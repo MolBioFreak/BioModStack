@@ -10,11 +10,6 @@ PROCESS_CONTRACTS = {
     'modules/laproteina_evaluation.nf:EvaluateLaProteina': (('LaProteina', 'gpu'), ("path closure, stageAs: 'la_evaluation_closure'",), ("path 'laproteina_evaluation', emit: native_outputs",), ('scripts/run_laproteina_inference.py', 'scripts/lib/laproteina_contract.py', 'scripts/lib/laproteina_motif_custody.py', 'scripts/bms_complexa/hf_cache.py', 'scripts/bms_complexa/assets.json'), ()),
     'modules/rfd4_proteina.nf:RunRFD4Proteina': (('RFD4Proteina', 'gpu'), ("path closure, stageAs: 'rfd4_closure'",), ("path 'rfd4_proteina', emit: native_outputs",), ('scripts/bms_rfd4/run.py',), ()),
     'modules/complexa.nf:RunComplexa': (('Complexa', 'gpu'), ('path request_dir',), ("path 'results', emit: native_results",), ('scripts/run_complexa_inference.py', 'scripts/lib/complexa_contract.py', 'scripts/bms_complexa/config.py', 'scripts/bms_complexa/profiles.json', 'scripts/bms_complexa/run.py', 'scripts/bms_complexa/inputs.py', 'scripts/bms_complexa/publication.py', 'scripts/bms_complexa/hf_cache.py', 'scripts/bms_complexa/assets.json'), ()),
-    'modules/af2.nf:RunAF2': (('AF2', 'gpu'), ('tuple val(batch_id), path(pdbs)',), ('tuple path("outputs/*.pdb"), path("*.json"), emit: pdbs_jsons', 'path ("*.json"), emit: json, topic: metadata_ch_fold_seq', 'path "*.log"'), ('scripts/run_af2_initial_guess.py',), ()),
-    'modules/af2.nf:AlignAF2': (('pyrosetta_tools',), ('path af2_pdbs', 'path reference_pdb'), ('path "aligned/*.pdb", emit: pdbs, optional: true', 'path "alignment_${task.index}.log", emit: logs, optional: true'), (), ()),
-    'modules/af2.nf:FilterAF2': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("output/*.pdb"), emit: pdbs, optional: true', 'path "filter_af2_${task.index}.log"', 'path ("filtered.jsonl"), emit: jsonl, optional: true'), (), ()),
-    'modules/af2_backprop.nf:MergeComplex': (('process_low',), ('tuple val(meta), path(antibody_pdb), path(target_pdb)',), ('tuple val(meta), path("*_complex.pdb"), emit: complex',), ('scripts/merge_complex.py',), ()),
-    'modules/af2_backprop.nf:AF2_BACKPROP': (('process_gpu', 'AF2_BACKPROP'), ('tuple val(meta), path(complex_pdb)',), ('tuple val(meta), path("*_refined.pdb"), emit: refined', 'tuple val(meta), path("*_refined.json"), emit: metrics', 'path "*.log", emit: log'), ('scripts/run_af2_backprop.py',), ()),
     'modules/analysis.nf:AnalyseBestDesigns': (('pyrosetta_tools',), ('path pdbs',), ('path "best_designs.jsonl", emit: jsonl, topic: metadata_ch_fold_seq', 'path "analysis.log", emit: log'), (), ()),
     'modules/antiberty.nf:ANTIBERTY_SCORE': (('process_medium',), ('tuple val(meta), path(input_file)  // Can be FASTA or PDB',), ('tuple val(meta), path("${meta.id}_pll_scores.csv"), emit: scores', 'tuple val(meta), path("${meta.id}_embeddings.pt"), emit: embeddings, optional: true', 'path "antiberty_${meta.id}.log"'), (), ('container "${params.container_dir}/antibody_tools.sif"',)),
     'modules/antiberty.nf:ANTIBERTY_FILTER': (('process_low',), ('tuple val(meta), path(scores_csv), path(fasta)',), ('tuple val(meta), path("${meta.id}_filtered.fasta"), emit: filtered_fasta', 'tuple val(meta), path("${meta.id}_filter_report.json"), emit: report'), (), ('container "${params.container_dir}/antibody_tools.sif"',)),
@@ -24,7 +19,6 @@ PROCESS_CONTRACTS = {
     'modules/antibody_batch.nf:BatchProtenixValidation': (('Protenix', 'gpu'), ('path pdbs', 'path msa'), ('path "predictions/*.pdb", emit: pdbs', 'path "predictions/*.json", emit: scores', 'path "predictions/*.cif", emit: cifs, optional: true', 'path "predictions/aligned_error/*.json", emit: aligned_error, optional: true', 'path "protenix_batch.log"'), ('scripts/align_protenix.py', 'scripts/extract_target_templates.py', 'scripts/prepare_protenix_exact_templates.py', 'scripts/protenix_constraint_utils.py', 'scripts/prep_protenix_batch.py', 'scripts/prepare_protenix_msa.py', 'scripts/protenix_chemistry.py', 'scripts/run_protenix_inference.py'), ('container { params.protenix_container_path ?: "${params.container_dir}/protenix.sif" }',)),
     'modules/antibody_batch.nf:BatchESMFold2Validation': (('ESMFold2',), ('path pdbs', 'path msa_files'), ('path "predictions/*_esmfold2.pdb", emit: pdbs', 'path "predictions/*_esmfold2.cif", emit: cifs', 'path "predictions/*_esmfold2.metrics.json", emit: metrics', 'path "predictions/esmfold2_validation_summary.json", emit: summary', 'path "esmfold2_batch.log", emit: log', 'path "predictions/*.confidence.npz", optional: true, emit: native_confidence', 'path "raw_predictions/*/effective_settings.json", emit: effective_settings'), ('scripts/run_esmfold2_batch.py', 'scripts/run_esmfold2_inference.py', 'scripts/normalize_esmfold2_validation.py'), ('container "${params.container_dir}/esmfold2.sif"',)),
     'modules/antibody_batch.nf:BatchImmunogenicity': (('Antiberty',), ('path pdbs',), ('path "immunogenicity_scores.csv", emit: scores',), ('scripts/batch_antiberty.py',), ('container "${params.container_dir}/antibody_tools.sif"',)),
-    'modules/antibody_batch.nf:BatchStability': (('ThermoMPNN',), ('path pdbs',), ('path "stability_scores.csv", emit: scores',), (), ('container "${params.container_dir}/stability_tools.sif"',)),
     'modules/antibody_frustrampnn_parent.nf:PrepareAntibodyFrustraMPNNCandidate': (('CPU',), ('tuple val(candidate_meta), path(terminal_structure), val(settings_base64), \\', 'val(settings_sha256), val(settings_value_origin)'), ("tuple path('workflow_component_request_v3.json'), path('canonical_source.pdb'), \\", "path('frustrampnn_structure_map_v1.json'), emit: prepared"), ('scripts/prepare_frustrampnn_candidate.py',), ()),
     'modules/antibody_frustrampnn_parent.nf:PublishAntibodyFrustraMPNNCandidate': (('CPU',), ('tuple val(result_meta), path(candidate_bundle), path(result_manifest)',), ("tuple val(result_meta), path(result_manifest), path('published_*.json'), emit: published",), ('scripts/publish_frustrampnn_bundle.py',), ()),
     'modules/antibody_frustrampnn_parent.nf:AggregateAndReportAntibodyFrustraMPNN': (('CPU',), ('path published_markers',), ("path 'antibody_frustrampnn_terminal_manifest.json', emit: terminal_manifest", "path 'frustrampnn_complete.reported', emit: reported"), ('scripts/stage_reporter.py',), ()),
@@ -84,10 +78,6 @@ PROCESS_CONTRACTS = {
     'modules/frustrampnn_parent_fanout.nf:StageFrustraMPNNParentCandidate': (('CPU',), ('tuple val(candidate_meta), path(terminal_structure)',), ("path 'candidate_*', emit: candidate",), ('scripts/stage_frustrampnn_parent_candidate.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
     'modules/frustrampnn_parent_fanout.nf:SpawnWaitFrustraMPNNParentChildren': (('CPU',), ('val parent_job_id', 'val parent_workflow_id', 'val settings_json', 'val settings_value_origin', 'path candidate_dirs'), ("path 'frustrampnn_parent_terminal_v1.json', emit: receipt", "path 'frustrampnn_child_bundles', emit: bundles"), ('scripts/run_frustrampnn_parent_fanout.py', 'scripts/stage_frustrampnn_parent_candidate.py'), ("errorStrategy 'terminate'", 'maxRetries 0')),
     'modules/frustrampnn_parent_fanout.nf:ReportFrustraMPNNParentChildrenComplete': (('CPU',), ('val parent_job_id', 'val parent_workflow_id', 'path terminal_receipt'), ("path 'frustrampnn_children_complete.reported', emit: marker",), ('scripts/stage_reporter.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
-    'modules/iggm.nf:IGGM_DENOVO': (('process_gpu',), ('tuple val(meta), path(antigen_pdb)', 'val epitope_residues'), ('tuple val(meta), path("output/*.pdb"), emit: designs', 'tuple val(meta), path("output/*.json"), emit: scores, optional: true', 'path "iggm_denovo_${meta.id}.log"'), (), ('container "${params.container_dir}/iggm.sif"',)),
-    'modules/iggm.nf:IGGM_AFFINITY_MATURATION': (('process_gpu',), ('tuple val(meta), path(antibody_pdb), path(antigen_pdb)',), ('tuple val(meta), path("output/*_matured.pdb"), emit: matured_designs', 'tuple val(meta), path("output/*_mutations.json"), emit: mutations', 'path "iggm_maturation_${meta.id}.log"'), (), ('container "${params.container_dir}/iggm.sif"',)),
-    'modules/iggm.nf:IGGM_STRUCTURE_PREDICTION': (('process_gpu',), ('tuple val(meta), path(antibody_fasta), path(antigen_pdb)',), ('tuple val(meta), path("output/*.pdb"), emit: predicted_structure', 'tuple val(meta), path("output/*_confidence.json"), emit: confidence', 'path "iggm_structure_${meta.id}.log"'), (), ('container "${params.container_dir}/iggm.sif"',)),
-    'modules/iggm.nf:IGGM_HUMANIZATION': (('process_gpu',), ('tuple val(meta), path(antibody_pdb)',), ('tuple val(meta), path("output/*_humanized.pdb"), emit: humanized', 'tuple val(meta), path("output/*_humanization_report.json"), emit: report', 'path "iggm_humanization_${meta.id}.log"'), (), ('container "${params.container_dir}/iggm.sif"',)),
     'modules/merge_uncropped_target.nf:MergeUncroppedTarget': (('pyrosetta_tools',), ('path pdb_files', 'path uncropped_target_pdb'), ('path ("merged_pdbs/*.pdb"), emit: pdbs',), (), ()),
     'modules/ngs/bam_prepare.nf:PrepareBamForAnalysis': (('dorado_cpu',), ("path bam, stageAs: 'source.bam'",), ('tuple path("aligned.bam"), path("aligned.bam.bai"), emit: aligned', 'path "bam_prepare.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
     'modules/ngs/bam_prepare.nf:ValidateMappedBam': (('dorado_cpu',), ("tuple path(bam, stageAs: 'validated-source.bam'), path(bai, stageAs: 'validated-source.bam.bai')", "path reference, stageAs: 'expected-reference.fasta'"), ('tuple path("aligned.bam"), path("aligned.bam.bai"), emit: aligned', 'path "bam_mapped_check.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
@@ -164,7 +154,6 @@ PROCESS_CONTRACTS = {
     'modules/structure_prediction.nf:BoltzFromSequenceWithMSATask': (('Boltz', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name), path(msa_file)',), ("path 'boltz_task_binding.json'", 'tuple val(producer_meta), path("producer_candidates.json"), path("predictions/*.{pdb,cif}"), emit: canonical_structures', 'path "predictions/*.json", emit: jsons, optional: true', 'path "predictions/*.npz", emit: native_identity_artifacts, optional: true', 'path "*.log"'), ('scripts/run_boltz_wrapper.py', 'scripts/lib/boltz_fidelity.py'), ()),
     'modules/structure_prediction.nf:PrepareComplexWithMSA': (('CPU',), ('tuple val(complex_name), path(complex_json), path(msa_files)',), ('tuple val(complex_name), path("yamls/${complex_name}.yaml"), path("msa"), emit: prepared', 'path "msa/*.a3m", emit: msa, optional: true', 'path "msa/*_msa_quality.json", emit: quality_report, optional: true', 'path "msa/complex_msa_manifest.json", emit: msa_manifest, optional: true', 'path "*.log"'), ('scripts/extract_target_templates.py', 'scripts/run_local_msa.py', 'scripts/lib/boltz_fidelity.py'), ()),
     'modules/structure_prediction.nf:BoltzFromComplex': (('Boltz', 'gpu'), ('tuple val(complex_name), path(complex_yaml), path(msa_dir)',), ("path 'boltz_task_binding.json'", 'tuple val(complex_name), path("producer_candidates.json"), path("predictions/*.pdb"), emit: canonical_pdbs, optional: true', 'path "predictions/*.cif", emit: cifs, optional: true', 'path "predictions/*.json", emit: jsons, optional: true', 'path "predictions/*.npz", emit: npz, optional: true', 'path "*.log"'), ('scripts/finalize_target_geometry.py', 'scripts/write_structure_producer_manifest.py', 'scripts/run_boltz_wrapper.py', 'scripts/lib/boltz_fidelity.py'), ()),
-    'modules/thermompnn.nf:THERMOMPNN': (('process_gpu',), ('tuple val(meta), path(pdb)',), ('tuple val(meta), path("*_stability.csv"), optional: true, emit: stability', 'path "thermompnn.log"'), (), ('container "${params.container_dir}/stability_tools.sif"',)),
     'modules/utils/anarci.nf:ANARCII': (('process_low',), ('tuple val(meta), path(pdb)',), ('tuple val(meta), path("*_imgt.pdb"), emit: pdb_imgt', 'tuple val(meta), path("*_cdrs.json"), emit: cdrs', 'tuple val(meta), path("*_cdr_positions.json"), emit: cdr_positions', 'path "anarci.log"'), (), ('container "${params.container_dir}/antibody_tools.sif"',)),
     'workflows/antibody_denovo.nf:SpawnRFantibodyJobs': (('process_low',), ('path target_pdb', 'val epitope_residues', 'val framework_type', 'val total_designs', 'val designs_per_job', 'val parent_job_id', 'val batch_name'), ('path "spawn_rfa_result.json", emit: result',), ('scripts/spawn_rfantibody_children.py',), ()),
     'workflows/antibody_denovo.nf:NormalizeTargetPDB': (('process_low',), ('tuple val(meta), path(target_pdb)',), ('tuple val(meta), path("normalized_target.pdb"), emit: normalized',), ('scripts/normalize_target_pdb.py',), ()),
@@ -281,8 +270,6 @@ LOOP_DESIGNER_STAGES = {
 
 # Images are the existing nextflow.config labels, not top-level model guesses.
 LABEL_ASSETS = {
-    'AF2': ('af2.sif', None, 'alphafold', 'af2_models'),
-    'AF2_BACKPROP': ('af2.sif', None, 'alphafold', 'af2_models'),
     'Boltz': ('boltz2.sif', None, 'boltz', 'boltz_models'),
     'BoltzCP': ('fold-cp.sif', 'bcp_container_path', 'boltz', 'boltz_models'),
     'ConforNets': ('confornets.sif', 'cn_container_path', 'openfold3', 'cn_checkpoint_path'),
@@ -307,7 +294,6 @@ LABEL_ASSETS = {
     'LaProteina': ('laproteina.sif', None, None, None),
     'DISCO': ('disco.sif', None, None, None),
     'Antiberty': ('antibody_tools.sif', None, None, None),
-    'ThermoMPNN': ('stability_tools.sif', None, 'thermompnn', None),
     'RFDpoly': ('rfdpoly_v2.sif', None, 'rfdpoly', None),
     'nampnn': ('nampnn.sif', None, 'nampnn', None),
     'PPIFlow': ('ppiflow.sif', None, 'ppiflow', 'ppiflow_weights_dir'),
@@ -822,19 +808,15 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         if not sequence_prediction and not boltzgen and not generation_only and not yes('skip_rfd_seq_pred') and not yes('skip_pred'):
             if p.get('uncropped_target_pdb') and str(p.get('rfd_mode', '')).startswith('binder_'):
                 after = a.chain(['MergeUncroppedTarget'], after)
-            pred = p.get('pred_method', 'af2')
-            if pred == 'af2':
-                after = a.chain(['RunAF2', 'FilterAF2'], after)
-                if str(p.get('rfd_mode', '')).startswith('binder_'):
-                    after = a.chain(['AlignAF2'], after)
-            elif pred == 'boltz':
+            pred = p.get('pred_method', 'boltz')
+            if pred == 'boltz':
                 after = a.chain(['PrepBoltz', 'RunBoltz', 'AlignBoltz', 'FilterBoltz'], after)
                 a.msa('boltz2', after)
             elif pred == 'rf3':
                 after = a.chain(['RunRF3', 'FilterRF3'], after)
             else:
                 unresolved(workflow, 'dependency_closure', entrypoint, 'Unsupported native design predictor: ' + str(pred))
-        for producer in ('RunMPNN', 'RunFAMPNN', 'RunAF2', 'AlignBoltz'):
+        for producer in ('RunMPNN', 'RunFAMPNN', 'AlignBoltz'):
             if any(row.component_key == producer for row in components):
                 a.stage('Compress', (producer,), condition='protein_design native run artifact publication')
         terminal = a.chain(['BindProteinDesignTerminalMetadata'], after)
@@ -1137,7 +1119,6 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
 
     if workflow == 'antibody_child':
         after = validation((), str(p.get('structure_validator') or 'boltz2').lower())
-        if yes('run_thermompnn'):a.chain(['BatchStability'], after)
         if yes('run_immunogenicity_scoring'):a.chain(['BatchImmunogenicity'], after)
         return True
 
@@ -1214,8 +1195,6 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             if p.get('maturation_redesign_enabled') is not False:
                 after = a.chain(['ANARCII', 'PrepMaturationRedesign', 'RunMaturationFAMPNN', 'ScoreMaturationImprovement'], after)
             after = a.chain(['FilterByMaturation'], after)
-        if yes('run_thermompnn'):after = a.chain(['THERMOMPNN'], after)
-        if yes('run_af2_backprop'):after = a.chain(['MergeComplex', 'AF2_BACKPROP'], after)
         if p.get('run_structure_validation') is not False:
             after = validation(after, str(p.get('structure_validator') or 'boltz2').lower())
             after = a.chain(['FinalizeSequentialValidationOutputs', 'StageStructureValidationArtifacts'], after)
@@ -1236,7 +1215,6 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         if p.get('run_immunogenicity_scoring') is not False:
             after = a.chain(['ANTIBERTY_SCORE'], after)
             if p.get('filter_immunogenic') is not False:after = a.chain(['ANTIBERTY_FILTER_STRUCTURES'], after)
-        if yes('run_affinity_maturation'):after = a.chain(['IGGM_AFFINITY_MATURATION'], after)
         if yes('run_frustrampnn'):a.frustra(after)
         if yes('interactive_gating') or yes('interactive_swa'):
             a.stage('OpenInteractiveGate', after, source=entrypoint, condition='interactiveGateEnabled; native stage predicates')

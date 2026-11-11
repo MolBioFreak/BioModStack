@@ -11,7 +11,7 @@ from services.rf_filter_criteria import THRESHOLDS, enabled_criteria
 
 KEY = 'rf_filter_task_roster'
 PROCESSES = {'FilterRF3': 'rf3_prediction_filter', 'FilterRFD3': 'rfd3_backbone_filter'}
-BRANCH_DEFAULTS = dict(diffusion_method='rfd3', pred_method='af2', run_rfd_only=False,
+BRANCH_DEFAULTS = dict(diffusion_method='rfd3', pred_method='boltz', run_rfd_only=False,
     skip_rfd=False, skip_rfd_seq=False, skip_rfd_seq_pred=False, skip_pred=False,
     rfd3_generation_request_path=None, rfd3_request_path=None,
     plr_validation_input_pdbs=None, plr_sequence_input_pdbs=None, plr_backbone_input_pdbs=None)

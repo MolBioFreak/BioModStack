@@ -220,21 +220,6 @@ export const PRESETS: Record<'speed' | 'balanced' | 'quality' | 'maximum', Quali
         // Pre-Boltz filter (null = disabled for speed mode, let everything through)
         fampnn_max_psce: null,
         fampnn_max_residue_psce: null,
-        // ThermoMPNN (disabled for speed)
-        run_thermompnn: false,
-        thermompnn_max_ddg: null,
-        // AF2 Backprop (disabled for speed)
-        run_af2_backprop: false,
-        af2_backprop_soft_iters: 100,
-        af2_backprop_temp_iters: 100,
-        af2_backprop_hard_iters: 10,
-        af2_backprop_num_recycles: 3,
-        af2_backprop_learning_rate: 0.1,
-        af2_backprop_use_multimer: true,
-        af2_backprop_num_models: 1,
-        af2_backprop_loss_plddt: 0.1,
-        af2_backprop_loss_pae: 0.1,
-        af2_backprop_loss_contact: 0.5,
         // Post-Boltz validation filtering (disabled for speed)
         boltz_max_binder_rmsd: null,
         boltz_min_ptm_interface: null,
@@ -335,21 +320,6 @@ export const PRESETS: Record<'speed' | 'balanced' | 'quality' | 'maximum', Quali
         // Pre-Boltz filter: off by default, opt in manually
         fampnn_max_psce: null,
         fampnn_max_residue_psce: null,
-        // ThermoMPNN: score-only by default if enabled later
-        run_thermompnn: false,
-        thermompnn_max_ddg: null,
-        // AF2 Backprop (disabled by default)
-        run_af2_backprop: false,
-        af2_backprop_soft_iters: 100,
-        af2_backprop_temp_iters: 100,
-        af2_backprop_hard_iters: 10,
-        af2_backprop_num_recycles: 3,
-        af2_backprop_learning_rate: 0.1,
-        af2_backprop_use_multimer: true,
-        af2_backprop_num_models: 1,
-        af2_backprop_loss_plddt: 0.1,
-        af2_backprop_loss_pae: 0.1,
-        af2_backprop_loss_contact: 0.5,
         // Post-Boltz validation filtering (permissive for balanced)
         boltz_max_binder_rmsd: null,
         boltz_min_ptm_interface: null,
@@ -450,21 +420,6 @@ export const PRESETS: Record<'speed' | 'balanced' | 'quality' | 'maximum', Quali
         // Pre-Boltz filter: off by default, opt in manually
         fampnn_max_psce: null,
         fampnn_max_residue_psce: null,
-        // ThermoMPNN: score-only by default if enabled later
-        run_thermompnn: false,
-        thermompnn_max_ddg: null,
-        // AF2 Backprop (disabled by default, can be enabled for better hit rate)
-        run_af2_backprop: false,
-        af2_backprop_soft_iters: 100,
-        af2_backprop_temp_iters: 100,
-        af2_backprop_hard_iters: 10,
-        af2_backprop_num_recycles: 5,
-        af2_backprop_learning_rate: 0.05,
-        af2_backprop_use_multimer: true,
-        af2_backprop_num_models: 2,
-        af2_backprop_loss_plddt: 0.1,
-        af2_backprop_loss_pae: 0.2,
-        af2_backprop_loss_contact: 0.4,
         // Post-Boltz validation filtering: off by default, opt in manually
         boltz_max_binder_rmsd: null,
         boltz_min_ptm_interface: null,
@@ -565,21 +520,6 @@ export const PRESETS: Record<'speed' | 'balanced' | 'quality' | 'maximum', Quali
         // Pre-Boltz filter: off by default, opt in manually
         fampnn_max_psce: null,
         fampnn_max_residue_psce: null,
-        // ThermoMPNN: score-only by default if enabled later
-        run_thermompnn: false,
-        thermompnn_max_ddg: null,
-        // AF2 Backprop: enabled for maximum quality runs
-        run_af2_backprop: false,
-        af2_backprop_soft_iters: 150,
-        af2_backprop_temp_iters: 150,
-        af2_backprop_hard_iters: 20,
-        af2_backprop_num_recycles: 8,
-        af2_backprop_learning_rate: 0.03,
-        af2_backprop_use_multimer: true,
-        af2_backprop_num_models: 3,
-        af2_backprop_loss_plddt: 0.1,
-        af2_backprop_loss_pae: 0.3,
-        af2_backprop_loss_contact: 0.3,
         // Post-Boltz validation filtering: off by default, opt in manually
         boltz_max_binder_rmsd: null,
         boltz_min_ptm_interface: null,

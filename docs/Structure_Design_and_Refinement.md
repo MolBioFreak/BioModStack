@@ -64,7 +64,6 @@ registry under [platform/api/config/models](../platform/api/config/models) and
 Current registry-backed predictor families:
 
 - [Boltz-2](../platform/api/config/models/boltz2.yaml)
-- [AlphaFold2](../platform/api/config/models/af2.yaml)
 - [RF3](../platform/api/config/models/rf3.yaml)
 - [NVIDIA Fold-CP](../platform/api/config/models/boltz_cp_experimental.yaml)
 
@@ -75,7 +74,7 @@ or an equivalent API registry entry exists again.
 
 Important distinction:
 
-- Boltz-2 / AF2 / RF3 remain registry-backed structure predictors
+- Boltz-2 / RF3 remain registry-backed structure predictors
 - NVIDIA Fold-CP is selected inside Structure Prediction when OEM context
   parallelism is appropriate for the target and compute placement
 
@@ -233,20 +232,17 @@ Purpose:
 - AntiFold
 - ProteinMPNN
 - FrustraMPNN
-- IgGM
 - Caliby Experimental
 
 ### Prediction and validation
 
 - Boltz-2
 - Protenix
-- AlphaFold2
 - RF3
 - NVIDIA Fold-CP
 
 ### Post-processing and scoring
 
-- ThermoMPNN
 - AntiBERTy
 - ANARCI / ANARCII
 

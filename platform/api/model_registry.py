@@ -120,7 +120,7 @@ class RuntimeDependencyRef(BaseModel):
 # owners bind immutable bytes. A model's composed workflow may select more.
 INDEPENDENT_RUNTIME_MODELS = frozenset({
     "protenix", "esmfold2", "esmfold2_experimental", "fampnn", "frustrampnn",
-    "boltz2", "af2", "proteinmpnn", "protein_modification_experimental",
+    "boltz2", "proteinmpnn", "protein_modification_experimental",
     "caliby_binder", "caliby_experimental", "ligandmpnn", "bindcraft2", "protonpottsmpnn",
     # Fold-CP uses its own image with the native BoltzCP shared Boltz tree.
     "boltz_cp_experimental", "rfd4_proteina", "complexa", "laproteina",
@@ -188,12 +188,12 @@ def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tupl
         refs.extend(RuntimeDependencyRef(kind=item.kind, relative_path=item.relative_path)
                     for item in selected)
     weights = {"protenix": "protenix", "esmfold2": "esmfold2", "esmfold2_experimental": "esmfold2",
-               "boltz2": "boltz", "af2": "alphafold", "boltz_cp_experimental": "boltz"}
+               "boltz2": "boltz", "boltz_cp_experimental": "boltz"}
     if model_id in weights:
         refs.append(RuntimeDependencyRef(kind="weights", relative_path=weights[model_id]))
     # Native preparation/filter stages are part of these models, not optional
-    # remote additions (modules/{fampnn,proteinmpnn,af2,boltzgen}.nf).
-    if model_id in {"fampnn", "proteinmpnn", "af2", "boltzgen"}:
+    # remote additions (modules/{fampnn,proteinmpnn,boltzgen}.nf).
+    if model_id in {"fampnn", "proteinmpnn", "boltzgen"}:
         refs.append(RuntimeDependencyRef(kind="image", relative_path="pyrosetta_tools.sif"))
     return tuple(refs)
 

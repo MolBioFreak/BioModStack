@@ -112,15 +112,6 @@ def test_antibody_disabled_branch_is_scheduled_and_emits_typed_status() -> None:
     assert "frustrampnn_results = frustrampnn_results" in source
 
 
-def test_antibody_iggm_sequence_change_fails_before_canonical_invocation() -> None:
-    source = _workflow()
-    guard = source.index("antibody_denovo:frustrampnn_stale_post_iggm_structure")
-    iggm = source.index("IGGM_AFFINITY_MATURATION(maturation_input)")
-    canonical = source.index("SchedulerFrustraMPNNParentFanout(")
-    assert guard < iggm < canonical
-    assert "run_affinity_maturation == true && params.run_frustrampnn == true" in source
-
-
 def test_antibody_enabled_results_follow_actual_publisher_outputs() -> None:
     source = _workflow()
     shared = (REPO_ROOT / "modules" / "frustrampnn_parent_fanout.nf").read_text(encoding="utf-8")

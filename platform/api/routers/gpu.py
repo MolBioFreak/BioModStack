@@ -176,13 +176,11 @@ def _infer_gpu_process_label(proc_name: str, cmdline: Optional[List[str]]) -> st
         ("protenix", "Protenix V2"),
         ("seq_design.py", "FAMPNN"),
         ("fampnn", "FAMPNN"),
-        ("thermompnn", "ThermoMPNN"),
         ("ppiflow", "PPIFlow"),
         ("rfdiffusion_inference.py", "RFantibody"),
         ("rfantibody", "RFantibody"),
         ("boltzgen", "BoltzGen"),
         ("boltz", "Boltz-2"),
-        ("af2_backprop", "AF2 Backprop"),
         ("alphafold", "AlphaFold2"),
         ("af2", "AlphaFold2"),
         ("frustrampnn", "FrustraMPNN"),
@@ -3330,7 +3328,7 @@ async def get_workflow_pins():
         "workflow_pins": config.get("workflow_pins", {}),
         "available_workflows": [
             "boltz", "fampnn", "rfantibody", "rfdiffusion", "rfd3", "rf3",
-            "af2", "mpnn", "boltzgen", "msa_batch",
+            "mpnn", "boltzgen", "msa_batch",
             "antibody_child"
         ]
     }

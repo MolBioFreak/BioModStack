@@ -35,7 +35,6 @@ interface ResumeSettingsForm {
     boltzMaxBinderRmsd: number;
     boltzMinPtmInterface: number;
     runMaturation: boolean;
-    runThermoMPNN: boolean;
     runAnarciiPost: boolean;
 }
 
@@ -59,7 +58,6 @@ const DEFAULT_RESUME_SETTINGS_FORM: ResumeSettingsForm = {
     boltzMaxBinderRmsd: 2.0,
     boltzMinPtmInterface: 0.5,
     runMaturation: false,
-    runThermoMPNN: false,
     runAnarciiPost: false,
 };
 
@@ -348,7 +346,6 @@ export function Dashboard() {
             boltzMaxBinderRmsd: clamp(toNumber(p.boltz_max_binder_rmsd, DEFAULT_RESUME_SETTINGS_FORM.boltzMaxBinderRmsd), 0.1, 6),
             boltzMinPtmInterface: clamp(toNumber(p.boltz_min_ptm_interface, DEFAULT_RESUME_SETTINGS_FORM.boltzMinPtmInterface), 0, 1),
             runMaturation: !!p.run_maturation,
-            runThermoMPNN: !!(p.run_thermompnn ?? p.run_stability_scoring),
             runAnarciiPost: !!p.run_anarcii_post,
         });
         setResumeSettingsError(null);
@@ -440,8 +437,6 @@ export function Dashboard() {
             maybeSetNumber('boltz_max_binder_rmsd', Number(resumeSettingsForm.boltzMaxBinderRmsd.toFixed(2)));
             maybeSetNumber('boltz_min_ptm_interface', Number(resumeSettingsForm.boltzMinPtmInterface.toFixed(2)));
             maybeSetBool('run_maturation', resumeSettingsForm.runMaturation);
-            maybeSetBool('run_thermompnn', resumeSettingsForm.runThermoMPNN);
-            maybeSetBool('run_stability_scoring', resumeSettingsForm.runThermoMPNN);
             maybeSetBool('run_anarcii_post', resumeSettingsForm.runAnarciiPost);
         }
 
@@ -896,16 +891,6 @@ export function Dashboard() {
                                                 disabled={resumeMutation.isPending}
                                             />
                                             PPIFlow maturation
-                                        </label>
-                                        <label className="flex items-center gap-2">
-                                            <input
-                                                type="checkbox"
-                                                checked={resumeSettingsForm.runThermoMPNN}
-                                                onChange={(e) => setResumeSettingsForm((prev) => ({ ...prev, runThermoMPNN: e.target.checked }))}
-                                                className="rounded bg-slate-900 border-slate-600"
-                                                disabled={resumeMutation.isPending}
-                                            />
-                                            ThermoMPNN scoring
                                         </label>
                                         <label className="flex items-center gap-2">
                                             <input

@@ -38,6 +38,6 @@ export function hydrateInitialStageSelection(values: Record<string, unknown> = {
             : values.run_ppiflow_backbone_refine === true || values.run_ppiflow_maturation === true,
         validation: values.initial_orchestration_validation !== undefined ? values.initial_orchestration_validation === true : values.run_structure_validation === true,
         qc: values.initial_orchestration_qc !== undefined ? values.initial_orchestration_qc === true
-            : [values.run_frustrampnn, values.run_anarcii_post, values.run_immunogenicity_scoring, values.run_stability_scoring, values.run_thermompnn].some(value => value === true),
+            : [values.run_frustrampnn, values.run_anarcii_post, values.run_immunogenicity_scoring].some(value => value === true),
     };
 }

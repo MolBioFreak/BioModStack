@@ -247,7 +247,6 @@ VRAM_PROFILES = {
     'boltz_batch': {'base': 6000, 'scale': 25}, # Boltz-2 batch mode
     'boltzgen': {'base': 5000, 'scale': 20},    # BoltzGen design
     'rf3': {'base': 10000, 'scale': 55},        # RosettaFold3 (high VRAM)
-    'af2': {'base': 12000, 'scale': 65},        # AlphaFold2 (highest VRAM)
     'rfdiffusion': {'base': 5000, 'scale': 25}, # RFdiffusion
     'rfantibody': {'base': 6000, 'scale': 25},  # RFantibody antibody generation
     'rfantibody_child': {'base': 6000, 'scale': 25},  # RFantibody child (same as parent)
@@ -260,7 +259,6 @@ VRAM_PROFILES = {
     'mpnn': {'base': 2000, 'scale': 5},         # Alias for ProteinMPNN
     'protonpottsmpnn': {'base': 2000, 'scale': 5},  # CUDA preparation estimate, not measured VRAM.
     'ligandmpnn': {'base': 2500, 'scale': 8},   # LigandMPNN (ligand-aware sequence design)
-    'thermompnn': {'base': 2000, 'scale': 5},   # ThermoMPNN (stability-focused)
     'frustrampnn': {'base': 2500, 'scale': 8},  # FrustraMPNN (frustration analysis)
     # ──────────────────────────────────────────────────────────────────────────
     # PROTENIX VARIANTS - measured from docs: 6GB@500tok → 78GB@4000tok
@@ -282,7 +280,6 @@ VRAM_PROFILES = {
 
 # Models that need heavy GPUs (exclude 5060 Ti)
 HEAVY_MODELS = {
-    'af2',
     'rfdiffusion',
     'rf3',
     'maturation_child',

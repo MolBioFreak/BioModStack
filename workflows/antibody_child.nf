@@ -17,7 +17,7 @@ nextflow.enable.dsl = 2
 // Spawned by parent antibody_denovo workflow in exploration mode.
 // =============================================================================
 
-include { BatchBoltzValidation ; BatchProtenixValidation ; BatchESMFold2Validation ; BatchImmunogenicity ; BatchStability } from '../modules/antibody_batch'
+include { BatchBoltzValidation ; BatchProtenixValidation ; BatchESMFold2Validation ; BatchImmunogenicity } from '../modules/antibody_batch'
 
 def resolveBooleanParam(value, defaultValue = false) {
     if (value == null) {
@@ -79,17 +79,6 @@ workflow ANTIBODY_CHILD {
     // =========================================================================
     // Use the *validated* structures from Boltz (folded) for downstream scoring
 
-    // ThermoMPNN stability scoring - only if enabled
-    def run_thermompnn = resolveBooleanParam(params.run_thermompnn, false)
-    if (run_thermompnn) {
-        BatchStability(validated_pdbs_ch)
-        thermompnn_scores = BatchStability.out.scores
-    }
-    else {
-        // Empty channel placeholder
-        thermompnn_scores = channel.empty()
-    }
-
     // AntiBERTy immunogenicity scoring - only if enabled  
     def run_immunogenicity = resolveBooleanParam(params.run_immunogenicity_scoring, false)
     if (run_immunogenicity) {
@@ -105,7 +94,6 @@ workflow ANTIBODY_CHILD {
     validated_pdbs = validated_pdbs_ch
     validation_scores = validation_scores_ch
     antiberty_scores = antiberty_scores
-    thermompnn_scores = thermompnn_scores
 }
 
 // Entry point when run as standalone workflow

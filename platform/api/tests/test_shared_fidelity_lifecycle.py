@@ -65,7 +65,7 @@ def test_project_redesign_uses_native_request_not_superseded_count_descriptor(ca
     validate({'native_job_request': request}, schema)
 
 
-@pytest.mark.parametrize('model_id', ['boltz2', 'esmfold2', 'af2'])
+@pytest.mark.parametrize('model_id', ['boltz2', 'esmfold2'])
 def test_unknown_nested_settings_diagnostics_are_not_validation(model_id):
     from model_registry import get_registry
     params = {'sequence': 'ACD', 'unexpected_nested_science': {'iterations': 999}}

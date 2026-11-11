@@ -829,11 +829,7 @@ def parse_stage_progress(work_dir: str, stage: str, total_designs: int = None) -
                 return f"step {last_step[0]}/{last_step[1]}"
             return None
         
-        # ThermoMPNN: Per-residue scoring
-        elif 'thermo' in stage_lower:
-            residues = len(re.findall(r'residue|position', content, re.IGNORECASE))
-            return f"{residues} residues" if residues else None
-        
+
         return None
         
     except Exception as e:
@@ -3427,8 +3423,6 @@ async def launch_nextflow_job(
                             stage = 'frustrampnn'  # FrustraMPNN (frustration analysis)
                         elif 'ligandmpnn' in stage_clean or 'ligand_mpnn' in stage_clean:
                             stage = 'ligandmpnn'   # LigandMPNN (ligand-aware design)
-                        elif 'thermompnn' in stage_clean or 'thermo_mpnn' in stage_clean:
-                            stage = 'thermompnn'   # ThermoMPNN (thermal stability)
                         elif 'proteinmpnn' in stage_clean or ('mpnn' in stage_clean and 'fa' not in stage_clean):
                             stage = 'proteinmpnn'  # ProteinMPNN (vanilla)
                         elif 'protenix' in stage_clean:
@@ -3469,8 +3463,6 @@ async def launch_nextflow_job(
                             or 'wf-clone' in stage_clean
                         ):
                             stage = 'wf_clone_validation'
-                        elif 'af2' in stage_clean:
-                            stage = 'af2'
                         elif 'rfdiffusion' in stage_clean:
                             stage = 'rfdiffusion'
 
@@ -5737,7 +5729,6 @@ def compile_nextflow_invocation(
         ('boltz2', 'predict'): 'boltz',
         ('boltz2', 'complex'): 'boltz',
         ('rf3', 'predict'): 'rf3',
-        ('af2', 'predict'): 'af2',
 
         # Mutagenesis batch workflow - routes to boltz for structure prediction
         ('mutagenesis', 'batch_predict'): 'boltz',
@@ -5969,7 +5960,6 @@ def compile_nextflow_invocation(
         or str(Path(explicit_data_root) / "apptainer")
     )
     explicit_rfd_models = params.get("rfd_models") or os.getenv("BMS_RFD_MODELS") or str(get_rfd_models_dir())
-    explicit_af2_models = params.get("af2_models") or os.getenv("BMS_AF2_MODELS") or str(Path(explicit_weights_root) / "alphafold" / "params")
     explicit_boltz_models = params.get("boltz_models") or os.getenv("BMS_BOLTZ_MODELS") or str(Path(explicit_weights_root) / "boltz")
     explicit_alphafold_params = params.get("alphafold_params") or str(Path(explicit_weights_root) / "alphafold" / "params")
 
@@ -6017,7 +6007,6 @@ def compile_nextflow_invocation(
         "container_dir": explicit_container_dir,
         "runtime_image_store": os.getenv("BMS_RUNTIME_IMAGE_STORE") or str(Path(explicit_container_dir) / ".image-store"),
         "rfd_models": explicit_rfd_models,
-        "af2_models": explicit_af2_models,
         "boltz_models": explicit_boltz_models,
         "alphafold_params": explicit_alphafold_params,
     }
@@ -6025,7 +6014,7 @@ def compile_nextflow_invocation(
             or model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES):
         # No diffusion, prediction or hosted/local MSA stage is selected by the
         # sequence-only wrapper. Do not demand their unselected input stores.
-        for key in ('rfd_models', 'af2_models', 'boltz_models', 'alphafold_params'):
+        for key in ('rfd_models', 'boltz_models', 'alphafold_params'):
             explicit_path_defaults.pop(key, None)
     if (not is_fastq_only_ont_command and not is_generic_sequence_command
             and model_id not in {'bindcraft2', 'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen', 'protonpottsmpnn'}

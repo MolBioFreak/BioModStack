@@ -64,10 +64,6 @@ def test_ppiflow_export_hook_leaves_native_body_and_result_unchanged(tmp_path):
     assert json.loads(Path(str(output) + '.sample.json').read_text())['sample_index'] == 42
 
 
-
-
-
-
 def test_frozen_selected_model_contracts_and_off_defaults():
     for model, mode, workflow in [('binder_refinement', 'refine', 'binder_refinement.nf'), ('caliby_binder', 'design', 'caliby_binder.nf')]:
         data = yaml.safe_load((ROOT / f'platform/api/config/models/{model}.yaml').read_text())
@@ -83,16 +79,6 @@ def test_frozen_selected_model_contracts_and_off_defaults():
     assert 'ScorePartialFlowImprovement' not in workflow
     assert 'if (repack || anchors)' in workflow
     assert 'if (flow)' in workflow and 'if (redesign)' in workflow
-
-
-def test_iggm_final_producer_and_freshness_are_not_revalidation_gate():
-    text = (ROOT / 'workflows/antibody_denovo.nf').read_text()
-    block = text[text.index('final_designs = matured_designs.flatMap'):text.index('if (params.run_frustrampnn == true)', text.index('final_designs = matured_designs.flatMap'))]
-    assert "validation_status: 'unvalidated'" in block
-    assert "source_meta: new LinkedHashMap(meta)" in block
-    assert "? 'iggm_affinity_maturation'" in block
-    assert "? 'iggm'" in block
-    assert 'error(' not in block
 
 
 def test_regions_need_no_rosetta_or_anchor_analysis(tmp_path):

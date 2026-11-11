@@ -10,7 +10,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from caliby_runtime import canonicalize_self_consistency_metrics, normalize_sampling_results
 from lib.filtering.metrics import extract_confidence_metrics
-from run_af2_initial_guess import corrected_source
 
 
 def test_native_caliby_metrics_and_sample_identity(tmp_path, monkeypatch):
@@ -41,15 +40,6 @@ def test_native_caliby_metrics_and_sample_identity(tmp_path, monkeypatch):
         '--min-sc-plddt', '0', '--max-sc-rmsd', '2'])
     main()
     assert len(list((tmp_path / 'passed').glob('*.pdb'))) == 2
-
-
-
-def test_af2_boundary_is_inclusive_and_idempotent():
-    source = 'mask = [int(i) > feat_holder.binderlen for i in range(len(feat_holder.seq))]'
-    namespace = {'feat_holder': types.SimpleNamespace(binderlen=2, seq='ACDEF')}
-    exec(corrected_source(source), namespace)
-    assert namespace['mask'] == [False, False, True, True, True]
-    assert corrected_source(corrected_source(source)) == corrected_source(source)
 
 
 def test_bc2_score_zero_readings():

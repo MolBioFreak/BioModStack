@@ -231,32 +231,3 @@ Path(args['--output_rotamer_enrichment']).write_text(json.dumps({'args':args,'lo
     assert next(out.rglob('published/selected.pdb')).read_bytes() == pdb.read_bytes()
 
 
-@pytest.mark.parametrize('count', [0, 2])
-def test_iggm_descendant_publication_graph(nextflow, tmp_path, count):
-    # Execute the production post-IgGM transformation and publication, replacing
-    # only the scientific producer channel with inert document fixtures.
-    source = (ROOT / 'workflows/antibody_denovo.nf').read_text()
-    start = source.index('final_designs = matured_designs.flatMap')
-    end = source.index('final_designs = PublishIgGMMaturedCandidates.out.candidates', start)
-    block = source[start:end]
-    paths = []
-    for index in range(count):
-        path = tmp_path / f'iggm-descendant-{index}.pdb'
-        path.write_text(atom('h', index + 1))
-        paths.append(str(path))
-    channel = ("Channel.of(tuple([id:'parent', plddt:99, validation_status:'validated', target_state:'state-B'], "
-               + '[' + ','.join(f"file('{path}')" for path in paths) + ']))') if paths else 'Channel.empty()'
-    workflow = tmp_path / 'iggm-transport.nf'
-    workflow.write_text("nextflow.enable.dsl = 2\ninclude { PublishIgGMMaturedCandidates } from '"
-                        + str(ROOT / 'workflows/maturation_child_core.nf')
-                        + "'\nworkflow {\n def matured_designs = " + channel + '\n' + block + '\n}\n')
-    out = tmp_path / 'out'
-    nextflow(workflow, dict(code_root=str(ROOT), out_dir=str(out)))
-    rows = [json.loads(path.read_text()) for path in out.rglob('generator_*.json')]
-    assert len(rows) == count
-    for row in rows:
-        assert row['id'].startswith('iggm-descendant-') and row['parent_id'] == 'parent'
-        assert row['source'] == 'iggm_affinity_maturation'
-        assert row['source_structure_state'] == 'state-B'
-        assert row['validation_status'] == 'unvalidated' and 'plddt' not in row
-        assert row['source_meta']['plddt'] == 99

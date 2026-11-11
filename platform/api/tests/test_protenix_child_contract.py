@@ -18,8 +18,7 @@ def test_child_compilation_retains_native_validator_and_dependencies(tmp_path, m
                   protenix_use_msa=msa, protenix_msa_backend='colabfold_api',
                   protenix_seeds='0,17', protenix_n_sample=3,
                   protenix_use_template=False, protenix_anchor_target=False,
-                  run_frustrampnn=False, run_immunogenicity_scoring=False,
-                  run_thermompnn=False)
+                  run_frustrampnn=False, run_immunogenicity_scoring=False)
     invocation = nextflow.compile_nextflow_invocation('antibody_child', 'validation_batch', params, str(tmp_path / 'out'))
     assert invocation.entrypoint == 'workflows/antibody_child.nf'
     assert invocation.execution_plan is not None

@@ -12,7 +12,6 @@ def antibodyPublicationMode(workDir, outputDir) {
     }
 }
 
-include { PublishIgGMMaturedCandidates } from './maturation_child_core.nf'
 
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
@@ -367,7 +366,6 @@ def initializeAntibodyDenovoParams(params) {
     ensureParamDefault(params, 'analysis_chain_id', 'all_chains')
     ensureParamDefault(params, 'filter_immunogenic', true)
     ensureParamDefault(params, 'run_immunogenicity_scoring', false)
-    ensureParamDefault(params, 'run_affinity_maturation', false)
     ensureParamDefault(params, 'run_post_boltz_maturation', false)
     ensureParamDefault(params, 'run_post_validation_maturation', params.run_post_boltz_maturation)
     if (!params.run_post_boltz_maturation && params.run_post_validation_maturation) {
@@ -476,9 +474,6 @@ include { PrepFAMPNN ; RunFAMPNN ; FilterFAMPNN } from '../modules/fampnn'
 include { RunCaliby ; FilterCaliby } from '../modules/caliby'
 include { PrepMPNN ; RunMPNN as ProteinMPNNSeq } from '../modules/proteinmpnn'
 include { ANTIBERTY_SCORE ; ANTIBERTY_FILTER_STRUCTURES } from '../modules/antiberty'
-include { THERMOMPNN } from '../modules/thermompnn'
-include { MergeComplex ; AF2_BACKPROP } from '../modules/af2_backprop'
-include { IGGM_AFFINITY_MATURATION } from '../modules/iggm'
 include { PrepBoltz ; PrepBoltzWithMSA ; RunBoltz } from '../modules/boltz'
 include { BoltzFromSequence } from '../modules/structure_prediction'
 include { ANARCII } from '../modules/utils/anarci'
@@ -1230,7 +1225,6 @@ process SpawnMaturationJobs {
         fampnn_repack_last: params.fampnn_repack_last,
         fampnn_seq_only: params.fampnn_seq_only,
         fampnn_extra_config: params.fampnn_extra_config,
-        thermompnn_max_ddg: params.thermompnn_max_ddg,
         structure_validator: params.structure_validator,
         rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom'),
         rfantibody_loop_length_ranges: params.get('rfantibody_loop_length_ranges'),
@@ -2200,9 +2194,6 @@ def ppiflowMaturationRegionMode = workflowContext.ppiflowMaturationRegionMode
 def selectedInputDir = workflowContext.selectedInputDir
 def selectedInputIsSequenceConditioned = workflowContext.selectedInputIsSequenceConditioned
 
-if (params.run_affinity_maturation == true && params.run_frustrampnn == true) {
-    error('antibody_denovo:frustrampnn_stale_post_iggm_structure: IgGM changes sequence, but no producer-bound post-IgGM structure revalidation is wired')
-}
 
 
 def orchestrator_batch_name = params.batch_name
@@ -2258,8 +2249,6 @@ if (shouldPauseAfterRFantibody) {
     )
     final_designs = Channel.empty()
     immunogenicity_scores = Channel.empty()
-    stability_scores_early = Channel.empty()
-    mutations = Channel.empty()
     backbone_designs = reviewed_backbone_designs
 } else {
     if (params.skip_rfantibody && !shouldScreenRFantibody) {
@@ -2624,7 +2613,6 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
         params.structure_validator ?: "boltz2"
     )
     validated_structures = Channel.empty()
-    stability_scores_early = Channel.empty()
 } else {
     maturation_seqs = Channel.empty()
     def run_ppiflow_maturation = params.run_ppiflow_maturation != null ? params.run_ppiflow_maturation : params.run_maturation
@@ -2749,106 +2737,6 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
         }
 
         pdb_designs_for_boltz = pdb_designs
-        if (params.run_thermompnn == true) {
-            log.info("Step 2.5: Scoring sequence stability with ThermoMPNN...")
-
-            thermompnn_input = pdb_designs.flatMap { meta, pdbs ->
-                def pdb_list = pdbs instanceof List ? pdbs : [pdbs]
-                pdb_list.collect { pdb ->
-                    def design_meta = [id: pdb.baseName]
-                    [design_meta, pdb]
-                }
-            }
-
-            THERMOMPNN(thermompnn_input)
-
-            THERMOMPNN.out.stability.subscribe { meta, csv ->
-                try {
-                    def args = [params.job_id, "thermompnn", "complete", csv.toString()]
-                    def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-                    proc.waitFor()
-                } catch (Exception e) {
-                    println "Warning: Failed to report stage thermompnn: ${e.message}"
-                }
-            }
-
-            def thermompnn_with_pdb = thermompnn_input
-                .join(THERMOMPNN.out.stability, remainder: true)
-                .map { meta, pdb, csv ->
-                    tuple(meta, pdb, csv)
-                }
-
-            if (params.thermompnn_max_ddg != null) {
-                log.info("  Filtering by ThermoMPNN ddG <= ${params.thermompnn_max_ddg}...")
-
-                stable_pdb_designs = thermompnn_with_pdb.filter { meta, pdb, csv ->
-                    if (csv == null) return true
-                    try {
-                        def lines = csv.text.split('\n')
-                        if (lines.size() > 1) {
-                            def ddg = lines[1].split(',')[1]?.trim()
-                            if (ddg && ddg != 'N/A' && ddg != 'ERROR') {
-                                return Float.parseFloat(ddg) <= params.thermompnn_max_ddg
-                            }
-                        }
-                    } catch (Exception e) {
-                        log.warn("Could not parse ThermoMPNN output for ${meta.id}: ${e.message}")
-                    }
-                    return true
-                }
-
-                pdb_designs_for_boltz = stable_pdb_designs
-                    .map { meta, pdb, csv -> pdb }
-                    .collect()
-                    .map { pdbs ->
-                        def meta = [id: "thermompnn_filtered"]
-                        [meta, pdbs]
-                    }
-            }
-
-            stability_scores_early = THERMOMPNN.out.stability
-        } else {
-            log.info("ThermoMPNN stability scoring disabled (enable with run_thermompnn=true)")
-            stability_scores_early = Channel.empty()
-        }
-
-        if (params.run_af2_backprop == true) {
-            log.info("Step 2.6: Refining CDR sequences with AF2 Backprop...")
-
-            af2_merge_input = pdb_designs_for_boltz
-                .flatMap { meta, pdbs ->
-                    def pdb_list = pdbs instanceof List ? pdbs : [pdbs]
-                    pdb_list.collect { pdb ->
-                        def design_meta = [id: pdb.baseName]
-                        [design_meta, pdb]
-                    }
-                }
-                .combine(target_pdb_ch.first().map { meta, pdb -> pdb })
-                .map { meta, antibody_pdb, target_pdb ->
-                    [meta, antibody_pdb, target_pdb]
-                }
-
-            MergeComplex(af2_merge_input)
-            AF2_BACKPROP(MergeComplex.out.complex)
-
-            AF2_BACKPROP.out.refined.subscribe { meta, pdb ->
-                try {
-                    def args = [params.job_id, "af2_backprop", "complete", pdb.toString()]
-                    def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-                    proc.waitFor()
-                } catch (Exception e) {
-                    println "Warning: Failed to report stage af2_backprop: ${e.message}"
-                }
-            }
-
-            pdb_designs_for_boltz = AF2_BACKPROP.out.refined
-                .map { meta, pdb -> pdb }
-                .collect()
-                .map { pdbs ->
-                    def meta = [id: "af2_refined"]
-                    [meta, pdbs]
-                }
-        }
 
         def structure_validator = (params.structure_validator ?: 'boltz2').toString().toLowerCase()
         if (structure_validator == 'protenix_v2') structure_validator = 'protenix'
@@ -2984,8 +2872,6 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                     msa_gpu_server_wait_timeout: params.msa_gpu_server_wait_timeout,
                     msa_gpu_server_db_load_mode: params.msa_gpu_server_db_load_mode,
                     msa_gpu_server_startup_wait: params.msa_gpu_server_startup_wait,
-                    run_thermompnn: params.run_thermompnn ?: false,
-                    thermompnn_max_ddg: params.thermompnn_max_ddg,
                     run_immunogenicity_scoring: params.run_immunogenicity_scoring ?: false,
                     pinned_gpus: params.pinned_gpus,
                     fampnn_max_psce: params.fampnn_max_psce,
@@ -3330,59 +3216,16 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
 
     stable_designs = filtered_structures
 
-    if (params.run_affinity_maturation == true) {
-        log.info("Step 6: Running affinity maturation with IgGM...")
+    final_designs = stable_designs
 
-        maturation_input = stable_designs
-            .combine(target_pdb_ch.first())
-            .map { meta, design_pdb, target_meta, target_pdb ->
-                [meta, design_pdb, target_pdb]
-            }
-
-        IGGM_AFFINITY_MATURATION(maturation_input)
-        matured_designs = IGGM_AFFINITY_MATURATION.out.matured_designs
-        mutations = IGGM_AFFINITY_MATURATION.out.mutations
-
-        if (params.run_structure_validation != false) {
-            log.warn("IgGM affinity maturation completed, but a full post-IgGM Boltz revalidation loop is not yet wired in this workflow.")
-        }
-        // IgGM changes the candidate, not its parent's validation evidence.
-        // Preserve that evidence only under source_meta; no revalidation gate.
-        final_designs = matured_designs.flatMap { meta, pdbs ->
-            def outputs = pdbs instanceof List ? pdbs : [pdbs]
-            outputs.collect { pdb ->
-                def childMeta = [
-                    id: pdb.baseName,
-                    parent_id: meta.id,
-                    source_document_id: meta.id,
-                    source_meta: new LinkedHashMap(meta),
-                    source_structure_state: meta.structure_state ?: meta.target_state,
-                    validation_status: 'unvalidated',
-                    terminal_producer: 'iggm_affinity_maturation'
-                ]
-                tuple(childMeta, pdb)
-            }
-        }
-        PublishIgGMMaturedCandidates(final_designs)
-        final_designs = PublishIgGMMaturedCandidates.out.candidates
-    }
-    else {
-        final_designs = stable_designs
-        mutations = Channel.empty()
-    }
-
-    def terminalStage = params.run_affinity_maturation == true
-        ? 'iggm_affinity_maturation'
-        : params.run_post_validation_maturation == true
+    def terminalStage = params.run_post_validation_maturation == true
             ? 'maturation_post_validation'
             : params.run_structure_validation != false
                 ? "structure_validation_${(params.structure_validator ?: 'boltz2').toString().toLowerCase()}"
                 : params.run_ppiflow_maturation == true || params.run_maturation == true
                     ? 'ppiflow_maturation'
                     : 'sequence_design_terminal'
-    def terminalMethod = params.run_affinity_maturation == true
-        ? 'iggm'
-        : params.run_post_validation_maturation == true || params.run_ppiflow_maturation == true || params.run_maturation == true
+    def terminalMethod = params.run_post_validation_maturation == true || params.run_ppiflow_maturation == true || params.run_maturation == true
             ? 'ppiflow'
             : params.run_structure_validation != false
                 ? (params.structure_validator ?: 'boltz2').toString().toLowerCase()
@@ -3455,8 +3298,6 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
     designs = final_designs // Final antibody designs
     frustrampnn_results = frustrampnn_results // Typed canonical component result/status stream
     immunogenicity = immunogenicity_scores // AntiBERTy PLL scores
-    stability = stability_scores_early // ThermoMPNN ddG scores
-    mutations = mutations // IgGM suggested mutations
     backbones = backbone_designs // RFantibody backbones after optional coarse screening/review staging
 }
 

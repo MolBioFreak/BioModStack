@@ -98,12 +98,9 @@ OPTIONAL_WEIGHTS = [
 
 # Optional container images to verify in container_dir (warn-only)
 OPTIONAL_CONTAINERS = [
-    "af2.sif",
     "boltz2.sif",
     "boltzgen.sif",
     "antibody_tools.sif",
-    "stability_tools.sif",
-    "iggm.sif",
     "frustrampnn.sif",
 ]
 

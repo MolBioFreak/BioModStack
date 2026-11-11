@@ -70,7 +70,6 @@ def test_legacy_esm_batch_selects_same_process_as_dispatcher(params, process):
     ('workflows/protein_local_redesign.nf:PrepProteinLocalMPNN', {'scripts/proteinmpnn_native_binding.py'}),
     ('workflows/protein_local_redesign.nf:PrepProteinLocalFAMPNN', FAM),
     ('modules/shape_blueprint.nf:RunShapeBoltzValidator', {'scripts/lib/boltz_fidelity.py'}),
-    ('modules/af2.nf:RunAF2', {'scripts/run_af2_initial_guess.py'}),
     ('modules/boltz_cp_experimental.nf:RunBoltzCPExperimental', {'scripts/fold_cp_input.py'}),
 ])
 def test_embedded_owner_helper_declarations(owner, required):

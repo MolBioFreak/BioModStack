@@ -148,11 +148,11 @@ def package(tmp_path, monkeypatch):
                '--api_python', str(current/'venv/bin/python'),
                '--msa_cache_dir', str(roots['data']/'cache'),
                '--msa_local_db', str(roots['data']/'absent-offline'),
-               '--af2_models', '/ignored/default/af2', '--boltz_models', str(roots['weights']/'boltz')]
+               '--alphafold_params', '/ignored/default/af2', '--boltz_models', str(roots['weights']/'boltz')]
     job = SimpleNamespace(id='job', model_id='protenix', mode='predict', child_output_dir=None,
                           output_dir=str(output), lineage_root_job_id=None, parent_job_id=None,
                           execution_source_revision='a'*40, execution_source_tree='b'*40,
-                          params={'protenix_msa_backend':'local', 'af2_models':'/ignored/original',
+                          params={'protenix_msa_backend':'local', 'alphafold_params':'/ignored/original',
                                   'boltz_models':str(roots['data']/'unrelated')},
                           provenance=bundle_assignment_fixture(), assigned_gpu=0)
     target = SimpleNamespace(id='target', remote_root=str(tmp_path/'remote'))
@@ -173,7 +173,7 @@ def package(tmp_path, monkeypatch):
                   container_dir=str(roots['containers']), data_root=str(roots['data']),
                   code_root=str(roots['repo']), api_python=str(current/'venv/bin/python'),
                   msa_cache_dir=str(roots['data']/'cache'), msa_local_db=str(roots['data']/'absent-offline'),
-                  af2_models='/ignored/default/af2', boltz_models=str(roots['weights']/'boltz'),
+                  alphafold_params='/ignored/default/af2', boltz_models=str(roots['weights']/'boltz'),
                   out_dir=str(output), work_dir=str(roots['data']/'work'))
     job.native_invocation = replace(NativeInvocation.capture(
         model_id=job.model_id, mode=job.mode, command=command, requested=native,

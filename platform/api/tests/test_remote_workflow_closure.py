@@ -997,11 +997,11 @@ def test_native_stage_projects_predecessor_roles_once():
     components, dynamic, dependencies, services, blockers = [], [], {}, [], []
     annotations = _NativeAnnotations({}, 'workflows/protein_design.nf', components,
         dynamic, dependencies, roles, services, lambda *a, **kw: blockers.append(a))
-    annotations.stage('AlignAF2', after=('parent',))
+    annotations.stage('AlignBoltz', after=('parent',))
     assert roles.scans == 1
     emitted = roles[4:]
     assert [role.source_role_ids for role in emitted if role.direction == 'input'] == [
-        ('parent:first', 'parent:second'), ('parent:first', 'parent:second')]
+        ('parent:first', 'parent:second')] * 3
     assert all(role.source_role_ids == () for role in emitted if role.direction == 'output')
     assert not blockers
 

@@ -136,7 +136,6 @@ include { PrepRFD3Input ; RunRFD3 ; FilterRFD3 } from '../modules/rfd3.nf'
 include { RunRF3 ; FilterRF3 } from '../modules/rf3.nf'
 include { PrepFAMPNN ; FilterFAMPNN ; RunFAMPNN } from '../modules/fampnn.nf'
 include { FilterMPNN ; PrepMPNN ; RunMPNN } from '../modules/proteinmpnn.nf'
-include { AlignAF2 ; FilterAF2 ; RunAF2 } from '../modules/af2.nf'
 include { AnalyseBestDesigns } from '../modules/analysis.nf'
 include { PublishResults } from '../modules/publish.nf'
 include { AlignBoltz ; FilterBoltz ; PrepBoltz ; RunBoltz } from '../modules/boltz.nf'
@@ -145,7 +144,6 @@ include { CombineMetadata } from '../modules/combine_metadata.nf'
 include { Compress as CompressRFD } from '../modules/compress'
 include { Compress as CompressMPNN } from '../modules/compress'
 include { Compress as CompressFAMPNN } from '../modules/compress'
-include { Compress as CompressAF2 } from '../modules/compress'
 include { Compress as CompressBoltz } from '../modules/compress'
 include { MergeUncroppedTarget } from '../modules/merge_uncropped_target.nf'
 include { BoltzFromSequence } from '../modules/structure_prediction.nf'
@@ -253,7 +251,6 @@ def proteinDesignTerminalCandidate(rawPath, branch, method, producer = [:]) {
     def branchAuthorities = [
         early_sequence_prediction: [producer_branch: 'early_sequence_prediction'],
         rfd3_only: [producer_branch: 'rfd3_only'],
-        af2_terminal: [producer_branch: 'af2_terminal'],
         boltz_terminal: [producer_branch: 'boltz_terminal'],
         rf3_terminal: [producer_branch: 'rf3_terminal'],
         protenix_terminal: [producer_branch: 'protenix_terminal'],
@@ -1053,39 +1050,7 @@ workflow PROTEIN_DESIGN {
         else {
             filt_seq_pdbs.set { pred_input_pdbs }
         }
-        if (params.pred_method == "af2") {
-
-            pred_input_pdbs
-                .collect()
-                .map { allPdbs -> partitionGpuBatchesByNumRes(allPdbs, params.gpus) }
-                .flatten()
-                .groupTuple()
-                .set { pred_input_tuple }
-
-            RunAF2(pred_input_tuple)
-
-            CompressAF2("af2", RunAF2.out.pdbs_jsons.flatten().collect())
-
-            rebatchTuples(RunAF2.out.pdbs_jsons, 200)
-                .set { af2_tuple }
-
-            FilterAF2(af2_tuple)
-
-            if (params.rfd_mode in ['binder_denovo', 'binder_foldconditioning', 'binder_motifscaffolding', 'binder_partialdiffusion']) {
-                AlignAF2(FilterAF2.out.pdbs.flatten().collect(), pred_input_pdbs.flatten().last())
-                AlignAF2.out.pdbs
-                    .flatten()
-                    .collect()
-                    .set { analysis_input_pdbs }
-            }
-            else {
-                FilterAF2.out.pdbs
-                    .flatten()
-                    .collect()
-                    .set { analysis_input_pdbs }
-            }
-        }
-        else if (params.pred_method == "boltz") {
+        if (params.pred_method == "boltz") {
             PrepBoltz(pred_input_pdbs)
 
             PrepBoltz.out.yamls
@@ -1139,7 +1104,7 @@ workflow PROTEIN_DESIGN {
                 .set { analysis_input_pdbs }
         }
         else {
-            error("Not a valid structure prediction method. Choose from: af2, boltz, rf3, protenix")
+            error("Not a valid structure prediction method. Choose from: boltz, rf3, protenix")
         }
     }
     else if (!params.run_rfd_only && params.diffusion_method != 'boltzgen') {
@@ -1199,9 +1164,7 @@ workflow PROTEIN_DESIGN {
                         ? 'skip_rfd_seq'
                         : params.skip_rfd == true
                             ? 'skip_rfd'
-                            : params.pred_method == 'af2'
-                                ? 'af2_terminal'
-                                : params.pred_method == 'boltz'
+                            : params.pred_method == 'boltz'
                                     ? 'boltz_terminal'
                                     : params.pred_method == 'rf3'
                                         ? 'rf3_terminal'

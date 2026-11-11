@@ -1462,15 +1462,6 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
         normalized["run_post_validation_maturation"] = _to_bool(canonical_post_validation)
         normalized["run_post_boltz_maturation"] = normalized["run_post_validation_maturation"]
 
-    canonical_thermompnn = normalized.get("run_thermompnn")
-    legacy_stability = normalized.get("run_stability_scoring")
-
-    if canonical_thermompnn is None and legacy_stability is not None:
-        canonical_thermompnn = _to_bool(legacy_stability)
-    if canonical_thermompnn is not None:
-        normalized["run_thermompnn"] = _to_bool(canonical_thermompnn)
-        normalized["run_stability_scoring"] = normalized["run_thermompnn"]
-
     ppiflow_checkpoint = str(normalized.get("ppiflow_checkpoint") or "").strip()
     if not ppiflow_checkpoint and (
         _to_bool(normalized.get("run_ppiflow_backbone_refine"))
@@ -4571,9 +4562,6 @@ def _build_antibody_iteration_job(
                 "run_maturation": False,
                 "run_frustrampnn": False,
                 "run_immunogenicity_scoring": False,
-                "run_thermompnn": False,
-                "run_stability_scoring": False,
-                "run_af2_backprop": False,
                 "interactive_swa": True,
                 "interactive_gating": True,
                 "interactive_gate_stage": "post_structure_validation",
@@ -4595,9 +4583,6 @@ def _build_antibody_iteration_job(
                 "run_maturation": False,
                 "run_frustrampnn": False,
                 "run_immunogenicity_scoring": False,
-                "run_thermompnn": False,
-                "run_stability_scoring": False,
-                "run_af2_backprop": False,
                 "interactive_swa": True,
                 "interactive_gating": True,
                 "interactive_gate_stage": "post_structure_validation",
@@ -4620,9 +4605,6 @@ def _build_antibody_iteration_job(
                 "run_maturation": False,
                 "run_frustrampnn": False,
                 "run_immunogenicity_scoring": False,
-                "run_thermompnn": False,
-                "run_stability_scoring": False,
-                "run_af2_backprop": False,
                 "interactive_swa": False,
                 "interactive_gating": False,
                 "interactive_gate_stage": "post_fampnn",
@@ -4652,9 +4634,6 @@ def _build_antibody_iteration_job(
                 "run_maturation": True,
                 "run_frustrampnn": False,
                 "run_immunogenicity_scoring": False,
-                "run_thermompnn": False,
-                "run_stability_scoring": False,
-                "run_af2_backprop": False,
                 "interactive_swa": False,
                 "interactive_gating": False,
                 "interactive_gate_stage": "post_structure_validation",
@@ -4682,9 +4661,6 @@ def _build_antibody_iteration_job(
                 "run_maturation": False,
                 "run_frustrampnn": False,
                 "run_immunogenicity_scoring": False,
-                "run_thermompnn": False,
-                "run_stability_scoring": False,
-                "run_af2_backprop": False,
                 "interactive_swa": True,
                 "interactive_gating": True,
                 "interactive_gate_stage": "post_fampnn",
@@ -4705,9 +4681,6 @@ def _build_antibody_iteration_job(
                 "run_maturation": False,
                 "run_frustrampnn": True,
                 "run_immunogenicity_scoring": False,
-                "run_thermompnn": False,
-                "run_stability_scoring": False,
-                "run_af2_backprop": False,
                 "interactive_swa": False,
                 "interactive_gating": False,
                 "interactive_gate_stage": "post_structure_validation",
@@ -7176,8 +7149,6 @@ async def _create_job(
         job_data.params['seq_design_caliby'] = False
         job_data.params['run_structure_validation'] = False
         job_data.params['run_immunogenicity_scoring'] = False
-        job_data.params['run_thermompnn'] = False
-        job_data.params['run_stability_scoring'] = False
         job_data.params['run_maturation'] = False
         logger.info("[QUEUE] rfantibody_backbone mode detected. Silencing downstream validation flags.")
 

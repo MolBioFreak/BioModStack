@@ -78,18 +78,6 @@ steps:
     description: Score sequence naturalness to predict immunogenicity risk
     required: true
 
-  - id: stability
-    name: Stability Scoring
-    model: thermompnn
-    description: Predict thermodynamic stability (ddG)
-    required: true
-
-  - id: maturation
-    name: Affinity Maturation
-    model: iggm
-    description: Suggest beneficial mutations for improved binding
-    required: false
-
 params:
   # ===== TARGET CONFIGURATION =====
   - name: target_pdb
@@ -418,40 +406,6 @@ params:
     type: boolean
     description: Extract per-residue embeddings for analysis
     default: false
-
-  # ===== STEP 5: STABILITY PARAMS =====
-  - name: run_stability_scoring
-    type: boolean
-    description: Score stability with ThermoMPNN
-    default: true
-
-  - name: thermompnn_ddg_threshold
-    type: number
-    description: Maximum ddG for stability filtering (kcal/mol)
-    default: 2.0
-    minimum: -10.0
-    maximum: 10.0
-    step: 0.5
-
-  # ===== STEP 6: AFFINITY MATURATION PARAMS =====
-  - name: run_affinity_maturation
-    type: boolean
-    description: Run IgGM affinity maturation (optional)
-    default: false
-
-  - name: iggm_num_variants
-    type: integer
-    description: Number of maturation variants to generate
-    default: 10
-    minimum: 1
-    maximum: 50
-
-  - name: iggm_maturation_cycles
-    type: integer
-    description: Number of maturation optimization cycles
-    default: 1
-    minimum: 1
-    maximum: 5
 
 enabled: true
 experimental: true
