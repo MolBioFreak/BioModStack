@@ -61,6 +61,7 @@ import { repairManualLatestRequest } from '../lib/repairManualFeedback';
 import './BioXpRobotControls.css';
 import { BioXpMovementFailureEvidence } from './BioXpMovementFailureEvidence';
 import { BioXpTransferControls } from './BioXpTransferControls';
+import { BioXpManualPlateControls, type BioXpManualPlateIntent } from './BioXpManualPlateControls';
 import { BioXpDeckRecordPanel } from './BioXpDeckRecordPanel';
 import { BioXpMotionToggle } from './BioXpMotionToggle';
 import { occupancyByTray } from '../lib/bioxpDeckRecord';
@@ -91,6 +92,8 @@ function DeckSubmissionRow({ item, generation, active, onSelect, onTerminal }: {
     const captured = item.request;
     const destinationLabel = captured.action_id === 'oem.xy.move_sequence' ? `Fast lane: ${captured.inputs.targets.map(deckLaneTargetLabel).join(' → ')}`
         : captured.action_id === 'oem.xy.retarget' ? `Retarget: ${deckLaneTargetLabel(captured.inputs.target)}`
+        : captured.action_id === 'oem.deck.catch_plate' ? `Pick up & hold · object ${captured.inputs.plate}`
+        : captured.action_id === 'oem.deck.release_plate' ? `Place held plate · destination ${captured.inputs.destination}`
         : deckLaneTargetLabel(captured.inputs);
     return <p data-request-key={item.request.idempotency_key}>
         {destinationLabel} · {label}
@@ -185,6 +188,8 @@ const nextIdempotencyKey = (prefix: string): string => {
 };
 
 const CANONICAL_DECK_ACTION_IDS = new Set([
+    'oem.deck.catch_plate',
+    'oem.deck.release_plate',
     'oem.deck.move_to_location',
     'oem.deck.move_to_well',
     'oem.deck._mov_execution',
@@ -1036,7 +1041,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         });
     };
     const submitDeckV2 = (request: BioXpOperatorActionV2Request) => {
-        if (!v2AuthorityCoherent || !['oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.xy.move_sequence', 'oem.xy.retarget'].includes(request.action_id)) return false;
+        if (!v2AuthorityCoherent || !['oem.deck.catch_plate', 'oem.deck.release_plate', 'oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.xy.move_sequence', 'oem.xy.retarget'].includes(request.action_id)) return false;
         const captured = invokeDeckAction.submit(request);
         if (captured) setDeckMutationGeneration(generation);
         return captured;
@@ -1104,6 +1109,20 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             setReconciledDeckPredecessor({ commandId: effectiveDeckCommandId, generation });
         }
         return true;
+    };
+    const plateHandlingDisabledReason = (actionId: BioXpManualPlateIntent['action_id']): string | null => {
+        if (invokeDeckAction.isPending) return 'A deck command submission is in flight; wait for its response.';
+        if (!linkConnected) return 'Connect to control the robot.';
+        const action = v2NormalActionById(actionId);
+        if (!action) return 'Robot plate handling action is unavailable.';
+        return action.enabled === true ? null : action.disabled_reason ?? 'Robot plate handling action is unavailable.';
+    };
+    const invokePlateHandling = (intent: BioXpManualPlateIntent) => {
+        if (plateHandlingDisabledReason(intent.action_id) !== null) return;
+        const envelope = v2NormalEnvelope();
+        if (!envelope) return;
+        submitDeckV2({ ...envelope, ...intent,
+            expected_board_epoch_by_board: v2NormalActionById(intent.action_id)?.expected_board_epoch_by_board ?? {} });
     };
     const invokeNamedDeckMove = (target: string, cameraOffset: boolean) => {
         if (stationDisabledReason(target) !== null) return;
@@ -1575,7 +1594,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 <YOperatorError label="Deck receipt" error={deckReceiptQuery.error} />
 
                         </div>}
-                        transferControls={visible => <BioXpTransferControls visible={visible} key={`${generation}:${active}`} generation={generation} connected={linkConnected} />}
+                        transferControls={visible => <><BioXpManualPlateControls visible={visible} disabledReason={plateHandlingDisabledReason} onSubmit={invokePlateHandling} /><BioXpTransferControls visible={visible} key={`${generation}:${active}`} generation={generation} connected={linkConnected} /></>}
                         deckRecord={<BioXpDeckRecordPanel generation={generation} connected={linkConnected} visible={liveDeckVisible} compact />}
                         tipOccupancy={occupancyByTray(liveTipTrays.data)}
                     />

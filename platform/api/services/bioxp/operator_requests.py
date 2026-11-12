@@ -132,6 +132,21 @@ class OperatorDeckMoveInputsV1(BaseModel):
         return self
 
 
+class OperatorDeckCatchPlateInputsV2(BaseModel):
+    """Exact OEM catch intent; object semantics remain native-owned."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    plate: StrictInt
+    run_in_parallel: StrictBool = False
+
+
+class OperatorDeckReleasePlateInputsV2(BaseModel):
+    """Exact OEM release intent; placement ordinals are not pipette locations."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    destination: StrictInt
+    press_plate: StrictBool = False
+    run_in_parallel: StrictBool = False
+
+
 class OperatorDeckMoveToWellInputsV2(BaseModel):
     """Explicit native well intent; resource/well semantics remain robot-owned."""
 

@@ -1660,6 +1660,15 @@ function assertCanonicalBoardEpochMap(value: Record<string, number>): void {
 
 export function assertBioXpOperatorActionV2Request(request: BioXpOperatorActionV2Request): void {
     assertCanonicalBoardEpochMap(request.expected_board_epoch_by_board);
+    if (request.action_id === 'oem.deck.catch_plate' || request.action_id === 'oem.deck.release_plate') {
+        const inputs = request.inputs as Record<string, unknown>;
+        const ordinal = request.action_id === 'oem.deck.catch_plate' ? 'plate' : 'destination';
+        const allowed = request.action_id === 'oem.deck.catch_plate' ? ['plate', 'run_in_parallel'] : ['destination', 'press_plate', 'run_in_parallel'];
+        if (!Number.isSafeInteger(inputs[ordinal]) || Object.keys(inputs).some(key => !allowed.includes(key))
+            || ['run_in_parallel', 'press_plate'].some(key => key in inputs && typeof inputs[key] !== 'boolean')) {
+            throw new Error('Plate handling inputs must match the native integer and optional boolean fields only');
+        }
+    }
     if (request.action_id === 'oem.deck.move_to_well') {
         if (Object.keys(request.inputs).sort().join(',') !== 'location_id,position_flag,well'
             || !Number.isSafeInteger(request.inputs.location_id)
@@ -1738,6 +1747,8 @@ export type BioXpOperatorActionV2Request =
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_absolute'; inputs: { target_steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.manual_panel_home'; inputs: Record<string, never> })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.move_to_location'; inputs: { target: string; camera_offset: boolean } })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.catch_plate'; inputs: { plate: number; run_in_parallel?: boolean } })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.release_plate'; inputs: { destination: number; press_plate?: boolean; run_in_parallel?: boolean } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.move_to_well'; inputs: { location_id: number; well: string | number; position_flag: 0 | 1 | 2 } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.xy.move_sequence'; inputs: { targets: BioXpXYTarget[] } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.xy.retarget'; inputs: { target: BioXpXYTarget } });
@@ -1829,8 +1840,8 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
 export const useInvokeBioXpOperatorActionV2 = () => useInvokeBioXpOperatorActionV2Mutation();
 
 /** Deck click lane: Full report (named/well moves), Fast lane (sequence) and Retarget. */
-export const BIOXP_DECK_LANE_ACTION_IDS: readonly string[] = ['oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.xy.move_sequence', 'oem.xy.retarget'];
-type BioXpDeckLaneActionId = 'oem.deck.move_to_location' | 'oem.deck.move_to_well' | 'oem.xy.move_sequence' | 'oem.xy.retarget';
+export const BIOXP_DECK_LANE_ACTION_IDS: readonly string[] = ['oem.deck.catch_plate', 'oem.deck.release_plate', 'oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.xy.move_sequence', 'oem.xy.retarget'];
+type BioXpDeckLaneActionId = 'oem.deck.catch_plate' | 'oem.deck.release_plate' | 'oem.deck.move_to_location' | 'oem.deck.move_to_well' | 'oem.xy.move_sequence' | 'oem.xy.retarget';
 const isDeckLaneRequest = (request: BioXpOperatorActionV2Request): request is Extract<BioXpOperatorActionV2Request, { action_id: BioXpDeckLaneActionId }> =>
     BIOXP_DECK_LANE_ACTION_IDS.includes(request.action_id);
 
@@ -2009,7 +2020,7 @@ export const bioXpDeckRecoveryResolution = (receipt: (BioXpOperatorReceiptV2 & P
         || !Number.isSafeInteger(value.transition_sequence) || value.transition_sequence < 1
         || value.command_id !== receipt?.command_id || receipt.terminal !== true
         || !['failed', 'ambiguous', 'interrupted', 'stopped', 'aborted', 'cancelled'].includes(receipt.status)
-        || !['oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.deck._mov_execution', 'oem.deck._finite_operation', 'oem.xy.move_sequence', 'oem.xy.retarget'].includes(receipt.action_id)) {
+        || !['oem.deck.catch_plate', 'oem.deck.release_plate', 'oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.deck._mov_execution', 'oem.deck._finite_operation', 'oem.xy.move_sequence', 'oem.xy.retarget'].includes(receipt.action_id)) {
         throw new Error('Invalid deck recovery resolution');
     }
     return value;

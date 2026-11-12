@@ -20,6 +20,8 @@ from services.bioxp.operator_requests import (
     OperatorAdmissionRequest,
     OperatorAssessmentRequest,
     OperatorDeckMoveInputsV1,
+    OperatorDeckCatchPlateInputsV2,
+    OperatorDeckReleasePlateInputsV2,
     OperatorDeckRecordRequestV1,
     OperatorDeckMoveToWellInputsV2,
     OperatorEmptyInputsV2,
@@ -179,6 +181,8 @@ _V2_NORMAL_INPUT_TYPES = {
     "oem.deck.collect_authority": OperatorEmptyInputsV2,
     "oem.deck.move_to_location": OperatorDeckMoveInputsV1,
     "oem.deck.move_to_well": OperatorDeckMoveToWellInputsV2,
+    "oem.deck.catch_plate": OperatorDeckCatchPlateInputsV2,
+    "oem.deck.release_plate": OperatorDeckReleasePlateInputsV2,
     "oem.xy.move_sequence": OperatorXYMoveSequenceInputsV2,
     "oem.xy.retarget": OperatorXYRetargetInputsV2,
 }
@@ -211,7 +215,8 @@ async def invoke_operator_action_v2(
     if input_type is None:
         raise HTTPException(status_code=404, detail="Unknown BMS v2 normal operator action")
     try:
-        inputs = input_type.model_validate(request.inputs).model_dump(mode="json")
+        inputs = input_type.model_validate(request.inputs).model_dump(
+            mode="json", exclude_unset=input_type in (OperatorDeckCatchPlateInputsV2, OperatorDeckReleasePlateInputsV2))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Action inputs do not match the action schema") from exc
     body = request.model_dump(exclude={"expected_connection_generation", "inputs"}, mode="json")

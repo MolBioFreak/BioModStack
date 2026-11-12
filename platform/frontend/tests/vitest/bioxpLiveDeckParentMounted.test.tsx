@@ -26,7 +26,7 @@ vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: () =
 
 let host: HTMLDivElement, root: Root, client: QueryClient;
 let catalog: any, generation: number, active: boolean, autoAccept: boolean;
-let held: Array<{ config: any; body: any; resolve: (value: any) => void }>;
+let held: Array<{ config: any; body: any; resolve: (value: any) => void; reject: (error: unknown) => void }>;
 let requests: Array<{ method: string; url: string; body?: any; params?: any }>;
 let receipts: Map<string, any>;
 const adapter = api.defaults.adapter, exported: any[] = [];
@@ -82,6 +82,9 @@ beforeEach(() => {
         { action_id: 'oem.deck.move_to_well', request_schema_version: 'bioxp.operator_action_request.v2',
             response_schema_version: 'bioxp.operator_action_receipt.v2', interrupt: false,
             enabled: true, disabled_reason: null, expected_board_epoch_by_board: { '4': 64, '5': 1 } },
+        ...['catch_plate', 'release_plate'].map(name => ({ action_id: `oem.deck.${name}`, request_schema_version: 'bioxp.operator_action_request.v2',
+            response_schema_version: 'bioxp.operator_action_receipt.v2', interrupt: false, enabled: true, disabled_reason: null,
+            expected_board_epoch_by_board: { '4': 72, '5': 9 } })),
     ]);
     api.defaults.adapter = async config => {
         const method = config.method ?? 'get', url = config.url ?? '';
@@ -89,6 +92,7 @@ beforeEach(() => {
         requests.push({ method, url, body, params: config.params });
         if (method === 'get') {
             if (url === '/api/bioxp/status') return response(config, { connection: { generation, active, configured: true, reachable: true, runtime_ready: true, hardware_fresh: true }, mutation_access: { enabled: true } });
+            if (url === '/api/bioxp/methods/catalog') return response(config, custodyCatalog);
             if (url.endsWith('/catalog')) return response(config, catalogWireFixture({ schema_version: 'bioxp.operator_control_catalog.v1',
                 dashboard: catalog.dashboard.telemetry ?? metadata.catalog.dashboard.telemetry,
                 actions: manual.referenced, canonical: structuredClone(catalog) }, config.params?.view));
@@ -97,7 +101,6 @@ beforeEach(() => {
             if (url.includes('/receipts/')) return response(config, receipts.get(decodeURIComponent(url.split('/').at(-1)!)));
             if (url === '/api/bioxp/protocols/jobs') return response(config, { rows: [] });
             if (url === '/api/bioxp/protocols/presets') return response(config, []);
-            if (url === '/api/bioxp/methods/catalog') return response(config, custodyCatalog);
             if (url === '/api/bioxp/operator-controls/deck/state') return response(config, { schema_version: 'bioxp.operator_deck_state.v1',
                 semantic: { plate_on_gantry: null, movable_plate_locations: { OUTPUT_COVER: 'LOC_OC_COVER_STORAGE', REAGENT_COVER: 'LOC_RC_COVER' } },
                 movable_objects: {}, physical_observation: false });
@@ -106,9 +109,9 @@ beforeEach(() => {
                 physical_observation: false });
             throw new Error(`Unexpected GET ${url}`);
         }
-        if (url.includes('/v2/actions/oem.deck.move_to_')) {
+        if (url.includes('/v2/actions/oem.deck.')) {
             if (autoAccept) return admit(config, body);
-            return new Promise(resolve => held.push({ config, body, resolve }));
+            return new Promise((resolve, reject) => held.push({ config, body, resolve, reject }));
         }
         if (url.endsWith('/v2/actions/meta.deactivate_motion') || url.endsWith('/v2/actions/meta.activate_motion')) return admit(config, body);
         if (url.includes('/v2/interrupts/')) return response(config, { ...park, action_id: url.split('/').at(-1), command_id: 'stop-parent' });
@@ -124,7 +127,8 @@ afterEach(async () => {
     vi.unstubAllGlobals(); vi.useRealTimers();
 });
 afterAll(() => {
-    if (process.env.BIOXP_LIVE_DECK_UI_EXPORT) writeFileSync(process.env.BIOXP_LIVE_DECK_UI_EXPORT,
+    const exportPath = process.env.BIOXP_MANUAL_PLATE_UI_EXPORT ?? process.env.BIOXP_LIVE_DECK_UI_EXPORT;
+    if (exportPath) writeFileSync(exportPath,
         JSON.stringify({ source: 'actual mounted cockpit and Axios serialization', transport_fixture_only: true, requests: exported }, null, 2));
 });
 
@@ -303,4 +307,87 @@ it('top-bar Motion Off posts Motion Off once even when the robot reports Activat
     expect(sent).toHaveLength(1);
     expect(sent[0].url).toBe('/api/bioxp/operator-controls/v2/actions/meta.deactivate_motion');
     expect(sent[0].body).toMatchObject({ schema_version: 'bioxp.operator_action_request.v2', inputs: {} });
+});
+
+const platePanel = () => live().querySelector<HTMLElement>('[aria-label="Manual plate handling"]')!;
+const choosePlate = async (label: string, value: string) => {
+    const select = platePanel().querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!;
+    expect(select, label).toBeTruthy();
+    await act(async () => { select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })); }); await advance();
+};
+const plateWrites = () => mutations().filter(r => r.url.endsWith('/oem.deck.catch_plate') || r.url.endsWith('/oem.deck.release_plate'));
+it('manual plate handling uses published nondefault ordinals, one synchronous submission and no protocol', async () => {
+    autoAccept = false; await mount();
+    expect(platePanel()).toBeTruthy();
+    expect(button('Pick up and move', live())).toBeTruthy();
+    await choosePlate('Object to pick up', 'PL_REAGENT');
+    await choosePlate('Place destination', 'LOC_MS');
+    const pickup = button('Pick up & hold', platePanel());
+    await act(async () => { pickup.click(); pickup.click(); }); await advance();
+    expect(plateWrites()).toHaveLength(1);
+    const request = plateWrites()[0];
+    expect(request).toMatchObject({ method: 'post', url: '/api/bioxp/operator-controls/v2/actions/oem.deck.catch_plate', body: {
+        schema_version: 'bioxp.operator_action_request.v2', expected_connection_generation: generation,
+        expected_ownership_generation: catalog.dashboard.ownership_generation, expected_board_epoch_by_board: { '4': 72, '5': 9 },
+        inputs: { plate: 2 }, idempotency_key: expect.any(String) } });
+    expect(request.body.inputs).toEqual({ plate: 2 });
+    await choosePlate('Object to pick up', 'PL_OUTPUT');
+    expect(plateWrites()[0]).toEqual(request);
+    const accepted = admit(held[0].config, held[0].body); accepted.data.status = 'queued';
+    await act(async () => held[0].resolve(accepted)); await advance();
+    expect(live().textContent).toContain('robot queued');
+    // No held provenance gate: native admission owns whether the held object can be placed.
+    await click(button('Place held plate', platePanel()));
+    expect(plateWrites()).toHaveLength(2);
+    expect(plateWrites()[1]).toMatchObject({ url: '/api/bioxp/operator-controls/v2/actions/oem.deck.release_plate', body: {
+        expected_board_epoch_by_board: { '4': 72, '5': 9 }, inputs: { destination: 25, press_plate: false } } });
+    expect(plateWrites()[1].body.inputs).toEqual({ destination: 25, press_plate: false });
+    expect(plateWrites()[1].body.idempotency_key).not.toBe(request.body.idempotency_key);
+    expect(mutations()).toHaveLength(2);
+});
+it('manual plate handling renders actual source choices and submits every published placement ordinal', async () => {
+    await mount();
+    const custody = custodyCatalog.authoring.custody;
+    const choices = platePanel().querySelector<HTMLSelectElement>('[aria-label="Object to pick up"]')!;
+    expect([...choices.options].filter(o => o.value).map(o => o.value)).toEqual(custody.objects.map(o => o.token));
+    for (const row of custody.destinations.filter(d => Number.isInteger(d.plate_destination))) {
+        await choosePlate('Place destination', row.token); await click(button('Place held plate', platePanel()));
+        expect(plateWrites().at(-1)?.body.inputs).toEqual({ destination: row.plate_destination, press_plate: false });
+    }
+    const id = [...receipts.keys()].at(-1)!;
+    const key = plateWrites().at(-1)!.body.idempotency_key;
+    expect(live().querySelector(`[data-request-key="${key}"]`)?.textContent).toContain('robot dispatched');
+    receipts.set(id, { ...receipts.get(id), terminal: true, status: 'completed', completion_class: 'completed' });
+    await act(async () => { await client.refetchQueries({ queryKey: ['bioxp'] }); }); await advance();
+    expect(requests.some(r => r.url.includes(`/receipts/${encodeURIComponent(id)}`))).toBe(true);
+    // The existing canonical observer retires only this completed request, not a synthetic UI timer.
+    expect(live().querySelector(`[data-request-key="${key}"]`)).toBeNull();
+    expect(mutations().every(r => r.url.includes('/v2/actions/oem.deck.release_plate'))).toBe(true);
+});
+it('manual plate handling retains late-error request identity without retrying the POST', async () => {
+    autoAccept = false; await mount();
+    await choosePlate('Object to pick up', 'PL_OUTPUT');
+    await click(button('Pick up & hold', platePanel()));
+    const original = structuredClone(plateWrites()[0]);
+    await act(async () => held[0].reject({ response: { status: 502, data: { detail: {
+        error: 'post_dispatch_receipt_validation_failed', command_id: 'late-manual-1', status_path: '/operator/v2/actions/receipts/late-manual-1',
+        retry_guidance: 'do_not_resubmit_reconcile_by_command_id' } } } })); await advance(5000);
+    expect(plateWrites()).toEqual([original]);
+    expect(live().textContent).toContain(original.body.idempotency_key);
+    expect(live().textContent).toContain('admission uncertain');
+    expect(live().textContent).toContain('late-manual-1');
+    const lookups = requests.filter(r => r.url.includes('/v2/requests/'));
+    expect(lookups.length).toBeGreaterThan(0);
+    expect(lookups.every(r => r.url.endsWith(original.body.idempotency_key))).toBe(true);
+});
+it('manual plate handling preserves native live interlock denials but ignores historical ambiguity', async () => {
+    catalog.actions.find((a: any) => a.action_id === 'oem.deck.catch_plate').enabled = false;
+    catalog.actions.find((a: any) => a.action_id === 'oem.deck.catch_plate').disabled_reason = 'Door interlock';
+    catalog.dashboard.latest_receipts = [{ ...park, action_id: 'oem.deck.release_plate', status: 'ambiguous', terminal: true }];
+    await mount(); await choosePlate('Object to pick up', 'PL_POOL'); await choosePlate('Place destination', 'LOC_OC');
+    expect(button('Pick up & hold', platePanel()).disabled).toBe(true);
+    expect(platePanel().textContent).toContain('Door interlock');
+    expect(button('Place held plate', platePanel()).disabled).toBe(false);
+    await click(button('Place held plate', platePanel()));
+    expect(plateWrites()).toHaveLength(1);
 });
