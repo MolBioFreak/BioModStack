@@ -136,7 +136,7 @@ class OperatorDeckCatchPlateInputsV2(BaseModel):
     """Exact OEM catch intent; object semantics remain native-owned."""
     model_config = ConfigDict(extra="forbid", strict=True)
     plate: StrictInt
-    run_in_parallel: StrictBool = False
+    run_in_parallel: StrictBool = True
 
 
 class OperatorDeckReleasePlateInputsV2(BaseModel):
@@ -144,7 +144,7 @@ class OperatorDeckReleasePlateInputsV2(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     destination: StrictInt
     press_plate: StrictBool = False
-    run_in_parallel: StrictBool = False
+    run_in_parallel: StrictBool = True
 
 
 class OperatorDeckMoveToWellInputsV2(BaseModel):

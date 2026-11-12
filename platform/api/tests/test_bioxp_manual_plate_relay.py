@@ -77,3 +77,10 @@ def test_manual_plate_replays_actual_mounted_axios_wires(monkeypatch):
         assert result.status_code == 202, result.text
         assert runtime.connection.client.calls[-1][1]['json_data'] == {
             k: v for k, v in row['body'].items() if k != 'expected_connection_generation'}
+
+
+@pytest.mark.parametrize("model_name", ["OperatorDeckCatchPlateInputsV2", "OperatorDeckReleasePlateInputsV2"])
+def test_manual_plate_parallel_default_matches_native(model_name):
+    from services.bioxp import operator_requests
+    model = getattr(operator_requests, model_name)
+    assert model.model_json_schema()["properties"]["run_in_parallel"]["default"] is True
