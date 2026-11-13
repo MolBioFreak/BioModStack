@@ -28,6 +28,7 @@ from .golden_gate_suggest import (
     DATASET_BY_ENZYME, NO_DATA, EnzymeReport, PartSpec, Proposal, SuggestRequest, SuggestResult,
     _windows, default_retained_fragment_index,
 )
+from .golden_gate_neb_overhangs import is_low_efficiency, listed_overhangs, low_efficiency_note
 from .golden_gate_suggest_prepared import PartReport, PreparedInfo, classify_part, order_by_overhangs, order_rows, order_summary
 from .golden_gate_workflow import material_for, run_workflow
 from .golden_gate_workflow_types import AssembleTask, CutWindow, FidelitySettings
@@ -300,7 +301,7 @@ def _for_enzyme(request, enzyme, name, geometry, dataset, pieces, vector_materia
         while True:
             result = fidelity.optimize_overhangs(["".join(x) for x in itertools.product("ACGT", repeat=width)], n_slots,
                                                  dataset, end_length=width, fixed=locked, excluded=sorted(excluded),
-                                                 settings=settings)
+                                                 avoided=listed_overhangs(width), settings=settings)
             if not result["solutions"]:
                 raise AssemblyError("; ".join(result["diagnostics"]) or "optimizer found no junction set with the fixed overhangs")
             assignments, blocked = [], set()
@@ -385,6 +386,8 @@ def _proposal(request, enzyme, name, binding, dataset, pieces, vector_material, 
     if any(p.linker for p in pieces):
         notes.append("payload_length includes linker bases; for PCR the linker must be carried in the primer 5' tail")
     notes.extend(ordering_notes)
+    notes.extend(low_efficiency_note(labels[slot], fixed[slot][1] if slot in fixed else "optimizer", slot + 1)
+                 for slot in range(n_slots) if is_low_efficiency(labels[slot]))
     if any(p.prepared is not None for p in pieces):
         notes.append("Pre-configured parts are used exactly as supplied; no flanks, linkers or overhangs were added to them.")
     summary = order_summary(prepared_rows, request.preparation_kind)

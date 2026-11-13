@@ -87,6 +87,9 @@ def test_chosen_label_that_would_form_a_site_with_a_neighbour_is_replaced(count)
             proposal.junctions[i] + parts[i] for i in range(count)).upper() * 2
 
 
-def test_clean_parts_keep_the_labels_they_always_had():
+def test_clean_parts_get_the_optimizer_set_without_listed_overhangs():
+    # Clean parts need no seam-site exclusion, so the labels are the optimizer's own best set. That set used to start
+    # with AAAA, which NEB's design tool will not use (golden_gate_neb_overhangs); it is now left out of free junctions.
     result = suggest_golden_gate(_request([_clean(50 + i, 21 + i) for i in range(5)], proposals=1))
-    assert result.proposals[0].junctions == ["AAAA", "AACC", "AAGG", "ACAC", "ACCA"]
+    assert result.proposals[0].junctions == ["AAAC", "AACA", "AAGT", "AATG", "ACAG"]
+    assert not [n for n in result.proposals[0].notes if "Low-efficiency" in n]

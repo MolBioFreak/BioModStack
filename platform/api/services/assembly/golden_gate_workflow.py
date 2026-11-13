@@ -1,7 +1,7 @@
 """Compose native physical design, empirical search, edits and worksheets locally."""
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from services.assembly import golden_gate_fidelity as fidelity
 from services.assembly.golden_gate_design import design_golden_gate, preparation_geometry, _positions, _map_features
 from services.assembly.golden_gate_design_types import (
@@ -252,7 +252,7 @@ def _homopolymer_junction_rules(material: Material, width: int, maximum: int | N
 
 
 def run_workflow(request: WorkflowRequest, *, resolve_revision: Callable[[str], Material] | None = None,
-                 allowed_positions: set[int] | None = None) -> WorkflowResult:
+                 allowed_positions: set[int] | None = None, avoided: Sequence[str] = ()) -> WorkflowResult:
     if isinstance(request, AssembleTask):
         return _assemble(request, resolve_revision)
     settings = request.fidelity
@@ -286,7 +286,7 @@ def run_workflow(request: WorkflowRequest, *, resolve_revision: Callable[[str], 
     result = fidelity.optimize_sequence_windows(material.sequence, [(w.start, w.end) for w in request.windows], settings.dataset_id,
         end_length=width, topology=material.topology, fixed_positions=request.fixed_positions, fixed_overhangs=request.fixed_overhangs,
         allowed_positions=allowed_positions,
-        required=request.required, excluded=request.excluded, protected_regions=[(w.start, w.end) for w in request.protected_regions],
+        required=request.required, excluded=request.excluded, avoided=avoided, protected_regions=[(w.start, w.end) for w in request.protected_regions],
         frame_constraints=[(w.start, w.end, w.origin, w.phase) for w in request.frame_constraints],
         min_fragment_length=request.min_fragment_length, max_fragment_length=request.max_fragment_length,
         target_fragment_length=request.target_fragment_length, condition_use=settings.condition_use, settings=search)

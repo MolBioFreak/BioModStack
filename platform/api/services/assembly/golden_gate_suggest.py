@@ -18,6 +18,7 @@ from .feature_types import Closed, Material, Region
 from .golden_gate import resolve_golden_gate_enzyme
 from .golden_gate_design import _digest, _scan, preparation_geometry
 from .golden_gate_design_types import DesignMaterial, Source
+from .golden_gate_neb_overhangs import is_low_efficiency, listed_overhangs, low_efficiency_note
 from .golden_gate_suggest_prepared import PartReport, order_rows, order_summary
 from .golden_gate_workflow import material_for, run_workflow, _homopolymer_junction_rules
 from .golden_gate_workflow_types import (
@@ -226,6 +227,22 @@ def request_sources(request: SuggestRequest) -> list[Source]:
     return [s for s in (request.target, request.donor_source, request.vector, *(p.source for p in request.parts)) if s is not None]
 
 
+def _listed_overhang_notes(junctions: list[str], cuts: list[int], request: "SuggestRequest", circular: bool) -> list[str]:
+    """Observation for every listed overhang in a proposal, saying why BMS kept it. Never a refusal."""
+    fixed = set(request.fixed_boundaries)
+    terminal = (request.terminal_right_fusion or "").upper()
+    notes = []
+    for index, overhang in enumerate(junctions):
+        if not is_low_efficiency(overhang):
+            continue
+        # junctions are [terminal overhang if linear] + one per cut, in cut order
+        is_terminal = not circular and index == 0 and overhang.upper() == terminal
+        cut = None if is_terminal else cuts[index - (0 if circular else 1)]
+        origin = "terminal" if is_terminal else ("fixed" if cut in fixed else "optimizer")
+        notes.append(low_efficiency_note(overhang, origin, index + 1))
+    return notes
+
+
 def suggest_golden_gate(request: SuggestRequest, *, resolve_revision: Callable[[str], Material] | None = None) -> SuggestResult:
     if request.parts or request.standard_overhangs is not None:
         from .golden_gate_suggest_parts import suggest_parts
@@ -278,7 +295,8 @@ def suggest_golden_gate(request: SuggestRequest, *, resolve_revision: Callable[[
                 if request.avoid_repeats else (None, windows, [None]))
             for allowed in masks:
                 effective = task.model_copy(update={"windows": preferred_windows if allowed is not None else windows})
-                result = run_workflow(effective, resolve_revision=resolve_revision, allowed_positions=allowed)
+                result = run_workflow(effective, resolve_revision=resolve_revision, allowed_positions=allowed,
+                                     avoided=listed_overhangs(geometry.overhang_length))
                 if result.solutions:
                     break
         except (AssemblyError, ValueError) as exc:
@@ -321,6 +339,7 @@ def suggest_golden_gate(request: SuggestRequest, *, resolve_revision: Callable[[
                                    fragment_lengths=choice["fragment_lengths"], f_set=choice.get("f_set"),
                                    split_request=selected_task.model_dump(mode="json"), candidate=candidate, pcr_products=pcr,
                                    notes=_repeat_notes(analysis, selected_cuts, choice["fragment_lengths"], circular) +
+                                       _listed_overhang_notes(choice["junctions"], selected_cuts, request, circular) +
                                        _homopolymer_junction_rules(material, geometry.overhang_length,
                                            request.max_homopolymer_run, request.homopolymer_junction_buffer)[1] +
                                        (["For this 3-prime enzyme, terminal_right_fusion supplies the external left bottom-strand protrusion; target top-strand bases are unchanged."]
