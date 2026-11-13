@@ -853,10 +853,9 @@ def test_container_command_sets_worker_label_and_finite_fsize(
     broker.mkdir(mode=0o700)
     digest = json.loads(worker_module.RUNTIME_POLICY_PATH.read_text())['runtime_id'].removeprefix("sha256:")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{digest}")
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", digest)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "podman")
     monkeypatch.setattr(
-        worker_module.subprocess,
+        subprocess,
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(
             args[0], 0, stdout=f"sha256:{digest}\n", stderr=""
@@ -889,17 +888,17 @@ def test_container_command_fails_closed_when_approved_image_is_absent(
     broker.mkdir(mode=0o700)
     digest = json.loads(worker_module.RUNTIME_POLICY_PATH.read_text())['runtime_id'].removeprefix("sha256:")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{digest}")
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", digest)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "docker")
     monkeypatch.setattr(
-        worker_module.subprocess,
+        subprocess,
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(
             args[0], 1, stdout="", stderr="image is absent"
         ),
     )
 
-    with pytest.raises(RuntimeError, match="local approved Squigualiser image"):
+    monkeypatch.setattr(worker_module.shutil, "which", lambda name: "/usr/bin/" + name)
+    with pytest.raises(RuntimeError, match="no local image for BMS_ONT_SQUIGUALISER_IMAGE"):
         OntSignalWorker(None, None)._container_command(output, broker, kind="mapping")
 
 
@@ -972,10 +971,9 @@ async def test_retained_parent_keeps_exact_inode_bytes_and_command_never_reopens
     broker.mkdir(mode=0o700)
     digest = json.loads(worker_module.RUNTIME_POLICY_PATH.read_text())['runtime_id'].removeprefix("sha256:")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{digest}")
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", digest)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "docker")
     monkeypatch.setattr(
-        worker_module.subprocess,
+        subprocess,
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(
             args[0], 0, stdout=f"sha256:{digest}\n", stderr=""
@@ -1186,55 +1184,42 @@ def test_runtime_broker_retains_parent_fds_across_trusted_child_exec(tmp_path: P
     ("squigulator_producer", "SQUIGULATOR_POLICY_PATH", "BMS_ONT_SQUIGULATOR_IMAGE"),
     ("squigualiser_comparison_renderer", "COMPARISON_RENDER_POLICY_PATH", "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE"),
 ])
-def test_selected_policy_is_single_runtime_authority_and_digest_is_provenance(
+def test_local_image_runs_on_its_own_id_and_policy_stays_provenance(
     tmp_path, monkeypatch, stage, policy_attribute, image_env,
 ):
     policy = json.loads(getattr(worker_module, policy_attribute).read_text())
-    # A release can select its actual rebuilt ID without editing Python constants.
-    selected = "sha256:" + "b" * 64
-    policy["runtime_id"] = policy["oci_digest"] = selected
     raw = json.dumps(policy, indent=4).encode() + b"\n"
     path = tmp_path / "policy.json"
     path.write_bytes(raw)
     monkeypatch.setattr(worker_module, policy_attribute, path)
-    monkeypatch.setenv(image_env, selected)
-    monkeypatch.setenv(image_env + "_DIGEST", "b" * 64)
+    # A locally built image has an id the repository cannot know in advance.
+    local = "sha256:" + "c" * 64
+    asked: list[str] = []
+    def resolve(env_name: str, runtime: str) -> tuple[str, str]:
+        asked.append(env_name)
+        return local, "c" * 64
+    monkeypatch.setattr(worker_module, "local_image_identity", resolve)
     identity = (OntSignalWorker._runtime_identity() if stage is None
                 else OntSignalWorker._comparison_runtime_identity(stage))
-    assert identity["image"] == selected
+    assert asked == [image_env]
+    assert identity["image"] == local != policy["runtime_id"]
+    assert identity["image_digest"] == "c" * 64
     assert identity["policy_manifest_sha256" if stage is None else "policy_sha256"] == hashlib.sha256(raw).hexdigest()
     if stage is not None:
         assert identity["wrapper_sha256"] == policy["wrapper_sha256"]
-    monkeypatch.setenv(image_env, "sha256:" + "c" * 64)
-    with pytest.raises(RuntimeError, match="identity"):
-        if stage is None:
-            OntSignalWorker._runtime_identity()
-        else:
-            OntSignalWorker._comparison_runtime_identity(stage)
-
-
-def test_runtime_identity_is_bound_to_the_staged_approved_oci_policy(
+def test_runtime_identity_records_the_local_image_and_upstream_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    approved = json.loads(worker_module.RUNTIME_POLICY_PATH.read_text())['runtime_id'].removeprefix("sha256:")
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{approved}")
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", approved)
-
+    local = "d" * 64
+    monkeypatch.setattr(
+        worker_module, "local_image_identity", lambda env_name, runtime: (f"sha256:{local}", local)
+    )
     identity = OntSignalWorker._runtime_identity()
-
-    assert identity["image"] == f"sha256:{approved}"
-    assert identity["image_digest"] == approved
+    assert identity["image"] == f"sha256:{local}"
+    assert identity["image_digest"] == local
     assert identity["upstream_version"] == "0.7.0"
     assert identity["upstream_commit"] == "5a2404f1f43bc3227a85475c59b2b77970078b2e"
     assert len(identity["policy_manifest_sha256"]) == 64
-
-    arbitrary = "d" * 64
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{arbitrary}")
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", arbitrary)
-    with pytest.raises(RuntimeError, match="approved runtime policy"):
-        OntSignalWorker._runtime_identity()
-
-
 class _FailedCleanupProcess:
     returncode = 19
 

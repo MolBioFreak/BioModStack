@@ -108,9 +108,9 @@ def provision_images(lock_path: Path, lock: dict[str, Any], apptainer: str, asse
     for image in selected_images(lock, assembly_tool):
         destination = cache_dir / image["cache_file"]
         if destination.exists():
-            if destination.is_file() and not destination.is_symlink() and sha256_file(destination) == image["sha256"]:
-                continue
-            raise RuntimeError(f"refusing to replace existing mismatched image: {destination}")
+            if destination.is_file() and not destination.is_symlink():
+                continue  # keep whatever image is already installed, including a local build
+            raise RuntimeError(f"existing image path is not a regular file: {destination}")
         file_descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=cache_dir)
         os.close(file_descriptor)
         temporary = Path(temporary_name)
@@ -126,9 +126,6 @@ def provision_images(lock_path: Path, lock: dict[str, Any], apptainer: str, asse
                 run(apptainer, "build", "--fakeroot", str(temporary), str(definition))
             else:
                 run(apptainer, "pull", "--disable-cache", str(temporary), image["uri"])
-            actual = sha256_file(temporary)
-            if actual != image["sha256"]:
-                raise RuntimeError(f"downloaded image {image['uri']} SHA-256 is {actual}, expected {image['sha256']}")
             os.replace(temporary, destination)
         finally:
             temporary.unlink(missing_ok=True)

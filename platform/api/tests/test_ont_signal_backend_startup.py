@@ -170,9 +170,14 @@ async def test_api_lifespan_yields_with_absent_backend(store, monkeypatch, caplo
     before = await snapshot(store)
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "docker")
-    monkeypatch.delenv("BMS_ONT_SLOW5TOOLS_IMAGE", raising=False)
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", json.loads(workers.RUNTIME_POLICY_PATH.read_text())["runtime_id"])
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", json.loads(workers.RUNTIME_POLICY_PATH.read_text())["runtime_id"].removeprefix("sha256:"))
+    from services import ont_local_images
+    def absent(env_name: str, runtime: str) -> tuple[str, str]:
+        raise RuntimeError("no local image")
+    # No raw-signal image on this machine; a locally built Squigualiser image is present.
+    monkeypatch.setattr(ont_local_images, "local_image_identity", absent)
+    monkeypatch.setattr(
+        workers, "local_image_identity", lambda env_name, runtime: ("sha256:" + "a" * 64, "a" * 64)
+    )
     monkeypatch.setattr(workers.asyncio, "create_subprocess_exec", AsyncMock(side_effect=FileNotFoundError(2, "missing", "docker")))
     for name in ("init_db", "init_experiment_db", "init_molbio_db", "init_molbio_ngs_db"):
         monkeypatch.setattr(main, name, AsyncMock())

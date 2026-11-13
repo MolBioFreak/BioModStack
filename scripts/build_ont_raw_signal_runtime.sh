@@ -26,13 +26,11 @@ IMAGE_ID="$($RUNTIME image inspect --format '{{.Id}}' "$TAG")"
 # Podman returns the same SHA-256 identifier without Docker's prefix.
 IMAGE_ID="sha256:${IMAGE_ID#sha256:}"
 [[ "$IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Invalid built image ID" >&2; exit 70; }
-DIGEST="${IMAGE_ID#sha256:}"
 # Publish this measured ID through the checked-in policy after qualification.
 
 printf '%s\n' \
     "BMS_ONT_CONTAINER_RUNTIME=$RUNTIME" \
     "BMS_ONT_SLOW5TOOLS_IMAGE=$IMAGE_ID" \
-    "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST=$DIGEST" \
     "BMS_ONT_RAW_SIGNAL_STAGING_ROOT=${BMS_DATA:-$HOME/.biomodstack}/ont-raw-signal-staging" \
     "BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE=unknown" \
     "BMS_ONT_LIVE_CONVERSION_ENABLED=1" \

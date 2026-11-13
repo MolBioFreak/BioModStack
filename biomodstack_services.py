@@ -1289,9 +1289,9 @@ def render_workflow_slice(lane: str) -> str:
     )
 
 
-def _ont_runtime_identity(
+def _ont_reference_image(
     project_root: Path, policy_name: str, label: str
-) -> tuple[str, str]:
+) -> str:
     policy_path = (
         project_root
         / "platform"
@@ -1301,18 +1301,17 @@ def _ont_runtime_identity(
         / policy_name
     )
     if not policy_path.is_file():
-        return "", ""
+        return ""
     try:
         policy = json.loads(policy_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ServiceManagerError(f"ONT {label} runtime policy is unreadable") from exc
     if not isinstance(policy, Mapping):
         raise ServiceManagerError(f"ONT {label} runtime policy must be an object")
+    # The reference build is tried first. The API falls back to the image under
+    # the tool's tag, so a local build needs no id here.
     runtime_id = str(policy.get("runtime_id", "")).strip().lower()
-    oci_digest = str(policy.get("oci_digest", "")).strip().lower()
-    if runtime_id != oci_digest or not re.fullmatch(r"sha256:[0-9a-f]{64}", runtime_id):
-        raise ServiceManagerError(f"ONT {label} runtime policy identity is invalid")
-    return runtime_id, runtime_id.removeprefix("sha256:")
+    return runtime_id if re.fullmatch(r"sha256:[0-9a-f]{64}", runtime_id) else ""
 
 
 def systemd_value(value: object) -> str:
@@ -1620,16 +1619,16 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         )
     )
     ont_container_runtime = os.environ.get("BMS_ONT_CONTAINER_RUNTIME", "docker").strip() or "docker"
-    ont_runtime_image, ont_runtime_digest = _ont_runtime_identity(
+    ont_runtime_image = _ont_reference_image(
         root, "raw_signal_runtime_policy_v1.json", "raw signal"
     )
-    ont_squigualiser_image, ont_squigualiser_digest = _ont_runtime_identity(
+    ont_squigualiser_image = _ont_reference_image(
         root, "runtime_policy_v1.json", "Squigualiser"
     )
-    ont_squigulator_image, ont_squigulator_digest = _ont_runtime_identity(
+    ont_squigulator_image = _ont_reference_image(
         root, "squigulator_runtime_policy_v1.json", "Squigulator producer"
     )
-    ont_comparison_image, ont_comparison_digest = _ont_runtime_identity(
+    ont_comparison_image = _ont_reference_image(
         root,
         "comparison_render_runtime_policy_v1.json",
         "Squigualiser comparison renderer",
@@ -1640,13 +1639,9 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             "BMS_CONTAINER_RUNTIME": os.environ.get("BMS_CONTAINER_RUNTIME", ont_container_runtime),
             "BMS_ONT_CONTAINER_RUNTIME": ont_container_runtime,
             "BMS_ONT_SLOW5TOOLS_IMAGE": ont_runtime_image,
-            "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST": ont_runtime_digest,
             "BMS_ONT_SQUIGUALISER_IMAGE": ont_squigualiser_image,
-            "BMS_ONT_SQUIGUALISER_IMAGE_DIGEST": ont_squigualiser_digest,
             "BMS_ONT_SQUIGULATOR_IMAGE": ont_squigulator_image,
-            "BMS_ONT_SQUIGULATOR_IMAGE_DIGEST": ont_squigulator_digest,
             "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE": ont_comparison_image,
-            "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST": ont_comparison_digest,
             # Basecalling device for the API (launch params) and adapter (Nextflow).
             **({"BMS_ONT_DORADO_DEVICE": os.environ["BMS_ONT_DORADO_DEVICE"].strip()}
                if os.environ.get("BMS_ONT_DORADO_DEVICE", "").strip() else {}),

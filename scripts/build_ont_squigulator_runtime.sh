@@ -14,4 +14,4 @@ IMAGE_ID="$($RUNTIME image inspect --format '{{.Id}}' "$TAG")"
 IMAGE_ID="sha256:${IMAGE_ID#sha256:}"
 [[ "$IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Invalid built image ID" >&2; exit 70; }
 # Publish this measured ID through the checked-in policy after qualification.
-printf '%s\n' "BMS_ONT_SQUIGULATOR_IMAGE=$IMAGE_ID" "BMS_ONT_SQUIGULATOR_IMAGE_DIGEST=${IMAGE_ID#sha256:}"
+printf '%s\n' "BMS_ONT_SQUIGULATOR_IMAGE=$IMAGE_ID"

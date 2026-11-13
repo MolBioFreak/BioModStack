@@ -17,7 +17,6 @@ import secrets
 import re
 import shutil
 import stat
-import subprocess
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -42,6 +41,7 @@ from database import (
 )
 from services.container_cli_environment import container_cli_environment, container_user_namespace_args
 from services.file_lease_signals import register_lease_break_listener
+from services.ont_local_images import local_image_identity
 from services.ont_read_metrics import publish_read_metrics_from_validation
 
 
@@ -51,7 +51,6 @@ EXTERNAL_BLOW5_VALIDATION_PROFILE_ID = "bms.blow5.external-validation.v2"
 # Lossless SLOW5 (ASCII) -> indexed BLOW5 (binary) with slow5tools from the same pinned runtime.
 SLOW5_TO_BLOW5_PROFILE_ID = "bms.blow5.slow5-to-blow5.v1"
 BLOW5_CONTAINER_ENV = "BMS_ONT_SLOW5TOOLS_IMAGE"
-BLOW5_CONTAINER_DIGEST_ENV = "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST"
 BLOW5_CONTAINER_RUNTIME_ENV = "BMS_ONT_CONTAINER_RUNTIME"
 BLOW5_STAGING_ROOT_ENV = "BMS_ONT_RAW_SIGNAL_STAGING_ROOT"
 BLOW5_MIN_FREE_BYTES_ENV = "BMS_ONT_RAW_SIGNAL_MIN_FREE_BYTES"
@@ -130,7 +129,7 @@ def source_lease_break_requested() -> bool:
 
 
 def raw_signal_runtime_identity() -> dict[str, Any]:
-    """Resolve raw-signal runtime identity from checked-in authority, not env input."""
+    """Tool versions from the checked-in policy, plus the id of the image on this machine."""
     descriptor = os.open(
         RAW_SIGNAL_RUNTIME_POLICY_PATH,
         os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -149,62 +148,26 @@ def raw_signal_runtime_identity() -> dict[str, Any]:
         policy = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError("raw-signal runtime policy is invalid") from exc
-    runtime_id = policy.get("runtime_id") if isinstance(policy, dict) else None
-    oci_digest = policy.get("oci_digest") if isinstance(policy, dict) else None
     tools = policy.get("tools") if isinstance(policy, dict) else None
     if (
-        policy != {
-            "schema": "bms.ont-raw-signal-runtime-policy.v1",
-            "runtime_id": runtime_id,
-            "oci_digest": oci_digest,
-            "tools": tools,
-            "network": "none",
-        }
-        or not isinstance(runtime_id, str)
-        or not isinstance(oci_digest, str)
-        or re.fullmatch(r"sha256:[0-9a-f]{64}", runtime_id) is None
-        or runtime_id != oci_digest
+        not isinstance(policy, dict)
+        or policy.get("schema") != "bms.ont-raw-signal-runtime-policy.v1"
+        or policy.get("network") != "none"
         or not isinstance(tools, dict)
         or tools != {"blue_crab": "0.5.0", "slow5tools": "1.4.0", "pyslow5": "1.4.0"}
     ):
         raise RuntimeError("raw-signal runtime policy manifest is invalid")
-    image = os.getenv(BLOW5_CONTAINER_ENV, "").strip()
-    digest = os.getenv(BLOW5_CONTAINER_DIGEST_ENV, "").strip().lower()
-    if image != runtime_id or digest != oci_digest.removeprefix("sha256:"):
-        raise RuntimeError("raw-signal runtime policy does not match configured image identity")
+    image, digest = local_image_identity(
+        BLOW5_CONTAINER_ENV, os.getenv(BLOW5_CONTAINER_RUNTIME_ENV, "docker").strip() or "docker"
+    )
     return {
-        "image": runtime_id,
+        "image": image,
         "digest": digest,
         "tools": dict(tools),
         "network": "none",
         "policy_sha256": policy_sha256,
     }
 
-
-def assert_local_raw_runtime_image(runtime: str, image: str) -> None:
-    """Admit only the exact policy image already present in the local runtime."""
-    if runtime not in {"docker", "podman"} or shutil.which(runtime) is None:
-        raise RuntimeError("raw-signal container runtime is unavailable")
-    if not image.startswith("sha256:") or not _is_sha256(image.removeprefix("sha256:")):
-        raise RuntimeError("raw-signal runtime image ID is not immutable")
-    try:
-        result = subprocess.run(
-            [runtime, "image", "inspect", "--format", "{{.Id}}", image],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-            timeout=30,
-            env=container_cli_environment(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("local raw-signal runtime image inspection failed") from exc
-    observed = result.stdout.strip()
-    if runtime == "podman" and re.fullmatch(r"[0-9a-f]{64}", observed):
-        observed = f"sha256:{observed}"
-    if result.returncode != 0 or observed != image:
-        raise RuntimeError("local raw-signal runtime image is absent or diverged")
 
 _RAW_FORMATS = frozenset({"pod5", "slow5", "blow5"})
 _TERMINAL_STATES = frozenset({"stopped", "completed", "failed"})
@@ -1906,9 +1869,11 @@ def _resource_snapshot(source_bytes: int) -> dict[str, Any]:
     usage = shutil.disk_usage(probe)
     configured_floor = int(os.getenv(BLOW5_MIN_FREE_BYTES_ENV, str(BLOW5_DEFAULT_MIN_FREE_BYTES)))
     required_free = max(configured_floor, int(source_bytes * 2.5) + 10 * 1024 * 1024 * 1024)
-    image = os.getenv(BLOW5_CONTAINER_ENV, "").strip()
-    image_digest = os.getenv(BLOW5_CONTAINER_DIGEST_ENV, "").strip()
     container_runtime = os.getenv(BLOW5_CONTAINER_RUNTIME_ENV, "docker").strip()
+    try:
+        image, image_digest = local_image_identity(BLOW5_CONTAINER_ENV, container_runtime)
+    except RuntimeError:
+        image, image_digest = "", ""
     return {
         "schema": "bms.ont.raw-signal-resource-snapshot.v1",
         "staging_root": str(root),
@@ -3284,9 +3249,6 @@ async def claim_next_waveform_lookup(
     snapshot = _resource_snapshot(0)
     try:
         runtime_identity = raw_signal_runtime_identity()
-        assert_local_raw_runtime_image(
-            str(snapshot["container_runtime"]), runtime_identity["image"]
-        )
     except RuntimeError as exc:
         lookup.state = "failed"
         lookup.reason_code = f"raw_signal_runtime_not_admitted:{type(exc).__name__}"
@@ -3608,9 +3570,6 @@ async def claim_next_derivation(session: AsyncSession, *, lease_seconds: int = 3
     snapshot = _derivation_resource_snapshot(run, source)
     try:
         runtime_identity = raw_signal_runtime_identity()
-        assert_local_raw_runtime_image(
-            str(snapshot["container_runtime"]), runtime_identity["image"]
-        )
     except RuntimeError as exc:
         result = await session.execute(
             update(OntRawSignalDerivationJob)

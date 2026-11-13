@@ -406,7 +406,6 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
         )
         # A service refresh uses the release policy, not stale caller selectors.
         monkeypatch.setenv(f"BMS_ONT_{key}_IMAGE", f"sha256:{'e' * 64}")
-        monkeypatch.setenv(f"BMS_ONT_{key}_IMAGE_DIGEST", "e" * 64)
     monkeypatch.setattr(
         services,
         "install_profile_snapshot",
@@ -457,7 +456,6 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
         assert "Environment=BMS_ONT_CONTAINER_RUNTIME=podman" in units[owner]
         for key, (_, digest) in policies.items():
             assert f"Environment=BMS_ONT_{key}_IMAGE=sha256:{digest}" in units[owner]
-            assert f"Environment=BMS_ONT_{key}_IMAGE_DIGEST={digest}" in units[owner]
     assert "ExecStartPre=/usr/bin/mkdir -p /srv/biomodstack-dev" in units[services.API_SERVICE]
     assert "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18279" in units[services.FRONTEND_SERVICE]
     assert "Environment=BMS_DEV_WEB_HOST_PORT=18278" in units[services.FRONTEND_SERVICE]

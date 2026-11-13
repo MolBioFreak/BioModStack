@@ -199,15 +199,22 @@ async def lifespan(app: FastAPI):
         install_global_experiment_worker(None)
         logger.warning("[STARTUP] %s", workflow_launch_block_detail("start the GPU workflow scheduler"))
 
-    ont_runtime_image = os.getenv("BMS_ONT_SLOW5TOOLS_IMAGE", "").strip()
-    ont_runtime_digest = os.getenv("BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST", "").strip()
-    if ont_runtime_image and len(ont_runtime_digest) == 64:
+    from services.ont_local_images import local_image_identity as _ont_local_image_identity
+    try:
+        _ont_local_image_identity(
+            "BMS_ONT_SLOW5TOOLS_IMAGE", os.getenv("BMS_ONT_CONTAINER_RUNTIME", "docker").strip() or "docker"
+        )
+    except RuntimeError:
+        ont_raw_image_present = False
+    else:
+        ont_raw_image_present = True
+    if ont_raw_image_present:
         _ont_raw_signal_worker = OntRawSignalWorker(async_session, poll_interval=5.0)
         await _ont_raw_signal_worker.start()
         logger.info("[STARTUP] ONT raw-signal derivation worker started")
     else:
         _ont_raw_signal_worker = None
-        logger.info("[STARTUP] ONT raw-signal worker disabled: pinned runtime identity absent")
+        logger.info("[STARTUP] ONT raw-signal worker disabled: raw-signal image is not built on this machine")
 
     # The raw-signal worker already polls active runs; otherwise run a plain
     # status monitor so MinKNOW runs started from BMS still reach completion.
@@ -221,7 +228,7 @@ async def lifespan(app: FastAPI):
         OntSignalWorker._runtime_identity()
     except (OSError, RuntimeError):
         _ont_signal_worker = None
-        logger.info("[STARTUP] ONT signal-workbench worker disabled: approved Squigualiser runtime policy absent or mismatched")
+        logger.info("[STARTUP] ONT signal-workbench worker disabled: Squigualiser image is not built on this machine")
     else:
         _ont_signal_worker = OntSignalWorker(async_session, molbio_ngs_session_factory, poll_interval=5.0)
         if await _ont_signal_worker.start():
