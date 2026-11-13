@@ -1524,10 +1524,8 @@ class OntSignalWorker:
             roots.append(managed_output_root)
         raw_signal_root = _lexical_absolute(
             Path(
-                os.getenv(
-                    ont_raw_signal.BLOW5_STAGING_ROOT_ENV,
-                    ont_raw_signal.BLOW5_DEFAULT_STAGING_ROOT,
-                )
+                os.getenv(ont_raw_signal.BLOW5_STAGING_ROOT_ENV)
+                or ont_raw_signal.blow5_default_staging_root()
             ).parent
             / "ont-raw-signal"
         )
