@@ -90,6 +90,7 @@ from services.assembly.types import (
     GibsonDesignResult,
 )
 from services.molbio_ops import pcr_product, apply_mutations, reverse_complement, clean_sequence
+from services.primer_thermo import PrimerThermoError, PrimerThermoRequest, PrimerThermoResponse, analyze_primer_thermo
 from services.primer_qc import evaluate_primer_pair_qc, evaluate_primer_qc, _evaluate_primer_qc_canonical, PrimerQcProfile, PRIMER_QC_PROFILE
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
 from services.annotation_sources import (
@@ -4992,6 +4993,15 @@ def _calculate_primer_qc(request: PrimerQcRequest):
         primers=primer_results,
         pairwise=pairwise,
     )
+
+
+@router.post("/primer-thermo", response_model=PrimerThermoResponse)
+async def calculate_primer_thermo(request: PrimerThermoRequest):
+    """Informational hairpin / self-dimer / pair-dimer delta-G (ViennaRNA, DNA parameters)."""
+    try:
+        return await run_in_threadpool(analyze_primer_thermo, request)
+    except PrimerThermoError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/primer-design", response_model=PrimerDesignResponse)

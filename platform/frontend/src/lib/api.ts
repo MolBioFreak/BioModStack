@@ -4936,6 +4936,63 @@ export interface PrimerQcRequest {
     include_pairwise?: boolean;
 }
 
+export type PrimerThermoSeverity = 'none' | 'yellow' | 'orange';
+
+export interface PrimerThermoRequest {
+    schema_version?: 'primer-thermo-v1';
+    primers: Array<{ id?: string; name?: string; sequence: string }>;
+    pairs?: Array<{ left: number; right: number }>;
+    settings?: {
+        temperature_c?: number;
+        na_mM?: number;
+        k_mM?: number;
+        tris_mM?: number;
+        mg_mM?: number;
+        dntps_mM?: number;
+    };
+}
+
+export interface PrimerThermoStructure {
+    dg_kcal_mol: number;
+    severity: PrimerThermoSeverity;
+    structure: string;
+    three_prime_paired: boolean;
+}
+
+export interface PrimerThermoEntry {
+    id?: string | null;
+    name?: string | null;
+    sequence: string;
+    hairpin: PrimerThermoStructure | null;
+    self_dimer: PrimerThermoStructure | null;
+    warnings: string[];
+}
+
+export interface PrimerThermoPairResult extends PrimerThermoStructure {
+    left: number;
+    right: number;
+    left_name?: string | null;
+    right_name?: string | null;
+}
+
+export interface PrimerThermoResponse {
+    schema_version?: 'primer-thermo-result-v1';
+    engine: string;
+    engine_version: string;
+    credit: string;
+    citations: string[];
+    caveats: string[];
+    thresholds_kcal_mol: { yellow_at_or_below: number; orange_at_or_below: number };
+    temperature_c: number;
+    monovalent_equivalent_mM: number;
+    salt_note?: string | null;
+    primers: PrimerThermoEntry[];
+    pairs: PrimerThermoPairResult[];
+}
+
+export const calculatePrimerThermo = (data: PrimerThermoRequest, signal?: AbortSignal) =>
+    api.post<PrimerThermoResponse>('/api/molbio/primer-thermo', { schema_version: 'primer-thermo-v1', ...data }, { signal });
+
 export const calculatePrimerQc = (data: PrimerQcRequest, signal?: AbortSignal) => api.post<PrimerQcResponse>('/api/molbio/primer-qc', { schema_version: 'primer-qc-v1', ...data }, { signal });
 
 export const designPrimers = (data: PrimerDesignRequest, signal?: AbortSignal) =>
