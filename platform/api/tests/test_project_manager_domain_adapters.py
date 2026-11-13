@@ -812,7 +812,7 @@ async def test_md_molbio_receipt_sequence_qc_and_alignment_use_native_verifiers(
 
     normalized_md_request = {
         "schema": "bms.md.job.v2",
-        "engine": "openmm",
+        "engine": "gromacs",
         "chemistry": {"profile_id": "profile-1", "profile_sha256": "a" * 64},
     }
     aggregate_digest = "b" * 64
