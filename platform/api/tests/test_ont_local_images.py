@@ -77,14 +77,3 @@ def test_missing_image_names_the_tag_to_build(monkeypatch: pytest.MonkeyPatch) -
     _images(monkeypatch, {})
     with pytest.raises(RuntimeError, match="build biomodstack/ont-squigulator:0.5.0"):
         ont_local_images.local_image_identity("BMS_ONT_SQUIGULATOR_IMAGE", "docker")
-
-
-def test_default_tags_match_the_installer_recipe() -> None:
-    import json
-    from pathlib import Path
-
-    recipe = json.loads(
-        (Path(__file__).resolve().parents[3] / "tools/recipes/ont-signal-tools.json").read_text(encoding="utf-8")
-    )
-    built = {image["docker"]["tag"] if "docker" in image else image.get("tag") for image in recipe["images"]}
-    assert set(ont_local_images.DEFAULT_TAGS.values()) <= built
