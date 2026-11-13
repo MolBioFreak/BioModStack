@@ -41,8 +41,8 @@ def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) 
 
 
 def resolve(lock_path: Path, value: str) -> Path:
-    path = Path(value)
-    return path if path.is_absolute() else (lock_path.parent / path).resolve()
+    from validate_wf_clone_runtime import resolve_lock_path
+    return resolve_lock_path(lock_path, value)
 
 
 def source_is_exact(source: Path, expected_commit: str, expected_tree: str) -> bool:
