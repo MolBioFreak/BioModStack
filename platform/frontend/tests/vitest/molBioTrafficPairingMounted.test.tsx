@@ -236,6 +236,7 @@ it.each(['ligation', 'gibson', 'golden-gate'] as const)('mounted %s save/load us
         captured.push(config); expect(config.url).toBe(`/api/molbio/assembly/${mode}/save`); expect(config.params).toEqual({ response_view: 'compact' }); return { config, status: 200, statusText: 'OK', headers: {}, data: JSON.parse(savedFixture.compact) };
     };
     await render(<AssemblyPanel sequenceData={{ ...seq, operationParams: { mode: mode === 'gibson' ? 'ligation' : mode.replace('-', '_'), assembly_request: savedFixture.request } }} selection={null} selectedSequenceId={null} onLoadProduct={load} onLoadSavedWorkup={noop} />);
+    if (mode === 'golden-gate') await click('Manual / prepared fragments');
     if (mode === 'gibson') { await click('Gibson'); await click('Validate purchased fragments'); }
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
     await click('Validate + Save'); await click('Load product');

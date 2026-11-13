@@ -121,6 +121,7 @@ it('options abort on mode switch and unmount; late discovery cannot replace a re
     await act(async () => complete.shift()!()); held = null;
     const operationParams = { mode: 'golden_gate', assembly_request: { enzyme_id: 'SapI', fragments: [] } };
     await render(<AssemblyPanel {...assemblyProps} sequenceData={{ ...seq, operationParams }} />); await flush();
+    await click('Manual / prepared fragments');
     expect([...host.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'SapI'))?.value).toBe('SapI');
 });
 it('preview aborts on edit but persistence stays in flight and invalidates only an explicitly opened shelf', async () => {
