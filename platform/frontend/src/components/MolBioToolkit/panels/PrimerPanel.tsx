@@ -22,6 +22,7 @@ import {
     type PrimerTmSettings,
 } from '../../../lib/api';
 import { PrimerTmSettingsPanel } from '../PrimerTmSettingsPanel';
+import { PrimerThermoSection } from './PrimerThermoSection';
 import {
     calculateGcPercent,
     cleanNucleotideSequence,
@@ -1327,6 +1328,7 @@ export function PrimerPanel({
                             )}
                         </>
                     )}
+                    <PrimerThermoSection primers={sequenceData.primers || []} tmSettings={tmSettings} />
                 </div>
             )}
 
