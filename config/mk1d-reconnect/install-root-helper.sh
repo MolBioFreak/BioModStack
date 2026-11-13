@@ -10,7 +10,7 @@ if (( EUID != 0 )); then
 fi
 
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-native_api_user="${BMS_NATIVE_API_USER:-${SUDO_USER:-dalab}}"
+native_api_user="${BMS_NATIVE_API_USER:-${SUDO_USER:-}}"
 minknow_service="${MINKNOW_SYSTEMD_SERVICE:-minknow.service}"
 compose_project="${BMS_DOCKER_COMPOSE_PROJECT:-biomodstack-core-runtime}"
 compose_file="$repo_root/compose.core-runtime.yml"
