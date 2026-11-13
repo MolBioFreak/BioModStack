@@ -30,8 +30,8 @@ REPO_ROOT = API_ROOT.parent.parent
 SIF_PATH = Path(os.environ.get("BMS_NGS_RUNTIME_SIF", str(REPO_ROOT / "apptainer" / "dorado.sif")))
 
 # Known tool paths (sandbox PATH is limited; tools live outside it)
-MICROMAMBA_BIN = Path("/home/dalab/micromamba/bin")
-LOCAL_BIN = Path("/home/dalab/.local/bin")
+MICROMAMBA_BIN = Path.home() / "micromamba" / "bin"
+LOCAL_BIN = Path.home() / ".local" / "bin"
 
 # Directories to add to PATH when running Nextflow in local mode
 TOOL_DIRS = [
