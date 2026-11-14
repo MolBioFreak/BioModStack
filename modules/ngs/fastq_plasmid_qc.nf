@@ -74,7 +74,7 @@ process FastqPlasmidQC {
     }
     def referenceSequenceSha256 = shellQuote(declaredReferenceSha256)
     def workflowId = ((params.workflow_id ?: params.ont_workflow_id ?: 'ont_fastq_qc') as String).trim()
-    if (!(workflowId in ['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'])) {
+    if (!(workflowId in ['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation', 'ont_basecall_dna'])) {
         error('FASTQ plasmid QC requires a canonical workflow_id')
     }
     def workflowIdArg = shellQuote(workflowId)

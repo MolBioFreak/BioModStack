@@ -18,7 +18,7 @@ fi
     exit 1
 }
 case "$workflow_id" in
-    ont_fastq_qc|ont_plasmid_qc|ont_construct_screening|wf_clone_validation) ;;
+    ont_fastq_qc|ont_plasmid_qc|ont_construct_screening|wf_clone_validation|ont_basecall_dna) ;;
     *) echo "canonical workflow_id is invalid" >&2; exit 1 ;;
 esac
 [[ "$input_mode" == "bam" ]] || { echo "primary alignment manifest requires BAM input mode" >&2; exit 1; }
