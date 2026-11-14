@@ -37,6 +37,7 @@ process DoradoPreflight {
     if (params.duplex_pairs) optional += "--pairs ${doradoShellQuote(params.duplex_pairs)}"
     if (params.barcode_kit) optional += "--barcode-kit ${doradoShellQuote(params.barcode_kit)}"
     if (params.sample_sheet) optional += "--sample-sheet ${doradoShellQuote(params.sample_sheet)}"
+    if (params.allow_multiple_pod5_runs == true) optional += "--allow-multiple-runs"
     """
     set -euo pipefail
     lock_source=${lockPath}

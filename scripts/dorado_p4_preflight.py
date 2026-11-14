@@ -437,7 +437,8 @@ def _read_pod5_inventory(files: list[Path], root: Path) -> tuple[dict[str, Any],
     }, read_ids)
 
 
-def _validate_chemistry(lock: dict[str, Any], molecule: str, inventory: dict[str, Any]) -> None:
+def _validate_chemistry(lock: dict[str, Any], molecule: str, inventory: dict[str, Any],
+                        allow_multiple_runs: bool = False) -> None:
     expected = lock["compatibility"][molecule]
     rates = inventory["sample_rates"]
     if rates != [int(expected["sample_rate"])]:
@@ -450,8 +451,12 @@ def _validate_chemistry(lock: dict[str, Any], molecule: str, inventory: dict[str
     prefixes = tuple(str(value) for value in expected["sequencing_kit_prefixes"])
     if not kits or any(not str(kit).startswith(prefixes) for kit in kits):
         raise ValueError(f"POD5 sequencing kits {kits} are incompatible with {molecule}")
-    if len(inventory["run_ids"]) != 1:
-        raise ValueError("mixed POD5 run IDs are not accepted in one production basecall unit")
+    # A paused, washed or restarted flow cell writes a new run id each time, and
+    # vendors deliver those runs merged. The operator opts in to basecall them together.
+    if len(inventory["run_ids"]) != 1 and not allow_multiple_runs:
+        raise ValueError(
+            f"POD5 input holds {len(inventory['run_ids'])} runs; turn on 'Allow POD5 from more than one run' to basecall them together"
+        )
 
 
 def _validate_pairs(path: Path, root: Path, read_ids: set[str]) -> dict[str, Any]:
@@ -571,7 +576,8 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
                     barcode_kit: str | None = None, sample_sheet: Path | None = None,
                     pairs: Path | None = None, batch_size: int | None = None,
                     min_qscore: int = 10, device: str = "cuda:0", verify_assets: bool = True,
-                    selected_binding: dict | None = None) -> dict[str, Any]:
+                    selected_binding: dict | None = None,
+                    allow_multiple_runs: bool = False) -> dict[str, Any]:
     lock = load_lock(Path(lock_path))
     molecule = str(molecule).strip().lower()
     quality = str(quality).strip().lower()
@@ -611,7 +617,7 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
             ancillary.add(_confined_file(Path(value), root, label))
     files = _pod5_files(root, ancillary)
     inventory, read_ids = _read_pod5_inventory(files, root)
-    _validate_chemistry(lock, molecule, inventory)
+    _validate_chemistry(lock, molecule, inventory, allow_multiple_runs)
 
     model = resolve_model(lock, molecule, quality)
     pairs_record = None
@@ -717,13 +723,15 @@ def main() -> int:
     parser.add_argument("--min-qscore", type=int, default=10)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--selected-binding-json", default="{}")
+    parser.add_argument("--allow-multiple-runs", action="store_true")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     payload = build_preflight(lock_path=args.lock, pod5_root=args.pod5_root, molecule=args.molecule,
         quality=args.quality, mode=args.mode, model_root=args.model_root, runtime_sif=args.runtime_sif,
         modified_bases=args.modified_bases, barcode_kit=args.barcode_kit, sample_sheet=args.sample_sheet,
         pairs=args.pairs, batch_size=args.batch_size, min_qscore=args.min_qscore,
-        device=args.device, verify_assets=True, selected_binding=json.loads(args.selected_binding_json))
+        device=args.device, verify_assets=True, selected_binding=json.loads(args.selected_binding_json),
+        allow_multiple_runs=args.allow_multiple_runs)
     _atomic_json(args.output, payload)
     return 0
 

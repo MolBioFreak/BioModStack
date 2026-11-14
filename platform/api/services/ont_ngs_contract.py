@@ -765,6 +765,10 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     if basecall_mode == "duplex" and raw_emit_moves:
         raise ValueError("emit_moves is unavailable for duplex until move-tag semantics are qualified")
     normalized["emit_moves"] = raw_emit_moves
+    raw_allow_runs = normalized.get("allow_multiple_pod5_runs", False)
+    if not isinstance(raw_allow_runs, bool):
+        raise ValueError("allow_multiple_pod5_runs must be boolean")
+    normalized["allow_multiple_pod5_runs"] = raw_allow_runs
 
     # A missing declaration on newly basecalled POD5 can use its exact native
     # profile. Never replace an explicit/saved declaration, or infer read origin

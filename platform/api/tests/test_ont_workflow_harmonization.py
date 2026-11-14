@@ -119,3 +119,11 @@ def test_plain_methylation_request_selects_the_methylation_stage_like_the_form()
     tagged = normalize_ont_launch_params("ont_methylation_analysis", dict(bam_path="/tagged.bam", reference_fasta="/reference.fa"))
     assert tagged["run_modkit"] is True
     assert normalize_ont_launch_params("ont_plasmid_qc", reads)["run_modkit"] is False
+
+
+def test_allow_multiple_pod5_runs_defaults_off_and_must_be_boolean():
+    reads = dict(pod5_dir="/reads", reference_fasta="/reference.fa")
+    assert normalize_ont_launch_params("ont_plasmid_qc", reads)["allow_multiple_pod5_runs"] is False
+    assert normalize_ont_launch_params("ont_plasmid_qc", dict(reads, allow_multiple_pod5_runs=True))["allow_multiple_pod5_runs"] is True
+    with pytest.raises(ValueError, match="allow_multiple_pod5_runs must be boolean"):
+        normalize_ont_launch_params("ont_plasmid_qc", dict(reads, allow_multiple_pod5_runs="yes"))

@@ -353,3 +353,24 @@ def test_min_qscore_zero_is_preserved_and_out_of_range_fails() -> None:
     assert payload["execution_policy"]["min_qscore"] == 0
     with pytest.raises(ValueError, match="min_qscore"):
         _preflight(module, _fixtures() / "barcode", min_qscore=31)
+
+
+def test_multiple_runs_are_refused_by_default_and_accepted_when_allowed(tmp_path: Path) -> None:
+    import uuid
+    module = _load_module()
+    pod5 = importlib.import_module("pod5")
+    source = next((_fixtures() / "barcode").glob("*.pod5"))
+    two_runs = tmp_path / "two_runs"
+    two_runs.mkdir()
+    shutil.copy2(source, two_runs / "run_a.pod5")
+    with pod5.Reader(source) as reader, pod5.Writer(two_runs / "run_b.pod5", software_name="BioModStack test") as writer:
+        for record in reader.reads():
+            read = record.to_read()
+            writer.add_read(replace(read, read_id=uuid.uuid4(),
+                                    run_info=replace(read.run_info, acquisition_id="second-run")))
+    with pytest.raises(ValueError, match="holds 2 runs"):
+        _preflight(module, two_runs)
+    allowed = _preflight(module, two_runs, allow_multiple_runs=True)
+    assert len(allowed["inputs"]["run_ids"]) == 2 and allowed["inputs"]["read_count"] == 14
+    # One run is unaffected by the setting.
+    assert len(_preflight(module, _fixtures() / "barcode", allow_multiple_runs=True)["inputs"]["run_ids"]) == 1

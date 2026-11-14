@@ -870,6 +870,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const validBatchSize = batchSize === null || (Number.isInteger(batchSize) && batchSize >= 0);
     const [emitSummary, setEmitSummary] = useState(initialValues?.emitSummary !== false);
     const [emitMoves, setEmitMoves] = useState(initialValues?.emitMoves !== false);
+    const [allowMultiplePod5Runs, setAllowMultiplePod5Runs] = useState(initialValues?.allowMultiplePod5Runs === true);
     const basecallDevicesQuery = useQuery({ queryKey: ['ont-basecall-devices', executionTargetId], queryFn: () => fetchOntBasecallDevices(executionTargetId), staleTime: 300_000 });
     const [doradoDevice, setDoradoDevice] = useState<string>(String(initialValues?.doradoDevice ?? ''));
     const effectiveDoradoDevice = doradoDevice || basecallDevicesQuery.data?.default || (executionTargetId ? 'cuda:0' : '');
@@ -1227,6 +1228,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     trim_adapters: trimAdapters,
                     emit_summary: emitSummary,
                     emit_moves: doradoMode === 'simplex' ? emitMoves : false,
+                    ...(allowMultiplePod5Runs && { allow_multiple_pod5_runs: true }),
                     ...(effectiveDoradoDevice && { dorado_device: effectiveDoradoDevice }),
                     ...(batchSize !== null && { dorado_batch_size: batchSize }),
                 }),
@@ -2168,6 +2170,21 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             {/* Analysis Toggles — mode-aware: only relevant options shown */}
             <div className={`${TASK_FLOW_CARD} space-y-3`}>
                 <div className="text-sm font-semibold text-[var(--text-primary)]">Analysis options</div>
+                {inputSource === 'pod5' && (
+                    <label className="flex items-center gap-3 cursor-pointer">
+                        <input
+                            type="checkbox"
+                            aria-label="Allow POD5 from more than one run"
+                            checked={allowMultiplePod5Runs}
+                            onChange={(e) => setAllowMultiplePod5Runs(e.target.checked)}
+                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
+                        />
+                        <div>
+                            <span className="text-sm text-[var(--text-primary)]">Allow POD5 from more than one run</span>
+                            <p className="text-xs text-[var(--text-secondary)]">For a restarted flow cell or merged vendor files. Leave off when the same barcode means different samples in different runs.</p>
+                        </div>
+                    </label>
+                )}
 
                 {/* Trim adapters — POD5 only */}
                 {inputSource === 'pod5' && (
