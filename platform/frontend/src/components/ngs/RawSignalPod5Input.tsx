@@ -102,7 +102,11 @@ export function RawSignalPod5Input({ domainExperimentId, onPod5Directory, onBusy
             BLOW5 or SLOW5 file
             <input aria-label="BLOW5 or SLOW5 file" type="file" accept=".blow5,.slow5" disabled={busy}
                 className="mt-1 block w-full min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-sm text-[var(--text-primary)]"
-                onChange={event => { setFile(event.target.files?.[0] ?? null); setStep('idle'); event.target.value = ''; }} />
+                onChange={event => {
+                    // The POD5 restored from the previous file no longer matches the chosen file.
+                    onPod5Directory(''); setDetail('');
+                    setFile(event.target.files?.[0] ?? null); setStep('idle'); event.target.value = '';
+                }} />
         </label>
         {format === 'blow5' && <label className="block text-xs font-medium text-[var(--text-secondary)]">
             Optional existing BLOW5 index (.idx)
