@@ -80,7 +80,9 @@ def _atomic_write(path: Path, data: bytes) -> None:
 async def issue_molbio_ngs_receipt(session: AsyncSession, *, sequence_id: str, revision: Any) -> MolBioNgsReceipt:
     sequence = _snapshot_sequence(revision)
     receipt_id = str(uuid.uuid4())
-    fasta = f">molbio_revision_{revision.id}\n{sequence}\n".encode("ascii")
+    # The aligner and every downstream reference check read DNA letters. An RNA
+    # revision keeps its U in the library; only this job's reference file uses T.
+    fasta = f">molbio_revision_{revision.id}\n{sequence.replace('U', 'T')}\n".encode("ascii")
     digest = hashlib.sha256(fasta).hexdigest()
     path = get_inputs_dir() / "molbio_ngs_receipts" / receipt_id / "expected_reference.fasta"
     _atomic_write(path, fasta)
