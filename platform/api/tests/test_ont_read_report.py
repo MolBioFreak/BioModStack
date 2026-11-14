@@ -209,3 +209,21 @@ def test_dna_run_reports_its_molecule_and_job_setting_wins_over_the_model_name(t
     _one_read_bam(bam, "TTGATCTT", "A+a?,0;", [250], model="rna004_130bps_sup@v5.2.0")
     report = build_read_report(bam, artifact={}, molecule_type="dna")
     assert report["molecule_type"] == "dna" and _motifs(report) == {"A+6mA@GATC": (1, 1)}
+
+
+def test_reference_list_reports_its_limit_and_the_full_counts(tmp_path: Path) -> None:
+    bam = tmp_path / "many.bam"
+    header = {"HD": {"VN": "1.6", "SO": "unknown"}, "SQ": [{"SN": f"ref{index}", "LN": 100} for index in range(60)]}
+    with pysam.AlignmentFile(str(bam), "wb", header=header) as handle:
+        for index in range(55):
+            read = pysam.AlignedSegment(handle.header)
+            read.query_name = f"r{index}"
+            read.query_sequence = "ACGT"
+            read.query_qualities = pysam.qualitystring_to_array("5555")
+            read.reference_id = index
+            read.reference_start = 0
+            read.cigarstring = "4M"
+            handle.write(read)
+    alignment = build_read_report(bam, artifact={})["alignment"]
+    assert (alignment["reference_count"], alignment["references_with_reads"], alignment["reference_list_limit"]) == (60, 55, 50)
+    assert len(alignment["references"]) == 50 and len(alignment["reads_per_reference"]) == 50

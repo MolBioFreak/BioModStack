@@ -153,7 +153,8 @@ describe('ONT FASTQ-QC decision report', () => {
         const onOpenViewer = vi.fn();
         await act(async () => root.render(<OntFastqQcResultPanel result={result} loading={false} error={null} onOpenViewer={onOpenViewer} />));
         const summary = container.querySelector('[aria-label="Sample summary"]')!;
-        expect(summary.textContent).toContain('Monomer');
+        expect(summary.textContent).toContain('Below 1.5x expected size');
+        expect(summary.textContent).not.toContain('Monomer');
         expect(summary.textContent).toContain('Dimer');
         const review = container.querySelector('[aria-label="Positions to review"]')!;
         expect(review.textContent).toContain('13 GATC (Dam) and 16 CCWGG (Dcm)');

@@ -139,7 +139,8 @@ function SampleSummary({ result }: { result: OntFastqQcResult }) {
     const reads = Number(result.summary.reads_considered) || 0;
     const dimer = Number(result.summary.dimer_like_reads) || 0;
     const trimer = Number(result.summary.trimer_plus_reads) || 0;
-    const monomer = Math.max(0, reads - dimer - trimer);
+    // Everything under 1.5x the expected size, short fragments included, so it is not called monomer.
+    const belowDimer = Math.max(0, reads - dimer - trimer);
     const identity = result.verification.summary.sequence_identity_fraction;
     const rows: Array<[string, string]> = [
         ['Reference', `${result.verification.summary.reference_name} · ${Number(result.verification.summary.reference_length).toLocaleString()} bp · ${result.verification.summary.reference_topology}`],
@@ -160,17 +161,17 @@ function SampleSummary({ result }: { result: OntFastqQcResult }) {
                     <div className="mb-1 text-[var(--text-secondary)]">Population by read length (reads)</div>
                     {reads > 0 ? (
                         <>
-                            <div className="flex h-3 w-full overflow-hidden rounded" role="img" aria-label="Monomer, dimer and trimer-plus read fractions">
-                                <div style={{ width: `${(monomer / reads) * 100}%`, background: '#63d39b' }} />
+                            <div className="flex h-3 w-full overflow-hidden rounded" role="img" aria-label="Read fractions below 1.5x, dimer and trimer-plus">
+                                <div style={{ width: `${(belowDimer / reads) * 100}%`, background: '#63d39b' }} />
                                 <div style={{ width: `${(dimer / reads) * 100}%`, background: '#f59e0b' }} />
                                 <div style={{ width: `${(trimer / reads) * 100}%`, background: '#ef4444' }} />
                             </div>
                             <div className="mt-1 grid grid-cols-3 gap-2 font-mono">
-                                <span>Monomer {percent(monomer / reads)}</span>
+                                <span>Below 1.5x expected size {percent(belowDimer / reads)}</span>
                                 <span>Dimer {percent(dimer / reads)}</span>
                                 <span>Trimer+ {percent(trimer / reads)}</span>
                             </div>
-                            <p className="mt-1 text-[10px] text-[var(--text-secondary)]">Read counts from the length screen ({reads.toLocaleString()} reads). Shaded histogram bands mark 1×, 2× and 3× the reference length ±10%.</p>
+                            <p className="mt-1 text-[10px] text-[var(--text-secondary)]">Read counts from the length screen ({reads.toLocaleString()} reads). Dimer is 1.5 to 2.5 times the expected size and Trimer+ is above that. Shaded histogram bands mark 1×, 2× and 3× the reference length ±10%.</p>
                         </>
                     ) : <span className="text-[var(--text-secondary)]">No reads were considered.</span>}
                 </div>

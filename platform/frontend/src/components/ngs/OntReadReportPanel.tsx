@@ -21,6 +21,7 @@ export interface OntReadReport {
     alignment: {
         aligned: boolean; mapped_reads: number; unmapped_reads: number; secondary_records: number; supplementary_records: number;
         references: Array<{ name: string; length: number }>; reads_per_reference: Record<string, number>;
+        reference_count?: number; references_with_reads?: number; reference_list_limit?: number;
     };
     move_tagged_reads: number;
     molecule_type?: 'dna' | 'rna';
@@ -62,13 +63,17 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
     const report = query.data!;
     const align = report.alignment;
     const bins = report.read_length_histogram.bins;
+    // Past the read cap every figure covers only the first reads in file order.
+    const capped = Boolean(report.truncated_at_reads);
+    const listedReferences = Object.keys(align.reads_per_reference).length;
+    const referencesWithReads = align.references_with_reads ?? listedReferences;
     const cards: Array<[string, string, string]> = [
-        ['Reads', n(report.reads), report.truncated_at_reads ? `first ${n(report.truncated_at_reads)} primary reads` : 'primary records'],
+        ['Reads', n(report.reads), report.truncated_at_reads ? `first ${n(report.truncated_at_reads)} primary reads in file order` : 'primary records'],
         ['Yield', n(report.total_bases, ' bp'), 'sum of read lengths'],
         ['Read N50', n(report.n50_read_length_bp, ' bp'), `mean ${n(Math.round(report.mean_read_length_bp))} · max ${n(report.longest_read_bp)}`],
         ['Mean Q', report.mean_qscore == null ? '—' : report.mean_qscore.toFixed(1), `median ${report.median_qscore?.toFixed(1) ?? '—'}`],
         ['≥Q10 / ≥Q20', report.reads ? `${pct(report.reads_q10_or_better / report.reads, 0)} / ${pct(report.reads_q20_or_better / report.reads, 0)}` : '—', 'share of reads'],
-        ['Mapped', align.aligned ? `${n(align.mapped_reads)} / ${n(report.reads)}` : 'not aligned', align.aligned ? `${align.references.length} reference contig(s)` : 'no reference supplied'],
+        ['Mapped', align.aligned ? `${n(align.mapped_reads)} / ${n(report.reads)}` : 'not aligned', align.aligned ? `${align.reference_count ?? align.references.length} reference contig(s)` : 'no reference supplied'],
         ['Move tables', n(report.move_tagged_reads), report.move_tagged_reads ? 'squiggles below' : 'enable "emit moves" for squiggles'],
     ];
     return (
@@ -87,7 +92,7 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
                 <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7" aria-label="Read summary">
                     {cards.map(([label, value, detail]) => (
                         <div key={label} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
-                            <div className="text-[11px] text-[var(--text-secondary)]">{label}</div>
+                            <div className="text-[11px] text-[var(--text-secondary)]">{label}{capped ? ' (capped)' : ''}</div>
                             <div className="font-mono text-sm text-[var(--text-primary)]">{value}</div>
                             <div className="mt-1 text-[9px] leading-tight text-[var(--text-secondary)]">{detail}</div>
                         </div>
@@ -165,7 +170,7 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
 
             {align.aligned && Object.keys(align.reads_per_reference).length > 0 && (
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs">
-                    <h4 className="text-sm font-semibold text-[var(--text-primary)]">Reads per reference</h4>
+                    <h4 className="text-sm font-semibold text-[var(--text-primary)]">Reads per reference{referencesWithReads > listedReferences ? ` (capped: top ${listedReferences} of ${referencesWithReads})` : ''}</h4>
                     <ul className="mt-1 space-y-0.5 font-mono">
                         {Object.entries(align.reads_per_reference).map(([name, count]) => <li key={name}>{name}: {count.toLocaleString()}</li>)}
                     </ul>

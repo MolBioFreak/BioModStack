@@ -15,6 +15,7 @@ from typing import Any
 
 REPORT_SCHEMA = "bms.ngs.read-report.v1"
 MAX_READS = 200_000
+REFERENCE_LIST_LIMIT = 50
 HISTOGRAM_BINS = 60
 MOD_PROBABILITY_THRESHOLD = 0.5
 
@@ -221,8 +222,11 @@ def build_read_report(bam_path: Path, *, artifact: dict[str, Any], molecule_type
             "unmapped_reads": unmapped,
             "secondary_records": secondary,
             "supplementary_records": supplementary,
-            "references": references[:50],
-            "reads_per_reference": dict(contigs.most_common(50)),
+            "references": references[:REFERENCE_LIST_LIMIT],
+            "reference_count": len(references),
+            "reads_per_reference": dict(contigs.most_common(REFERENCE_LIST_LIMIT)),
+            "references_with_reads": len(contigs),
+            "reference_list_limit": REFERENCE_LIST_LIMIT,
         },
         "move_tagged_reads": move_tagged,
         "molecule_type": "rna" if rna else "dna",

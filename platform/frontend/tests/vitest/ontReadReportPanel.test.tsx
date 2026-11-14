@@ -89,6 +89,25 @@ describe('OntReadReportPanel', () => {
         expect(onOpenSignal).toHaveBeenCalled();
     });
 
+    it('labels every figure as capped past the read cap and says when the reference list is cut', async () => {
+        const capped = { ...REPORT, truncated_at_reads: 200000, alignment: {
+            ...REPORT.alignment, aligned: true, mapped_reads: 12, unmapped_reads: 0,
+            references: [{ name: 'a', length: 10 }], reference_count: 80,
+            reads_per_reference: { a: 7, b: 5 }, references_with_reads: 61, reference_list_limit: 50,
+        } };
+        get.mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('ngs-read-report') ? capped : url.endsWith('/reads') ? READS : SQUIGGLE }));
+        await mount();
+        const summary = container.querySelector('[aria-label="Read summary"]')!;
+        for (const label of ['Reads', 'Yield', 'Read N50', 'Mean Q', 'Mapped']) expect(summary.textContent).toContain(`${label} (capped)`);
+        expect(summary.textContent).toContain('first 200,000 primary reads in file order');
+        expect(summary.textContent).toContain('80 reference contig(s)');
+        expect(container.textContent).toContain('Reads per reference (capped: top 2 of 61)');
+    });
+    it('shows no capped label on a complete report', async () => {
+        get.mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('ngs-read-report') ? REPORT : url.endsWith('/reads') ? READS : SQUIGGLE }));
+        await mount();
+        expect(container.textContent).not.toContain('capped');
+    });
     it('reports a missing BAM instead of rendering an empty report', async () => {
         get.mockRejectedValue(new Error('This job published no reads BAM.'));
         await mount();
