@@ -466,9 +466,12 @@ WORKFLOW_DEFAULTS: dict[str, dict[str, Any]] = {
     "ont_methylation_analysis": {
         "ont_molecule_type": "dna",
         "dorado_quality_mode": "hac",
-        "run_modkit": False,
+        # The named methylation workflow runs its methylation stage unless the
+        # caller switches it off, and calls the same modifications the form
+        # preselects. Both stay independently settable.
+        "run_modkit": True,
         "run_fastq_qc": True,
-        "modified_bases": "none",
+        "modified_bases": "5mC_5hmC 6mA",
     },
     "ont_fastq_qc": {
         "ont_molecule_type": "dna",
