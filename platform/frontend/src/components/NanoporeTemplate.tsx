@@ -518,7 +518,7 @@ function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse, e
             if (targets.some((target) => !target.label.trim() || !target.sequenceId || !target.revisionId)) {
                 throw new Error('Every pooled target needs a label, saved sequence, and exact immutable revision.');
             }
-            if (!isIntegerInRange(minMapq, 0, 60) || !Number.isFinite(minAlignmentScoreMargin) || minAlignmentScoreMargin < 0) {
+            if (!isIntegerInRange(minMapq, 0, 60) || !isIntegerInRange(minAlignmentScoreMargin, 0, 1000)) {
                 throw new Error('Pooled alignment thresholds are invalid.');
             }
 
@@ -576,7 +576,7 @@ function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse, e
                     <input type="number" min={0} max={60} value={minMapq} onChange={(event) => setMinMapq(coerceIntegerInput(event.target.value, 20, 0, 60))} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-sm text-[var(--text-primary)]" />
                 </label>
                 <label className="text-xs text-[var(--text-secondary)]">Minimum alignment score margin
-                    <input type="number" min={0} step="0.1" value={minAlignmentScoreMargin} onChange={(event) => setMinAlignmentScoreMargin(coerceNumberInput(event.target.value, 5, 0, 1000))} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-sm text-[var(--text-primary)]" />
+                    <input type="number" min={0} max={1000} step={1} value={minAlignmentScoreMargin} onChange={(event) => setMinAlignmentScoreMargin(coerceIntegerInput(event.target.value, 5, 0, 1000))} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-sm text-[var(--text-primary)]" />
                 </label>
             </div>
             <div className="overflow-x-auto rounded border border-[var(--border-primary)]">
