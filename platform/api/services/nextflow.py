@@ -1506,6 +1506,42 @@ def _apply_protenix_preflight(params: Dict[str, Any]) -> Tuple[Dict[str, Any], L
     return tuned, notes
 
 
+def _nextflow_failure_summary(lines: Iterable[str], *, limit: int = 400) -> Optional[str]:
+    """Name the failing process and its last error line from Nextflow's own report.
+
+    Reads only the retained log tail. Returns None when Nextflow printed no
+    process error, so the caller keeps its generic message.
+    """
+    import re
+
+    process: Optional[str] = None
+    error_lines: List[str] = []
+    in_error = False
+    for raw in lines:
+        line = str(raw).rstrip("\n")
+        marker = re.search(r"Error executing process > '([^']+)'", line)
+        if marker:
+            process, error_lines, in_error = marker.group(1), [], False
+            continue
+        if process is None:
+            continue
+        stripped = line.strip()
+        if stripped == "Command error:":
+            in_error = True
+            continue
+        if in_error:
+            if stripped.startswith(("Work dir:", "Tip:", "Container:")):
+                in_error = False
+            elif stripped and set(stripped) - set("^~ "):
+                error_lines.append(stripped)
+    if process is None:
+        return None
+    detail = error_lines[-1] if error_lines else ""
+    if detail in ("(empty)", ""):
+        return f"process {process} failed"[:limit]
+    return f"process {process} failed: {detail}"[:limit]
+
+
 def _attempt_has_cuda_oom(lines: Iterable[str]) -> bool:
     oom_markers = (
         "CUDA out of memory",
@@ -3860,7 +3896,11 @@ async def launch_nextflow_job(
                                 f"Nextflow {stage} failed with CUDA OOM: {oom_line[:400]}"
                             )
                         else:
-                            job.error_message = f"Nextflow exited with code {exit_code}"
+                            failure_summary = _nextflow_failure_summary(full_log)
+                            job.error_message = (
+                                f"Nextflow exited with code {exit_code}: {failure_summary}"
+                                if failure_summary else f"Nextflow exited with code {exit_code}"
+                            )
                         if job.status == JobStatus.FAILED.value:
                             logger.error(f"Nextflow failed for job {job_id} with code {exit_code}")
                         else:

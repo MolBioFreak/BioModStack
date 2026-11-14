@@ -75,6 +75,23 @@ def optional_one(root: Path, pattern: str, kind: str) -> Path | None:
     return found[0] if found else None
 
 
+def upstream_failure_reason(root: Path, sample: str) -> str | None:
+    """Return the pipeline's own failure text for one sample, if it recorded one."""
+    found = candidates(root, "sample_status.txt")
+    if len(found) != 1:
+        return None
+    try:
+        rows = read_rows(found[0], delimiter=",")
+    except (OSError, UnicodeError, ValueError, IndexError):
+        return None
+    key = "Assembly completed / failed reason"
+    for row in rows:
+        text = str(row.get(key) or "").strip()
+        if row.get("Sample") == sample and text and text != "Completed successfully":
+            return text[:300]
+    return None
+
+
 def read_single_fasta(path: Path) -> tuple[str, str]:
     records: list[tuple[str, str]] = []
     name: str | None = None
@@ -158,9 +175,15 @@ def normalize(args: argparse.Namespace) -> dict[str, Any]:
         authoritative_input(args.source_bai, "authoritative_analysis_bai"),
     ]
 
+    sample = args.sample
+    if not candidates(root, "*.final.fasta"):
+        # The pipeline writes its own reason when a sample yields no assembly.
+        # Report that reason instead of a missing-file error.
+        upstream_reason = upstream_failure_reason(root, sample)
+        if upstream_reason:
+            fail("UPSTREAM_ASSEMBLY_FAILED", f"clone assembly did not complete for {sample}: {upstream_reason}")
     final_fasta = exactly_one(root, "*.final.fasta", "final FASTA")
     fasta_name, sequence = read_single_fasta(final_fasta)
-    sample = args.sample
     if fasta_name != sample or final_fasta.name != f"{sample}.final.fasta":
         fail("FASTA_SAMPLE_MISMATCH", f"final FASTA identity {fasta_name!r}/{final_fasta.name!r} does not match sample {sample!r}")
     final_fastq = exactly_one(root, f"{sample}.final.fastq", "final FASTQ")
