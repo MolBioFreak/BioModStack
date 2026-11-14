@@ -273,6 +273,23 @@ def _confined_file(path: Path, root: Path, label: str, *, nonempty: bool = False
     return resolved
 
 
+def _authorized_fastq(value: Any, label: str) -> Path:
+    """Resolve a pooled FASTQ with the same resolver ordinary ONT launch uses.
+
+    Uploads, Downloads and the configured data roots are accepted exactly as they
+    are for every other ONT workflow; this owner adds no path rule of its own.
+    """
+    from routers.ont_runs import _confine_submitted_path  # noqa: PLC0415
+
+    try:
+        resolved = Path(_confine_submitted_path(value, label, directory=False))
+    except ValueError as exc:
+        raise PooledAssignmentError(str(exc), status_code=409) from exc
+    if resolved.stat().st_size == 0:
+        raise PooledAssignmentError(f"{label} must be non-empty", status_code=409)
+    return resolved
+
+
 def _confined_directory(path: Path, root: Path, label: str) -> Path:
     if root.is_symlink() or path.is_symlink():
         raise PooledAssignmentError(f"{label} symlink is forbidden", status_code=409)
@@ -720,9 +737,7 @@ async def submit_pooled_reference_assignment(
 ) -> dict[str, Any]:
     """Stage one immutable pooled set and atomically launch its review-only assignment job."""
 
-    fastq = _confined_file(
-        Path(request.fastq_path).expanduser(), get_inputs_dir(), "pooled FASTQ", nonempty=True
-    )
+    fastq = _authorized_fastq(request.fastq_path, "pooled FASTQ")
     fastq_sha256 = _sha256_file(fastq)
     fingerprint = _submit_fingerprint(request, fastq_sha256)
     existing = await _find_submit_replay(session, request.idempotency_key, fingerprint)
@@ -739,7 +754,7 @@ async def submit_pooled_reference_assignment(
         if existing is not None:
             await session.rollback()
             return existing
-        fastq = _confined_file(fastq, get_inputs_dir(), "pooled FASTQ", nonempty=True)
+        fastq = _authorized_fastq(str(fastq), "pooled FASTQ")
         if _sha256_file(fastq) != fastq_sha256:
             raise PooledAssignmentError("pooled FASTQ changed during submission", status_code=409)
         validated = await _validate_receipts(session, request.targets)
@@ -1003,9 +1018,7 @@ def _validate_occurrence_map(
         "occurrence map",
     )
     params = dict(assignment_job.params or {})
-    source_fastq = _confined_file(
-        Path(str(params.get("fastq_path") or "")), get_inputs_dir(), "assignment source FASTQ", nonempty=True
-    )
+    source_fastq = _authorized_fastq(params.get("fastq_path"), "assignment source FASTQ")
     if (
         payload.get("schema") != OCCURRENCE_MAP_SCHEMA
         or payload.get("input_fastq_filename") != source_fastq.name

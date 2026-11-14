@@ -478,6 +478,23 @@ async def test_identical_sequences_require_one_explicit_common_group(pooled_cont
 
 
 @pytest.mark.asyncio
+async def test_submit_accepts_a_fastq_under_any_root_ordinary_launch_allows(
+    pooled_context, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = pooled_context
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    vendor = downloads / "vendor.fastq"
+    vendor.write_bytes(context.fastq.read_bytes())
+    from routers import ont_runs
+    roots = dict(ont_runs.get_allowed_roots())
+    monkeypatch.setattr(ont_runs, "get_allowed_roots", lambda: {**roots, "downloads": downloads})
+    request = _submit_request(context, key="downloads").model_copy(update={"fastq_path": str(vendor)})
+    assert ont_runs._confine_submitted_path(str(vendor), "fastq_path", directory=False) == str(vendor)
+    await _submit(context, request)
+
+
+@pytest.mark.asyncio
 async def test_submit_rejects_fastq_escape_symlink_and_receipt_tamper(pooled_context, tmp_path: Path) -> None:
     context = pooled_context
     outside = tmp_path / "outside.fastq"
