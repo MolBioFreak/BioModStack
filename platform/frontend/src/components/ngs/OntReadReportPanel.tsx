@@ -23,6 +23,7 @@ export interface OntReadReport {
         references: Array<{ name: string; length: number }>; reads_per_reference: Record<string, number>;
     };
     move_tagged_reads: number;
+    molecule_type?: 'dna' | 'rna';
     modifications: {
         probability_threshold: number;
         by_code: Array<{ code: string; called_sites: number; modified_sites: number; reads: number; modified_fraction: number }>;

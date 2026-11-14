@@ -129,3 +129,83 @@ def test_implicit_mm_mode_counts_unlisted_bases_as_unmodified_calls(tmp_path: Pa
     assert report["modifications"]["by_motif"] == [
         {"code": "A+6mA", "motif": "GATC", "called_sites": 2, "modified_sites": 1, "modified_fraction": 0.5},
     ]
+
+
+def _one_read_bam(path: Path, sequence: str, mm: str, ml: list[int], *, model: str | None = None) -> None:
+    header = {"HD": {"VN": "1.6"}}
+    if model:
+        header["RG"] = [{"ID": "rg", "DS": f"runid=r basecall_model={model}"}]
+    with pysam.AlignmentFile(str(path), "wb", header=header) as handle:
+        read = pysam.AlignedSegment(handle.header)
+        read.query_name = "r"
+        read.query_sequence = sequence
+        read.is_unmapped = True
+        read.query_qualities = pysam.qualitystring_to_array("5" * len(sequence))
+        read.set_tag("MM", mm)
+        read.set_tag("ML", ml)
+        handle.write(read)
+
+
+def _motifs(report: dict) -> dict:
+    return {f"{row['code']}@{row['motif']}": (row["called_sites"], row["modified_sites"]) for row in report["modifications"]["by_motif"]}
+
+
+@pytest.mark.parametrize("motif", ["CCAGG", "CCTGG"])
+def test_dcm_counts_only_the_second_c_of_ccwgg(tmp_path: Path, motif: str) -> None:
+    # C at 2, 3 (motif; 3 is the Dcm target), 8, 9 (motif; 9 is the target) and 14 (outside any motif).
+    sequence = f"TT{motif}T{motif}TCT"
+    bam = tmp_path / "calls.bam"
+    # Explicit mode, every C listed: targets methylated, first Cs and the stray C not.
+    _one_read_bam(bam, sequence, "C+m?,0,0,0,0,0;", [5, 250, 5, 250, 5])
+    report = build_read_report(bam, artifact={})
+    assert _motifs(report) == {"C+5mC@CCWGG": (2, 2)}
+    (overall,) = report["modifications"]["by_code"]
+    assert (overall["called_sites"], overall["modified_sites"]) == (5, 2)
+
+
+def test_dcm_implicit_mode_counts_an_unlisted_target_c_as_unmethylated(tmp_path: Path) -> None:
+    bam = tmp_path / "calls.bam"
+    # Only the first target C (index 3) is listed; the second target (index 9) is implicitly unmodified.
+    _one_read_bam(bam, "TTCCAGGTCCTGGT", "C+m.,1;", [250])
+    assert _motifs(build_read_report(bam, artifact={})) == {"C+5mC@CCWGG": (2, 1)}
+
+
+def test_dcm_explicit_mode_leaves_an_unlisted_target_c_uncalled(tmp_path: Path) -> None:
+    bam = tmp_path / "calls.bam"
+    _one_read_bam(bam, "TTCCAGGTCCTGGT", "C+m?,1;", [250])
+    assert _motifs(build_read_report(bam, artifact={})) == {"C+5mC@CCWGG": (1, 1)}
+
+
+def test_5hmc_is_kept_apart_from_dcm(tmp_path: Path) -> None:
+    bam = tmp_path / "calls.bam"
+    # Both codes on the same Cs: 5hmC high at the Dcm target, 5mC low.
+    _one_read_bam(bam, "TTCCAGGT", "C+h?,0,0;C+m?,0,0;", [5, 250, 5, 5])
+    report = build_read_report(bam, artifact={})
+    assert _motifs(report) == {"C+5mC@CCWGG": (1, 0)}
+    by_code = {row["code"]: (row["called_sites"], row["modified_sites"]) for row in report["modifications"]["by_code"]}
+    assert by_code == {"C+5hmC": (2, 1), "C+5mC": (2, 0)}
+
+
+def test_opposite_strand_dcm_call_is_read_at_the_paired_g(tmp_path: Path) -> None:
+    bam = tmp_path / "calls.bam"
+    # G at 5 and 6; index 5 pairs with the other strand's target C.
+    _one_read_bam(bam, "TTCCAGGT", "G-m?,0,0;", [250, 5])
+    assert _motifs(build_read_report(bam, artifact={})) == {"G+5mC@CCWGG": (1, 1)}
+
+
+@pytest.mark.parametrize("how", ["job", "model"])
+def test_rna_run_names_m6a_and_shows_no_bacterial_methylase(tmp_path: Path, how: str) -> None:
+    bam = tmp_path / "calls.bam"
+    _one_read_bam(bam, "TTGATCTTAATTGATCTT", "A+a?,0,0,0,0;", [250, 5, 5, 250],
+                  model="rna004_130bps_sup@v5.2.0" if how == "model" else None)
+    report = build_read_report(bam, artifact={}, molecule_type="rna" if how == "job" else None)
+    assert report["molecule_type"] == "rna"
+    assert report["modifications"]["by_motif"] == []
+    assert [row["code"] for row in report["modifications"]["by_code"]] == ["A+m6A"]
+
+
+def test_dna_run_reports_its_molecule_and_job_setting_wins_over_the_model_name(tmp_path: Path) -> None:
+    bam = tmp_path / "calls.bam"
+    _one_read_bam(bam, "TTGATCTT", "A+a?,0;", [250], model="rna004_130bps_sup@v5.2.0")
+    report = build_read_report(bam, artifact={}, molecule_type="dna")
+    assert report["molecule_type"] == "dna" and _motifs(report) == {"A+6mA@GATC": (1, 1)}

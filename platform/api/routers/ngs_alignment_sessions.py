@@ -1349,7 +1349,11 @@ async def get_ngs_read_report(
             )
             public = {**metadata, "filename": chosen.get("filename") or Path(str(chosen.get("relative_path") or "")).name,
                       "url": chosen.get("url")}
-            return await run_in_threadpool(build_read_report, Path(path), artifact=public)
+            molecule = (authorized_job.params or {}).get("ont_molecule_type") if isinstance(authorized_job.params, dict) else None
+            return await run_in_threadpool(
+                build_read_report, Path(path), artifact=public,
+                molecule_type=str(molecule) if molecule else None,
+            )
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
     except OntReadReportError as exc:
