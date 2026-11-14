@@ -1459,26 +1459,6 @@ function lookupCodePercent(
     return { percent, coverage };
 }
 
-function pickDominantCytosineCall(
-    mCall: { percent: number | null; coverage: number | null },
-    hCall: { percent: number | null; coverage: number | null }
-): { percent: number | null; coverage: number | null } {
-    const mPercent = mCall.percent;
-    const hPercent = hCall.percent;
-    const hasM = mPercent != null;
-    const hasH = hPercent != null;
-
-    if (!hasM && !hasH) {
-        return { percent: null, coverage: null };
-    }
-
-    const coverage = Math.max(mCall.coverage || 0, hCall.coverage || 0) || null;
-    if (!hasH || (hasM && (mPercent as number) >= (hPercent as number))) {
-        return { percent: mPercent, coverage };
-    }
-    return { percent: hPercent, coverage };
-}
-
 function buildDamDcmCalls(
     records: ParsedBedRecord[],
     fastaText: string
@@ -1543,13 +1523,9 @@ function buildDamDcmCalls(
         const minusPos = hit.start + 4;
         const pairKey = `${chrom}:Dcm:${hit.start + 1}`;
 
-        const plusM = lookupCodePercent(lookup, chrom, plusPos, 'm');
-        const plusH = lookupCodePercent(lookup, chrom, plusPos, 'h');
-        const plus = pickDominantCytosineCall(plusM, plusH);
-
-        const minusM = lookupCodePercent(lookup, chrom, minusPos, 'm');
-        const minusH = lookupCodePercent(lookup, chrom, minusPos, 'h');
-        const minus = pickDominantCytosineCall(minusM, minusH);
+        // Dcm writes 5mC. 5hmC is a different modification and is never folded into the Dcm figure.
+        const plus = lookupCodePercent(lookup, chrom, plusPos, 'm');
+        const minus = lookupCodePercent(lookup, chrom, minusPos, 'm');
 
         dcmSites.push({
             chrom,
@@ -5132,7 +5108,11 @@ export function NGSToolkit() {
                                             )}
 
                                             <div className="text-xs text-[var(--text-secondary)]">
-                                                Dam/Dcm motif view; Dcm uses <span className="font-mono">max(m, h)</span>.
+                                                modkit pileup, per reference position and strand. Percent modified is modified calls over valid calls (modified, other modification and canonical) at that position.
+                                                {' '}Low-confidence calls are dropped first: {selectedJob?.params?.modkit_filter_threshold != null && String(selectedJob.params.modkit_filter_threshold) !== ''
+                                                    ? `pass threshold ${String(selectedJob.params.modkit_filter_threshold)} was set for this run`
+                                                    : 'the pass threshold was estimated by modkit from sampled reads (see pileup.log)'}.
+                                                {' '}Dam is 6mA at GATC and Dcm is 5mC at the second C of CCWGG; 5hmC is not combined into Dcm.
                                             </div>
                                             <div className="flex flex-wrap items-center gap-2 text-xs">
                                                 <span className="text-[var(--text-secondary)]">Strand view:</span>
@@ -5405,7 +5385,7 @@ export function NGSToolkit() {
 
                                             {methylationReport.summary ? (
                                                 <div className="bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded p-3">
-                                                    <div className="text-xs text-[var(--text-secondary)] mb-2">modkit summary (first 20 rows)</div>
+                                                    <div className="text-xs text-[var(--text-secondary)] mb-2">modkit summary (first 20 rows). Read-level call counts by modification code over the reads modkit sampled, with pass thresholds it estimates itself. The pileup pass threshold does not apply here, and these are not per-site estimates.</div>
                                                     <div className="overflow-x-auto">
                                                         <table className="w-full text-xs">
                                                             <thead>

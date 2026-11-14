@@ -227,3 +227,14 @@ def test_reference_list_reports_its_limit_and_the_full_counts(tmp_path: Path) ->
     alignment = build_read_report(bam, artifact={})["alignment"]
     assert (alignment["reference_count"], alignment["references_with_reads"], alignment["reference_list_limit"]) == (60, 55, 50)
     assert len(alignment["references"]) == 50 and len(alignment["reads_per_reference"]) == 50
+
+
+def test_modification_block_states_its_own_method(tmp_path: Path) -> None:
+    bam = tmp_path / "calls.bam"
+    _one_read_bam(bam, "TTGATCTT", "A+a?,0;", [250])
+    modifications = build_read_report(bam, artifact={})["modifications"]
+    assert modifications["probability_threshold"] == 0.5
+    assert modifications["method"] == {
+        "source": "read MM/ML tags", "population": "primary reads",
+        "denominator": "called bases of the modified base type", "filter": "none",
+    }

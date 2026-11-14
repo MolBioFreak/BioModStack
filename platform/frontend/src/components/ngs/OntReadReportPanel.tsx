@@ -27,6 +27,7 @@ export interface OntReadReport {
     molecule_type?: 'dna' | 'rna';
     modifications: {
         probability_threshold: number;
+        method?: { source: string; population: string; denominator: string; filter: string };
         by_code: Array<{ code: string; called_sites: number; modified_sites: number; reads: number; modified_fraction: number }>;
         by_motif?: Array<{ code: string; motif: string; called_sites: number; modified_sites: number; modified_fraction: number }>;
     };
@@ -103,6 +104,11 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
             {report.modifications.by_code.length > 0 && (
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" aria-label="Modification calls">
                     <h4 className="text-sm font-semibold text-[var(--text-primary)]">Modification calls</h4>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]" data-testid="modification-method">
+                        Counted per read from the {report.modifications.method?.source ?? 'read MM/ML tags'}: a base counts as modified at P(modified) ≥ {report.modifications.probability_threshold}.
+                        {' '}Population: {report.modifications.method?.population ?? 'primary reads'}. Denominator: {report.modifications.method?.denominator ?? 'called bases'}. Filter: {report.modifications.method?.filter ?? 'none'}.
+                        {' '}These are read-site tallies, not modkit's per-reference-position estimates.
+                    </p>
                     {(report.modifications.by_motif ?? []).length > 0 && (
                         <>
                             <p className="mt-1 text-xs text-[var(--text-secondary)]">Host methylation, scored at its motif (P(modified) ≥ {report.modifications.probability_threshold}). Below {pct(METHYLATED_FRACTION_CUTOFF, 0)} the template is read as unmethylated.</p>

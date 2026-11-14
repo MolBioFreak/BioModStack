@@ -83,6 +83,9 @@ describe('OntReadReportPanel', () => {
         expect(dam).toMatch(/methylated$/);
         expect(dam).not.toContain('not methylated');
         expect(container.querySelector('[data-motif-code="C+5mC@CCWGG"]')?.textContent).toContain('too few sites');
+        const method = container.querySelector('[data-testid="modification-method"]')!.textContent!;
+        expect(method).toContain('P(modified) ≥ 0.5');
+        expect(method).toContain('not modkit');
         expect(container.querySelector('[data-mod-code="A+6mA"]')?.textContent).not.toContain('methylated');
         const open = Array.from(container.querySelectorAll('button')).find(node => node.textContent === 'Open squiggles')!;
         await act(async () => open.click());

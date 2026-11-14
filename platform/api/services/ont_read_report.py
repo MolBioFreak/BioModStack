@@ -232,6 +232,13 @@ def build_read_report(bam_path: Path, *, artifact: dict[str, Any], molecule_type
         "molecule_type": "rna" if rna else "dna",
         "modifications": {
             "probability_threshold": MOD_PROBABILITY_THRESHOLD,
+            # How these tallies are made, so they are not read as modkit's per-site estimates.
+            "method": {
+                "source": "read MM/ML tags",
+                "population": "primary reads" + (f", first {MAX_READS} in file order" if truncated else ""),
+                "denominator": "called bases of the modified base type",
+                "filter": "none",
+            },
             "by_code": [
                 {"code": key, **value,
                  "modified_fraction": round(value["modified_sites"] / value["called_sites"], 6) if value["called_sites"] else 0.0}
