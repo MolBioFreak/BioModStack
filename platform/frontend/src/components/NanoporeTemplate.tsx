@@ -1196,6 +1196,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 : selectedWorkflow === 'modified'
                     ? 'ont_methylation_analysis'
                     : 'ont_basecall_dna';
+    // The panel selector shows only for these workflows with a saved sequence chosen.
+    // A panel picked earlier and then hidden by a workflow change is not submitted.
+    const comparisonPanelSelectable = Boolean(selectedMolbioSequenceId) && ['plasmidQc', 'constructScreening', 'fastqQc'].includes(selectedWorkflow);
     const buildRequest = (molbioNgsReceiptId = '', comparisonPanelReceiptId = '') => {
         return {
             name: jobName,
@@ -1328,7 +1331,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 if (!isCurrent()) return null;
                 molbioNgsReceiptId = receiptResponse.data.receipt_id.trim();
                 if (!molbioNgsReceiptId) throw new Error('The immutable MolBio handoff did not return a receipt.');
-                if (approvedComparisonPanelId) {
+                if (approvedComparisonPanelId && comparisonPanelSelectable) {
                     const panelResponse = await fetch(`/api/molbio/ngs-comparison-panels/${encodeURIComponent(approvedComparisonPanelId)}/receipts`, {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ expected_receipt_id: molbioNgsReceiptId }),
@@ -1823,7 +1826,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             <div><div className="text-[var(--text-secondary)]">Topology / state</div><div className="mt-1 text-[var(--text-primary)]">{selectedMolbioRevision.topology} · {selectedMolbioRevision.is_current ? 'current' : 'historical'}</div></div>
                         </div>
                     )}
-                    {selectedMolbioSequenceId && ['plasmidQc', 'constructScreening', 'fastqQc'].includes(selectedWorkflow) && (
+                    {comparisonPanelSelectable && (
                         <div className="mt-3 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/40 p-3">
                             <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">Approved comparison panel (optional)</label>
                             <select value={approvedComparisonPanelId} onChange={(event) => setApprovedComparisonPanelId(event.target.value)} className="w-full rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]">

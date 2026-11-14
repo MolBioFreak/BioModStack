@@ -543,6 +543,18 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         expect(submits()[0].body).not.toHaveProperty('model_id');
     });
 
+    it('sends the reopened comparison panel on a workflow that shows the panel selector', async () => {
+        const source = { name: 'panel-qc', execution_target_id: null, params: {
+            ont_workflow_id: 'ont_plasmid_qc', fastq_path: '/data/reads.fastq',
+            molbio_revision_binding: { sequence_id: 'sequence-1', revision_id: 'revision-1', receipt_id: 'consumed' },
+            comparison_panel_binding: { panel_id: 'panel-1' },
+        } } as unknown as Job;
+        await mount(JSON.parse(JSON.stringify(normalizeNanoporeCloneState(source))));
+        await remoteReview();
+        await click('Approve and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params).toMatchObject({ molbio_ngs_receipt_id: 'new-receipt', ngs_comparison_panel_receipt_id: 'new-panel-receipt' });
+        expect(submits()[0].body.comparison_launch_id).toBe(launchId);
+    });
     it('reopens serialized cloned optional files and exact molecular/panel selections without old approval/runtime identity', async () => {
         const fileParams = { wf_clone_primers: '/data/primers.fasta', wf_clone_insert_reference: '/data/insert.fasta', wf_clone_host_reference: '/data/host.fasta', wf_clone_regions_bedfile: '/data/regions.bed' };
         const source = { name: 'clone-files', execution_target_id: null, execution_plan_approval: 'old-approval', params: {
@@ -566,8 +578,11 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         expect(calls.filter(call => call.url.endsWith('/ngs-receipts'))).toHaveLength(1);
         expect(prepares()).toHaveLength(1);
         await click('Approve and submit'); await until(() => expect(submits()).toHaveLength(1));
-        expect(submits()[0].body.params).toMatchObject({ ...fileParams, wf_clone_min_quality: 0, wf_clone_expected_coverage: 0, wf_clone_canu_fast: false, molbio_ngs_receipt_id: 'new-receipt', ngs_comparison_panel_receipt_id: 'new-panel-receipt' });
-        expect(submits()[0].body.comparison_launch_id).toBe(launchId);
+        expect(submits()[0].body.params).toMatchObject({ ...fileParams, wf_clone_min_quality: 0, wf_clone_expected_coverage: 0, wf_clone_canu_fast: false, molbio_ngs_receipt_id: 'new-receipt' });
+        // The API refuses a comparison panel on the clone route, and the form shows no panel selector there,
+        // so a panel carried over from an earlier selection is not sent.
+        expect(submits()[0].body.params).not.toHaveProperty('ngs_comparison_panel_receipt_id');
+        expect(submits()[0].body.comparison_launch_id).toBeUndefined();
         expect(submits()[0].body.params).not.toHaveProperty('dorado_model');
         expect(submits()[0].body.params).not.toHaveProperty('molbio_revision_binding');
     });
