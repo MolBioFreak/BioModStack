@@ -299,6 +299,14 @@ def is_ont_fastq_qc_job(job: Job) -> bool:
     )
 
 
+def ont_fastq_qc_stage_selected(params: Any) -> bool:
+    """Mirror workflows/ngs/ont_fastq_qc.nf: explicit run_fastq_qc wins, then legacy run_multimer_qc."""
+    params = params if isinstance(params, dict) else {}
+    if params.get("run_fastq_qc") is not None:
+        return params.get("run_fastq_qc") is not False
+    return params.get("run_multimer_qc") is not False
+
+
 def is_ont_signal_alignment_job(job: Job) -> bool:
     """Return whether one Job is the bounded external move-BAM alignment lane."""
 
@@ -365,7 +373,9 @@ def ont_native_completion_path(job: Any) -> str:
     if workflow == "ont_pooled_reference_assignment":
         return "pooled_review"
     if is_ont_fastq_qc_job(job):
-        return "fastq_qc"
+        # QC off runs alignment and multimer analysis only. It writes no QC or
+        # verification manifest, so it completes through the shared importer.
+        return "fastq_qc" if ont_fastq_qc_stage_selected(params) else "shared_native_import"
     if is_ont_signal_alignment_job(job):
         return "signal_alignment"
     return "shared_native_import"

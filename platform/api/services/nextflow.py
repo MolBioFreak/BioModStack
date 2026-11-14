@@ -3751,6 +3751,7 @@ async def launch_nextflow_job(
                             from services.ont_ngs_completion import (
                                 is_ont_fastq_qc_job,
                                 is_ont_signal_alignment_job,
+                                ont_fastq_qc_stage_selected,
                                 validate_and_prepare_ont_signal_alignment_completion,
                             )
 
@@ -3758,7 +3759,7 @@ async def launch_nextflow_job(
                                 await _finalize_local_md_job(
                                     job, session, result_output_dir, projection_ingested=True)
                                 logger.info("Validated the immutable MD completion generation for job %s", job_id)
-                            elif is_ont_fastq_qc_job(job):
+                            elif is_ont_fastq_qc_job(job) and ont_fastq_qc_stage_selected(job.params):
                                 integrity = await _validate_ont_fastq_qc_terminal_completion(
                                     job,
                                     terminal_resource_receipt_factory,

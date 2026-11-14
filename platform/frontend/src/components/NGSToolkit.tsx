@@ -2543,13 +2543,17 @@ export function NGSToolkit() {
             : typeof selectedJobParams.workflow_id === 'string'
                 ? selectedJobParams.workflow_id
                 : null;
-    const isCanonicalFastqQcRun = isFastqOnlyRun && selectedOntWorkflowId === 'ont_fastq_qc';
+    // QC off runs alignment and multimer analysis only and publishes no QC result package.
+    const fastqQcStageSelected = selectedJobParams.run_fastq_qc != null
+        ? selectedJobParams.run_fastq_qc !== false
+        : selectedJobParams.run_multimer_qc !== false;
+    const isCanonicalFastqQcRun = isFastqOnlyRun && selectedOntWorkflowId === 'ont_fastq_qc' && fastqQcStageSelected;
     const showOntReadReport = !isCanonicalFastqQcRun && selectedJob?.status === 'completed' && !!selectedOntWorkflowId && /^ont_/.test(selectedOntWorkflowId) && (hasPod5Input || hasBamInput);
     const sequenceQcManifestState = useSequenceQcManifest(selectedJob?.id, selectedJob?.status);
     const ontFastqQcResultState = useOntFastqQcResult(
         selectedJob?.id,
         selectedJob?.status,
-        selectedOntWorkflowId,
+        isCanonicalFastqQcRun ? selectedOntWorkflowId : null,
     );
     const alignmentAuthorityBinding = useMemo(() => {
         const result = ontFastqQcResultState.result;

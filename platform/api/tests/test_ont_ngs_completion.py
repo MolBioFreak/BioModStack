@@ -711,3 +711,18 @@ def test_package_source_custody_and_published_reopen_are_distinct(tmp_path, monk
         service.build_ngs_package_artifacts(job.id, **authority, verify_source_input=True)
     monkeypatch.setattr(service, "_stable_file_identity", lambda *a, **kw: pytest.fail("reopen rescanned managed input"))
     assert service.build_ngs_package_artifacts(job.id, **authority, published_artifacts=inventory) == inventory
+
+
+def test_fastq_qc_off_completes_through_the_shared_importer() -> None:
+    from services import ont_ngs_completion as service
+
+    def job(**extra):
+        return SimpleNamespace(model_id="nanopore", mode="fastq_qc", params={
+            "ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq", **extra})
+
+    assert service.ont_native_completion_path(job()) == "fastq_qc"
+    assert service.ont_native_completion_path(job(run_fastq_qc=True)) == "fastq_qc"
+    assert service.ont_native_completion_path(job(run_fastq_qc=False)) == "shared_native_import"
+    # Legacy saved requests carry run_multimer_qc; explicit run_fastq_qc wins.
+    assert service.ont_native_completion_path(job(run_multimer_qc=False)) == "shared_native_import"
+    assert service.ont_native_completion_path(job(run_fastq_qc=True, run_multimer_qc=False)) == "fastq_qc"
