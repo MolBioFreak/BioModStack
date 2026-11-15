@@ -72,6 +72,7 @@ import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
 import { OntReadReportPanel } from './ngs/OntReadReportPanel';
 import { OntFastqQcResultPanel } from './ngs/OntFastqQcResultPanel';
 import { PlasmidSummaryPanel } from './ngs/PlasmidSummaryPanel';
+import { NativeResultProjectAttach } from './ngs/NativeResultProjectAttach';
 import { AlignmentPresentationStatus } from './ngs/AlignmentPresentationStatus';
 import { useOntFastqQcResult } from './ngs/useOntFastqQcResult';
 import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
@@ -5505,6 +5506,11 @@ export function NGSToolkit() {
                                 <div className="space-y-2">
                                     <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Stage Artifacts</h4>
                                     {selectedJob.status === 'completed' && <NgsArtifactDownloads jobId={selectedJob.id} />}
+                                    {/* A run with a construct-QC manifest is added from that panel; the others are added here. */}
+                                    {selectedJob.status === 'completed' && sequenceQcManifestState.status !== 'available' && sequenceQcManifestState.status !== 'loading'
+                                        && packageArtifacts?.some(artifact => artifact.state === 'present') && (
+                                        <NativeResultProjectAttach jobId={selectedJob.id} label={selectedJob.name || selectedJob.id} />
+                                    )}
                                     {Object.keys(stageOutputs).length === 0 ? (
                                         <p className="text-sm text-[var(--text-secondary)]">No stage outputs recorded yet.</p>
                                     ) : (

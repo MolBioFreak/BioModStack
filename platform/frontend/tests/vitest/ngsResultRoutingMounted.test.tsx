@@ -242,6 +242,8 @@ describe('NGS authoritative stage presentation', () => {
         await flush();
         const asked = vi.mocked(api.get).mock.calls.some(call => call[0] === '/api/jobs/job-123/ngs-read-report');
         expect(asked).toBe(expected);
+        // No construct-QC manifest here, so the run is added to a Project from its published files.
+        expect(container.querySelector('[data-testid="native-result-add-to-project"]')).not.toBeNull();
     });
     it('opens native clone downloads and recovers the catalog in the actual toolkit cache', async () => {
         Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
