@@ -470,7 +470,7 @@ def install_governed_ngs_openapi(app: Any) -> None:
 
 _CLOSED_ARTIFACT_EXTENSIONS = (
     "fastq.gz", "vcf.gz", "bedgraph", "fasta", "fastq", "json", "html", "csv", "tsv",
-    "bam", "bai", "fai", "vcf", "bed", "log", "txt", "gz", "bin", "ab1",
+    "bam", "bai", "fai", "vcf", "bed", "log", "txt", "gz", "bin", "ab1", "svg", "gbk",
 )
 _INLINE_ARTIFACT_EXTENSIONS = frozenset({"bam", "bai", "fasta", "fai"})
 
@@ -1316,6 +1316,96 @@ async def list_ngs_package_artifacts(
         }
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+
+
+async def _plasmid_summary_catalog(job_id: str, authorized_job: Job, pinned_root: Path) -> list[dict[str, Any]]:
+    return await run_in_threadpool(
+        service.build_ngs_package_artifacts, job_id, **_job_package_authority(authorized_job),
+        job_output_dir=pinned_root, pinned_root_descriptor=True,
+    )
+
+
+async def _plasmid_summary_path(job_id: str, authorized_job: Job, pinned_root: Path, artifact_id: str) -> Path:
+    path, _metadata = await run_in_threadpool(
+        service.resolve_ngs_package_artifact, job_id, artifact_id,
+        **_job_package_authority(authorized_job), job_output_dir=pinned_root, pinned_root_descriptor=True,
+    )
+    return Path(path)
+
+
+@router.get("/jobs/{job_id}/ngs-plasmid-summary", responses=_STANDARD_GOVERNED_ERRORS)
+async def get_ngs_plasmid_summary(
+    job_id: str,
+    authorized_job: Job = Depends(require_alignment_job),
+):
+    """The workflow's own plasmid summary and the published files that make up the result."""
+    import json
+    from services import ont_plasmid_summary as plasmid_summary
+    try:
+        async with _validated_pinned_result_root(authorized_job) as pinned_root:
+            artifacts = await _plasmid_summary_catalog(job_id, authorized_job, pinned_root)
+            chosen = plasmid_summary.select_summary_artifact(artifacts)
+            if chosen is None:
+                raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+                                       message="This job published no plasmid summary.", job_id=job_id, resource="artifact")
+            path = await _plasmid_summary_path(job_id, authorized_job, pinned_root, chosen["artifact_id"])
+            document = await run_in_threadpool(lambda: json.loads(path.read_text(encoding="utf-8")))
+            files = plasmid_summary.select_summary_files(artifacts)
+        inside, left_out = plasmid_summary.plan_zip(files)
+        public = lambda item: {key: item[key] for key in ("key", "label", "format", "url", "size_bytes", "filename")}
+        return {
+            "schema": "bms.ngs.plasmid-summary-response.v1", "job_id": job_id, "summary": document,
+            "files": [public(item) for item in files],
+            "download_all": {"url": f"/api/jobs/{job_id}/ngs-plasmid-summary/download-all",
+                             "included": [item["key"] for item in inside],
+                             "left_out": [item["key"] for item in left_out]},
+        }
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+    except (OSError, ValueError) as exc:
+        raise OntNgsRouteError(status_code=409, code="NGS_AUTHORITY_CONFLICT", message="The plasmid summary could not be read.",
+                               job_id=job_id, resource="artifact") from exc
+
+
+@router.get("/jobs/{job_id}/ngs-plasmid-summary/download-all", responses=_BINARY_RESPONSES)
+async def download_ngs_plasmid_result(
+    job_id: str,
+    authorized_job: Job = Depends(require_alignment_job),
+):
+    """Every file of the plasmid result as one zip."""
+    import tempfile
+    from starlette.background import BackgroundTask
+    from services import ont_plasmid_summary as plasmid_summary
+    handle = tempfile.NamedTemporaryFile(prefix="bms-plasmid-result-", suffix=".zip", delete=False)
+    handle.close()
+    archive = Path(handle.name)
+    try:
+        async with _validated_pinned_result_root(authorized_job) as pinned_root:
+            artifacts = await _plasmid_summary_catalog(job_id, authorized_job, pinned_root)
+            files = plasmid_summary.select_summary_files(artifacts)
+            if not files:
+                raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+                                       message="This job published no plasmid result files.", job_id=job_id, resource="artifact")
+            inside, left_out = plasmid_summary.plan_zip(files)
+            members = [(item["filename"], await _plasmid_summary_path(job_id, authorized_job, pinned_root, item["artifact_id"]))
+                       for item in inside]
+            sample = re.sub(r"[^A-Za-z0-9._-]", "_", str(getattr(authorized_job, "name", "") or job_id))[:80] or "plasmid_result"
+            await run_in_threadpool(plasmid_summary.write_zip, archive, members, left_out, sample)
+    except BaseException as exc:
+        archive.unlink(missing_ok=True)
+        if isinstance(exc, service.AlignmentSessionError):
+            raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+        raise
+
+    def chunks() -> Iterator[bytes]:
+        with archive.open("rb") as stream:
+            while block := stream.read(1024 * 1024):
+                yield block
+    return StreamingResponse(
+        chunks(), media_type="application/zip", background=BackgroundTask(archive.unlink, missing_ok=True),
+        headers={"Content-Disposition": f'attachment; filename="{sample}_plasmid_result.zip"',
+                 "Content-Length": str(archive.stat().st_size), "Cache-Control": "private, no-store"},
+    )
 
 
 @router.get("/jobs/{job_id}/ngs-read-report", responses=_STANDARD_GOVERNED_ERRORS)

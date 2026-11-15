@@ -50,6 +50,7 @@ process FastqPlasmidQC {
     path "fastq_consensus.fasta.fai", emit: consensus_index
     path "fastq_consensus.log", emit: consensus_log
     path "consensus_pileup.ab1", emit: pileup_chromatogram, optional: true
+    path "plasmid_summary/*", emit: plasmid_summary, optional: true
     path "fastq_qc.log", emit: log
 
     script:
@@ -550,6 +551,17 @@ process FastqPlasmidQC {
         --igv-report-log igv_report.log \\
         "\${pileup_args[@]}" \\
         --log fastq_qc.log
+    # Summary page files, restated from the outputs above; an extra, never a completion condition.
+    if [[ -f fastq_consensus.fasta ]]; then
+        "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_plasmid_summary.py" \\
+            --sample "${manifestJobId}" \\
+            --consensus-fasta fastq_consensus.fasta \\
+            --per-base-support per_base_support.tsv \\
+            --alignment-stats fastq_alignment_stats.tsv \\
+            --read-lengths read_lengths.tsv \\
+            --coordinates reference --expected-sequence-provided \\
+            --out-dir plasmid_summary >> fastq_qc.log 2>&1 || rm -rf plasmid_summary
+    fi
     # Native writers are finished; metadata/logs remain private publications.
     for completed in aligned.bam aligned.bam.bai reference_qc.fasta reference_qc.fasta.fai fastq_consensus.fasta fastq_consensus.fasta.fai; do
         if [[ -f "\${completed}" && ! -L "\${completed}" ]] && (( (8#\$(stat -c %a "\${completed}") & 8#222) != 0 )); then chmod 0444 "\${completed}"; fi

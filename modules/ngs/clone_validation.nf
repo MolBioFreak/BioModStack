@@ -182,6 +182,7 @@ process CloneValidationAdapter {
     path "verification_input/**", type: 'file', hidden: true, optional: true, emit: publication_files
     path "per_base_support.tsv", emit: per_base_support
     path "consensus_pileup.ab1", emit: pileup_chromatogram, optional: true
+    path "plasmid_summary/*", emit: plasmid_summary, optional: true
     path "alignment_stats.tsv", emit: alignment_stats
     path "dimer_breakpoint_call.tsv", emit: breakpoint_call
     path "dimer_secondary_summary.tsv", emit: secondary_summary
@@ -195,6 +196,7 @@ process CloneValidationAdapter {
     def inputBuilder = shellQuote("${codeRoot}/scripts/build_construct_verification_input.py")
     def supportBuilder = shellQuote("${codeRoot}/scripts/build_fastq_support_tables.py")
     def pileupWriter = shellQuote("${codeRoot}/scripts/write_pileup_ab1.py")
+    def summaryBuilder = shellQuote("${codeRoot}/scripts/build_plasmid_summary.py")
     // Without an expected sequence the staged reference is the assembled consensus:
     // read support is counted against it and no expected-sequence bundle is built.
     def hasExpected = (params.reference_fasta && params.reference_fasta.toString().trim()) ? 'true' : 'false'
@@ -258,6 +260,19 @@ process CloneValidationAdapter {
         printf 'mapped_reads\t%s\n' "\${mapped_reads}"
         printf 'unmapped_reads\t%s\n' "\${unmapped_reads}"
     } > alignment_stats.tsv
+    # Summary page files, restated from the outputs above; an extra, never a completion condition.
+    summary_args=(--coordinates consensus)
+    if ${hasExpected}; then summary_args=(--coordinates reference --expected-sequence-provided); fi
+    annotations="${result_root}/${sampleName}.annotations.bed"
+    if [[ -f "\${annotations}" ]]; then summary_args+=(--annotations-bed "\${annotations}"); fi
+    python3 ${summaryBuilder} \
+        --sample "${sampleName}" \
+        --consensus-fasta "${result_root}/${sampleName}.final.fasta" \
+        --per-base-support per_base_support.tsv \
+        --alignment-stats alignment_stats.tsv \
+        --reads-fastq source_reads.fastq \
+        "\${summary_args[@]}" \
+        --out-dir plasmid_summary || rm -rf plasmid_summary
     printf 'breakpoint_status\tconfidence\tprimary_breakpoint_in_boundary_window\n' > dimer_breakpoint_call.tsv
     printf 'aligned_dimer_reads\tnon_boundary_split_reads\n' > dimer_secondary_summary.tsv
     """

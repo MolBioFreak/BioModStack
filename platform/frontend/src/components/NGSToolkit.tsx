@@ -71,6 +71,7 @@ import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
 import { OntReadReportPanel } from './ngs/OntReadReportPanel';
 import { OntFastqQcResultPanel } from './ngs/OntFastqQcResultPanel';
+import { PlasmidSummaryPanel } from './ngs/PlasmidSummaryPanel';
 import { AlignmentPresentationStatus } from './ngs/AlignmentPresentationStatus';
 import { useOntFastqQcResult } from './ngs/useOntFastqQcResult';
 import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
@@ -4717,6 +4718,14 @@ export function NGSToolkit() {
                                             recoveryPending={alignmentAccessRecoveryPending}
                                         />
                                     </div>
+                                )}
+                                {/* Shown for any completed run that published a plasmid summary; hidden otherwise. */}
+                                {!isCanonicalFastqQcRun && selectedJob.status === 'completed' && (
+                                    <PlasmidSummaryPanel
+                                        jobId={selectedJob.id}
+                                        onOpenIgv={igvMissingReason ? undefined : () => void openIgvModal()}
+                                        onOpenSignal={signalDatasetId && rawSignalRunId && rawSignalObservedGeneration ? () => openSignalWorkbench() : undefined}
+                                    />
                                 )}
                                 {showOntReadReport && (
                                     <div className="space-y-2">
