@@ -21,6 +21,7 @@ from services.nextflow import compile_job_nextflow_invocation
 from services.remote_execution import bundle
 from test_boltzgen_generation_launch import admission, target  # noqa: F401
 from test_remote_bundle_runtime_gaps import bundle_assignment_fixture
+from test_remote_support_packaging import receipt_payload
 
 
 @pytest.mark.asyncio
@@ -33,7 +34,8 @@ from test_remote_bundle_runtime_gaps import bundle_assignment_fixture
     ('boltzgen', 'nanobody_binder', 'boltzgen_yaml_config'),
 ])
 async def test_approved_prepared_directory_reaches_real_bundle(
-        model, mode, path_key, target, admission, tmp_path, monkeypatch):
+        model, mode, path_key, target, admission, receipt_payload, tmp_path, monkeypatch):
+    monkeypatch.setattr("services.remote_execution.critical_runtime.selected_support_root", lambda: receipt_payload)
     session, tasks = admission, BackgroundTasks()
     roots = {'inputs': target.parent, 'results': tmp_path / 'results'}
     monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: roots['inputs'])

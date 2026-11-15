@@ -185,7 +185,7 @@ def test_permission_projection_actual_mismatch_never_publishes_layout(cache):
     path.write_bytes(b'wrong!')
     path.chmod(0o444)
     rows = [dict(row, name='model/run', mode=0o555)]
-    with pytest.raises(ValueError, match='hash_mismatch'):
+    with pytest.raises(ValueError, match='corrupt_cache_object'):
         cache.weights(rows, install=True)
     assert cache.weights(rows)['state'] == 'missing'
 

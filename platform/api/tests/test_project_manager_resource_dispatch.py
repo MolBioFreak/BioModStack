@@ -364,7 +364,11 @@ def test_runner_receipt_exposes_scheduler_dispatch_gpu_identity() -> None:
     assert receipt["dispatch"] == {"gpu_index": 2, "gpu_uuid": "GPU-2222"}
 
 
-def test_runner_records_expected_device_allow_paths_canonically() -> None:
+def test_runner_records_expected_device_allow_paths_canonically(monkeypatch) -> None:
+    def devices(gpu_index):
+        assert gpu_index == 2
+        return ['/dev/nvidiactl', '/dev/nvidia2', '/dev/nvidia-uvm-tools', '/dev/nvidia-uvm']
+    monkeypatch.setattr(resource_evidence, 'workflow_nvidia_device_allow_paths', devices)
     assert resource_evidence._expected_device_allow_paths({"gpu_index": 2}) == (  # noqa: SLF001
         "/dev/nvidia-uvm",
         "/dev/nvidia-uvm-tools",

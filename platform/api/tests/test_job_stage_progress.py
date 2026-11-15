@@ -243,9 +243,11 @@ async def test_http_summary_full_detail_stages_agree_without_n_plus_one(tmp_path
             assert 'params' not in row and 'provenance' not in row
             # Decoded legacy defaults are covered by frontendDashboardSummary.test.ts.
         selects.clear()
-        assert client.get('/api/jobs?summary=true&limit=1').status_code == 200
-        assert query_count <= 5
-        assert len(selects) <= query_count  # zero-direct terminal rows alone need child counts
+        single = client.get('/api/jobs?summary=true&limit=1&q=remote')
+        assert single.status_code == 200
+        assert [row['id'] for row in single.json()['jobs']] == ['remote']
+        # One parent with children exercises the same batched reads as the cohort.
+        assert query_count == len(selects)
         full = client.get('/api/jobs?limit=100')
         assert full.status_code == 200, full.text
         for row in full.json()['jobs']:

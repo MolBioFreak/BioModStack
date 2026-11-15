@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 import paths
 from services.remote_execution import bundle, cache, hf_assets, images
-from services.remote_execution.contracts import ProvisionSelection, WorkflowPackSelection
+from services.remote_execution.contracts import ProvisionSelection
 
 
 @pytest.fixture

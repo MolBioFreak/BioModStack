@@ -9,15 +9,8 @@ from model_registry import selected_execution_metadata
 
 
 @pytest.fixture
-def current_project_store(monkeypatch, tmp_path, request):
-    # Forward the real pytest request through the remote two-store fixture.
-    from types import SimpleNamespace
-    from tests import test_md_typed_launch as typed
-    original = typed.project_context_preview_store.__wrapped__
-    monkeypatch.setattr(typed, 'project_context_preview_store', SimpleNamespace(
-        __wrapped__=lambda patcher, root, _request: original(patcher, root, request)))
-    yield from remote_project_store.__wrapped__(monkeypatch, tmp_path)
-
+def current_project_store(remote_project_store):
+    return remote_project_store
 
 
 @pytest.mark.parametrize('navigation', [None, '/designs/source?view=selected'])
