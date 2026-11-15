@@ -70,9 +70,9 @@ process RunCloneValidation {
     def hostReferenceArg = hostReferencePath ? "--host_reference ${shellQuote(hostReferencePath)}" : ''
     def regionsBedfileArg = regionsBedfilePath ? "--regions_bedfile ${shellQuote(regionsBedfilePath)}" : ''
     def referencePath = reference_fasta ? reference_fasta.toString().trim() : ''
-    if (!referencePath) {
-        error("wf_clone_validation requires a full reference FASTA for construct verification")
-    }
+    // Without an expected sequence the pipeline assembles and annotates only.
+    def fullReferenceArg = referencePath ? "--full_reference ${shellQuote(referencePath)}" : ''
+    def assemblyOnly = referencePath ? 'false' : 'true'
     def apiPython = shellQuote(params.api_python ?: System.getenv("BMS_API_PYTHON") ?: "python3")
     // The nested executor consumes this task's existing scheduler allocation;
     // it must not independently guess host memory/CPU or reserve another slot.
@@ -142,7 +142,7 @@ PY
         ${nonUniformCoverage} \
         ${canuFast} \
         --override_basecaller_cfg "${basecallerModel}" \
-        --full_reference "${referencePath}" \
+        ${fullReferenceArg} \
         ${primersArg} \
         ${insertReferenceArg} \
         ${hostReferenceArg} \
@@ -153,6 +153,11 @@ PY
     if [[ \${wf_clone_rc} -ne 0 ]]; then
         printf 'wf-clone-validation failed (assembly_tool=%s, exit=%s)\n' "${assemblyTool}" "\${wf_clone_rc}" >&2
         exit "\${wf_clone_rc}"
+    fi
+    if ${assemblyOnly} && ! compgen -G 'wf_clone_out/*.final.fasta' > /dev/null; then
+        # The pipeline records its own reason when a sample yields no assembly.
+        echo "clone assembly did not complete: \$(tail -n +2 wf_clone_out/sample_status.txt 2>/dev/null | head -n 3 | tr '\\n' ' ')" >&2
+        exit 1
     fi
     # All nested writers have joined; metadata/logs remain private copies.
     find wf_clone_out -type f \\( -name '*.bam' -o -name '*.bai' -o -name '*.fasta' -o -name '*.fa' -o -name '*.fastq' -o -name '*.fq' -o -name '*.fasta.gz' -o -name '*.fa.gz' -o -name '*.fastq.gz' -o -name '*.fq.gz' \\) -exec chmod 0444 {} +
@@ -174,7 +179,7 @@ process CloneValidationAdapter {
     output:
     path "adapter_manifest.json", emit: manifest
     env published_directory, emit: verification_input
-    path "verification_input/**", type: 'file', hidden: true, emit: publication_files
+    path "verification_input/**", type: 'file', hidden: true, optional: true, emit: publication_files
     path "per_base_support.tsv", emit: per_base_support
     path "alignment_stats.tsv", emit: alignment_stats
     path "dimer_breakpoint_call.tsv", emit: breakpoint_call
@@ -188,6 +193,10 @@ process CloneValidationAdapter {
     def adapter = shellQuote("${codeRoot}/scripts/adapt_wf_clone_validation.py")
     def inputBuilder = shellQuote("${codeRoot}/scripts/build_construct_verification_input.py")
     def supportBuilder = shellQuote("${codeRoot}/scripts/build_fastq_support_tables.py")
+    // Without an expected sequence the staged reference is the assembled consensus:
+    // read support is counted against it and no expected-sequence bundle is built.
+    def hasExpected = (params.reference_fasta && params.reference_fasta.toString().trim()) ? 'true' : 'false'
+    def fullReferenceFlag = hasExpected == 'true' ? '--full-reference-provided' : ''
 
     """
     set -euo pipefail
@@ -208,11 +217,12 @@ process CloneValidationAdapter {
         --runtime-provenance "\$(realpath ${runtime_provenance})" \
         --sample "${sampleName}" \
         --execution-exit-code 0 \
-        --full-reference-provided \
+        ${fullReferenceFlag} \
         --source-bam "\$(realpath ${aligned_bam})" \
         --source-bai "\$(realpath ${aligned_bai})" \
         --output adapter_manifest.json
 
+    if ${hasExpected}; then
     python3 ${inputBuilder} \
         --reference-fasta authoritative_reference.fasta \
         --expected-reference-sha256 "${params.reference_sequence_sha256 ?: ''}" \
@@ -220,6 +230,7 @@ process CloneValidationAdapter {
         --consensus-fasta "${result_root}/${sampleName}.final.fasta" \
         --consensus-method wf_clone_validation_final_assembly \
         --out-dir verification_input
+    fi
 
     python3 ${supportBuilder} \
         --bam "${aligned_bam}" \

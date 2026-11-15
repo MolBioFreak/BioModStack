@@ -626,6 +626,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [selectedMolbioSequenceId, setSelectedMolbioSequenceId] = useState(molbioSequenceId);
     const [selectedMolbioRevisionId, setSelectedMolbioRevisionId] = useState(molbioRevisionId);
     const [showOptionalReference, setShowOptionalReference] = useState(false);
+    // Assembly report without an expected sequence: assemble and annotate only.
+    const [noExpectedReference, setNoExpectedReference] = useState(initialValues?.assembleWithoutReference === true);
     const molbioRevisionPairError = Boolean(selectedMolbioSequenceId) !== Boolean(selectedMolbioRevisionId)
         ? 'Exact molecular sequence and revision IDs must be supplied together.'
         : null;
@@ -880,7 +882,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     if (effectiveDoradoDevice && !doradoDeviceOptions.some(option => option.value === effectiveDoradoDevice)) {
         doradoDeviceOptions.push({ value: effectiveDoradoDevice, label: `${effectiveDoradoDevice} (selected)` });
     }
-    const requiresReference = workflowRequiresReference || (selectedWorkflow === 'dna' && (inputSource === 'fastq' || runModkit || runFastqQc));
+    const assembleOnly = selectedWorkflow === 'clone' && noExpectedReference
+        && !selectedMolbioSequenceId && !selectedManagedReferenceRevisionId;
+    const requiresReference = (workflowRequiresReference && !assembleOnly) || (selectedWorkflow === 'dna' && (inputSource === 'fastq' || runModkit || runFastqQc));
     const [modkitFilterThreshold, setModkitFilterThreshold] = useState<number | null>(
         (initialValues?.modkitFilterThreshold as number | null | undefined) ?? null
     );
@@ -1063,7 +1067,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const canRunModkit = ['modified', 'plasmidQc', 'dna', 'clone', 'constructScreening'].includes(selectedWorkflow);
     const fastqQcSettingAvailable = selectedWorkflow === 'dna' || selectedWorkflow === 'plasmidQc'
         || selectedWorkflow === 'fastqQc'
-        || ((selectedWorkflow === 'clone' || selectedWorkflow === 'constructScreening') && inputSource === 'fastq');
+        || ((selectedWorkflow === 'clone' || selectedWorkflow === 'constructScreening') && inputSource === 'fastq' && !assembleOnly);
     const cloneValidationControlsActive = selectedWorkflow === 'clone'
         || (selectedWorkflow === 'constructScreening' && runAssembly);
     const reviewInputReady = inputSource === 'pod5'
@@ -1213,7 +1217,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 ...buildNanoporeOperatorStageParams({
                     selectedWorkflow,
                     inputSource,
-                    runFastqQc,
+                    // The QC box is hidden without an expected sequence, so it is not sent as on.
+                    runFastqQc: runFastqQc && !assembleOnly,
                     runAssembly,
                 }),
                 ...(inputSource === 'pod5' && {
@@ -1770,20 +1775,28 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             {/* Shared MolBio and NGS reference library */}
             <section className={TASK_FLOW_PANEL} data-testid="immutable-molbio-reference-panel" data-ngs-section="reference" aria-labelledby="ngs-reference-heading">
                 <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>Reference sequence</h2>
-                {!requiresReference && !showOptionalReference && !selectedMolbioSequenceId && !selectedMolbioRevisionId && !selectedManagedReferenceRevisionId ? (
+                {!requiresReference && selectedWorkflow !== 'clone' && !showOptionalReference && !selectedMolbioSequenceId && !selectedMolbioRevisionId && !selectedManagedReferenceRevisionId ? (
                     <div className="space-y-3 text-sm text-[var(--text-secondary)]">
                         <p>No reference needed for basecalling.</p>
                         <button type="button" onClick={() => setShowOptionalReference(true)} className="rounded border border-[var(--border-primary)] px-3 py-2 text-[var(--text-primary)]">Add optional reference</button>
                     </div>
                 ) : <>
-                    {!requiresReference && <button type="button" onClick={() => {
+                    {selectedWorkflow === 'clone' && <button type="button" aria-pressed={assembleOnly} data-testid="ngs-assemble-without-reference"
+                        className={`mb-3 rounded border px-3 py-2 text-sm text-[var(--text-primary)] ${assembleOnly ? 'border-[var(--accent-primary)]' : 'border-[var(--border-primary)]'}`}
+                        onClick={() => {
+                            if (assembleOnly) { setNoExpectedReference(false); return; }
+                            setSelectedMolbioSequenceId(''); setSelectedMolbioRevisionId('');
+                            setSelectedManagedReferenceRevisionId(''); setApprovedComparisonPanelId('');
+                            setNoExpectedReference(true);
+                        }}>No reference — assemble and annotate only</button>}
+                    {!requiresReference && selectedWorkflow !== 'clone' && <button type="button" onClick={() => {
                         setSelectedMolbioSequenceId(''); setSelectedMolbioRevisionId('');
                         setSelectedManagedReferenceRevisionId(''); setApprovedComparisonPanelId('');
                         setShowOptionalReference(false);
                     }}>No reference — basecalling only</button>}
                     <div className="mb-3">
                         <h3 className="text-sm font-semibold text-[var(--text-primary)]">{requiresReference ? 'This analysis needs a reference sequence' : 'Optional reference sequence'}</h3>
-                        <p className="mt-1 text-xs text-[var(--text-secondary)]">{requiresReference ? 'Pick a sequence already in this Project, or add one below: paste it, upload FASTA/GenBank/CSV files, or choose saved sequences from Molecular Tools.' : 'Basecalling works without a reference. Add one if you also want reads aligned and checked against it.'}</p>
+                        <p className="mt-1 text-xs text-[var(--text-secondary)]">{requiresReference ? 'Pick a sequence already in this Project, or add one below: paste it, upload FASTA/GenBank/CSV files, or choose saved sequences from Molecular Tools.' : (assembleOnly ? 'The assembled consensus is annotated and reported. Expected-sequence checks are not run.' : 'Basecalling works without a reference. Add one if you also want reads aligned and checked against it.')}</p>
                         {requiresReference && exactDomainExperimentId && molbioSequences.length === 0 && !molbioSequencesQuery.isLoading && !exactStateRevisionQuery.isLoading && (
                             <p role="alert" className="mt-2 rounded border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-2 text-xs text-[var(--warning)]">This Project has no reference sequences yet. Add one or several below.</p>
                         )}

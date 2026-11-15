@@ -74,8 +74,9 @@ def main(argv=None) -> int:
             from lib.container_runtime import container_executable
             lock=json.loads(args.runtime_lock.read_text())
             image=next(item for item in lock['containers']['images'] if 'wf-clone-validation:' in item['uri'])
-            cache=Path(lock['containers']['cache_dir'])
-            if not cache.is_absolute(): cache=(args.runtime_lock.parent/cache).resolve()
+            # Same location rule as the runtime validator, so ${BMS_RUNTIME_HOME} resolves.
+            from validate_wf_clone_runtime import resolve_lock_path
+            cache=resolve_lock_path(args.runtime_lock.resolve(),lock['containers']['cache_dir'])
             command=[container_executable() or 'apptainer','exec','--bind',f'{args.bam.resolve().parent}:{args.bam.resolve().parent}:ro',
                      str(cache/image['cache_file']),args.samtools]
         with tempfile.TemporaryFile(mode='w+t') as error:

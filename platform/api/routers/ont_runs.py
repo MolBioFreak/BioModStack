@@ -153,6 +153,9 @@ ONT_REFERENCE_REQUIRED_WORKFLOWS = frozenset(
         "wf_clone_validation",
     }
 )
+# A reference here is still server-controlled, but the workflow also runs without
+# one: it assembles and annotates, and the expected-sequence checks are not run.
+ONT_REFERENCE_OPTIONAL_WORKFLOWS = frozenset({"wf_clone_validation"})
 
 ONT_COMPARISON_PANEL_WORKFLOWS = frozenset({"ont_plasmid_qc", "ont_construct_screening", "ont_fastq_qc"})
 
@@ -515,7 +518,8 @@ def _validate_ont_input_contract(canonical_id: str, params: dict[str, Any]) -> t
             f"accepted modes: {', '.join(spec.input_modes)}"
         )
 
-    if canonical_id in ONT_REFERENCE_REQUIRED_WORKFLOWS and not str(params.get("reference_fasta") or "").strip():
+    if (canonical_id in ONT_REFERENCE_REQUIRED_WORKFLOWS and canonical_id not in ONT_REFERENCE_OPTIONAL_WORKFLOWS
+            and not str(params.get("reference_fasta") or "").strip()):
         raise ValueError(f"workflow {canonical_id!r} requires reference_fasta for construct verification")
 
     if canonical_id == "ont_basecall_dna" and (input_mode == "fastq" or params.get("run_fastq_qc") or params.get("run_modkit")) and not str(params.get("reference_fasta") or "").strip():
@@ -1191,7 +1195,8 @@ async def _prepare_ont_ngs_workflow(
                 raise ValueError(
                     "reference_fasta is server-controlled for reference-required NGS workflows; submit an immutable MolBio receipt"
                 )
-            if not receipt_id and request.managed_reference is None:
+            if (not receipt_id and request.managed_reference is None
+                    and canonical_id not in ONT_REFERENCE_OPTIONAL_WORKFLOWS):
                 raise ValueError(
                     f"workflow {canonical_id!r} requires a server-issued molbio_ngs_receipt_id or exact managed-reference authority"
                 )

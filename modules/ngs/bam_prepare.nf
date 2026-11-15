@@ -187,6 +187,25 @@ process ValidateMappedBam {
     ngs_input_snapshot "${bai}" aligned.bam.bai true
     """
 }
+process FastqToUnalignedBam {
+    label 'dorado_cpu'
+    tag "fastq_to_unaligned_bam"
+    input:
+    path fastq
+    output:
+    path "reads.unaligned.bam", emit: bam
+    script:
+    """
+    set -euo pipefail
+    # Reference-free assembly takes the reads as an unaligned BAM.
+    samtools import -@ ${task.cpus} -T '*' -0 "${fastq}" -o reads.unaligned.bam
+    if [[ "\$(samtools view -c reads.unaligned.bam)" -eq 0 ]]; then
+        echo "ERROR: FASTQ contains no reads." >&2
+        exit 1
+    fi
+    chmod 0444 reads.unaligned.bam
+    """
+}
 process BamToFastqForQC {
     label 'dorado_cpu'
     publishDir "${params.out_dir}/fastq_qc", mode: 'copy'

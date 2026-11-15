@@ -383,6 +383,44 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(capturedRequest().params).toMatchObject({ pod5_dir: '/data/restored/pod5' });
     });
+    it('submits an assembly report without an expected sequence and reopens it the same way', async () => {
+        // Without a reference choice the form is not ready, so mount() would wait forever.
+        const values = { ...base, selectedWorkflow: 'clone', runAssembly: true, runFastqQc: true, inputSource: 'fastq', fastqPath: '/data/reads.fastq' };
+        await act(async () => root.render(React.createElement(QueryClientProvider, { client }, <MemoryRouter><NanoporeTemplate onBack={() => {}} initialValues={values} /></MemoryRouter>)));
+        const toggle = () => container.querySelector<HTMLButtonElement>('[data-testid="ngs-assemble-without-reference"]')!;
+        await until(() => expect(toggle()).not.toBeNull());
+        expect(toggle().getAttribute('aria-pressed')).toBe('false');
+        // The sequence selectors stay on screen, as in the sketch.
+        expect(container.querySelector('[data-testid="molbio-sequence-selector"]')).not.toBeNull();
+        expect(container.querySelector('[data-testid="ngs-review-reference"]')!.textContent).toBe('REFERENCE REQUIRED');
+        await click('No reference — assemble and annotate only');
+        expect(toggle().getAttribute('aria-pressed')).toBe('true');
+        expect(container.textContent).toContain('The assembled consensus is annotated and reported. Expected-sequence checks are not run.');
+        expect(container.querySelector('[data-testid="ngs-review-reference"]')!.textContent).toBe('REFERENCE OPTIONAL');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].url).toBe('/api/ont/ngs/wf_clone_validation/submit');
+        expect(submits()[0].body.params).toMatchObject({ run_assembly: true, fastq_path: '/data/reads.fastq' });
+        expect(submits()[0].body.params).not.toHaveProperty('molbio_ngs_receipt_id');
+        expect(submits()[0].body.params.run_fastq_qc).toBe(false);
+        expect(submits()[0].body).not.toHaveProperty('managed_reference');
+        expect(calls.some(call => call.url.endsWith('/ngs-receipts'))).toBe(false);
+        const reopened = normalizeNanoporeCloneState({ id: 'job', name: 'job', model_id: 'nanopore', mode: 'clone_validation',
+            params: { ont_workflow_id: 'wf_clone_validation', fastq_path: '/data/reads.fastq', run_assembly: true } } as unknown as Job)!;
+        expect(reopened.assembleWithoutReference).toBe(true);
+        const withReference = normalizeNanoporeCloneState({ id: 'job', name: 'job', model_id: 'nanopore', mode: 'clone_validation',
+            params: { ont_workflow_id: 'wf_clone_validation', fastq_path: '/data/reads.fastq', reference_fasta: '/managed/reference.fasta' } } as unknown as Job)!;
+        expect(withReference.assembleWithoutReference).toBe(false);
+    });
+    it('picking a sequence after choosing no reference sends that sequence', async () => {
+        await mount({ ...base, selectedWorkflow: 'clone', runAssembly: true, assembleWithoutReference: true });
+        expect(container.querySelector('[data-testid="ngs-assemble-without-reference"]')!.getAttribute('aria-pressed')).toBe('true');
+        await input('[data-testid="molbio-sequence-selector"]', 'sequence-1');
+        await until(() => expect(container.querySelector<HTMLSelectElement>('[data-testid="molbio-revision-selector"]')!.options.length).toBeGreaterThan(1));
+        await input('[data-testid="molbio-revision-selector"]', 'revision-1');
+        expect(container.querySelector('[data-testid="ngs-assemble-without-reference"]')!.getAttribute('aria-pressed')).toBe('false');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params).toMatchObject({ molbio_ngs_receipt_id: 'new-receipt' });
+    });
     it('opens optional reference controls on demand and returns to reference-free calling', async () => {
         await mount();
         expect(container.querySelector('[data-testid="molbio-sequence-selector"]')).toBeNull();

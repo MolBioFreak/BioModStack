@@ -98,6 +98,9 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         emitSummary: p.emit_summary !== false,
         emitMoves: p.emit_moves !== false,
         allowMultiplePod5Runs: p.allow_multiple_pod5_runs === true,
+        // An assembly report saved without an expected sequence reopens the same way.
+        assembleWithoutReference: workflowId === 'wf_clone_validation' && !p.reference_fasta
+            && typeof molecular.sequence_id !== 'string' && typeof p.ngs_reference_revision_id !== 'string',
         doradoDevice: typeof p.dorado_device === 'string' ? p.dorado_device : undefined,
         batchSize: p.dorado_batch_size ?? null,
         minQscore: p.min_qscore ?? 10,

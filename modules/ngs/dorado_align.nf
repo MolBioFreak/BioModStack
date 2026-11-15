@@ -53,6 +53,7 @@ process DoradoAlign {
         (params.ont_input_mode ?: params.input_mode ?: '').toString().trim() == 'bam'
         && params.run_fastq_qc == false
         && params.source_external_move_registration_receipt_id?.toString()?.trim()
+        && declaredReferenceSha256
     ) ? 'true' : 'false'
     if (declaredSourceSha256 && !(declaredSourceSha256 ==~ /[0-9a-f]{64}/)) {
         throw new IllegalArgumentException('bam_source_sha256 must be exactly 64 hexadecimal characters')
