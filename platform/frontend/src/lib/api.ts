@@ -3636,7 +3636,7 @@ export interface SuggestGibsonSource {
 export interface SuggestGibsonRequest {
     target: { name: string; sequence: string; circular: boolean; features?: SequenceFeature[] | null };
     sources: SuggestGibsonSource[];
-    min_match: number; overlap: number; target_tm: number; min_anneal: number;
+    min_match: number; overlap?: number | null; target_tm: number; min_anneal: number;
     allow_synthesis: boolean; limit: number;
     fixed_boundaries?: number[]; protected_feature_ids?: string[]; max_pcr_length?: number;
     fragment_count?: number | null; max_synthesis_length?: number | null;

@@ -19,11 +19,16 @@ from .common import orient_fragment
 from .feature_mapping import region_positions, stored_to_features
 from .feature_types import Material
 from .gibson_overlap_plan import (
+    FEW_FRAGMENT_OVERLAP,
+    MANY_FRAGMENT_OVERLAP,
     MIN_SYNTHESIS_FRAGMENT,
     cut_stretch,
     fragment_spans,
     maximum_count,
     minimum_count,
+    overlap_note,
+    scaled_overlap,
+    beyond_guidance_note,
     tune_primer_overlap,
 )
 from .pydna_gibson import design_gibson
@@ -57,7 +62,7 @@ class SuggestRequest(BaseModel):
     target: TargetIn
     sources: list[SourceIn] = Field(default_factory=list)
     min_match: int = Field(default=30, ge=12)
-    overlap: int = Field(default=25, ge=15, le=80)
+    overlap: int | None = Field(default=None, ge=15, le=80)  # blank: follows NEB's guidance for the fragment count
     target_tm: float = Field(default=58.0, ge=45.0, le=72.0)
     min_anneal: int = Field(default=14, ge=10, le=30)
     fixed_boundaries: list[int] | None = None
@@ -372,6 +377,32 @@ def _same_product(a: str, b: str, circular: bool) -> bool:
     return a == b or (circular and len(a) == len(b) and a in b + b)
 
 
+def _split_for_overlap(frags: list[Frag], target: str, req: SuggestRequest,
+                       notes: list[str]) -> tuple[SuggestRequest, list[Frag] | None]:
+    """Cut the synthetic stretches and settle the overlap, which follows the final fragment count unless it was set.
+
+    The count depends a little on the overlap (a longer overlap leaves less room under the synthesis limit), so the
+    first pass uses the few-fragment overlap and a second pass uses the larger one if that count calls for it.
+    """
+    if req.overlap is not None:
+        sized = req.model_copy(update={"overlap": req.overlap + req.overlap % 2})
+        return sized, _split_synthetic(frags, target, sized, notes)
+    overlap = FEW_FRAGMENT_OVERLAP
+    for attempt in range(2):
+        sized = req.model_copy(update={"overlap": overlap})
+        trial: list[str] = []
+        split = _split_synthetic(frags, target, sized, trial)
+        if split is None:
+            return sized, None
+        wanted = scaled_overlap(len(split))
+        if wanted == overlap or attempt == 1:
+            notes.extend(trial)
+            notes.append(overlap_note(overlap, len(split)))
+            return sized, split
+        overlap = wanted
+    raise AssertionError("unreachable")
+
+
 def _evaluate(request: dict[str, Any], target: str, circular: bool):
     fragments = [AssemblyFragment(id=f["id"], name=f["name"], sequence=f["sequence"],
                                   orientation=f["orientation"]) for f in request["fragments"]]
@@ -436,12 +467,15 @@ def suggest_gibson(req: SuggestRequest) -> SuggestResult:
             if key in protected_ids:
                 protected_spans.append(positions)
     origin = min(cuts) if cuts and req.target.circular else None
+    # Repeat containment is judged before the fragment count is known, so it uses the larger overlap unless one was set.
+    repeat_overlap = req.overlap if req.overlap is not None else MANY_FRAGMENT_OVERLAP
+    repeat_overlap += repeat_overlap % 2
     base = cover_target(target, [], circular=req.target.circular, origin=origin, matcher=matcher)
     if (req.target.circular and req.max_pcr_length and not cuts and not protected_spans
             and len(base.pieces) == 1 and base.pieces[0].is_match and base.pieces[0].end - base.pieces[0].start > req.max_pcr_length):
         # One source covers the whole circular target, so where the construct starts is free: start it where the repeats can stay whole.
         trial = RepeatAnalysis(target[base.rotation:] + target[:base.rotation], circular=True,
-                               overlap=req.overlap + req.overlap % 2, min_anneal=req.min_anneal)
+                               overlap=repeat_overlap, min_anneal=req.min_anneal)
         best = trial.plan(min_len=MIN_PCR_PIECE, max_len=req.max_pcr_length) if trial.has_repeats else None
         if best is not None and best.restricts and best.origin:
             base = cover_target(target, [], circular=True, origin=(base.rotation + best.origin) % n, matcher=matcher)
@@ -455,7 +489,7 @@ def suggest_gibson(req: SuggestRequest) -> SuggestResult:
     repeat_info: dict[str, Any] = {}
     analysis = None
     if req.max_pcr_length and any(p.is_match and p.end - p.start > req.max_pcr_length for p in pieces):
-        analysis = RepeatAnalysis(rotated, circular=req.target.circular, overlap=req.overlap + req.overlap % 2, min_anneal=req.min_anneal)
+        analysis = RepeatAnalysis(rotated, circular=req.target.circular, overlap=repeat_overlap, min_anneal=req.min_anneal)
     pieces = _split(pieces, [c for c in shift if c], req.max_pcr_length, analysis, repeat_info)
     notes.extend(n for n in repeat_info.get("notes", []) if n not in notes)
     if not req.allow_synthesis and any(not p.is_match for p in pieces):
@@ -476,13 +510,16 @@ def suggest_gibson(req: SuggestRequest) -> SuggestResult:
         if not frags:
             continue
         variant_notes: list[str] = []
-        frags = _split_synthetic(frags, rotated, req, variant_notes)
+        sized, frags = _split_for_overlap(frags, rotated, req, variant_notes)
         if frags is None:
             diagnostics.append(f"Variant {variant} not offered: a synthetic stretch cannot be cut into overlapping "
                                f"fragments of at most {cap} bp")
             continue
-        request, outs = _build_request(frags, rotated, req)
-        specs = _junction_specs(frags, rotated, req)
+        many = beyond_guidance_note(len(frags))
+        if many:
+            variant_notes.append(many)
+        request, outs = _build_request(frags, rotated, sized)
+        specs = _junction_specs(frags, rotated, sized)
         if specs:
             request["junctions"] = specs
         if any(len(f.sequence or "") > cap for f in outs if f.preparation == "synthesis"):

@@ -18,6 +18,34 @@ MIN_SYNTHESIS_FRAGMENT = 125
 EDGE_MARGIN = 30
 MIN_RADIUS = 10  # a cut can always move this far from an even split
 
+# Default overlap by fragment count. NEB's NEBuilder HiFi DNA Assembly protocol (E2621/E5520) gives 15-20 nt overlaps
+# for 2-3 fragments and 20-30 nt for 4-6 fragments, noting that efficiency falls as the number of fragments rises
+# (https://www.neb.com/en/protocols/nebuilder-hifi-dna-assembly-reaction-protocol). The default is the top of each
+# range: 20 nt is also the shortest overlap the NEBuilder tool itself read as clean, and the longer end of the range
+# suits the larger assembly. It is only a default: an overlap the user sets wins.
+FEW_FRAGMENTS = 3
+FEW_FRAGMENT_OVERLAP = 20
+MANY_FRAGMENT_OVERLAP = 30
+DOCUMENTED_FRAGMENTS = 6  # NEB's HiFi guidance (overlaps, DNA amounts) stops at 6 fragments
+
+
+def scaled_overlap(count: int) -> int:
+    """Overlap NEB's guidance gives for `count` fragments in one assembly."""
+    return MANY_FRAGMENT_OVERLAP if count > FEW_FRAGMENTS else FEW_FRAGMENT_OVERLAP
+
+
+def overlap_note(overlap: int, count: int) -> str:
+    shown = f"{count} fragment{'s' if count != 1 else ''}"
+    guide = "20-30 nt for 4-6 fragments" if overlap == MANY_FRAGMENT_OVERLAP else "15-20 nt for 2-3 fragments"
+    return f"Overlap {overlap} nt for {shown}: NEBuilder HiFi guidance is {guide}. Set an overlap to use a different one."
+
+
+def beyond_guidance_note(count: int) -> str | None:
+    if count <= DOCUMENTED_FRAGMENTS:
+        return None
+    return (f"{count} fragments is more than the 2-6 NEB's HiFi guidance covers; "
+            f"{MANY_FRAGMENT_OVERLAP} nt is the top of its 4-6 fragment range, and assembling in two stages is the usual alternative.")
+
 
 @dataclass(frozen=True)
 class Cut:
