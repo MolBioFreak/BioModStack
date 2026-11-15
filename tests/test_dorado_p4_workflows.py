@@ -69,7 +69,8 @@ def test_all_pod5_routes_publish_canonical_basecall_provenance_and_fail_closed_r
         text = (ROOT / "workflows/ngs" / name).read_text(encoding="utf-8")
         assert '"${params.out_dir}/basecall/dorado_preflight.json"' in text, name
         assert '"${params.out_dir}/basecall/dorado_runtime_provenance.json"' in text, name
-        assert "include { reportStage } from '../../modules/ngs/stage_reporting.nf'" in text, name
+        assert ("include { reportStage } from '../../modules/ngs/stage_reporting.nf'" in text
+                or "include { reportStage; igvReportIfCreated } from '../../modules/ngs/stage_reporting.nf'" in text), name
         assert "reportStage(params," in text, name
         assert "Warning: Failed to report stage" not in text, name
 

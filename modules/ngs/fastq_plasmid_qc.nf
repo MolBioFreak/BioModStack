@@ -44,7 +44,7 @@ process FastqPlasmidQC {
     path "igv_report_sites.bed", emit: igv_report_sites_bed
     path "igv_report_sites.tsv", emit: igv_report_sites_tsv
     path "igv_track_config.json", emit: igv_track_config
-    path "igv_report.html", emit: igv_report
+    path "igv_report.html", emit: igv_report, optional: true
     path "igv_report.log", emit: igv_report_log
     path "fastq_consensus.fasta", emit: consensus
     path "fastq_consensus.fasta.fai", emit: consensus_index
@@ -370,12 +370,20 @@ process FastqPlasmidQC {
 
     : > igv_report.log
 
-    if ! command -v create_report >/dev/null 2>&1; then
-        echo "CRITICAL_FAILURE: IGV_REPORT_CREATE_REPORT_UNAVAILABLE" | tee -a igv_report.log >&2
-        exit 86
-    fi
+    # The standalone page is an extra download. When it cannot be made the reason is
+    # recorded and the QC result goes on; the integrated IGV view reads the BAM directly.
+    igv_report_cli_available=1
+    igv_report_status="created"
+    igv_export_unavailable() {
+        echo "IGV_REPORT_UNAVAILABLE: \$1" | tee -a igv_report.log >&2
+        rm -f igv_report.html
+        igv_report_status="unavailable_\${1%% *}"
+    }
     rm -f igv_report.html
-    if ! create_report igv_report_sites.bed \
+    if ! command -v create_report >/dev/null 2>&1; then
+        igv_report_cli_available=0
+        igv_export_unavailable CREATE_REPORT_UNAVAILABLE
+    elif ! create_report igv_report_sites.bed \
         --fasta reference_qc.fasta \
         --track-config igv_standalone_track_config.json \
         --flanking ${igvReportFlankingBp} \
@@ -384,31 +392,18 @@ process FastqPlasmidQC {
         --template /opt/bms/igv-reports/igv_variant_standalone.html \
         --standalone \
         --output igv_report.html >> igv_report.log 2>&1; then
-        echo "CRITICAL_FAILURE: IGV_REPORT_CREATE_REPORT_FAILED" | tee -a igv_report.log >&2
-        rm -f igv_report.html
-        exit 86
-    fi
-    if [[ ! -s igv_report.html ]]; then
-        echo "CRITICAL_FAILURE: IGV_REPORT_ARTIFACT_EMPTY" | tee -a igv_report.log >&2
-        exit 86
-    fi
-    if ! "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/validate_standalone_igv_report.py" \
+        igv_export_unavailable CREATE_REPORT_FAILED
+    elif [[ ! -s igv_report.html ]]; then
+        igv_export_unavailable ARTIFACT_EMPTY
+    elif ! "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/validate_standalone_igv_report.py" \
         --report igv_report.html \
         --template /opt/bms/igv-reports/igv_variant_standalone.html \
         --igv-js /opt/bms/igv-reports/igv.min.js \
         --max-bytes 100663296 >> igv_report.log 2>&1; then
-        echo "CRITICAL_FAILURE: IGV_REPORT_VALIDATE_FAILED" | tee -a igv_report.log >&2
-        rm -f igv_report.html
-        exit 86
+        igv_export_unavailable VALIDATE_FAILED
+    elif [[ "\$(wc -c < igv_report.html)" -gt 100663296 ]]; then
+        igv_export_unavailable "ARTIFACT_OVERSIZED max_bytes=100663296"
     fi
-    igv_report_size=\$(wc -c < igv_report.html)
-    if [[ "\${igv_report_size}" -gt 100663296 ]]; then
-        echo "CRITICAL_FAILURE: IGV_REPORT_ARTIFACT_OVERSIZED bytes=\${igv_report_size} max_bytes=100663296" | tee -a igv_report.log >&2
-        rm -f igv_report.html
-        exit 86
-    fi
-    igv_report_cli_available=1
-    igv_report_status="created"
 
     {
         echo "igv_report_cli_available=\${igv_report_cli_available}"
@@ -491,6 +486,8 @@ process FastqPlasmidQC {
     if [[ -f fastq_consensus.fasta ]]; then chmod 0444 fastq_consensus.fasta; fi
     # Read-pileup chromatogram for sequence viewers. It is an extra download:
     # when it cannot be written the QC result is unchanged.
+    igv_report_args=(--igv-report-unavailable "\${igv_report_status}")
+    if [[ -f igv_report.html ]]; then igv_report_args=(--igv-report igv_report.html); fi
     pileup_args=()
     if [[ -f fastq_consensus.fasta ]] && "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/write_pileup_ab1.py" \\
         --per-base-support per_base_support.tsv \\
@@ -547,7 +544,7 @@ process FastqPlasmidQC {
         --igv-report-sites-bed igv_report_sites.bed \\
         --igv-report-sites-tsv igv_report_sites.tsv \\
         --igv-track-config igv_track_config.json \\
-        --igv-report igv_report.html \\
+        "\${igv_report_args[@]}" \\
         --igv-report-log igv_report.log \\
         "\${pileup_args[@]}" \\
         --log fastq_qc.log

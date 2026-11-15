@@ -151,6 +151,11 @@ function SampleSummary({ result }: { result: OntFastqQcResult }) {
         ['Mean depth', display(result.summary.mean_coverage_depth as number, '×')],
         ['Read N50', display(result.summary.n50_read_length_bp as number, ' bp')],
     ];
+    // The standalone IGV page is an optional export; say so when this run could not make it.
+    const igvExport = result.summary.igv_report_status;
+    if (typeof igvExport === 'string' && igvExport.startsWith('unavailable')) {
+        rows.push(['Standalone IGV page', 'not made for this run; the built-in IGV view is unaffected']);
+    }
     return (
         <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" aria-label="Sample summary">
             <h4 className="text-sm font-semibold text-[var(--text-primary)]">Sample summary</h4>

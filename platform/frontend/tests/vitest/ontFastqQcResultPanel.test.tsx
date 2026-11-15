@@ -39,6 +39,17 @@ afterEach(async () => {
 });
 
 describe('ONT FASTQ-QC decision report', () => {
+    it('says when the optional standalone IGV page was not made, and shows the result all the same', async () => {
+        const result = resultFixture();
+        await act(async () => root.render(<OntFastqQcResultPanel result={result} loading={false} error={null} />));
+        expect(container.textContent).not.toContain('Standalone IGV page');
+        result.summary.igv_report_status = 'unavailable_VALIDATE_FAILED';
+        await act(async () => root.render(<OntFastqQcResultPanel result={{ ...result }} loading={false} error={null} />));
+        const summary = container.querySelector('[aria-label="Sample summary"]')!;
+        expect(summary.textContent).toContain('Standalone IGV page');
+        expect(summary.textContent).toContain('not made for this run; the built-in IGV view is unaffected');
+        expect(container.querySelector('[data-testid="ont-fastq-qc-result"]')).not.toBeNull();
+    });
     it('separates configured-check PASS from unchanged experimental calibration metadata', async () => {
         const result = resultFixture();
         result.verification.verdict = 'PASS';

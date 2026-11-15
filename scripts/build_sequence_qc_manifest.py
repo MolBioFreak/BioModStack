@@ -73,6 +73,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--igv-report-sites-tsv", required=False, type=Path)
     parser.add_argument("--igv-track-config", required=False, type=Path)
     parser.add_argument("--igv-report", required=False, type=Path)
+    parser.add_argument("--igv-report-unavailable", required=False,
+                        help="why the optional standalone IGV page was not made")
     parser.add_argument("--igv-report-log", required=False, type=Path)
     parser.add_argument("--log", required=False, type=Path)
     return parser.parse_args()
@@ -359,6 +361,10 @@ def artifact_specs_from_args(args: argparse.Namespace) -> list[ArtifactSpec]:
                     required,
                 )
             )
+    unavailable = getattr(args, "igv_report_unavailable", None)
+    if args.igv_report is None and unavailable:
+        # The standalone page is an optional export; say it was not made, and why.
+        specs.append(ArtifactSpec("igv_report", None, False, state="not_produced", unavailable_reason=unavailable))
     return specs
 
 

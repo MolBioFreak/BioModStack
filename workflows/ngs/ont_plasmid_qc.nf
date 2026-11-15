@@ -20,7 +20,7 @@ include { ComparisonPanelAttribution as Pod5ComparisonPanelAttribution; Comparis
 
 include { ModkitAnalysis } from '../../modules/ngs/modkit_analysis.nf'
 
-include { reportStage } from '../../modules/ngs/stage_reporting.nf'
+include { reportStage; igvReportIfCreated } from '../../modules/ngs/stage_reporting.nf'
 
 workflow ONT_PLASMID_QC {
     main:
@@ -279,7 +279,7 @@ workflow ONT_PLASMID_QC {
                 has_fastq ? "${params.out_dir}/fastq_qc/fastq_coverage.tsv" : null,
                 "${params.out_dir}/fastq_qc/per_base_support.tsv",
                 "${params.out_dir}/fastq_qc/qc_manifest.json",
-                "${params.out_dir}/fastq_qc/igv_report.html",
+                igvReportIfCreated(_ignored, "${params.out_dir}/fastq_qc/igv_report.html"),
                 "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
                 "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
             ])

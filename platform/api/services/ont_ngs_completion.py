@@ -65,6 +65,8 @@ _REQUIRED_STAGE_OUTPUT_SUFFIXES = {
         "verification/evidence.html", "verification/topology_evidence.json",
     ),
 }
+# Optional exports: a stage is complete with or without them.
+_OPTIONAL_STAGE_OUTPUT_SUFFIXES = {"fastq_qc": frozenset({"fastq_qc/igv_report.html"})}
 _MAX_MANIFEST_ARTIFACTS = 256
 
 
@@ -767,7 +769,8 @@ def _validate_terminal_stages(
                 raise OntNgsCompletionError("required NGS stage output is duplicated across stages")
             observed_paths.add(suffix)
             observed_suffixes.append(suffix)
-        if set(observed_suffixes) != set(_REQUIRED_STAGE_OUTPUT_SUFFIXES[stage]):
+        optional = _OPTIONAL_STAGE_OUTPUT_SUFFIXES.get(stage, frozenset())
+        if set(observed_suffixes) - optional != set(_REQUIRED_STAGE_OUTPUT_SUFFIXES[stage]) - optional:
             raise OntNgsCompletionError(f"required NGS stage output contract mismatch: {stage}")
         stage_outputs[stage] = list(outputs)
     return list(_REQUIRED_TERMINAL_STAGES), stage_outputs

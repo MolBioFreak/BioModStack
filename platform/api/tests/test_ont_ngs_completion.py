@@ -726,3 +726,29 @@ def test_fastq_qc_off_completes_through_the_shared_importer() -> None:
     # Legacy saved requests carry run_multimer_qc; explicit run_fastq_qc wins.
     assert service.ont_native_completion_path(job(run_multimer_qc=False)) == "shared_native_import"
     assert service.ont_native_completion_path(job(run_fastq_qc=True, run_multimer_qc=False)) == "fastq_qc"
+
+
+def test_the_fastq_qc_stage_is_complete_without_the_optional_standalone_igv_page(tmp_path: Path) -> None:
+    from services.ont_ngs_completion import _REQUIRED_STAGE_OUTPUT_SUFFIXES
+
+    def build(skip: str) -> tuple[Path, dict[str, list[str]]]:
+        result_root = tmp_path / skip.replace("/", "_")
+        outputs: dict[str, list[str]] = {}
+        for stage in _REQUIRED_TERMINAL_STAGES:
+            outputs[stage] = []
+            for suffix in _REQUIRED_STAGE_OUTPUT_SUFFIXES[stage]:
+                if suffix == skip:
+                    continue
+                path = result_root / suffix
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(stage, encoding="utf-8")
+                outputs[stage].append(f"bms_results/{result_root.name}/{suffix}")
+        return result_root, outputs
+
+    root, outputs = build("fastq_qc/igv_report.html")
+    stages, accepted = _validate_terminal_stages(cast(Any, _job_with_terminal_states(outputs)), root, root)
+    assert stages == list(_REQUIRED_TERMINAL_STAGES) and accepted == outputs
+    # A scientific output is still required.
+    root, outputs = build("fastq_qc/fastq_consensus.fasta")
+    with pytest.raises(OntNgsCompletionError, match="output contract mismatch"):
+        _validate_terminal_stages(cast(Any, _job_with_terminal_states(outputs)), root, root)
