@@ -158,9 +158,13 @@ def test_fixed_boundary_and_protected_feature(client):
     assert design(client, top)["selected_product"]["sequence"] == target
 
 
-def test_no_matching_source_returns_a_diagnostic_not_a_proposal(client):
-    body = suggest(client, target={"sequence": dna(18, 500), "circular": False}, sources=[{"id": "x", "sequence": dna(30, 400)}])
-    assert body["proposals"] == [] and "No supplied source matches" in body["diagnostics"][0]
+def test_no_matching_source_is_built_from_overlapping_synthetic_fragments(client):
+    target = dna(18, 500)
+    body = suggest(client, target={"sequence": target, "circular": False}, sources=[{"id": "x", "sequence": dna(30, 400)}])
+    assert "No supplied source matches" in body["diagnostics"][0]
+    top = body["proposals"][0]
+    assert top["counts"]["pcr"] == 0 and top["counts"]["synthesis"] >= 1
+    assert design(client, top)["selected_product"]["sequence"] == target
 
 
 def test_twenty_kb_target_two_ten_kb_sources_in_seconds(client):
