@@ -226,7 +226,7 @@ def _write_assignment_summary(
         for _ in range(target_counts[target_id]):
             ordinal += 1
             occurrence_id = f"occurrence_{ordinal}"
-            source_header = ("read-a note", "read-b")[ordinal - 1]
+            source_header = [line[1:] for line in context.fastq.read_text(encoding="ascii").splitlines()[0::4]][ordinal - 1]
             source_id = source_header.split()[0]
             occurrences.append(
                 {
@@ -665,3 +665,45 @@ def test_pooled_request_rejects_extra_fields() -> None:
                 "unknown": True,
             }
         )
+
+
+@pytest.mark.asyncio
+async def test_release_from_a_barcode_bam_gives_each_reference_its_own_tagged_records(pooled_context) -> None:
+    import pysam
+    from services import bam_read_occurrences
+    from test_bam_read_occurrences import _bam
+    context = pooled_context
+    bam = context.inputs_root / "uploads" / "barcode02.bam"
+    source = _bam(bam, count=2, repeated=(0, 1))  # both reads carry the same name
+    written = bam_read_occurrences.bam_to_fastq(bam, context.fastq)
+    submitted = await pooled.submit_pooled_reference_assignment(
+        session=context.session, request=_submit_request(context, key="from-barcode-bam"),
+        background_tasks=BackgroundTasks(), http_request=_http_request("/api/jobs/source/barcode-batches"),
+        response=Response(),
+        source_bam={"bam_path": str(bam), "bam_sha256": written["bam_sha256"], "source_ont_job_id": "source-job",
+                    "source_barcode_unit": "barcode02", "target_workflow": "ont_plasmid_qc",
+                    "run_modkit": True, "modkit_filter_threshold": 0.7},
+    )
+    assignment = await context.session.get(Job, submitted["assignment_job_id"])
+    assignment.status = JobStatus.COMPLETED.value
+    await context.session.commit()
+    _write_assignment_summary(context, submitted, target_counts={"target-a": 1, "target-b": 1, "target-c": 0})
+    released = await pooled.release_pooled_assignment(
+        session=context.session, assignment_job_id=submitted["assignment_job_id"],
+        request=pooled.PooledAssignmentReleaseRequest(
+            idempotency_key="release-from-barcode-bam", target_workflow="ont_plasmid_qc", target_ids=["target-a", "target-b"]),
+        background_tasks=BackgroundTasks(),
+        http_request=_http_request(f"/api/jobs/{submitted['assignment_job_id']}/pooled-assignment/release"),
+        response=Response(),
+    )
+    rows = (await context.session.execute(select(Job).where(Job.id.in_(released["child_job_ids"])))).scalars().all()
+    children = {row.params["pooled_assignment_target_binding"]["target_id"]: row.params for row in rows}
+    for target_id, expected in (("target-a", source[0]), ("target-b", source[1])):
+        params = children[target_id]
+        assert not params.get("fastq_path") and params["bam_force_realign"] is True
+        assert params["run_modkit"] is True and params["modkit_filter_threshold"] == 0.7
+        child_bam = Path(params["bam_path"])
+        assert params["bam_source_sha256"] == _sha256_bytes(child_bam.read_bytes())
+        assert params["pooled_assignment_target_binding"]["source_barcode_unit"] == "barcode02"
+        with pysam.AlignmentFile(str(child_bam), "rb", check_sq=False) as handle:
+            assert [record.to_string() for record in handle.fetch(until_eof=True)] == [expected]

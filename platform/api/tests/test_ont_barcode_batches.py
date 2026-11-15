@@ -30,7 +30,7 @@ def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _source_tree(root: Path, unit_ids: list[str]) -> tuple[str, dict[str, Any]]:
+def _source_tree(root: Path, unit_ids: list[str], real_bams: tuple[str, ...] = ()) -> tuple[str, dict[str, Any]]:
     basecall = root / "basecall"
     demux = root / "demux"
     units_dir = demux / "demux" / "units"
@@ -47,6 +47,9 @@ def _source_tree(root: Path, unit_ids: list[str]) -> tuple[str, dict[str, Any]]:
     for index, unit_id in enumerate(unit_ids, start=1):
         bam = units_dir / f"{unit_id}.bam"
         bam.write_bytes(f"BAM-{unit_id}".encode("ascii"))
+        if unit_id in real_bams:
+            from test_bam_read_occurrences import _bam
+            _bam(bam, count=5)
         bam_sha256 = _sha256_bytes(bam.read_bytes())
         unit_payload = {
             "schema": "biomodstack.dorado_barcode_unit.v1",
@@ -144,11 +147,11 @@ def _add_receipts(
 
 
 @pytest_asyncio.fixture
-async def batch_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+async def batch_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
     inputs_root = tmp_path / "inputs"
     source_root = tmp_path / "source"
     unit_ids = [f"barcode{index:02d}" for index in range(1, 11)]
-    demux_sha256, source_metadata = _source_tree(source_root, unit_ids)
+    demux_sha256, source_metadata = _source_tree(source_root, unit_ids, getattr(request, "param", ()))
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'main.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -487,3 +490,76 @@ def test_methylation_choice_is_part_of_the_request_identity_only_when_asked_for(
     identity = lambda request: batches.request_fingerprint(request, source_job_id="source-job")
     assert "run_modkit" not in batches._normalized_request(plain, source_job_id="source-job")
     assert len({identity(plain), identity(asked), identity(stricter)}) == 3
+
+
+def _second_sequence_on(context: SimpleNamespace, unit_id: str, key: str) -> batches.BarcodeBatchRequest:
+    sequence = "TTGCA" * 4
+    fasta = f">second\n{sequence}\n".encode("ascii")
+    path = context.inputs_root / "molbio_ngs_receipts" / "receipt-11" / "expected_reference.fasta"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(fasta)
+    context.session.add(MolBioNgsReceipt(
+        id="receipt-11", sequence_id="sequence-11", revision_id="revision-11",
+        revision_sha256=_sha256_bytes(sequence.encode("ascii")), reference_snapshot_path=str(path.resolve()),
+        reference_snapshot_sha256=_sha256_bytes(fasta), expires_at=datetime.utcnow() + timedelta(minutes=15),
+        created_at=datetime.utcnow(),
+    ))
+    request = _request(context, key=key)
+    extra = batches.BarcodeBatchRequestMapping(
+        unit_id=unit_id, sample_alias="sample-02", molbio_ngs_receipt_id="receipt-11", label="second plasmid")
+    return request.model_copy(update={"mappings": [*request.mappings, extra]})
+
+
+def _pooled_roots(context: SimpleNamespace, monkeypatch: pytest.MonkeyPatch):
+    from services import ont_pooled_reference_assignment as pooled
+    results_root = context.inputs_root.parent / "results"
+    results_root.mkdir(exist_ok=True)
+    monkeypatch.setattr(pooled, "get_inputs_dir", lambda: context.inputs_root)
+    monkeypatch.setattr(pooled, "get_results_dir", lambda: results_root)
+    monkeypatch.setattr(ont_runs, "get_allowed_roots", lambda: {"inputs": context.inputs_root, "results": results_root})
+    return pooled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch_context", [("barcode02",)], indirect=True)
+async def test_a_barcode_with_two_sequences_has_its_reads_assigned_and_the_rest_run_as_before(
+    batch_context, canonical_job_spy, monkeypatch,
+) -> None:
+    from database import NgsPooledReferenceTarget
+    context = batch_context
+    calls, _ = canonical_job_spy
+    _pooled_roots(context, monkeypatch)
+    request = _second_sequence_on(context, "barcode02", "two-on-one").model_copy(update={"run_modkit": True})
+    await context.session.commit()
+    result = await _create(context, request)
+    assert set(result["assignment_job_ids"]) == {"barcode02"}
+    assert len(result["child_job_ids"]) == 9 and len(calls) == 10
+    assignment = await context.session.get(Job, result["assignment_job_ids"]["barcode02"])
+    assert assignment.mode == "pooled_reference_assignment"
+    source = assignment.params["pooled_source_bam"]
+    unit_bam = context.source_root / "demux" / "demux" / "units" / "barcode02.bam"
+    assert source["source_barcode_unit"] == "barcode02" and source["run_modkit"] is True
+    assert source["bam_sha256"] == _sha256_bytes(unit_bam.read_bytes()) and Path(source["bam_path"]).samefile(unit_bam)
+    # The FASTQ the assignment reads is the barcode BAM, record for record, repeated names included.
+    names = Path(assignment.params["fastq_path"]).read_text().splitlines()[0::4]
+    assert names == ["@read-0", "@repeated-read", "@read-2", "@read-3", "@repeated-read"]
+    targets = (await context.session.execute(select(NgsPooledReferenceTarget))).scalars().all()
+    assert sorted(target.target_id for target in targets) == ["barcode02_seq1", "barcode02_seq2"]
+    assert "second plasmid" in {target.label for target in targets}
+    children = (await context.session.execute(select(Job).where(Job.id.in_(result["child_job_ids"])))).scalars().all()
+    assert "barcode02" not in {child.params["source_barcode_unit"] for child in children}
+    assert await _create(context, request) == result and len(calls) == 10
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch_context", [("barcode02",)], indirect=True)
+async def test_nothing_is_launched_when_another_barcode_has_no_sequence(batch_context, canonical_job_spy, monkeypatch) -> None:
+    context = batch_context
+    calls, _ = canonical_job_spy
+    _pooled_roots(context, monkeypatch)
+    request = _second_sequence_on(context, "barcode02", "two-on-one-missing")
+    request = request.model_copy(update={"mappings": [item for item in request.mappings if item.unit_id != "barcode03"]})
+    await context.session.commit()
+    with pytest.raises(batches.BarcodeBatchError, match="missing=barcode03"):
+        await _create(context, request)
+    assert calls == []

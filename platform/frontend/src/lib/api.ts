@@ -1768,6 +1768,8 @@ export interface OntBarcodeBatchMapping {
     unit_id: string;
     sample_alias: string | null;
     molbio_ngs_receipt_id: string;
+    /** Sequence name, sent when a barcode holds several sequences. */
+    label?: string;
 }
 
 export interface OntBarcodeBatchSubmitRequest {
@@ -1781,10 +1783,13 @@ export interface OntBarcodeBatchSubmitRequest {
     execution_target_id?: string | null;
     execution_policy?: ExecutionPolicy;
     reference_set_id?: string | null;
+    pooled_reference_set_ids?: Record<string, string>;
     execution_plan_approvals?: Record<string, string>;
 }
 
 export interface OntBarcodeBatchSubmitResponse {
+    /** Barcodes holding several sequences: the run that assigns their reads first. */
+    assignment_job_ids?: Record<string, string>;
     reference_set_id: string;
     manifest_sha256: string;
     child_job_ids: string[];

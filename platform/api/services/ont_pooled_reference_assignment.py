@@ -36,6 +36,7 @@ from services.molbio_ngs_receipts import consume_molbio_ngs_receipt
 REFERENCE_SET_SCHEMA = "bms.ngs.reference-set.v1"
 REFERENCE_SET_MODE = "pooled"
 REFERENCE_SET_ROOT_NAME = "ngs_reference_sets"
+TAGGED_BAM_ROOT_NAME = "ont_barcode_pools"
 ASSIGNMENT_WORKFLOW_ID = "ont_pooled_reference_assignment"
 ASSIGNMENT_MODE = "pooled_reference_assignment"
 SUMMARY_SCHEMA = "bms.ngs.pooled-reference-assignment-summary.v1"
@@ -734,8 +735,13 @@ async def submit_pooled_reference_assignment(
     http_request: Any,
     response: Any,
     prepare_only: bool = False,
+    source_bam: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Stage one immutable pooled set and atomically launch its review-only assignment job."""
+    """Stage one immutable pooled set and atomically launch its review-only assignment job.
+
+    ``source_bam`` is set by the server when the FASTQ was written from a barcode
+    BAM; release then gives each reference its reads as whole BAM records.
+    """
 
     fastq = _authorized_fastq(request.fastq_path, "pooled FASTQ")
     fastq_sha256 = _sha256_file(fastq)
@@ -788,6 +794,7 @@ async def submit_pooled_reference_assignment(
             "lineage_root_job_id": assignment_job_id,
             "stage_family": "ont_ngs",
             "stage_mode": ASSIGNMENT_MODE,
+            **({"pooled_source_bam": dict(source_bam)} if source_bam else {}),
         }
         job_data = JobCreate(
             name=request.name or "ONT pooled reference assignment",
@@ -1545,6 +1552,41 @@ async def _find_release_replay(
     return _release_result(row, list(targets))
 
 
+def _tagged_target_bams(context: Mapping[str, Any], target_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+    """Each selected reference's reads as whole records of the barcode BAM.
+
+    The assignment numbered its reads in input order, and the FASTQ it read was
+    written one record per BAM record in that order, so read N is BAM record N
+    even when two reads share a name.
+    """
+    source = (context["job"].params or {}).get("pooled_source_bam")
+    if not isinstance(source, dict):
+        return {}
+    from services import bam_read_occurrences  # noqa: PLC0415
+
+    root = get_inputs_dir() / TAGGED_BAM_ROOT_NAME / str(context["job"].id)
+    root.mkdir(parents=True, exist_ok=True)
+    ordinals: dict[str, list[int]] = {target_id: [] for target_id in target_ids}
+    for row in context["summary"]["read_assignments"]:
+        if row["target_id"] in ordinals:
+            ordinals[row["target_id"]].append(row["input_ordinal"])
+    paths = {target_id: root / f"target_{target_id}.bam" for target_id in target_ids}
+    missing = {paths[target_id]: ordinals[target_id] for target_id in target_ids if not paths[target_id].is_file()}
+    if missing:
+        try:
+            written = bam_read_occurrences.split_bam(Path(str(source.get("bam_path"))), missing)
+        except (OSError, bam_read_occurrences.BamRecordError) as exc:
+            raise PooledAssignmentError("the barcode BAM could not be separated by reference", status_code=409) from exc
+        if written["bam_sha256"] != source.get("bam_sha256"):
+            for path in missing:
+                path.unlink(missing_ok=True)
+            raise PooledAssignmentError("the barcode BAM changed after its reads were assigned", status_code=409)
+    return {
+        target_id: {"path": paths[target_id], "sha256": _sha256_file(paths[target_id]), "read_count": len(ordinals[target_id])}
+        for target_id in target_ids
+    }
+
+
 def _safe_child_name(prefix: str, target_id: str) -> str:
     name = f"{prefix} {target_id}"
     if len(name) > 128:
@@ -1566,6 +1608,7 @@ async def _create_release_child(
     request: PooledAssignmentReleaseRequest,
     summary_sha256: str,
     prepare_only: bool = False,
+    tagged_bam: Mapping[str, Any] | None = None,
 ) -> tuple[str, str] | dict[str, Any]:
     target: NgsPooledReferenceTarget = evidence["target"]
     manifest_path = Path(str(manifest_row.manifest_path)).resolve()
@@ -1626,6 +1669,26 @@ async def _create_release_child(
         "selection_source_job_id": str(assignment.id),
         "source_selection_count": len(request.target_ids),
     }
+    if tagged_bam is not None:
+        # The reads came from a barcode BAM: analyse the same records with their
+        # modification calls and signal tags instead of the tagless FASTQ.
+        source = dict((assignment.params or {}).get("pooled_source_bam") or {})
+        for key in ("fastq_path", "fastq_minimap2_preset", "fastq_minimap2_allow_secondary"):
+            params.pop(key)
+        params.update(
+            bam_path=str(tagged_bam["path"]),
+            bam_force_realign=True,
+            bam_source_sha256=str(tagged_bam["sha256"]),
+        )
+        if source.get("run_modkit") is True:
+            params["run_modkit"] = True
+            if source.get("modkit_filter_threshold") is not None:
+                params["modkit_filter_threshold"] = source["modkit_filter_threshold"]
+        target_binding.update(
+            assigned_bam_sha256=str(tagged_bam["sha256"]),
+            source_ont_job_id=source.get("source_ont_job_id"),
+            source_barcode_unit=source.get("source_barcode_unit"),
+        )
     from routers.ont_runs import OntNgsSubmitRequest, _job_create_for_ont_submit  # noqa: PLC0415
 
     submit = OntNgsSubmitRequest(
@@ -1644,7 +1707,7 @@ async def _create_release_child(
         request.target_workflow,
         submit,
         trusted_server_params=trusted,
-        trusted_result_paths=frozenset({"fastq_path"}),
+        trusted_result_paths=frozenset({"fastq_path", "bam_path"}),
     ).model_copy(
         update={
             "parent_job_id": None,
@@ -1696,6 +1759,7 @@ async def release_pooled_assignment(
         evidence = context["target_evidence"][target_id]
         if evidence["read_count"] <= 0 or not evidence["fastq_path"].is_file() or evidence["fastq_path"].stat().st_size == 0:
             raise PooledAssignmentError("selected target must have a non-empty assigned FASTQ")
+    tagged = _tagged_target_bams(context, selected_ids)
 
     child_ids: list[str] = []
     committed = False
@@ -1723,6 +1787,7 @@ async def release_pooled_assignment(
                     release_id=release_id, child_id=child_id,
                     evidence=context["target_evidence"][target_id], request=request,
                     summary_sha256=summary_sha256, prepare_only=True,
+                    tagged_bam=tagged.get(target_id),
                 )
             await session.rollback()
             return {"request": request.model_copy(update={"release_id": release_id, "execution_plan_approvals": {}}).model_dump(mode="json", exclude_unset=True),
@@ -1758,6 +1823,7 @@ async def release_pooled_assignment(
                 evidence=evidence,
                 request=request,
                 summary_sha256=summary_sha256,
+                tagged_bam=tagged.get(target_id),
             )
             tokens.append((created_id, token))
             manifest_path = Path(str(context["manifest_row"].manifest_path)).resolve()
