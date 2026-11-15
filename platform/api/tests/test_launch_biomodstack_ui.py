@@ -130,7 +130,7 @@ def test_resolve_pnpm_executable_falls_back_to_nvm_when_not_on_path(tmp_path) ->
     pnpm_path.write_text("#!/usr/bin/env node\n", encoding="utf-8")
 
     resolved_pnpm, resolved_env = module.resolve_pnpm_executable(
-        env={"PATH": "/usr/bin:/bin"},
+        env={"PATH": str(tmp_path / "empty-path")},
         home=home_dir,
     )
 

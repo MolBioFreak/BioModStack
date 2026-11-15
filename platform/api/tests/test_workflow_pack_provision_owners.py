@@ -36,6 +36,12 @@ def test_denovo_union_keeps_native_declared_owner_resolution_without_another_pac
 def pack(request, assets, monkeypatch):
     selection = WorkflowPackSelection(kind='workflow_pack', workflow_id=request.param)
     containers, weights = assets
+    monkeypatch.setenv('BMS_CONTAINER_DIR', str(containers))
+    monkeypatch.setenv('BMS_WEIGHTS', str(weights))
+    from dataclasses import replace
+    from services.frustrampnn import runtime
+    monkeypatch.setattr(runtime, 'FRUSTRAMPNN_RUNTIME_IDENTITY', replace(
+        runtime.FRUSTRAMPNN_RUNTIME_IDENTITY, configured_sif_path=str(containers / 'frustrampnn.sif')))
     refs = model_registry.workflow_pack_dependencies(selection.workflow_id)
     for ref in refs:
         path = (containers if ref.kind == 'image' else weights) / ref.relative_path
@@ -73,9 +79,9 @@ def pack(request, assets, monkeypatch):
     (weights / 'boltz').rmdir()
     (weights / 'boltz').symlink_to(layout)
     original = model_registry.model_acquisition_plan
-    monkeypatch.setattr(model_registry, 'model_acquisition_plan', lambda model_id:
+    monkeypatch.setattr(model_registry, 'model_acquisition_plan', lambda model_id, *, include_optional=False:
         {'artifacts': [dict(dependency=dependency, **entry) for entry in members]}
-        if model_id == 'boltz2' else original(model_id))
+        if model_id == 'boltz2' else original(model_id, include_optional=include_optional))
     return selection, refs, obj
 
 
