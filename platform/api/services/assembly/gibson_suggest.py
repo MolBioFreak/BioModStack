@@ -375,7 +375,7 @@ def _evaluate(request: dict[str, Any], target: str, circular: bool):
         specs = [JunctionSpec(j["after_fragment_id"], j.get("overlap"), j.get("distribution")) for j in chosen or []] or None
         result = design_gibson(fragments, preparations=[f["preparation"] for f in request["fragments"]],
                                circular=circular, overlap=request["overlap"], target_tm=request["target_tm"],
-                               min_anneal=request["min_anneal"], junctions=specs)
+                               min_anneal=request["min_anneal"], junctions=specs, planner_fallback=False)
         if not _same_product(result.candidates[0].product.sequence, target, circular):
             raise AssemblyError("designed fragments do not reproduce the target")
         return result

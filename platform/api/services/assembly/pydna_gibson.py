@@ -452,12 +452,14 @@ def design_gibson(
     min_anneal: int = 15,
     max_candidates: int = MAX_CANDIDATES,
     junctions: list[JunctionSpec] | None = None,
+    planner_fallback: bool = True,
 ) -> GibsonDesignResult:
     """Design and independently validate one bounded ordered Gibson assembly.
 
     ``junctions`` optionally sets the overlap length and which primers carry it for the join after
     named fragments; every other join follows ``overlap``. A target the stock pydna assembler cannot
-    resolve (repeats) is designed by the overlap planner instead of being refused.
+    resolve (repeats) is designed by the overlap planner instead of being refused, unless
+    ``planner_fallback`` is False (Suggest chooses its own repeat-aware breakpoints and keeps the refusal).
     """
     arguments = dict(
         preparations=preparations, circular=circular, overlap=overlap, target_tm=target_tm,
@@ -466,6 +468,8 @@ def design_gibson(
     try:
         return _design_gibson(fragments, **arguments)
     except _StockAssemblerRefused as refusal:
+        if not planner_fallback:
+            raise AssemblyError(str(refusal)) from None
         try:
             return _design_gibson(fragments, **arguments, force_custom=True, note=PLANNER_FALLBACK_NOTE)
         except AssemblyError as exc:
