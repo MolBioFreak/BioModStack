@@ -576,5 +576,6 @@ def dispatch_setup(project_root: Path) -> None:
         return
     python = resolved["python"]
     if Path(sys.prefix).resolve() == Path(python).parent.parent.resolve():
+        os.environ.update(resolved["env"])
         return
     os.execve(python, [python, "-B", *sys.argv], resolved["env"])

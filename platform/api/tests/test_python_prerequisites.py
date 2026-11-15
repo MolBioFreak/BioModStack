@@ -127,7 +127,7 @@ class PrerequisitesTest(unittest.TestCase):
         before = (self.external / "state.json").read_bytes()
         probe = self.base / "dispatch.py"
         probe.write_text(
-            "import sys, json\nfrom pathlib import Path\nfrom types import SimpleNamespace\n"
+            "import sys, json, os\nfrom pathlib import Path\nfrom types import SimpleNamespace\n"
             f"sys.path.insert(0, {str(ROOT)!r})\n"
             "import biomodstack_python_prerequisites as p\n"
             f"managed = Path({str(self.external / 'environment')!r})\n"
@@ -136,6 +136,10 @@ class PrerequisitesTest(unittest.TestCase):
             "prefix=sys.prefix, base_prefix=sys.base_prefix, argv=sys.argv)\n"
             "p.check_environment = lambda root: 'inventory'\n"
             f"p.dispatch_setup(Path({str(self.source)!r}))\n"
+            "assert os.environ.get('VIRTUAL_ENV') == sys.prefix\n"
+            "assert os.environ['PATH'].split(os.pathsep)[0] == str(Path(sys.prefix) / 'bin')\n"
+            "if Path(sys.prefix) != managed:\n"
+            "    assert os.environ.get('BMS_SUPPORT_PAYLOAD_RECEIPT') == str(Path(sys.prefix) / 'support-payload.json')\n"
             "print(json.dumps(dict(prefix=sys.prefix, version=p.identity("
             f"Path({str(self.source)!r}))['python'])))\n"
         )
@@ -148,11 +152,11 @@ class PrerequisitesTest(unittest.TestCase):
         # mutable environment on its next dispatch.
         published = self.base / "published"
         venv.EnvBuilder(with_pip=False).create(published)
-        state["support_payload"] = {"python": str(published / "bin/python")}
+        state["support_payload"] = {"python": str(published / "bin/python"), "payload_root": str(published)}
         p.save(self.external, state)
         probe.write_text(probe.read_text().replace(
             "if Path(sys.prefix) != managed:",
-            f"if Path(sys.prefix) not in (managed, Path({str(published)!r})):"))
+            f"if Path(sys.prefix) not in (managed, Path({str(published)!r})):", 1))
         result = subprocess.run([sys.executable, "-B", str(probe)], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["prefix"], str(published))
