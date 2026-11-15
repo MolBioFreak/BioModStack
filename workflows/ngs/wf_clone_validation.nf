@@ -267,6 +267,7 @@ workflow WF_CLONE_VALIDATION {
         CloneValidationAdapter.out.alignment_stats,
         breakpointEvidence,
         secondaryEvidence,
+        Channel.value((params.sequencing_kits ?: '').toString()),
     )
     }
 

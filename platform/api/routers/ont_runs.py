@@ -34,6 +34,7 @@ from services.molbio_ngs_evidence import attach_instrument_run_evidence
 from services.molbio_ngs_receipts import (
     build_molbio_revision_binding,
     consume_molbio_ngs_receipt,
+    receipt_reference_topology,
     validate_molbio_ngs_receipt,
 )
 from services.molbio_ngs_references import resolve_managed_reference_for_launch
@@ -1235,6 +1236,8 @@ async def _prepare_ont_ngs_workflow(
                     "expected_result_manifest_schema": expected_result_manifest_schema,
                 }
             )
+        if managed_launch is not None and managed_launch.topology in {"linear", "circular"}:
+            submitted["reference_topology"] = managed_launch.topology
         receipt_authority = None
         panel_receipt_authority = None
         if receipt_id:
@@ -1242,6 +1245,9 @@ async def _prepare_ont_ngs_workflow(
                 session, receipt_id=receipt_id
             )
             submitted["reference_fasta"] = receipt_authority.reference_snapshot_path
+            saved_topology = receipt_reference_topology(receipt_authority)
+            if saved_topology:
+                submitted["reference_topology"] = saved_topology
         if panel_receipt_id:
             if receipt_authority is None:
                 raise ValueError("comparison panel launch has no expected receipt authority")

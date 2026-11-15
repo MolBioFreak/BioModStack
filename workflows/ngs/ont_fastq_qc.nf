@@ -98,6 +98,7 @@ workflow ONT_FASTQ_QC {
             FastqPlasmidQC.out.alignment_stats,
             BuildDimerCanonicalOutputs.out.breakpoint_call,
             BuildDimerCanonicalOutputs.out.secondary_summary,
+            Channel.value((params.sequencing_kits ?: '').toString()),
         )
         ConstructVerify.out.manifest.subscribe { _ignored ->
             reportStage(params, "construct_verification", [

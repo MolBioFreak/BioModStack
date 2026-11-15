@@ -288,7 +288,7 @@ def test_ngs_module_render_has_no_nested_runtime_fallback(tmp_path, module, proc
         **{key: 'fixture' for key in ('reference', 'aligned_bam', 'aligned_bai',
             'verification_input', 'per_base_support', 'alignment_stats',
             'dimer_breakpoint_call', 'dimer_secondary_summary', 'result_root',
-            'runtime_provenance')},
+            'runtime_provenance', 'sequencing_kits')},
     }
     (tmp_path / 'bindings.json').write_text(json.dumps(bindings))
     script = tmp_path / 'module.groovy'

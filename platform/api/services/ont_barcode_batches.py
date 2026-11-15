@@ -28,7 +28,7 @@ from paths import get_inputs_dir, get_results_dir
 from schemas import ExecutionPolicy
 from fastapi import HTTPException
 from services import alignment_access, bam_read_occurrences, ont_submission_trust
-from services.molbio_ngs_receipts import consume_molbio_ngs_receipt
+from services.molbio_ngs_receipts import consume_molbio_ngs_receipt, receipt_reference_topology
 from services.ont_barcode_units import _resolve_barcode_catalogs
 from services.ont_ngs_contract import normalized_fasta_sequence_sha256
 
@@ -248,6 +248,16 @@ def _source_snapshot(source_job: Job, source_root: Path) -> dict[str, Any]:
     }
 
 
+def _sequencing_kits(preflight: Mapping[str, Any]) -> list[str]:
+    """The kits the source run named, so a barcode's analysis knows how its library was made."""
+    inputs = preflight.get("inputs")
+    barcoding = preflight.get("barcoding")
+    kits = list(inputs.get("sequencing_kits") or []) if isinstance(inputs, Mapping) else []
+    if isinstance(barcoding, Mapping) and barcoding.get("kit"):
+        kits.append(barcoding["kit"])
+    return sorted({str(kit).strip() for kit in kits if str(kit).strip()})
+
+
 def _terminal_product_digests(source: Mapping[str, Any]) -> dict[str, str]:
     terminal = source.get("terminal")
     products = terminal.get("products") if isinstance(terminal, dict) else None
@@ -351,6 +361,7 @@ def _validate_source_products(source: Mapping[str, Any]) -> dict[str, Any]:
         "source_calls_sha256": source_calls_sha256,
         "preflight_sha256": preflight_sha256,
         "units": demux_units,
+        "sequencing_kits": _sequencing_kits(preflight),
     }
 
 
@@ -667,6 +678,8 @@ async def _create_one_child(
         "source_stage_job_id": str(source["id"]),
         "source_stage_family": str(source["stage_family"]),
         "source_stage_mode": str(source["stage_mode"]),
+        **({"reference_topology": saved} if (saved := receipt_reference_topology(receipt)) else {}),
+        **({"sequencing_kits": ",".join(kits)} if (kits := source_products.get("sequencing_kits")) else {}),
         "selection_source_type": "ont_dorado_demux",
         "selection_source_job_id": str(source["id"]),
         "source_selection_count": len(source_products["unit_by_id"]),

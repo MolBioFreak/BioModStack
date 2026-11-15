@@ -70,6 +70,7 @@ class ManagedReferenceLaunch:
     expected_reference_fasta_size_bytes: int
     launch_snapshot_sha256: str
     launch_snapshot_size_bytes: int
+    topology: str | None = None
 
 
 def _sha256(value: bytes) -> str:
@@ -842,6 +843,7 @@ async def resolve_managed_reference_for_launch(
         expected_reference_fasta_size_bytes=revision.canonical_fasta_size_bytes,
         launch_snapshot_sha256=snapshot_sha256,
         launch_snapshot_size_bytes=snapshot_size_bytes,
+        topology=str(revision.topology or "").strip().lower() or None,
     )
 
 

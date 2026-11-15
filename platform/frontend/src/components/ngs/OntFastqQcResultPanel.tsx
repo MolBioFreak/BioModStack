@@ -59,6 +59,60 @@ const CHECKS: Array<{
     { key: 'topology', label: 'Topology' },
 ];
 
+const LIBRARY_PREP_NOTE: Record<string, string> = {
+    rapid: 'Rapid prep cuts every molecule, so few reads span both ends. Not reported as damage.',
+    ligation: 'Ligation prep keeps molecules whole, so this is the full-length share of the library.',
+    unknown: 'The library prep is not named for these reads, so the share spanning both ends is not interpreted.',
+};
+/** Where reads start and stop on a linear construct. Shown only for a linear reference. */
+function LinearReadEnds({ check }: { check: OntFastqQcCheck }) {
+    const raw = check.metrics.linear_ends;
+    if (check.metrics.expected_topology !== 'linear' || !raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const number = (key: string) => (typeof raw[key] === 'number' ? (raw[key] as number) : null);
+    const prep = typeof raw.library_prep === 'string' && raw.library_prep in LIBRARY_PREP_NOTE ? raw.library_prep : 'unknown';
+    const spanning = number('reads_spanning_both_ends');
+    const fraction = number('spanning_fraction');
+    const aligned = number('aligned_reads');
+    const histogram = raw.read_end_histogram;
+    const table = histogram && typeof histogram === 'object' && !Array.isArray(histogram) ? histogram : null;
+    const width = table && typeof table.bin_width_bp === 'number' ? table.bin_width_bp : 1;
+    const bins = table && Array.isArray(table.bins) ? (table.bins as unknown as Array<Record<string, number>>) : [];
+    const shown = (value: number | null, suffix = '') => (value === null ? '—' : `${value.toLocaleString()}${suffix}`);
+    const tiles: Array<[string, string, string]> = [
+        ['Library prep', prep.replace(/^./, (letter) => letter.toUpperCase()), prep === 'unknown' ? 'not named in the input' : 'from the raw data'],
+        ['Reads spanning both ends', `${shown(spanning)}${fraction === null ? '' : ` · ${percent(fraction)}`}`, `of ${shown(aligned)} aligned reads`],
+        ['Depth at the ends', `${shown(number('mean_depth_first_window'), '×')} / ${shown(number('mean_depth_last_window'), '×')}`, `first and last ${shown(number('end_window_bp'))} bp`],
+    ];
+    return (
+        <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" aria-label="Read ends on a linear construct" data-testid="linear-read-ends">
+            <h4 className="text-sm font-semibold text-[var(--text-primary)]">Read ends on a linear construct</h4>
+            <p className="text-xs text-[var(--text-secondary)]">Where reads start and stop along the construct.</p>
+            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                {tiles.map(([label, value, detail]) => (
+                    <div key={label} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
+                        <div className="text-[11px] text-[var(--text-secondary)]">{label}</div>
+                        <div className="font-mono text-sm text-[var(--text-primary)]">{value}</div>
+                        <div className="mt-1 text-[9px] leading-tight text-[var(--text-secondary)]">{detail}</div>
+                    </div>
+                ))}
+            </div>
+            {bins.length > 0 && (
+                <Plot
+                    data={[{ type: 'bar', name: 'Read ends', x: bins.map((bin) => bin.start_bp + width / 2), y: bins.map((bin) => bin.read_starts + bin.read_ends), width, marker: { color: '#55a7ff' } }]}
+                    layout={{
+                        xaxis: { title: { text: 'Position on construct (bp)' } }, yaxis: { title: { text: 'Read ends' } },
+                        margin: { l: 62, r: 20, t: 16, b: 56 }, height: 260, showlegend: false,
+                        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#b8c4d8' },
+                    }}
+                    config={{ responsive: true, displaylogo: false }}
+                    useResizeHandler
+                    style={{ width: '100%', height: '260px' }}
+                />
+            )}
+            <p className="mt-2 text-[11px] text-[var(--text-secondary)]">{LIBRARY_PREP_NOTE[prep]}</p>
+        </section>
+    );
+}
 function CheckCard({
     label,
     limitation,
@@ -75,7 +129,8 @@ function CheckCard({
             : check.status === 'review'
                 ? 'text-[var(--warning)] border-[color-mix(in_srgb,var(--warning)_35%,transparent)]'
                 : 'text-[var(--text-secondary)] border-[var(--border-primary)]';
-    const checkMetrics = Object.entries(check.metrics);
+    // Read-end measurements have their own block below.
+    const checkMetrics = Object.entries(check.metrics).filter(([key]) => key !== 'linear_ends');
     return (
         <div className={`rounded border bg-[var(--bg-tertiary)] p-3 ${statusClass}`}>
             <div className="flex items-center justify-between gap-2">
@@ -89,7 +144,9 @@ function CheckCard({
                     {checkMetrics.map(([key, value]) => (
                         <div key={key} className="flex justify-between gap-3">
                             <dt className="text-[var(--text-secondary)]">
-                                {label === 'Topology' && key === 'state' ? 'Topology state' : metricLabel(key)}
+                                {label === 'Topology' && key === 'state' ? 'Topology state'
+                                    : label === 'Topology' && key === 'origin_spanning_reads' && check.metrics.expected_topology === 'linear' ? 'End-to-end junction reads'
+                                        : metricLabel(key)}
                             </dt>
                             <dd className="text-right font-mono text-[var(--text-primary)]">
                                 {displayJsonValue(value)}
@@ -446,6 +503,7 @@ export function OntFastqQcResultPanel({
                     ))}
                 </div>
             </section>
+            <LinearReadEnds check={verification.checks.topology} />
 
             <section className="grid grid-cols-1 gap-3 xl:grid-cols-2">
                 <div className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">

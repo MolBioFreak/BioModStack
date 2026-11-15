@@ -814,9 +814,17 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
         normalized["run_assembly"] = True
         _normalize_wf_clone_controls(normalized)
 
+    reference_topology = normalized.get("reference_topology")
+    if reference_topology in (None, ""):
+        normalized.pop("reference_topology", None)
+    elif reference_topology not in {"linear", "circular"}:
+        raise ValueError("reference_topology must be linear or circular")
     dimer_workflows = {"ont_plasmid_qc", "ont_construct_screening", "ont_fastq_qc", "wf_clone_validation"}
     if canonical_id in dimer_workflows:
         normalized["enable_rotating_reference_frames"] = setting_bool("enable_rotating_reference_frames", True)
+        if normalized.get("reference_topology") == "linear":
+            # A linear construct has no origin to rotate through. Junction and concatemer screening stay on.
+            normalized["enable_rotating_reference_frames"] = False
         normalized["rotation_scan_step_bp"] = setting_int("rotation_scan_step_bp", 1, 1, 10_000)
         normalized["single_ref_split_min_mapq"] = setting_int("single_ref_split_min_mapq", 20, 0, 60)
         normalized["single_ref_split_min_segment_bp"] = setting_int("single_ref_split_min_segment_bp", 250, 1, 1_000_000)

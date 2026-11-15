@@ -19,7 +19,9 @@ _SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
 if _SCRIPT_DIRECTORY not in sys.path:
     sys.path.insert(0, _SCRIPT_DIRECTORY)
 
-from plasmid_evidence import StructuralEvidenceUnavailable, validate_structural_rows
+from plasmid_evidence import (
+    StructuralEvidenceUnavailable, library_prep_from_kits, linear_end_measurements, validate_structural_rows,
+)
 
 CIGAR_TOKEN = re.compile(r"(\d+)([MIDNSHP=X])")
 REFERENCE_CONSUMING = frozenset("MDN=X")
@@ -188,8 +190,15 @@ def breakpoint_is_contradictory(row: dict[str, str]) -> bool:
     return split_supported and credible and non_boundary
 
 
-def derive_topology_evidence(
+def _basis(expected_topology: str) -> str:
+    return ("primary_and_supplementary_alignment_ends_plus_dimer_screen" if expected_topology == "linear"
+            else "primary_and_supplementary_alignment_edges_plus_dimer_screen")
+
+
+def _derive_evidence(
     *,
+    expected_topology: str,
+    segments_out: dict[str, list[dict[str, Any]]],
     reference_length: int,
     sam_rows: Iterable[str],
     breakpoint_rows: list[dict[str, str]],
@@ -228,14 +237,15 @@ def derive_topology_evidence(
             edges.add("end")
         alignment_records += 1
 
+    segments_out.update(segments_by_read)
     mapped_unique_reads = len(read_edges)
     if mapped_unique_reads == 0:
         return {
             "schema": "biomodstack.construct_topology_evidence.v1",
             "state": "unavailable",
             "reason": "NO_MAPPED_ALIGNMENT_EVIDENCE",
-            "expected_topology": "circular",
-            "evidence_basis": "primary_and_supplementary_alignment_edges_plus_dimer_screen",
+            "expected_topology": expected_topology,
+            "evidence_basis": _basis(expected_topology),
             "origin_spanning_reads": 0,
             "mapped_unique_reads": 0,
             "alignment_records": 0,
@@ -256,8 +266,8 @@ def derive_topology_evidence(
             "schema": "biomodstack.construct_topology_evidence.v1",
             "state": "unavailable",
             "reason": str(exc),
-            "expected_topology": "circular",
-            "evidence_basis": "primary_and_supplementary_alignment_edges_plus_dimer_screen",
+            "expected_topology": expected_topology,
+            "evidence_basis": _basis(expected_topology),
             "origin_spanning_reads": origin_spanning,
             "mapped_unique_reads": mapped_unique_reads,
             "alignment_records": alignment_records,
@@ -272,8 +282,8 @@ def derive_topology_evidence(
         "schema": "biomodstack.construct_topology_evidence.v1",
         "state": "present",
         "reason": None,
-        "expected_topology": "circular",
-        "evidence_basis": "primary_and_supplementary_alignment_edges_plus_dimer_screen",
+        "expected_topology": expected_topology,
+        "evidence_basis": _basis(expected_topology),
         "origin_spanning_reads": origin_spanning,
         "mapped_unique_reads": mapped_unique_reads,
         "alignment_records": alignment_records,
@@ -283,6 +293,37 @@ def derive_topology_evidence(
         "contradictory_breakpoint_evidence": contradictory,
         "edge_window_bp": edge,
     }
+
+
+def derive_topology_evidence(
+    *,
+    reference_length: int,
+    sam_rows: Iterable[str],
+    breakpoint_rows: list[dict[str, str]],
+    secondary_rows: list[dict[str, str]],
+    edge_window_bp: int,
+    expected_topology: str = "circular",
+    sequencing_kits: Iterable[str] = (),
+) -> dict[str, Any]:
+    """A circular reference is judged on reads that cross its origin. A linear one has no
+    origin: the same split pattern is reported as end-to-end junctions, and where reads
+    start and stop is measured instead."""
+    if expected_topology not in {"linear", "circular"}:
+        raise ValueError("expected_topology must be linear or circular")
+    segments: dict[str, list[dict[str, Any]]] = {}
+    evidence = _derive_evidence(
+        expected_topology=expected_topology, segments_out=segments, reference_length=reference_length,
+        sam_rows=sam_rows, breakpoint_rows=breakpoint_rows, secondary_rows=secondary_rows,
+        edge_window_bp=edge_window_bp,
+    )
+    if expected_topology == "linear" and segments:
+        kits = sorted({str(kit).strip() for kit in sequencing_kits if str(kit).strip()})
+        evidence["linear_ends"] = {
+            "library_prep": library_prep_from_kits(kits),
+            "sequencing_kits": kits,
+            **linear_end_measurements(segments, reference_length, int(evidence["edge_window_bp"])),
+        }
+    return evidence
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -298,6 +339,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="one command-prefix argument; repeat for wrappers such as apptainer exec",
     )
     parser.add_argument("--edge-window-bp", type=int)
+    parser.add_argument("--expected-topology", choices=("linear", "circular"), default="circular")
+    parser.add_argument("--sequencing-kits", default="", help="comma-separated kit names from the raw data")
     parser.add_argument("--out", type=Path, required=True)
     return parser.parse_args(argv)
 
@@ -323,14 +366,16 @@ def main(argv: list[str] | None = None) -> int:
             breakpoint_rows=read_tsv_rows(args.breakpoint_call),
             secondary_rows=read_tsv_rows(args.secondary_summary),
             edge_window_bp=edge_window,
+            expected_topology=args.expected_topology,
+            sequencing_kits=args.sequencing_kits.split(","),
         )
     except ValueError as exc:
         evidence = {
             "schema": "biomodstack.construct_topology_evidence.v1",
             "state": "malformed",
             "reason": f"MALFORMED_NUMERIC_EVIDENCE: {exc}",
-            "expected_topology": "circular",
-            "evidence_basis": "primary_and_supplementary_alignment_edges_plus_dimer_screen",
+            "expected_topology": args.expected_topology,
+            "evidence_basis": _basis(args.expected_topology),
         }
     evidence["provenance"] = {
         "reference_sha256": sha256_file(args.reference_fasta),

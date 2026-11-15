@@ -3,6 +3,11 @@ def shellQuote(value) {
     return "'${text.replace("'", "'\"'\"'")}'"
 }
 
+// The kit named in the raw data, read from the basecall preflight this run wrote.
+def sequencingKits(preflight) {
+    def inputs = new groovy.json.JsonSlurper().parseText(preflight.text).inputs
+    return ((inputs?.sequencing_kits ?: []) as List).join(',')
+}
 process ConstructVerify {
     label 'fastq_qc_cpu'
     publishDir "${params.out_dir}", mode: 'copy'
@@ -16,6 +21,7 @@ process ConstructVerify {
     path alignment_stats
     path dimer_breakpoint_call
     path dimer_secondary_summary
+    val sequencing_kits
 
     output:
     path "verification", emit: verification_dir
@@ -32,6 +38,10 @@ process ConstructVerify {
     def profileConfig = shellQuote("${codeRoot}/config/ngs/construct_verify_profiles.json")
     def referenceDigest = shellQuote(params.reference_sequence_sha256 ?: '')
     def profileId = shellQuote(params.construct_verify_profile ?: 'plasmid_strict_v1')
+    // The reference's saved topology. Unset keeps the profile default, as before.
+    def topologyValue = (params.reference_topology ?: '').toString().trim()
+    def topologyArgs = topologyValue in ['linear', 'circular'] ? "--expected-topology ${topologyValue}" : ''
+    def kitsArg = shellQuote((sequencing_kits ?: '').toString())
 
     """
     set -euo pipefail
@@ -60,6 +70,8 @@ process ConstructVerify {
         --breakpoint-call "${dimer_breakpoint_call}" \\
         --secondary-summary "${dimer_secondary_summary}" \\
         "\${SAMTOOLS_ARGS[@]}" \\
+        ${topologyArgs} \\
+        --sequencing-kits ${kitsArg} \\
         --out verification/topology_evidence.json
 
     "\${PYTHON_CMD[@]}" ${verifierScript} \\
@@ -77,6 +89,7 @@ process ConstructVerify {
         "\${SAMTOOLS_ARGS[@]}" \\
         --profile-config ${profileConfig} \\
         --profile ${profileId} \\
+        ${topologyArgs} \\
         --out-dir verification
     """
 }

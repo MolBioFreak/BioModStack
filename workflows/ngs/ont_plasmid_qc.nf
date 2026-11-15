@@ -15,7 +15,7 @@ include { PrepareBamForAnalysis; PrepareReferenceForIGV; BamToFastqForQC as Pod5
 include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC as Pod5PlasmidQC; FastqPlasmidQC as BamPlasmidQC; FastqPlasmidQC as InputFastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis as Pod5DimerAnalysis; FastqDimerAnalysis as BamDimerAnalysis; FastqDimerAnalysis as InputFastqDimerAnalysis; BuildDimerCanonicalOutputs as Pod5DimerCanonicalOutputs; BuildDimerCanonicalOutputs as BamDimerCanonicalOutputs; BuildDimerCanonicalOutputs as InputFastqDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
-include { ConstructVerify as Pod5ConstructVerify; ConstructVerify as BamConstructVerify; ConstructVerify as InputFastqConstructVerify } from '../../modules/ngs/construct_verify.nf'
+include { ConstructVerify as Pod5ConstructVerify; ConstructVerify as BamConstructVerify; ConstructVerify as InputFastqConstructVerify; sequencingKits } from '../../modules/ngs/construct_verify.nf'
 include { ComparisonPanelAttribution as Pod5ComparisonPanelAttribution; ComparisonPanelAttribution as BamComparisonPanelAttribution; ComparisonPanelAttribution as InputComparisonPanelAttribution } from '../../modules/ngs/comparison_panel_attribution.nf'
 
 include { ModkitAnalysis } from '../../modules/ngs/modkit_analysis.nf'
@@ -136,6 +136,7 @@ workflow ONT_PLASMID_QC {
                     Pod5PlasmidQC.out.alignment_stats,
                     Pod5DimerCanonicalOutputs.out.breakpoint_call,
                     Pod5DimerCanonicalOutputs.out.secondary_summary,
+                    DoradoPreflight.out.manifest.map { sequencingKits(it) },
                 )
                 qcSummary = Pod5PlasmidQC.out.summary
                 if (params.comparison_panel_snapshot && params.comparison_panel_snapshot.toString().trim()) {
@@ -209,6 +210,7 @@ workflow ONT_PLASMID_QC {
                 BamPlasmidQC.out.alignment_stats,
                 BamDimerCanonicalOutputs.out.breakpoint_call,
                 BamDimerCanonicalOutputs.out.secondary_summary,
+                Channel.value((params.sequencing_kits ?: '').toString()),
             )
             qcSummary = BamPlasmidQC.out.summary
             if (params.comparison_panel_snapshot && params.comparison_panel_snapshot.toString().trim()) {
@@ -257,6 +259,7 @@ workflow ONT_PLASMID_QC {
                 InputFastqPlasmidQC.out.alignment_stats,
                 InputFastqDimerCanonicalOutputs.out.breakpoint_call,
                 InputFastqDimerCanonicalOutputs.out.secondary_summary,
+                Channel.value((params.sequencing_kits ?: '').toString()),
             )
             qcSummary = InputFastqPlasmidQC.out.summary
             if (params.comparison_panel_snapshot && params.comparison_panel_snapshot.toString().trim()) {
