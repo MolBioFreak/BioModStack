@@ -91,6 +91,9 @@ class BarcodeBatchRequest(BaseModel):
     name_prefix: str | None = Field(default=None, max_length=128)
     pinned_gpu: int | None = Field(default=None, ge=0, le=15)
     mappings: list[BarcodeBatchRequestMapping] = Field(min_length=1, max_length=96)
+    # Methylation tables from the modification calls already in each barcode's reads.
+    run_modkit: bool = False
+    modkit_filter_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     reference_set_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
     execution_policy: ExecutionPolicy | None = None
@@ -188,6 +191,14 @@ def _read_json_file(path: Path, root: Path, label: str) -> tuple[Path, dict[str,
     return resolved, payload, payload_bytes
 
 
+def _modkit_params(request: BarcodeBatchRequest) -> dict[str, Any]:
+    """The methylation choice, present only when asked for so earlier requests keep their identity."""
+    if not request.run_modkit:
+        return {}
+    threshold = request.modkit_filter_threshold
+    return {"run_modkit": True, **({"modkit_filter_threshold": threshold} if threshold is not None else {})}
+
+
 def _normalized_request(request: BarcodeBatchRequest, *, source_job_id: str) -> dict[str, Any]:
     mappings = [
         {
@@ -205,6 +216,7 @@ def _normalized_request(request: BarcodeBatchRequest, *, source_job_id: str) -> 
         "name_prefix": request.name_prefix,
         "pinned_gpu": request.pinned_gpu,
         "mappings": mappings,
+        **_modkit_params(request),
         **request.model_dump(mode="json", include={"execution_target_id", "execution_policy"}, exclude_unset=True),
     }
 
@@ -650,6 +662,7 @@ async def _create_one_child(
         "selection_source_type": "ont_dorado_demux",
         "selection_source_job_id": str(source["id"]),
         "source_selection_count": len(source_products["unit_by_id"]),
+        **_modkit_params(request),
     }
     prefix = request.name_prefix or str(source["name"]).strip() or f"ONT {request.target_workflow}"
     from routers.jobs import create_job  # noqa: PLC0415

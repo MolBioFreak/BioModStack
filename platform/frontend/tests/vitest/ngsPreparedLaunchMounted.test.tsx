@@ -331,6 +331,14 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-RBK114-96', sample_sheet: '/data/samples.csv' });
     });
+    it('keeps modification calling when a barcoding kit is chosen and points methylation to the barcode units', async () => {
+        await mount({ ...base, modifiedBases: '6mA', barcodeKit: 'SQK-RBK114-96' });
+        expect(container.querySelector<HTMLInputElement>('input[type="checkbox"][aria-label="6mA"]')!.checked).toBe(true);
+        expect(container.querySelector('[data-testid="ngs-methylation-barcoded-note"]')?.textContent).toContain('Demultiplexed barcode units');
+        expect(container.querySelector('[data-testid="ngs-methylation-card"]')).toBeNull();
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-RBK114-96', modified_bases: '6mA', run_modkit: false });
+    });
     it('offers DNA calling options once and submits modification tags without adding methylation analysis', async () => {
         await mount();
         expect(container.querySelector('[data-ngs-workflow-key="duplex"]')).toBeNull();
@@ -347,7 +355,8 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         // Dorado allows one model per canonical base: choosing 4mC_5mC replaces the CpG model.
         await act(async () => mod('4mC_5mC')!.click()); await settle();
         expect(mod('5mCG_5hmCG')!.checked).toBe(false);
-        expect(container.querySelector<HTMLSelectElement>('select[aria-label="Barcoding"]')?.disabled).toBe(true);
+        // Modification calling no longer locks the barcoding choice.
+        expect(container.querySelector<HTMLSelectElement>('select[aria-label="Barcoding"]')?.disabled).toBe(false);
         expect(container.textContent).toContain(doradoLock.models.modified_bases['dna_r10.4.1_e8.2_400bps_sup@v5.2.0_6mA@v1'].id);
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(submits()[0].url).toBe('/api/ont/ngs/ont_basecall_dna/submit');

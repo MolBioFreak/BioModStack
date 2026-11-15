@@ -50,9 +50,6 @@
       },
       "then": {
         "properties": {
-          "barcode_kit": {
-            "type": "null"
-          },
           "basecalling_mode": {
             "const": "simplex"
           }
@@ -72,11 +69,10 @@
           "type": "null"
         }
       ],
-      "x-bms-applicability": "simplex DNA without modified bases",
+      "x-bms-applicability": "simplex DNA",
       "x-bms-default-policy": "required_explicit_or_authority_bound",
       "x-bms-incompatibilities": [
-        "basecalling_mode=duplex",
-        "modified_bases!=none"
+        "basecalling_mode=duplex"
       ],
       "x-bms-native-key": "barcode_kit",
       "x-bms-persisted-representation": "requested_and_effective",

@@ -4834,6 +4834,7 @@ export function NGSToolkit() {
                                 <BarcodeUnitsPanel
                                     key={`barcode-units-${selectedJob.id}`}
                                     jobId={selectedJob.id}
+                                    modifiedBases={typeof selectedJob.params?.modified_bases === 'string' ? selectedJob.params.modified_bases : null}
                                     enabled={selectedJob.status === 'completed' && selectedJob.model_id === 'nanopore' && selectedJob.mode === 'basecall_dna' && Boolean(selectedJob.params?.barcode_kit)}
                                 />
 

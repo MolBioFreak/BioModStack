@@ -1775,6 +1775,8 @@ export interface OntBarcodeBatchSubmitRequest {
     target_workflow: 'ont_plasmid_qc' | 'ont_construct_screening';
     name_prefix?: string;
     pinned_gpu?: number | null;
+    run_modkit?: boolean;
+    modkit_filter_threshold?: number;
     mappings: OntBarcodeBatchMapping[];
     execution_target_id?: string | null;
     execution_policy?: ExecutionPolicy;

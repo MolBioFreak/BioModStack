@@ -706,9 +706,6 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
 
     modified_bases = canonical_modified_bases(resolve_modified_bases(
         lock, molecule_type, quality_mode, basecall_mode, normalized.get("modified_bases")))
-    if barcode_kit and modified_bases != "none":
-        # Barcoded completion seals unmodified demux units; per-barcode modkit is downstream.
-        raise ValueError("inline barcode classification and modified-base calling are mutually exclusive")
 
     raw_batch = normalized.get("dorado_batch_size")
     if raw_batch in (None, ""):

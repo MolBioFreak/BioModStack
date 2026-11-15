@@ -20,3 +20,18 @@ it('does not partially overwrite mappings when one pasted barcode is invalid',as
     await paste('barcode01,A\nunclassified,B');await click('Apply barcode mappings');await vi.waitFor(async()=>{await settle();expect(host.textContent).toContain('Unknown or repeated');});
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Saved sequence for barcode01"]')!.value).toBe('');expect(mocks.receipt).not.toHaveBeenCalled();expect(mocks.submit).not.toHaveBeenCalled();
 });
+it('offers methylation tables only for a run called with modifications and sends the choice with the batch',async()=>{
+    expect(host.querySelector('[data-testid="ont-barcode-methylation"]')).toBeNull();
+    await act(async()=>root.render(<QueryClientProvider client={client}><BarcodeUnitsPanel jobId="source" enabled modifiedBases="5mC_5hmC 6mA"/></QueryClientProvider>));await settle();
+    const box=host.querySelector<HTMLInputElement>('input[aria-label="Generate methylation tables"]')!;expect(box.checked).toBe(false);
+    await act(async()=>box.click());await settle();await click('Strict 0.70');
+    await paste('barcode01,A\nbarcode02,B');await click('Apply barcode mappings');await vi.waitFor(async()=>{await settle();expect(host.textContent).toContain('Applied 2 exact');});await click('Submit mapped batch');
+    await vi.waitFor(()=>expect(mocks.submit).toHaveBeenCalledTimes(1));
+    expect(mocks.submit.mock.calls[0][1]).toMatchObject({run_modkit:true,modkit_filter_threshold:0.7});
+});
+it('sends no methylation fields when the box is left off',async()=>{
+    await act(async()=>root.render(<QueryClientProvider client={client}><BarcodeUnitsPanel jobId="source" enabled modifiedBases="6mA"/></QueryClientProvider>));await settle();
+    await paste('barcode01,A\nbarcode02,B');await click('Apply barcode mappings');await vi.waitFor(async()=>{await settle();expect(host.textContent).toContain('Applied 2 exact');});await click('Submit mapped batch');
+    await vi.waitFor(()=>expect(mocks.submit).toHaveBeenCalledTimes(1));
+    expect(mocks.submit.mock.calls[0][1]).not.toHaveProperty('run_modkit');
+});

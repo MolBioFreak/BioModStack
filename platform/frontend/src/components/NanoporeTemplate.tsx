@@ -1942,9 +1942,9 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             <label className="text-sm text-[var(--text-secondary)]">Barcoding<select aria-label="Barcoding" value={barcodeKit} onChange={(event) => {
                                 const value = event.target.value as '' | 'SQK-RBK114-96';
                                 setBarcodeKit(value);
-                                if (value) { setModifiedBases('none'); setRunModkit(false); setRunAssembly(false); }
+                                if (value) { setRunModkit(false); setRunAssembly(false); }
                                 else setSampleSheet('');
-                            }} disabled={modifiedBases !== 'none'} className="mt-1 block w-full bg-[var(--bg-tertiary)] rounded p-2 disabled:opacity-40">
+                            }} className="mt-1 block w-full bg-[var(--bg-tertiary)] rounded p-2 disabled:opacity-40">
                                 <option value="">No barcoding</option>
                                 <option value="SQK-RBK114-96">SQK-RBK114-96</option>
                             </select></label>
@@ -2025,7 +2025,13 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             )}
 
             {/* Methylation tables (modkit) — every DNA and plasmid method, from POD5/BLOW5 or tagged BAM */}
-            {canRunModkit && (
+            {canRunModkit && Boolean(barcodeKit) && (
+                <div className={`${TASK_FLOW_CARD} space-y-2`} data-testid="ngs-methylation-barcoded-note">
+                    <div className="text-sm font-semibold text-[var(--text-primary)]">Methylation</div>
+                    <p className="text-xs text-[var(--text-secondary)]">Barcoded run: set per barcode under Runs → Demultiplexed barcode units.</p>
+                </div>
+            )}
+            {canRunModkit && !barcodeKit && (
                 <div className={`${TASK_FLOW_CARD} space-y-3`} data-testid="ngs-methylation-card">
                     <div className="text-sm font-semibold text-[var(--text-primary)]">Methylation</div>
                             <label className="flex items-center gap-3 cursor-pointer">

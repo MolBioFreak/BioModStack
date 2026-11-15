@@ -24,7 +24,16 @@ type TargetWorkflow = 'ont_plasmid_qc' | 'ont_construct_screening';
 interface BarcodeUnitsPanelProps {
     jobId: string;
     enabled: boolean;
+    /** Modification models the barcoded run was called with; methylation tables need them. */
+    modifiedBases?: string | null;
 }
+
+const MODKIT_THRESHOLDS: Array<{ key: string; label: string; value: number | null }> = [
+    { key: 'auto', label: 'Auto (Recommended)', value: null },
+    { key: 'balanced', label: 'Balanced 0.50', value: 0.5 },
+    { key: 'strict', label: 'Strict 0.70', value: 0.7 },
+    { key: 'very-strict', label: 'Very strict 0.85', value: 0.85 },
+];
 
 interface BarcodeMappingDraft {
     sampleAlias: string;
@@ -106,8 +115,11 @@ function BarcodeMappingCells({ unitId, sequences, mapping, onChange, disabled }:
     );
 }
 
-export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
+export function BarcodeUnitsPanel({ jobId, enabled, modifiedBases }: BarcodeUnitsPanelProps) {
     const queryClient = useQueryClient();
+    const hasModificationCalls = Boolean(modifiedBases && modifiedBases !== 'none');
+    const [runModkit, setRunModkit] = useState(false);
+    const [modkitThreshold, setModkitThreshold] = useState<number | null>(null);
     const [targetWorkflow, setTargetWorkflow] = useState<TargetWorkflow>('ont_plasmid_qc');
     const [namePrefix, setNamePrefix] = useState('');
     const [pinnedGpu, setPinnedGpu] = useState('');
@@ -206,6 +218,7 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
                 target_workflow: targetWorkflow,
                 ...(namePrefix.trim() ? { name_prefix: namePrefix.trim() } : {}),
                 ...(parsedPinnedGpu !== null ? { pinned_gpu: parsedPinnedGpu } : {}),
+                ...(runModkit && hasModificationCalls ? { run_modkit: true, ...(modkitThreshold !== null ? { modkit_filter_threshold: modkitThreshold } : {}) } : {}),
                 mappings,
                 ...prepareExecutionPlacement({ execution_target_id: executionTargetId, execution_policy: executionPolicy }),
             };
@@ -241,6 +254,30 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
                     {submitMutation.isPending ? 'Submitting batch…' : 'Submit mapped batch'}
                 </button>
             </div>
+            {hasModificationCalls && (
+                <div className="space-y-2 rounded border border-[var(--border-primary)] p-3" data-testid="ont-barcode-methylation">
+                    <label className="flex cursor-pointer items-center gap-3">
+                        <input type="checkbox" aria-label="Generate methylation tables" checked={runModkit} onChange={event => setRunModkit(event.target.checked)} className="h-4 w-4 rounded border-[var(--border-primary)]" />
+                        <div>
+                            <span className="text-sm text-[var(--text-primary)]">Generate methylation tables</span>
+                            <p className="text-xs text-[var(--text-secondary)]">From the modification calls already in each barcode's reads.</p>
+                        </div>
+                    </label>
+                    {runModkit && (
+                        <div className="space-y-1">
+                            <div className="text-xs text-[var(--text-secondary)]">modkit filter threshold ({modkitThreshold !== null ? modkitThreshold.toFixed(2) : 'auto'})</div>
+                            <div className="flex flex-wrap gap-2">
+                                {MODKIT_THRESHOLDS.map(option => (
+                                    <button key={option.key} type="button" aria-pressed={modkitThreshold === option.value} onClick={() => setModkitThreshold(option.value)}
+                                        className={`rounded border px-2 py-1 text-xs ${modkitThreshold === option.value ? 'border-[var(--accent-secondary)] bg-[var(--bg-tertiary)] text-[var(--text-primary)]' : 'border-[var(--border-primary)] text-[var(--text-secondary)]'}`}>
+                                        {option.label}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
             {unitsQuery.isLoading && <div className="text-xs text-[var(--text-secondary)]">Loading barcodes…</div>}
             {unitsQuery.isError && <div className="text-xs text-[var(--error)]">No verified barcode manifest is available.</div>}
             {sequencesQuery.isError && <div className="text-xs text-[var(--error)]">Saved MolBio sequences could not be loaded.</div>}

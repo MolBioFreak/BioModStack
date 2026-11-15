@@ -466,3 +466,24 @@ async def test_idempotent_replay_returns_exact_children_and_conflict_is_409(batc
         await _create(context, conflicting)
     assert raised.value.status_code == 409
     assert raised.value.code == "IDEMPOTENCY_CONFLICT"
+
+
+@pytest.mark.asyncio
+async def test_methylation_choice_reaches_every_barcode_child(batch_context, canonical_job_spy) -> None:
+    context = batch_context
+    calls, _ = canonical_job_spy
+    request = _request(context, key="batch-modkit").model_copy(update={"run_modkit": True, "modkit_filter_threshold": 0.7})
+    result = await _create(context, request)
+    children = (await context.session.execute(select(Job).where(Job.id.in_(result["child_job_ids"])))).scalars().all()
+    assert len(children) == 10
+    assert all(child.params["run_modkit"] is True for child in children)
+    assert all(child.params["modkit_filter_threshold"] == 0.7 for child in children)
+
+
+def test_methylation_choice_is_part_of_the_request_identity_only_when_asked_for(batch_context) -> None:
+    plain = _request(batch_context)
+    asked = plain.model_copy(update={"run_modkit": True})
+    stricter = plain.model_copy(update={"run_modkit": True, "modkit_filter_threshold": 0.85})
+    identity = lambda request: batches.request_fingerprint(request, source_job_id="source-job")
+    assert "run_modkit" not in batches._normalized_request(plain, source_job_id="source-job")
+    assert len({identity(plain), identity(asked), identity(stricter)}) == 3
