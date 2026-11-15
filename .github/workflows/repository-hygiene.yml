@@ -22,3 +22,39 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_repository_*.py' -v
       - name: Check tracked paths and approved exceptions
         run: python3 scripts/check_repository_hygiene.py
+
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '26.13.0'
+      - name: Install pinned package manager and frozen frontend workspace
+        # Root workspace owns the lock, local packages and seqviz patch.
+        run: |
+          npm install --prefix "$RUNNER_TEMP/frontend-tools" --no-audit --no-fund --ignore-scripts pnpm@10.11.0
+          echo "$RUNNER_TEMP/frontend-tools/node_modules/.bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/frontend-tools/node_modules/.bin/pnpm" --filter 'frontend...' install --frozen-lockfile --ignore-scripts --ignore-pnpmfile
+      - name: Typecheck complete app source
+        working-directory: platform/frontend
+        run: pnpm exec tsc -p tsconfig.app.json --incremental --tsBuildInfoFile "$RUNNER_TEMP/frontend.tsbuildinfo"
+      - name: Scoped offline mounted regressions
+        working-directory: platform/frontend
+        # No API, provider, model, worker, BioXP or ONT runtime suites.
+        # Actual-byte receiving is separate: BMS_STRUCTURE_BYTES_WIRE=<genuine
+        # ASGI download wire> pnpm run test:structure-bytes. No synthetic wire here.
+        env:
+          BMS_VITE_CACHE_DIR: ${{ runner.temp }}/frontend-vite
+          NODE_OPTIONS: --localstorage-file=${{ runner.temp }}/frontend-storage.sqlite
+        run: pnpm run test:ci --reporter=default --reporter=junit --outputFile.junit="$RUNNER_TEMP/frontend-junit.xml"
+      - name: Retain mounted test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: frontend-junit
+          path: ${{ runner.temp }}/frontend-junit.xml
+          if-no-files-found: warn

@@ -149,6 +149,8 @@ export default defineConfig({
             './tests/vitest/deleteActionsMounted.test.tsx',
             './tests/vitest/molBioThemeReadability.test.tsx',
             './tests/vitest/spatialTrackMounted.test.tsx',
+            // Requires genuine ASGI download bytes; never substitute a synthetic wire.
+            ...(process.env.BMS_STRUCTURE_BYTES_WIRE ? ['./tests/vitest/scientificStructureBytesMounted.test.tsx'] : []),
             './tests/vitest/scientificViewerIdentity.test.ts',
             './tests/vitest/scientificViewerMounted.test.tsx',
             './tests/vitest/mdTrimMounted.test.tsx',
@@ -240,6 +242,7 @@ export default defineConfig({
             './tests/vitest/ngsThemeSafeColors.test.ts',
             './tests/vitest/pooledAssignmentReviewPanel.test.tsx',
             './tests/vitest/conformationalMappingViewerBehavior.test.tsx',
+            './tests/vitest/frustraMpnnPlotlyAnalytics.test.tsx',
             './tests/vitest/frustraMpnnSettingsControls.test.tsx',
             './tests/vitest/frustraMpnnOperatorSurfaces.test.tsx',
             './tests/vitest/frustraMpnnResultsNavigation.test.tsx',

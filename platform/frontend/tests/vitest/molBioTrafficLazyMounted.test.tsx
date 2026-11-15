@@ -18,11 +18,32 @@ vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({ use
 vi.mock('../../src/lib/restrictionAnalysis', async original => ({ ...await original<any>(), fetchRestrictionCatalogBrowse: async () => ({ catalog: { catalog_id: 'fixture' }, items: [] }), fetchRestrictionAnalysisBatch: async () => ({}) }));
 vi.mock('../../src/lib/api', async original => ({ ...await original<any>(), fetchNucleotideSequences: async () => ({ data: [] }), createNucleotideSequence: async (data: any) => ({ data: { ...data, id: 'imported', length: data.sequence.length, version: 1 } }), fetchPrimerTmOptions: async () => ({ data: { algorithms: [{ id: 'nn_santalucia_hicks_2004', sequence_types: ['dna', 'rna'] }], defaults: {} } }) }));
 import { MolBioToolkitV2 } from '../../src/components/MolBioToolkit/MolBioToolkitV2';
+import { api } from '../../src/lib/api';
 import { ExportDropdown } from '../../src/components/MolBioToolkit/ExportDropdown';
 
 it('real toolkit defers chart/parser modules, retains GC science and real GenBank/FASTA actions', async () => {
     localStorage.clear(); window.innerWidth = 1400;
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ workups: [] }) }));
+    const unexpectedRequests: string[] = [];
+    const importRequests: unknown[] = [];
+    const originalAdapter = api.defaults.adapter;
+    api.defaults.adapter = async config => {
+        const request = `${config.method?.toUpperCase()} ${config.url}`;
+        if (request === 'POST /api/molbio/sequences/import/commit') {
+            importRequests.push(JSON.parse(config.data));
+            // This case exercises the real browser parser fallback, not server import.
+            throw new Error('Import service unavailable in browser-parser fallback fixture');
+        }
+        unexpectedRequests.push(request);
+        throw new Error(`Unexpected Axios request: ${request}`);
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/molbio/sequences/imported/ngs-workup?limit=50&offset=0') {
+            return { ok: true, json: async () => ({ sequence_id: 'imported', workups: [], has_more: false }) };
+        }
+        unexpectedRequests.push(`fetch ${url}`);
+        throw new Error(`Unexpected fetch: ${url}`);
+    }));
     const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const render = async (node: React.ReactNode) => { await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter>{node}</MemoryRouter></QueryClientProvider>)); };
@@ -45,14 +66,20 @@ it('real toolkit defers chart/parser modules, retains GC science and real GenBan
         expect(seen.plotProps.data.some((trace: any) => trace.y?.some((v: number) => v === 50))).toBe(true);
         await act(async () => seen.header.onGCTrackToggle()); await act(async () => seen.header.onGCTrackToggle());
         expect(seen.plotlyImports).toBe(1); expect(seen.parserImports).toBe(0);
-        await act(async () => seen.input.onImportFile(new File(['>Imported fixture\nACGTACGTACGT\n'], 'fixture.fasta', { type: 'text/plain' })));
+        const importedFile = new File(['>Imported fixture\nACGTACGTACGT\n'], 'fixture.fasta', { type: 'text/plain' });
+        // jsdom's File needs real text decoding instead of setup's String(blob) fallback.
+        Object.defineProperty(importedFile, 'text', { value: () => text(importedFile) });
+        await act(async () => seen.input.onImportFile(importedFile));
         expect(seen.parserImports).toBe(1); expect(seen.header.sequenceData.sequence).toBe('ACGTACGTACGT');
         await render(<ExportDropdown sequenceData={{ name: 'Export fixture', sequence: 'ACGTACGTACGT', circular: false, sequenceType: 'dna', features: [{ name: 'kept', type: 'misc_feature', start: 0, end: 4, strand: 1 }] }} />);
         await click('Export'); await click('GenBank (.gb)');
         expect(seen.parserImports).toBe(1); expect(blobs).toHaveLength(1);
         const gb = await text(blobs[0]); expect(gb).toContain('LOCUS'); expect(gb).toContain('kept'); expect(gb.toLowerCase()).toContain('acgtacgtac');
         await click('Export'); await click('FASTA (.fasta)'); expect(blobs).toHaveLength(2); expect(await text(blobs[1])).toContain('>Export fixture\nACGTACGTACGT');
+        expect(importRequests).toHaveLength(1);
+        expect(importRequests[0]).toMatchObject({ source_format: 'fasta', source_text: '>Imported fixture\nACGTACGTACGT\n' });
+        expect(unexpectedRequests).toEqual([]);
     } finally {
-        await act(async () => root.unmount()); client.clear(); host.remove(); anchorClick.mockRestore(); vi.unstubAllGlobals();
+        await act(async () => root.unmount()); client.clear(); host.remove(); anchorClick.mockRestore(); vi.unstubAllGlobals(); api.defaults.adapter = originalAdapter;
     }
 });
