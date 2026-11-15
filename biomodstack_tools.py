@@ -570,7 +570,10 @@ def _fetch_weights(run: _Run, selected: set[str] | None, accepted: set[str]) -> 
             # Downloaders such as "dorado download" exit 1 when the folder they write into is absent.
             for expected in weight["present_if"]:
                 (where["weights_root"] / expected).parent.mkdir(parents=True, exist_ok=True)
-            image = where["container_dir"] / (fetch.get("image") or recipe["images"][0]["filename"])
+            # The same image BMS runs: built, adopted, or in the managed store.
+            wanted = fetch.get("image") or recipe["images"][0]["filename"]
+            spec = next((item for item in recipe["images"] if item["filename"] == wanted), {"filename": wanted})
+            image = _sif_path(spec, where) or where["container_dir"] / wanted
             run.command([_apptainer(), "exec", "--bind", f"{where['weights_root']}:/weights", image] + fetch["argv"],
                         step=step, reason_code="weights_download_failed")
         if not _weight_present(weight, where["weights_root"]):

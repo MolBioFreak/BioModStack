@@ -74,7 +74,7 @@
     },
     {
       "id": "sup-v5.2.0",
-      "required": false,
+      "required": true,
       "approx_size_gb": 0.3,
       "license": {
         "id": "ONT-PL-1.0",

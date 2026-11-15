@@ -1,5 +1,6 @@
 """Tool installer CLI, exercised through start_ui.sh with a stand-in container runtime."""
 import json
+import re
 import os
 from pathlib import Path
 import shutil
@@ -316,3 +317,31 @@ def test_recipes_install_pytorch_releases_not_nightlies():
     for definition in sorted((ROOT / "apptainer").glob("*.def")):
         assert "whl/nightly" not in definition.read_text(), definition.name
 
+
+
+def test_weights_download_runs_in_the_managed_store_image(install):
+    """With the image only in the managed store, the model download uses that image and builds nothing."""
+    store = install.data / "apptainer" / ".image-store"
+    image = store / "objects" / "sha256" / ("a" * 64) / "runtime.sif"
+    image.parent.mkdir(parents=True)
+    image.write_text("image")
+    (store / "references").mkdir()
+    (store / "references" / "state.json").write_text(json.dumps({
+        "current": {"production": "r1"},
+        "releases": {"r1": {"images": {"BMS_RUNTIME_IMAGE_DEMO_SIF": {"path": str(image)}}}}}))
+    code, done = install("build", "demo", "--accept-license", "DEMO-1.0")
+    calls = install.calls.read_text()
+    assert code == 0 and done["status"] == "ready", done
+    assert f"{image} make-weights" in calls
+    assert not (install.data / "apptainer" / "demo.sif").exists()
+    assert (install.data / "weights" / "demo" / "model").is_dir()
+
+
+def test_dorado_recipe_installs_the_model_the_default_quality_uses():
+    recipe = json.loads((ROOT / "tools/recipes/dorado.json").read_text())
+    lock = json.loads((ROOT / "config/ngs/dorado_v2.1.2.lock.json").read_text())
+    config = (ROOT / "nextflow.config").read_text()
+    default = re.search(r"dorado_quality_mode = '(\w+)'", config).group(1)
+    model = lock["models"]["dna"][default]["id"]
+    required = {path for w in recipe["weights"] if w["required"] for path in w["present_if"]}
+    assert f"dorado/2.1.2/{model}" in required
