@@ -1,7 +1,8 @@
 """Offline presence reconciliation: provider fixtures and isolated SQLite only.
 
 Full managed-runtime activation needs native task witnesses, not version stubs.
-The probe races below stop before that boundary; they do not qualify activation.
+Probe races stop before that boundary. Final publication races mock runtime
+qualification explicitly; neither qualifies a native runtime.
 """
 import json
 from datetime import datetime, timedelta
@@ -302,6 +303,84 @@ async def test_activation_cannot_publish_ready_after_provider_stops_during_probe
         assert not (await check.get(ExecutionTarget, 'vast:49674511')).active
     # Authenticated attachment now precedes the two bootstrap calls.
     assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('state', ['stopped', 'running'])
+async def test_activation_final_publication_rechecks_inventory(store, monkeypatch, state):
+    # Controller/SQLite regression only: remote qualification is a mocked leaf,
+    # not a version-only substitute for native task witnesses.
+    from services.remote_execution import cache, critical_runtime, managed_inventory
+    session, factory = store
+    identifier = 'vast:49674511'
+    inventory(monkeypatch, ['49674511'])
+    async def capture(*args): return ('fixture host key', 'a' * 64)
+    async def noop(*args, **kwargs): pass
+    async def probe(*args): return {'ok': True}
+    async def remote(connection, command, **kwargs):
+        if command[:3] == ['sh', '-s', '--']:
+            return SimpleNamespace(stdout='BMS_ATTACHED\nBMS_TELEMETRY\n')
+        assert command[:3] == ['bash', '-s', '--'] and command[3] in {'check', 'install'}
+        return SimpleNamespace(stdout='')
+    manifest = {'selection': 'controller-unit-fixture'}
+    async def helper(connection, request, fence):
+        await fence()
+        return {'boot_id': 'fixture-boot'}
+    async def qualify(*args):
+        return SimpleNamespace(critical=SimpleNamespace(observed={'backend': 'apptainer'}),
+                               model_dump=lambda **kwargs: {})
+    refreshed = []
+    async def observe(*args):
+        # Last remote readback: a second session commits before final publication.
+        inventory(monkeypatch, ['49674511'], state=state)
+        async with factory() as other:
+            before = await other.get(ExecutionTarget, identifier)
+            assert before.state == 'probing' and before.active
+            attachment = dict(before.provider_metadata['attachment'])
+            await targets.refresh_vast_targets(other)
+            await other.refresh(before)
+            refreshed.append((attachment, dict(before.provider_metadata['inventory'])))
+        return SimpleNamespace(boot_id='fixture-boot', critical_runtime_ready=True,
+                               model_dump=lambda **kwargs: {'boot_id': 'fixture-boot'})
+    monkeypatch.setattr(targets, 'capture_host_key', capture)
+    monkeypatch.setattr(targets, 'persist_host_key', noop)
+    monkeypatch.setattr(targets, 'run_remote', remote)
+    monkeypatch.setattr(targets, 'probe_readiness', probe)
+    monkeypatch.setattr(critical_runtime, 'project_runtime', lambda *args: (manifest, []))
+    monkeypatch.setattr(critical_runtime, 'runtime_binding', lambda *args: {})
+    monkeypatch.setattr(cache, '_cache_artifacts', noop)
+    monkeypatch.setattr(managed_inventory, 'helper_call', helper)
+    monkeypatch.setattr(managed_inventory, 'activate_release', qualify)
+    monkeypatch.setattr(managed_inventory, 'observe_releases', observe)
+    published = []
+    execute = session.execute
+    async def record_publication(statement, *args, **kwargs):
+        result = await execute(statement, *args, **kwargs)
+        if getattr(statement, 'is_update', False) and statement.compile().params.get('state') == 'ready':
+            published.append(result.rowcount)
+        return result
+    monkeypatch.setattr(session, 'execute', record_publication)
+    request = ExecutionTargetActivateRequest(provider_instance_id='49674511',
+        username='fixture-user', remote_root='/fixture-worker')
+    if state == 'stopped':
+        with pytest.raises(targets.ExecutionTargetError, match='changed during attachment'):
+            await targets.activate_target(session, request)
+    else:
+        result = await targets.activate_target(session, request)
+        assert result.active and result.state == 'ready'
+    assert published == [0 if state == 'stopped' else 1]
+    assert len(refreshed) == 1
+    async with factory() as check:
+        current = await check.get(ExecutionTarget, identifier)
+        assert current.provider_metadata['inventory'] == refreshed[0][1]
+        assert current.active is (state == 'running')
+        if state == 'running':
+            assert current.state == 'ready'
+            assert current.provider_metadata['attachment'] == refreshed[0][0]
+            assert (current.username, current.remote_root) == ('fixture-user', '/fixture-worker')
+            assert current.host_key_sha256 == 'a' * 64
+        else:
+            assert current.state != 'ready'
 
 
 @pytest.mark.asyncio
