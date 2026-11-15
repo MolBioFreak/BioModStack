@@ -18,10 +18,18 @@ from pydantic import BaseModel, Field
 from .common import orient_fragment
 from .feature_mapping import region_positions, stored_to_features
 from .feature_types import Material
+from .gibson_overlap_plan import (
+    MIN_SYNTHESIS_FRAGMENT,
+    cut_stretch,
+    fragment_spans,
+    maximum_count,
+    minimum_count,
+    tune_primer_overlap,
+)
 from .pydna_gibson import design_gibson
 from .region_match import Matcher, Piece, Source, cover_target, reverse_complement
 from .repeat_breakpoints import RepeatAnalysis, choose_boundaries
-from .types import AssemblyError, AssemblyFragment
+from .types import AssemblyError, AssemblyFragment, JunctionSpec
 
 SMALL_MATCH = 150  # matched pieces shorter than this may be absorbed into synthesis (variant 3)
 MAX_SYNTHESIS = 3000
@@ -56,6 +64,8 @@ class SuggestRequest(BaseModel):
     allow_synthesis: bool = True
     max_pcr_length: int | None = Field(default=None, ge=100)
     limit: int = Field(default=3, ge=1, le=3)
+    fragment_count: int | None = Field(default=None, ge=2, le=200)  # wanted fragments in total, best effort
+    max_synthesis_length: int | None = Field(default=None, ge=300, le=20000)  # each synthetic fragment, default 3000
 
 
 class SourceRef(BaseModel):
@@ -81,6 +91,18 @@ class FeatureReport(BaseModel):
     clipped: list[str] = Field(default_factory=list)
 
 
+class JunctionOut(BaseModel):
+    left_id: str
+    right_id: str
+    overlap_length: int
+    overlap_sequence: str | None = None
+    overlap_tm: float | None = None
+    overlap_tm_2_4: float | None = None
+    overlap_gc: float | None = None
+    distribution: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
 class Proposal(BaseModel):
     rank: int
     summary: str
@@ -89,6 +111,7 @@ class Proposal(BaseModel):
     design_request: dict[str, Any]
     features: FeatureReport
     notes: list[str] = Field(default_factory=list)
+    junctions: list[JunctionOut] = Field(default_factory=list)
 
 
 class SuggestResult(BaseModel):
@@ -209,9 +232,84 @@ def _fragments(pieces: list[Piece], target: str, sources: dict[str, SourceIn], v
             if frag.kind == "pcr" and frag.end - frag.start < SMALL_MATCH and near_new:
                 frags[i] = Frag("synthesis", frag.start, frag.end, sequence=target[frag.start:frag.end])
         frags = _merge_new(frags, target)
-        if any(f.kind == "synthesis" and f.end - f.start > MAX_SYNTHESIS for f in frags):
-            return []
     return frags
+
+
+def _split_synthetic(frags: list[Frag], target: str, req: SuggestRequest, notes: list[str]) -> list[Frag] | None:
+    """Cut synthetic stretches into overlapping fragments that fit the length limit and the wanted count.
+
+    Neighbouring synthetic fragments share their overlap inside the ordered sequences, so no primers are needed.
+    Cut windows are the cleanest near an even split (Tm, GC, complexity, uniqueness). Returns None when a stretch
+    cannot be cut within the limit.
+    """
+    n = len(target)
+    cap = req.max_synthesis_length or MAX_SYNTHESIS
+    overlap = req.overlap + req.overlap % 2
+    wanted = req.fragment_count
+    stretches = [i for i, frag in enumerate(frags) if frag.kind == "synthesis"]
+    if not stretches:
+        if wanted and wanted != len(frags):
+            notes.append(f"{wanted} fragments were asked for; this design has {len(frags)} because no part of it is synthetic")
+        return frags
+    closed = len(frags) == 1 and req.target.circular
+    counts: dict[int, int] = {}
+    ceilings: dict[int, int] = {}
+    for i in stretches:
+        frag = frags[i]
+        span = frag.end - frag.start
+        flanks = sum(1 for j in (i - 1, i + 1) if 0 <= j < len(frags) and frags[j].kind == "existing")
+        if closed or len(frags) == 1:
+            floor = 2
+        else:
+            floor = 1
+        counts[i] = max(floor, minimum_count(span, closed, cap - flanks * overlap, overlap)) if span + flanks * overlap > cap or floor > 1 else 1
+        ceilings[i] = maximum_count(span, closed)
+        if counts[i] > ceilings[i]:
+            return None
+    fixed = len(frags) - len(stretches)
+    if wanted:
+        while fixed + sum(counts.values()) < wanted:
+            candidates = [i for i in stretches if counts[i] < ceilings[i]]
+            if not candidates:
+                break
+            longest = max(candidates, key=lambda i: (frags[i].end - frags[i].start) / counts[i])
+            counts[longest] += 1
+        total = fixed + sum(counts.values())
+        if total != wanted:
+            notes.append(f"{wanted} fragments were asked for; the closest this target allows within the {cap} bp limit "
+                         f"and a {MIN_SYNTHESIS_FRAGMENT} bp minimum per synthetic fragment is {total}")
+    out: list[Frag] = []
+    for i, frag in enumerate(frags):
+        count = counts.get(i, 1)
+        if frag.kind != "synthesis" or count == 1:
+            out.append(frag)
+            continue
+        cuts = cut_stretch(target, req.target.circular, frag.start, frag.end, count, overlap, closed=closed)
+        if cuts is None:
+            return None
+        spans = fragment_spans(cuts, frag.start, frag.end, closed=closed, size=n)
+        out.extend(Frag("synthesis", a, b, sequence=None) for a, b in spans)
+    return out
+
+
+def _junction_specs(frags: list[Frag], target: str, req: SuggestRequest) -> list[dict[str, Any]]:
+    """Overlap lengths for joins whose overlap rides on primers, when a longer one avoids weak windows."""
+    n = len(target)
+    base = req.overlap + req.overlap % 2
+    count = len(frags)
+    pairs = [(i, i + 1) for i in range(count - 1)] + ([(count - 1, 0)] if req.target.circular and count > 1 else [])
+    specs: list[dict[str, Any]] = []
+    for i, j in pairs:
+        left, right = frags[i], frags[j]
+        pa, pb = left.kind == "pcr", right.kind == "pcr"
+        if not (pa or pb):
+            continue
+        distribution = "split" if pa and pb else "right" if pb else "left"
+        boundary = left.end % n if req.target.circular else left.end
+        length = tune_primer_overlap(target, req.target.circular, boundary, base, distribution)
+        if length != base:
+            specs.append({"after_fragment_id": f"f{i + 1}", "overlap": length, "distribution": None})
+    return specs
 
 
 def _build_request(frags: list[Frag], target: str, req: SuggestRequest) -> tuple[dict[str, Any], list[FragmentOut]]:
@@ -272,12 +370,23 @@ def _same_product(a: str, b: str, circular: bool) -> bool:
 def _evaluate(request: dict[str, Any], target: str, circular: bool):
     fragments = [AssemblyFragment(id=f["id"], name=f["name"], sequence=f["sequence"],
                                   orientation=f["orientation"]) for f in request["fragments"]]
-    result = design_gibson(fragments, preparations=[f["preparation"] for f in request["fragments"]],
-                           circular=circular, overlap=request["overlap"], target_tm=request["target_tm"],
-                           min_anneal=request["min_anneal"])
-    if not _same_product(result.candidates[0].product.sequence, target, circular):
-        raise AssemblyError("designed fragments do not reproduce the target")
-    return result
+
+    def run(chosen: list[dict[str, Any]] | None):
+        specs = [JunctionSpec(j["after_fragment_id"], j.get("overlap"), j.get("distribution")) for j in chosen or []] or None
+        result = design_gibson(fragments, preparations=[f["preparation"] for f in request["fragments"]],
+                               circular=circular, overlap=request["overlap"], target_tm=request["target_tm"],
+                               min_anneal=request["min_anneal"], junctions=specs)
+        if not _same_product(result.candidates[0].product.sequence, target, circular):
+            raise AssemblyError("designed fragments do not reproduce the target")
+        return result
+
+    try:
+        return run(request.get("junctions"))
+    except AssemblyError:
+        if not request.get("junctions"):
+            raise
+        request.pop("junctions")  # the tuned overlaps did not assemble; offer the plain plan instead
+        return run(None)
 
 
 def _feature_report(req: SuggestRequest, cover_pieces: list[Piece], rotation: int, target: str,
@@ -348,8 +457,9 @@ def suggest_gibson(req: SuggestRequest) -> SuggestResult:
         return SuggestResult(proposals=[], diagnostics=["Part of the target is not found in the supplied sources "
                                                         "and synthesis is not allowed"])
     diagnostics: list[str] = []
+    cap = req.max_synthesis_length or MAX_SYNTHESIS
     if not any(p.is_match for p in pieces):
-        diagnostics.append("No supplied source matches the target; whole-target synthesis is planned by the DNA Weaver planner")
+        diagnostics.append("No supplied source matches the target; it is built from overlapping synthetic fragments")
     features = _feature_report(req, pieces, rotation, target, sources)
     if req.target.features and any(source.features for source in sources.values()):
         notes.append("Feature report lists source coverage and target match coverage separately; "
@@ -360,7 +470,19 @@ def suggest_gibson(req: SuggestRequest) -> SuggestResult:
         frags = _fragments(pieces, rotated, sources, variant)
         if not frags:
             continue
+        variant_notes: list[str] = []
+        frags = _split_synthetic(frags, rotated, req, variant_notes)
+        if frags is None:
+            diagnostics.append(f"Variant {variant} not offered: a synthetic stretch cannot be cut into overlapping "
+                               f"fragments of at most {cap} bp")
+            continue
         request, outs = _build_request(frags, rotated, req)
+        specs = _junction_specs(frags, rotated, req)
+        if specs:
+            request["junctions"] = specs
+        if any(len(f.sequence or "") > cap for f in outs if f.preparation == "synthesis"):
+            diagnostics.append(f"Variant {variant} not offered: a synthetic fragment is longer than {cap} bp")
+            continue
         key = repr([(f["preparation"], f["sequence"], f["orientation"]) for f in request["fragments"]])
         if key in seen:
             continue
@@ -390,7 +512,11 @@ def suggest_gibson(req: SuggestRequest) -> SuggestResult:
             bits.append(f"min overlap Tm {min(overlap_tms):.1f} C")
         scored.append(((synth_bp, counts["pcr"] + counts["synthesis"], evidence), Proposal(
             rank=0, summary=", ".join(bits), counts=counts, fragments=outs, design_request=request,
-            features=features, notes=list(notes))))
+            features=features, notes=[*notes, *variant_notes],
+            junctions=[JunctionOut(left_id=j.left_fragment_id, right_id=j.right_fragment_id, overlap_length=j.overlap_length,
+                                   overlap_sequence=j.overlap_sequence, overlap_tm=j.overlap_tm, overlap_tm_2_4=j.overlap_tm_2_4,
+                                   overlap_gc=j.overlap_gc, distribution=j.distribution, notes=list(j.notes))
+                       for j in result.candidates[0].product.junctions])))
     scored.sort(key=lambda item: item[0])
     proposals = [p.model_copy(update={"rank": i + 1}) for i, (_, p) in enumerate(scored[:req.limit])]
     return SuggestResult(proposals=proposals, diagnostics=diagnostics)
