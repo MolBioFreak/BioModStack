@@ -27,6 +27,7 @@ from .types import (
     GeneratedPrimer,
     GibsonCandidate,
     GibsonDesignResult,
+    JunctionSpec,
     OrientedFragment,
 )
 
@@ -50,6 +51,7 @@ def _candidate_checksum(
     overlap: int,
     target_tm: float,
     min_anneal: int,
+    junctions: list[list[object]] | None = None,
 ) -> str:
     """Bind candidate identity to topology and reproducible design provenance."""
     payload = {
@@ -64,6 +66,8 @@ def _candidate_checksum(
         "target_tm": target_tm,
         "min_anneal": min_anneal,
     }
+    if junctions:
+        payload["junctions"] = junctions
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -239,12 +243,56 @@ def _site(sequence: str, annealing: str, *, reverse: bool, circular: bool) -> di
             "strand": -1 if reverse else 1}
 
 
-def _custom_plan(oriented, preparations, circular, overlap):
+JUNCTION_DISTRIBUTIONS = ("split", "left", "right")
+
+
+def _resolve_junction_specs(
+    oriented: list[OrientedFragment],
+    circular: bool,
+    junctions: list[JunctionSpec] | None,
+) -> dict[int, tuple[int | None, str | None]]:
+    """Map the user's junction choices onto fragment indices; only real choices are returned."""
+    if not junctions:
+        return {}
+    by_id = {item.id: index for index, item in enumerate(oriented)}
+    parts = [index for index, item in enumerate(oriented) if len(item.sequence) > SHORT_FRAGMENT]
+    resolved: dict[int, tuple[int | None, str | None]] = {}
+    seen: set[str] = set()
+    for spec in junctions:
+        index = by_id.get(spec.after_fragment_id)
+        if index is None:
+            raise AssemblyError(f"Junction after '{spec.after_fragment_id}': no fragment has that id")
+        name = oriented[index].name
+        if spec.after_fragment_id in seen:
+            raise AssemblyError(f"Junction after '{name}' is given more than once")
+        seen.add(spec.after_fragment_id)
+        if index not in parts:
+            raise AssemblyError(
+                f"'{name}' is {len(oriented[index].sequence)} nt, so it is carried as a linker on its neighbours' "
+                f"primers; set the junction on the fragment before the linker instead"
+            )
+        if not circular and parts.index(index) == len(parts) - 1:
+            raise AssemblyError(f"There is no junction after '{name}': it is the last fragment of a linear assembly")
+        if spec.overlap is not None and not 15 <= spec.overlap <= 80:
+            raise AssemblyError(f"Junction after '{name}': overlap must be between 15 and 80 nt")
+        if spec.distribution is not None and spec.distribution not in JUNCTION_DISTRIBUTIONS:
+            raise AssemblyError(
+                f"Junction after '{name}': distribution must be one of {', '.join(JUNCTION_DISTRIBUTIONS)}"
+            )
+        if spec.overlap is not None or spec.distribution is not None:
+            resolved[index] = (spec.overlap, spec.distribution)
+    return resolved
+
+
+def _custom_plan(oriented, preparations, circular, overlap, specs=None):
     """Tails only for junctions that lack homology; short parts ride on neighbours.
 
-    Returns (part indices, effective sequences, forward tails, reverse tails (as
-    written on the primer), junction gaps, existing homology per junction).
+    ``specs`` maps a part index to the user's (overlap, distribution) for the join after it.
+    Returns (part indices, effective sequences, forward tails, reverse tails (as written on the
+    primer), junction gaps, and per-junction (distribution, overlap, span, note) keyed by the
+    (left part, right part) pair).
     """
+    specs = specs or {}
     eff = [effective_sequence(item)[0] for item in oriented]
     parts = [i for i, item in enumerate(oriented) if len(item.sequence) > SHORT_FRAGMENT]
     if not parts:
@@ -252,7 +300,7 @@ def _custom_plan(oriented, preparations, circular, overlap):
     fwd = {i: "" for i in parts}
     rev = {i: "" for i in parts}
     junctions = []
-    half = -(-overlap // 2)
+    info: dict[tuple[int, int], tuple[str, int, int, str | None]] = {}
     count = len(parts)
     pairs = [(k, (k + 1) % count) for k in range(count if circular else count - 1)]
     for k, m in pairs:
@@ -261,32 +309,81 @@ def _custom_plan(oriented, preparations, circular, overlap):
         gap = "".join(eff[g] for g in gap_indices)
         homology = 0 if gap else _existing_homology(eff[a], eff[b])
         junctions.append((a, b, gap, homology))
+        user = a in specs
+        chosen, distribution = specs.get(a, (None, None))
         if homology:
+            note = (
+                f"The fragments already share {homology} nt of terminal homology, so the overlap you set "
+                f"for this junction was not applied"
+            ) if user else None
+            info[(a, b)] = ("homology", homology, homology, note)
             continue
+        ov = chosen or overlap
+        half = -(-ov // 2)
         pa, pb = preparations[a] == "pcr", preparations[b] == "pcr"
+        where = f"Junction {oriented[a].name} → {oriented[b].name}"
         if a == b:
             if not pa:
                 raise AssemblyError("Single-fragment closure without terminal homology needs pcr preparation")
+            if user and len(eff[a]) <= ov:
+                raise AssemblyError(f"{where}: an overlap of {ov} nt is not shorter than the fragment ({len(eff[a])} nt)")
             if gap:
-                fwd[a] = (eff[a] + gap)[-overlap:]
+                if user and distribution in ("left", "right"):
+                    raise AssemblyError(f"{where}: with linkers around a single fragment only 'split' is available")
+                fwd[a] = (eff[a] + gap)[-ov:]
                 rev[a] = reverse_complement(gap[:half])
+                distribution = "split"
+            elif distribution == "left":
+                rev[a] = reverse_complement(eff[a][:ov])
+            elif distribution == "right":
+                fwd[a] = eff[a][-ov:]
             else:
-                fwd[a] = eff[a][-(overlap // 2):]
+                fwd[a] = eff[a][-(ov // 2):]
                 rev[a] = reverse_complement(eff[a][:half])
-        elif pa and pb:
-            fwd[b] = eff[a][-(overlap // 2):] + gap
-            rev[a] = reverse_complement(gap + eff[b][:half])
-        elif pb:
-            fwd[b] = eff[a][-overlap:] + gap
-        elif pa:
-            rev[a] = reverse_complement(gap + eff[b][:overlap])
+                distribution = "split"
         else:
-            raise AssemblyError(
-                "pydna cannot design an overlap between adjacent ready_linear fragments "
-                f"'{oriented[a].name}' and '{oriented[b].name}' that share no terminal homology; "
-                "at least one fragment at each junction must use pcr preparation"
-            )
-    return parts, eff, fwd, rev, junctions
+            if distribution is None:
+                if pa and pb:
+                    distribution = "split"
+                elif pb:
+                    distribution = "right"
+                elif pa:
+                    distribution = "left"
+                else:
+                    raise AssemblyError(
+                        "pydna cannot design an overlap between adjacent ready_linear fragments "
+                        f"'{oriented[a].name}' and '{oriented[b].name}' that share no terminal homology; "
+                        "at least one fragment at each junction must use pcr preparation"
+                    )
+            elif distribution == "split" and not (pa and pb):
+                lacking = oriented[b].name if pa else oriented[a].name
+                raise AssemblyError(f"{where}: 'split' needs both fragments to be PCR products; {lacking} is ready_linear")
+            elif distribution == "left" and not pa:
+                raise AssemblyError(
+                    f"{where}: 'left' puts the overlap on the reverse primer of {oriented[a].name}, "
+                    f"but {oriented[a].name} is ready_linear"
+                )
+            elif distribution == "right" and not pb:
+                raise AssemblyError(
+                    f"{where}: 'right' puts the overlap on the forward primer of {oriented[b].name}, "
+                    f"but {oriented[b].name} is ready_linear"
+                )
+            if user:
+                left_need = ov if distribution == "right" else ov // 2 if distribution == "split" else 0
+                right_need = ov if distribution == "left" else half if distribution == "split" else 0
+                if left_need >= len(eff[a]) or right_need >= len(eff[b]):
+                    raise AssemblyError(
+                        f"{where}: an overlap of {ov} nt is not shorter than the fragment that has to carry it"
+                    )
+            if distribution == "split":
+                fwd[b] = eff[a][-(ov // 2):] + gap
+                rev[a] = reverse_complement(gap + eff[b][:half])
+            elif distribution == "right":
+                fwd[b] = eff[a][-ov:] + gap
+            else:
+                rev[a] = reverse_complement(gap + eff[b][:ov])
+        info[(a, b)] = (distribution, ov, ov + (len(gap) if distribution == "split" else 0), None)
+    return parts, eff, fwd, rev, junctions, info
 
 
 def _custom_product(parts, eff, junctions, circular):
@@ -315,9 +412,9 @@ def _needs_custom_design(oriented, preparations, circular) -> bool:
     return any(_existing_homology(eff[i], eff[j]) for i, j in pairs)
 
 
-def _custom_amplicons(oriented, preparations, circular, overlap, target_tm, min_anneal):
+def _custom_amplicons(oriented, preparations, circular, overlap, target_tm, min_anneal, specs=None):
     """Design path for overlap-bearing, short, single and sticky-end inputs."""
-    parts, eff, fwd, rev, junctions = _custom_plan(oriented, preparations, circular, overlap)
+    parts, eff, fwd, rev, junctions, info = _custom_plan(oriented, preparations, circular, overlap, specs)
     entries = {}
     for i in parts:
         if preparations[i] != "pcr":
@@ -331,7 +428,7 @@ def _custom_amplicons(oriented, preparations, circular, overlap, target_tm, min_
             fwd[i] + core + reverse_complement(rev[i]), (f_full, f_anneal), (r_full, r_anneal),
         )
     product = _custom_product(parts, eff, junctions, circular)
-    return parts, eff, entries, product
+    return parts, eff, entries, product, info
 
 
 def design_gibson(
@@ -343,8 +440,13 @@ def design_gibson(
     target_tm: float = 60.0,
     min_anneal: int = 15,
     max_candidates: int = MAX_CANDIDATES,
+    junctions: list[JunctionSpec] | None = None,
 ) -> GibsonDesignResult:
-    """Design and independently validate one bounded ordered Gibson assembly."""
+    """Design and independently validate one bounded ordered Gibson assembly.
+
+    ``junctions`` optionally sets the overlap length and which primers carry it for the join after
+    named fragments; every other join follows ``overlap``.
+    """
     _validate_request(
         fragments,
         preparations,
@@ -361,15 +463,17 @@ def design_gibson(
             f"Gibson design input is {total_nt} nt; the maximum is {MAX_TOTAL_NT} nt"
         )
 
-    custom = _needs_custom_design(oriented, preparations, circular)
+    specs = _resolve_junction_specs(oriented, circular, junctions)
+    custom = bool(specs) or _needs_custom_design(oriented, preparations, circular)
     pydna_products = []
+    info: dict[tuple[int, int], tuple[str, int, int, str | None]] = {}
     entries: dict[int, tuple] = {}
     custom_product = ""
     parts = list(range(len(oriented)))
     if custom:
         try:
-            parts, _eff, entries, custom_product = _custom_amplicons(
-                oriented, preparations, circular, overlap, target_tm, min_anneal
+            parts, _eff, entries, custom_product, info = _custom_amplicons(
+                oriented, preparations, circular, overlap, target_tm, min_anneal, specs
             )
         except AssemblyError:
             raise
@@ -471,18 +575,34 @@ def design_gibson(
         if not carried:
             validation_inputs.append(_designed_input_fragment(source, designed_sequence, preparation))
 
+    order = [(parts[k], parts[(k + 1) % len(parts)]) for k in range(len(parts) if circular else len(parts) - 1)]
+    preferred_overlaps = [specs.get(pair[0], (None, None))[0] for pair in order] if specs else None
     try:
         validated = simulate_gibson(
             validation_inputs,
             circular=circular,
             minimum_overlap=min(overlap, MIN_HOMOLOGY) if custom else overlap,
             preferred_overlap=overlap,
-            maximum_overlap=80 if custom else overlap,
+            maximum_overlap=max([80, *(item[2] for item in info.values())]) if custom else overlap,
+            preferred_overlaps=preferred_overlaps,
         )
     except AssemblyError as exc:
         raise AssemblyError(
             f"Designed fragments failed independent Gibson validation: {exc}"
         ) from None
+
+    tails = {primer.id: len(primer.tail_sequence) for primer in primers}
+    for junction, pair in zip(validated.junctions, order):
+        if pair in info and info[pair][0] == "homology":
+            junction.distribution = "homology"
+            if info[pair][3]:
+                junction.notes.append(info[pair][3])
+            continue
+        carries_left = tails.get(f"{oriented[pair[0]].id}:reverse", 0) > 0
+        carries_right = tails.get(f"{oriented[pair[1]].id}:forward", 0) > 0
+        junction.distribution = (
+            "split" if carries_left and carries_right else "left" if carries_left else "right" if carries_right else None
+        )
 
     intended_sequence = custom_product if custom else "".join(
         fragment.sequence for fragment in oriented
@@ -528,6 +648,7 @@ def design_gibson(
                 "pydna produced no exact candidate for the intended ordered assembly"
             )
 
+    junction_payload = [[oriented[index].id, spec[0], spec[1]] for index, spec in sorted(specs.items())] or None
     candidates: list[GibsonCandidate] = []
     for sequence in ordered_sequences:
         exact_match = sequence == intended_key
@@ -558,6 +679,7 @@ def design_gibson(
                     overlap=overlap,
                     target_tm=target_tm,
                     min_anneal=min_anneal,
+                    junctions=junction_payload,
                 ),
                 product=product,
                 exact_match=exact_match,
@@ -572,6 +694,7 @@ def design_gibson(
         overlap=overlap,
         target_tm=target_tm,
         min_anneal=min_anneal,
+        junctions=junction_payload,
     )
     return GibsonDesignResult(
         engine=ENGINE,
