@@ -191,11 +191,16 @@ describe('Gibson suggest plan with junctions', () => {
         const first = vi.mocked(api.suggestGibsonPlan).mock.calls[0][0];
         expect('fragment_count' in first).toBe(false);
         expect('max_synthesis_length' in first).toBe(false);
-        expect(first.overlap).toBe(30);
+        expect('overlap' in first).toBe(false);
         await type(input('Fragment count'), '3');
         await type(input('Max synthesis length'), '1800');
         await click('Suggest');
-        expect(vi.mocked(api.suggestGibsonPlan).mock.calls[1][0]).toMatchObject({ fragment_count: 3, max_synthesis_length: 1800, overlap: 30 });
+        const second = vi.mocked(api.suggestGibsonPlan).mock.calls[1][0];
+        expect(second).toMatchObject({ fragment_count: 3, max_synthesis_length: 1800 });
+        expect('overlap' in second).toBe(false);
+        await type(input('Overlap (nt)'), '24');
+        await click('Suggest');
+        expect(vi.mocked(api.suggestGibsonPlan).mock.calls[2][0]).toMatchObject({ overlap: 24 });
     });
 
     it('a target with no sources shows synthetic proposals normally, with each proposal junction listed', async () => {

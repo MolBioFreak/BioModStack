@@ -176,7 +176,7 @@ def suggest_for(seq: str, cap: int):
     return suggest_gibson(SuggestRequest.model_validate({
         "target": {"name": "t", "sequence": seq, "circular": True},
         "sources": [{"id": "self", "name": "plasmid", "sequence": seq, "circular": True}],
-        "max_pcr_length": cap, "limit": 3}))
+        "max_pcr_length": cap, "limit": 3, "overlap": 25}))
 
 
 def test_suggest_splits_a_repeat_plasmid_so_the_design_route_assembles_it() -> None:

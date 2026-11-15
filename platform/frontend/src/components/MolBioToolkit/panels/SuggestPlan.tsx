@@ -159,7 +159,7 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
     const [pasteCircular, setPasteCircular] = useState(true);
     const [useCurrentSource, setUseCurrentSource] = useState(false);
     const [sources, setSources] = useState<Molecule[]>([]);
-    const [overlap, setOverlap] = useState(30);
+    const [overlap, setOverlap] = useState('');
     const [targetTm, setTargetTm] = useState(60);
     const [minAnneal, setMinAnneal] = useState(13);
     const [minMatch, setMinMatch] = useState(30);
@@ -231,7 +231,8 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                         ...(m.revision_number != null ? { source_revision: m.revision_number } : {}),
                         ...(m.features ? { features: m.features } : {}),
                     })),
-                    min_match: minMatch, overlap, target_tm: targetTm, min_anneal: minAnneal, allow_synthesis: true, limit: 3,
+                    min_match: minMatch, target_tm: targetTm, min_anneal: minAnneal, allow_synthesis: true, limit: 3,
+                    ...(optionalCount(overlap, 15) != null ? { overlap: optionalCount(overlap, 15) } : {}),
                     ...(optionalCount(gibsonFragmentCount, 2) != null ? { fragment_count: optionalCount(gibsonFragmentCount, 2) } : {}),
                     ...(optionalCount(maxSynthesisLength, 1) != null ? { max_synthesis_length: optionalCount(maxSynthesisLength, 1) } : {}),
                     ...(numbers(boundaries).length ? { fixed_boundaries: numbers(boundaries) } : {}),
@@ -380,9 +381,9 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                     <button type="button" className="shrink-0 text-slate-400" onClick={() => setSources((list) => list.filter((_, j) => j !== i))}>Remove</button></li>)}</ul>
             </fieldset>}
 
-            {method === 'gibson' && <SetupGroup title="Overlaps and primers" hint="Overlap is the minimum overlap length; leave Fragment count blank to let BMS choose, and Max synthesis length blank for 3000 nt.">
+            {method === 'gibson' && <SetupGroup title="Overlaps and primers" hint="Leave Overlap blank to follow NEB's guidance for the fragment count (20 nt for 2-3 fragments, 30 nt for 4 or more); leave Fragment count blank to let BMS choose, and Max synthesis length blank for 3000 nt.">
                 <div className="flex flex-wrap gap-3">
-                    <Num label="Overlap (nt)" value={overlap} onChange={setOverlap} />
+                    <OptNum label="Overlap (nt)" min={15} value={overlap} onChange={setOverlap} />
                     <Num label="Target Tm (°C)" value={targetTm} onChange={setTargetTm} />
                     <Num label="Min anneal (nt)" value={minAnneal} onChange={setMinAnneal} />
                     <Num label="Min match (nt)" value={minMatch} onChange={setMinMatch} />

@@ -78,7 +78,8 @@ describe('Suggest plan', () => {
         await click('Suggest');
         const body = vi.mocked(api.suggestGibsonPlan).mock.calls[0][0];
         expect(body.sources).toEqual([expect.objectContaining({ name: 'chosen source', sequence: 'GGGGCCCCAAAATTTT', source_sequence_id: 'doc-src', source_revision: 3 })]);
-        expect(body).toMatchObject({ overlap: 30, target_tm: 60, min_anneal: 13, min_match: 30, limit: 3, target: { name: 'open plasmid', circular: true } });
+        expect(body).toMatchObject({ target_tm: 60, min_anneal: 13, min_match: 30, limit: 3, target: { name: 'open plasmid', circular: true } });
+        expect('overlap' in body).toBe(false); // blank: the server follows NEB's guidance for the fragment count
         expect([...host.querySelectorAll('button')].filter((b) => b.textContent === 'Use this plan').length).toBe(3);
         expect(host.textContent).toContain('1 PCR · 1 synthesis (50 bp) · 0 existing');
         expect(host.textContent).toContain('removed: KanR');
