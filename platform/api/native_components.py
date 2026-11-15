@@ -1314,9 +1314,40 @@ def ngs_clone_runtime_dependencies(params):
     add('runtime_data', prefix + '/nxf-home/' + jar, home / jar)
     cache = resolve_lock_path(lock_path, lock['containers']['cache_dir'])
     for image in selected_images(lock, params.get('wf_clone_assembly_tool') or 'flye'):
-        add('image', prefix + '/images/' + image['cache_file'],
-            cache / image['cache_file'], image['sha256'])
+        installed = cache / image['cache_file']
+        # A pulled or locally built image never reproduces the reference file hash,
+        # so the identity carried to launch and remote transport is the installed
+        # file's own. A missing image keeps the reference hash and is reported as
+        # missing by the existing check.
+        add('image', prefix + '/images/' + image['cache_file'], installed,
+            _installed_file_sha256(installed) or image['sha256'])
     return tuple(dependencies), paths
+
+
+_INSTALLED_SHA256 = {}
+
+
+def _installed_file_sha256(path):
+    """SHA-256 of an installed regular file, hashed once per file version."""
+    import hashlib
+    import os
+    try:
+        info = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return None
+    import stat as stat_module
+    if not stat_module.S_ISREG(info.st_mode):
+        return None
+    key = (str(path), info.st_size, info.st_mtime_ns, info.st_ino)
+    cached = _INSTALLED_SHA256.get(str(path))
+    if cached and cached[0] == key:
+        return cached[1]
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    _INSTALLED_SHA256[str(path)] = (key, digest.hexdigest())
+    return digest.hexdigest()
 
 
 def ngs_dorado_model_dependencies(params, workflow):
