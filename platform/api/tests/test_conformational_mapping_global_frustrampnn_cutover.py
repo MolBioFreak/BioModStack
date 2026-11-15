@@ -1161,5 +1161,3 @@ def test_cm_nextflow_wires_every_candidate_through_canonical_v2_and_no_direct_ru
     assert "--checkpoint" not in module
     assert "--container" not in module
     assert "--gpu-id" not in module
-
-

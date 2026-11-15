@@ -16,5 +16,3 @@ def test_registry_declares_campaign_and_model_owned_native_lifecycle_routes():
     assert {param['name'] for param in model['params']} == {'bindcraft2_settings', 'bc2_preview_digest', 'bc2_source_job_id', 'bc2_action_options'}
     assert all(mode['params'] == ['bc2_source_job_id', 'bc2_action_options'] for mode in model['modes'][1:])
     assert next(p for p in model['params'] if p['name'] == 'bc2_preview_digest')['pattern'] == '^[0-9a-f]{64}$'
-
-
