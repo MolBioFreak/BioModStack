@@ -26,7 +26,34 @@ from services.ont_raw_signal import (
 )
 
 STATUS_NAME = "restore-status.json"
+PARTIAL_DIR = "partial"
 _TASKS: dict[str, asyncio.Task[None]] = {}
+
+
+def _process_start(pid: Any) -> str | None:
+    """Start time of a live process, or None when it is gone. A reused pid has a different start time."""
+    try:
+        text = Path(f"/proc/{int(pid)}/stat").read_text(encoding="utf-8")
+        return text.rsplit(")", 1)[1].split()[19]
+    except (OSError, ValueError, IndexError, TypeError):
+        return None
+
+
+def _owner() -> dict[str, Any]:
+    return {"pid": os.getpid(), "started": _process_start(os.getpid())}
+
+
+def _owner_is_working(status: dict[str, Any]) -> bool:
+    """Whether the process that wrote a running status is still doing that restore."""
+    owner = status.get("owner")
+    task = _TASKS.get(str(status.get("representation_id")))
+    ours = task is not None and not task.done()
+    if not isinstance(owner, dict):
+        return ours  # written before owners were recorded: only this process could be running it
+    if owner.get("pid") == os.getpid() and owner.get("started") == _process_start(os.getpid()):
+        return ours
+    started = _process_start(owner.get("pid"))
+    return started is not None and started == owner.get("started")
 
 
 def restore_dir(representation_id: str) -> Path:
@@ -46,9 +73,14 @@ def _write_status(directory: Path, status: dict[str, Any]) -> None:
 def restore_status(representation_id: str) -> dict[str, Any]:
     path = restore_dir(representation_id) / STATUS_NAME
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        status = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"representation_id": representation_id, "state": "not_requested"}
+    if isinstance(status, dict) and status.get("state") == "running" and not _owner_is_working(status):
+        # The saved state says running, but nothing is running it: the API stopped part-way.
+        return {**status, "state": "interrupted",
+                "reason": "The restore stopped before it finished. Request it again to continue."}
+    return status
 
 
 def _blow5_partitions(representation: OntRawSignalRepresentation) -> list[dict[str, Any]]:
@@ -88,17 +120,29 @@ def _restore(directory: Path, partitions: list[dict[str, Any]], runtime: str, im
     ]
     expected = 0
     outputs: list[str] = []
+    finished = [str(name) for name in status.get("completed_files") or []]
+    partial = directory / PARTIAL_DIR
+    partial.mkdir(exist_ok=True)
     for index, item in enumerate(partitions):
         source = Path(str(item["path"]))
         expected += int(item.get("read_count") or 0)
         name = f"restored-{index:03d}.pod5"
+        if name in finished and (directory / name).is_file():
+            outputs.append(name)  # finished before an interruption; not converted again
+            continue
+        # Written aside and moved into place when complete, so a file in the folder is always a whole one.
         result = _run(common + [
             "--mount", f"type=bind,src={source.parent},dst=/in,readonly", image,
-            "blue-crab", "s2p", f"/in/{source.name}", "-o", f"/out/{name}",
+            "blue-crab", "s2p", f"/in/{source.name}", "-o", f"/out/{PARTIAL_DIR}/{name}",
         ])
         if result.returncode != 0:
             raise RuntimeError(f"blue-crab s2p failed: {result.stderr.strip()[-400:]}")
+        os.replace(partial / name, directory / name)
         outputs.append(name)
+        finished.append(name)
+        status["completed_files"] = list(finished)
+        _write_status(directory, status)
+    shutil.rmtree(partial, ignore_errors=True)
     count = _run(common + [image, "python3", "-c", (
         "import glob,pod5\n"
         "n=0\n"
@@ -123,13 +167,27 @@ async def request_restore(representation: OntRawSignalRepresentation) -> dict[st
     partitions = _blow5_partitions(representation)
     runtime, image = _image()
     directory = restore_dir(representation.id)
-    if directory.exists():
-        shutil.rmtree(directory)
-    directory.mkdir(parents=True)
+    kept: list[str] = []
+    if current.get("state") == "interrupted" and current.get("image") == image:
+        # Continue an interrupted restore: keep the files that were finished, drop the rest.
+        kept = [str(name) for name in current.get("completed_files") or [] if (directory / str(name)).is_file()]
+        for entry in directory.iterdir():
+            if entry.name in kept:
+                continue
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+    else:
+        if directory.exists():
+            shutil.rmtree(directory)
+        directory.mkdir(parents=True)
     status: dict[str, Any] = {
         "representation_id": representation.id, "run_id": representation.run_id,
         "observed_generation": representation.observed_generation, "state": "running",
         "directory": str(directory), "requested_at": _now(), "image": image,
+        "owner": _owner(), "completed_files": kept,
+        "attempt": int(current.get("attempt") or 1) + 1 if current.get("state") == "interrupted" else 1,
     }
     _write_status(directory, status)
 
