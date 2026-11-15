@@ -87,10 +87,19 @@ process DoradoBasecall {
     path "dorado_preflight.json", emit: preflight
     path "dorado_runtime_provenance.json", emit: provenance
     path "sequencing_summary.tsv", emit: summary, optional: true
+    path "poly_a_config.toml", emit: poly_a_config, optional: true
 
     script:
     def summaryRequested = params.emit_summary != false
     def movesRequested = params.emit_moves == true
+    // Dorado's own poly(A) estimate. A tail inside a plasmid is found between two flanks.
+    def polyARequested = params.estimate_poly_a == true
+    def polyAPlasmid = polyARequested && (params.poly_a_context ?: '').toString().trim() == 'plasmid'
+    def polyAFront = (params.poly_a_front_flank ?: '').toString().trim().toUpperCase()
+    def polyARear = (params.poly_a_rear_flank ?: '').toString().trim().toUpperCase()
+    if (polyAPlasmid && !(polyAFront ==~ /[ACGT]{6,200}/ && polyARear ==~ /[ACGT]{6,200}/)) {
+        throw new IllegalArgumentException('a poly(A) tail inside a plasmid needs the sequence just before and just after it')
+    }
     def trimAdapters = params.trim_adapters != false
     def expectedLockSha256 = (params.dorado_lock_sha256 ?: '').toString().trim().toLowerCase()
     if (expectedLockSha256 && !(expectedLockSha256 ==~ /[0-9a-f]{64}/)) {
@@ -267,6 +276,15 @@ process DoradoBasecall {
       [[ "\${mode}" == simplex ]] || { echo 'move-tag emission is not qualified for duplex' >&2; exit 1; }
       dorado_supports_option dorado basecaller --emit-moves || { echo 'locked Dorado runtime lacks --emit-moves' >&2; exit 1; }
       command+=(--emit-moves)
+    fi
+    if [[ '${polyARequested}' == 'true' ]]; then
+      [[ "\${mode}" == simplex ]] || { echo 'poly(A) estimation is a simplex basecalling option' >&2; exit 1; }
+      dorado_supports_option dorado basecaller --estimate-poly-a || { echo 'locked Dorado runtime lacks --estimate-poly-a' >&2; exit 1; }
+      command+=(--estimate-poly-a)
+      if [[ '${polyAPlasmid}' == 'true' ]]; then
+        printf '[anchors]\\nplasmid_front_flank = "%s"\\nplasmid_rear_flank = "%s"\\n' '${polyAFront}' '${polyARear}' > poly_a_config.toml
+        command+=(--poly-a-config "\$PWD/poly_a_config.toml")
+      fi
     fi
 
     : > basecall.log

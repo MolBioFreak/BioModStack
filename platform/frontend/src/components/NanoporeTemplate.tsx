@@ -873,6 +873,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [emitSummary, setEmitSummary] = useState(initialValues?.emitSummary !== false);
     const [emitMoves, setEmitMoves] = useState(initialValues?.emitMoves !== false);
     const [allowMultiplePod5Runs, setAllowMultiplePod5Runs] = useState(initialValues?.allowMultiplePod5Runs === true);
+    const [estimatePolyA, setEstimatePolyA] = useState(initialValues?.estimatePolyA === true);
+    const [polyAContext, setPolyAContext] = useState<'molecule_end' | 'plasmid'>(initialValues?.polyAContext === 'plasmid' ? 'plasmid' : 'molecule_end');
+    const [polyAFrontFlank, setPolyAFrontFlank] = useState(String(initialValues?.polyAFrontFlank ?? ''));
+    const [polyARearFlank, setPolyARearFlank] = useState(String(initialValues?.polyARearFlank ?? ''));
     const basecallDevicesQuery = useQuery({ queryKey: ['ont-basecall-devices', executionTargetId], queryFn: () => fetchOntBasecallDevices(executionTargetId), staleTime: 300_000 });
     const [doradoDevice, setDoradoDevice] = useState<string>(String(initialValues?.doradoDevice ?? ''));
     const effectiveDoradoDevice = doradoDevice || basecallDevicesQuery.data?.default || (executionTargetId ? 'cuda:0' : '');
@@ -1065,6 +1069,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         usesMolBioReceiptLane,
     ]);
     const canRunModkit = ['modified', 'plasmidQc', 'dna', 'clone', 'constructScreening'].includes(selectedWorkflow);
+    // Dorado estimates the tail while basecalling one strand; a tail inside a plasmid is a DNA case.
+    const polyAEnabled = estimatePolyA && inputSource === 'pod5' && doradoMode === 'simplex';
+    const polyAInPlasmid = polyAEnabled && doradoMolecule === 'dna' && polyAContext === 'plasmid';
+    const polyAFlank = (value: string) => value.replace(/\s+/g, '').toUpperCase();
     const fastqQcSettingAvailable = selectedWorkflow === 'dna' || selectedWorkflow === 'plasmidQc'
         || selectedWorkflow === 'fastqQc'
         || ((selectedWorkflow === 'clone' || selectedWorkflow === 'constructScreening') && inputSource === 'fastq' && !assembleOnly);
@@ -1086,6 +1094,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (inputSource === 'pod5' && pod5Uploading) blockers.push('Wait for the POD5 upload to finish.');
         if (inputSource === 'pod5' && barcodeKit && sampleSheetBlocker) blockers.push(sampleSheetBlocker);
         if (inputSource === 'pod5' && doradoMolecule === 'rna' && doradoMode === 'duplex') blockers.push('RNA duplex is unsupported by the locked Dorado runtime.');
+        if (polyAInPlasmid && ![polyAFrontFlank, polyARearFlank].every(value => /^[ACGT]{6,200}$/.test(polyAFlank(value)))) blockers.push('Paste the sequence just before and just after the poly(A) tail (6 to 200 bases, ACGT).');
         if (inputSource === 'pod5' && doradoMode === 'duplex' && !duplexPairs.trim()) blockers.push('Duplex basecalling requires a confined read-pairs file.');
         if (inputSource === 'pod5' && doradoMode === 'duplex' && barcodeKit) blockers.push('Barcode classification and duplex cannot be combined in the locked runtime.');
         const modificationBlocker = inputSource === 'pod5' ? modifiedBasesBlocker(selectedModifications, doradoMolecule, doradoModel, doradoMode) : null;
@@ -1234,6 +1243,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     emit_summary: emitSummary,
                     emit_moves: doradoMode === 'simplex' ? emitMoves : false,
                     ...(allowMultiplePod5Runs && { allow_multiple_pod5_runs: true }),
+                    ...(polyAEnabled && { estimate_poly_a: true, poly_a_context: polyAInPlasmid ? 'plasmid' : 'molecule_end',
+                        ...(polyAInPlasmid && { poly_a_front_flank: polyAFlank(polyAFrontFlank), poly_a_rear_flank: polyAFlank(polyARearFlank) }) }),
                     ...(effectiveDoradoDevice && { dorado_device: effectiveDoradoDevice }),
                     ...(batchSize !== null && { dorado_batch_size: batchSize }),
                 }),
@@ -2219,6 +2230,44 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             <span className="text-sm text-[var(--text-primary)]">Trim adapters{doradoMolecule === 'rna' ? ' (required for RNA)' : doradoMode === 'duplex' ? ' (fixed by duplex mode)' : ''}</span>
                         </div>
                     </label>
+                )}
+                {/* Poly(A) tail length — estimated by Dorado while basecalling */}
+                {inputSource === 'pod5' && doradoMode === 'simplex' && (
+                    <div className="space-y-2" data-testid="ngs-poly-a">
+                        <label className="flex items-center gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                aria-label="Estimate poly(A) tail length"
+                                checked={estimatePolyA}
+                                onChange={(e) => setEstimatePolyA(e.target.checked)}
+                                className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
+                            />
+                            <div>
+                                <span className="text-sm text-[var(--text-primary)]">Estimate poly(A) tail length</span>
+                                <p className="text-xs text-[var(--text-secondary)]">One value per read, from Dorado.</p>
+                            </div>
+                        </label>
+                        {estimatePolyA && doradoMolecule === 'dna' && (
+                            <div className="ml-7 space-y-2">
+                                <label className="block text-xs text-[var(--text-secondary)]">Where the tail is
+                                    <select aria-label="Where the tail is" value={polyAContext} onChange={(e) => setPolyAContext(e.target.value as 'molecule_end' | 'plasmid')} className="mt-1 block w-full bg-[var(--bg-tertiary)] rounded p-2 text-sm text-[var(--text-primary)]">
+                                        <option value="molecule_end">End of the molecule (RNA, cDNA)</option>
+                                        <option value="plasmid">Inside a plasmid</option>
+                                    </select>
+                                </label>
+                                {polyAContext === 'plasmid' && (
+                                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                                        <label className="block text-xs text-[var(--text-secondary)]">Sequence just before the tail
+                                            <input aria-label="Sequence just before the tail" value={polyAFrontFlank} onChange={(e) => setPolyAFrontFlank(e.target.value)} placeholder="Paste sequence" spellCheck={false} className="mt-1 block w-full bg-[var(--bg-tertiary)] rounded p-2 font-mono text-sm text-[var(--text-primary)]" />
+                                        </label>
+                                        <label className="block text-xs text-[var(--text-secondary)]">Sequence just after the tail
+                                            <input aria-label="Sequence just after the tail" value={polyARearFlank} onChange={(e) => setPolyARearFlank(e.target.value)} placeholder="Paste sequence" spellCheck={false} className="mt-1 block w-full bg-[var(--bg-tertiary)] rounded p-2 font-mono text-sm text-[var(--text-primary)]" />
+                                        </label>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
                 )}
 
                 {/* BAM realignment toggle */}

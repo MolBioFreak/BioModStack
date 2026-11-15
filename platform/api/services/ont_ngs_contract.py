@@ -636,6 +636,8 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
                     "basecalling_mode", "barcode_kit", "sample_sheet", "duplex_pairs",
                     "modified_bases", "min_qscore", "pinned_gpu", "pinned_gpus",
                     "cuda_visible_devices", "cpus_per_gpu",
+                    # Tail length is estimated while basecalling, so only a POD5 run carries it.
+                    "estimate_poly_a", "poly_a_context", "poly_a_front_flank", "poly_a_rear_flank",
                 }
             ):
                 normalized.pop(key, None)
@@ -766,6 +768,28 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     if not isinstance(raw_allow_runs, bool):
         raise ValueError("allow_multiple_pod5_runs must be boolean")
     normalized["allow_multiple_pod5_runs"] = raw_allow_runs
+    # Dorado's own poly(A) estimate: one pt value per read. Off unless asked for.
+    estimate_poly_a = normalized.get("estimate_poly_a", False)
+    if not isinstance(estimate_poly_a, bool):
+        raise ValueError("estimate_poly_a must be boolean")
+    if estimate_poly_a and basecall_mode == "duplex":
+        raise ValueError("poly(A) estimation is a simplex basecalling option")
+    poly_a_context = str(normalized.get("poly_a_context") or "molecule_end").strip()
+    flanks = {key: re.sub(r"\s+", "", str(normalized.get(key) or "")).upper()
+              for key in ("poly_a_front_flank", "poly_a_rear_flank")}
+    for key in ("poly_a_context", *flanks):
+        normalized.pop(key, None)
+    normalized["estimate_poly_a"] = estimate_poly_a
+    if estimate_poly_a:
+        if poly_a_context not in {"molecule_end", "plasmid"}:
+            raise ValueError("poly_a_context must be molecule_end or plasmid")
+        normalized["poly_a_context"] = poly_a_context
+        if poly_a_context == "plasmid":
+            if molecule_type != "dna":
+                raise ValueError("a tail inside a plasmid is a DNA option")
+            if any(re.fullmatch(r"[ACGT]{6,200}", value) is None for value in flanks.values()):
+                raise ValueError("a tail inside a plasmid needs the sequence just before and just after it (6 to 200 bases, ACGT)")
+            normalized.update(flanks)
 
     # A missing declaration on newly basecalled POD5 can use its exact native
     # profile. Never replace an explicit/saved declaration, or infer read origin

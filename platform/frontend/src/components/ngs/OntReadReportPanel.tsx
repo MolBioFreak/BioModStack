@@ -24,6 +24,12 @@ export interface OntReadReport {
         reference_count?: number; references_with_reads?: number; reference_list_limit?: number;
     };
     move_tagged_reads: number;
+    /** Dorado's per-read poly(A) estimate; absent when the run did not ask for it. */
+    poly_a?: {
+        source: string; reads: number; estimated_reads: number; no_estimate_reads: number; zero_length_reads: number; reads_without_tag: number;
+        median_tail_nt: number | null; mean_tail_nt: number | null; longest_tail_nt: number | null;
+        histogram: { bin_width_nt: number; bins: Array<{ start_nt: number; end_nt_exclusive: number; read_count: number }> };
+    } | null;
     /** Whether the quick squiggle can read this run's own POD5 and basecall BAM. */
     quick_squiggle?: { available: boolean; reason: string | null };
     molecule_type?: 'dna' | 'rna';
@@ -158,6 +164,43 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
                 </section>
             )}
 
+            {report.poly_a && (
+                <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" aria-label="Poly(A) tail length" data-testid="poly-a-result">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                            <h4 className="text-sm font-semibold text-[var(--text-primary)]">Poly(A) tail length{capped ? ' (capped)' : ''}</h4>
+                            <p className="text-xs text-[var(--text-secondary)]">One value per read, from Dorado.</p>
+                        </div>
+                        <a href={`/api/jobs/${encodeURIComponent(jobId)}/ngs-read-report?poly_a_tsv=true`} download="poly_a_tail_lengths.tsv" className="rounded border border-[var(--border-primary)] px-2 py-1 text-xs">Per-read values (TSV)</a>
+                    </div>
+                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                        {([
+                            ['Reads with an estimate', n(report.poly_a.estimated_reads), `of ${n(report.poly_a.reads)} reads`],
+                            ['No estimate', n(report.poly_a.no_estimate_reads), report.poly_a.reads_without_tag ? `counted apart from zero · ${n(report.poly_a.reads_without_tag)} reads carry no value` : 'counted apart from zero'],
+                            ['Median tail', report.poly_a.median_tail_nt == null ? '—' : n(report.poly_a.median_tail_nt), report.poly_a.mean_tail_nt == null ? 'nt' : `nt · mean ${report.poly_a.mean_tail_nt} · longest ${n(report.poly_a.longest_tail_nt)}`],
+                        ] as Array<[string, string, string]>).map(([label, value, detail]) => (
+                            <div key={label} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
+                                <div className="text-[11px] text-[var(--text-secondary)]">{label}</div>
+                                <div className="font-mono text-sm text-[var(--text-primary)]">{value}</div>
+                                <div className="mt-1 text-[9px] leading-tight text-[var(--text-secondary)]">{detail}</div>
+                            </div>
+                        ))}
+                    </div>
+                    {report.poly_a.histogram.bins.length > 0 && (
+                        <Plot
+                            data={[{ type: 'bar', name: 'Reads', x: report.poly_a.histogram.bins.map(bin => (bin.start_nt + bin.end_nt_exclusive) / 2), y: report.poly_a.histogram.bins.map(bin => bin.read_count), width: report.poly_a.histogram.bin_width_nt, marker: { color: '#55a7ff' } }]}
+                            layout={{
+                                xaxis: { title: { text: 'Tail length (nt)' } }, yaxis: { title: { text: 'Reads' } },
+                                margin: { l: 62, r: 20, t: 16, b: 56 }, height: 260, showlegend: false,
+                                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#b8c4d8' },
+                            }}
+                            config={{ responsive: true, displaylogo: false }}
+                            useResizeHandler
+                            style={{ width: '100%', height: '260px' }}
+                        />
+                    )}
+                </section>
+            )}
             <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
                 <h4 className="text-sm font-semibold text-[var(--text-primary)]">Read-length distribution</h4>
                 <Plot

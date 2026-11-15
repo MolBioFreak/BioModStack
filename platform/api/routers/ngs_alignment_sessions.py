@@ -1418,9 +1418,10 @@ async def download_ngs_plasmid_result(
 async def get_ngs_read_report(
     job_id: str,
     authorized_job: Job = Depends(require_alignment_job),
+    poly_a_tsv: bool = Query(False),
 ):
     """Yield, length, quality, mapping and modification summary from the job's reads BAM."""
-    from services.ont_read_report import OntReadReportError, build_read_report, select_reads_bam
+    from services.ont_read_report import OntReadReportError, build_read_report, poly_a_tsv_text, select_reads_bam
 
     try:
         async with _validated_pinned_result_root(authorized_job) as pinned_root:
@@ -1445,6 +1446,10 @@ async def get_ngs_read_report(
             )
             public = {**metadata, "filename": chosen.get("filename") or Path(str(chosen.get("relative_path") or "")).name,
                       "url": chosen.get("url")}
+            if poly_a_tsv:
+                text = await run_in_threadpool(poly_a_tsv_text, Path(path))
+                return Response(content=text, media_type="text/tab-separated-values",
+                                headers={"Content-Disposition": 'attachment; filename="poly_a_tail_lengths.tsv"'})
             molecule = (authorized_job.params or {}).get("ont_molecule_type") if isinstance(authorized_job.params, dict) else None
             report = await run_in_threadpool(
                 build_read_report, Path(path), artifact=public,

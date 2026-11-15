@@ -98,6 +98,10 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         emitSummary: p.emit_summary !== false,
         emitMoves: p.emit_moves !== false,
         allowMultiplePod5Runs: p.allow_multiple_pod5_runs === true,
+        estimatePolyA: p.estimate_poly_a === true,
+        polyAContext: p.poly_a_context === 'plasmid' ? 'plasmid' : 'molecule_end',
+        polyAFrontFlank: typeof p.poly_a_front_flank === 'string' ? p.poly_a_front_flank : '',
+        polyARearFlank: typeof p.poly_a_rear_flank === 'string' ? p.poly_a_rear_flank : '',
         // An assembly report saved without an expected sequence reopens the same way.
         assembleWithoutReference: workflowId === 'wf_clone_validation' && !p.reference_fasta
             && typeof molecular.sequence_id !== 'string' && typeof p.ngs_reference_revision_id !== 'string',

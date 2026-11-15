@@ -339,6 +339,17 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-RBK114-96', modified_bases: '6mA', run_modkit: false });
     });
+    it('sends the poly(A) option only when ticked, with the plasmid flanks when the tail is inside a plasmid', async () => {
+        await mount();
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).not.toHaveProperty('estimate_poly_a');
+    });
+    it('carries a tail inside a plasmid with the sequence on each side', async () => {
+        await mount({ ...base, estimatePolyA: true, polyAContext: 'plasmid', polyAFrontFlank: 'gctagc aagctt', polyARearFlank: 'GGATCCGAATTC' });
+        expect(container.querySelector<HTMLSelectElement>('select[aria-label="Where the tail is"]')!.value).toBe('plasmid');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ estimate_poly_a: true, poly_a_context: 'plasmid', poly_a_front_flank: 'GCTAGCAAGCTT', poly_a_rear_flank: 'GGATCCGAATTC' });
+    });
     it('offers DNA calling options once and submits modification tags without adding methylation analysis', async () => {
         await mount();
         expect(container.querySelector('[data-ngs-workflow-key="duplex"]')).toBeNull();

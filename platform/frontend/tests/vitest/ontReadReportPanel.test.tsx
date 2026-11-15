@@ -129,6 +129,23 @@ describe('OntReadReportPanel', () => {
         await mount();
         expect(container.textContent).not.toContain('capped');
     });
+    it('shows poly(A) tail length with no-estimate reads counted apart from zero, and a per-read download', async () => {
+        get.mockResolvedValue({ data: { ...REPORT, poly_a: { source: 'Dorado pt tag, one value per read', reads: 12, estimated_reads: 9, no_estimate_reads: 3,
+            zero_length_reads: 1, reads_without_tag: 0, median_tail_nt: 96, mean_tail_nt: 91.4, longest_tail_nt: 141,
+            histogram: { bin_width_nt: 10, bins: [{ start_nt: 90, end_nt_exclusive: 100, read_count: 9 }] } } } });
+        await mount();
+        const block = container.querySelector('[data-testid="poly-a-result"]')!;
+        expect(block.textContent).toContain('One value per read, from Dorado.');
+        expect(block.textContent).toContain('Reads with an estimate9of 12 reads');
+        expect(block.textContent).toContain('No estimate3counted apart from zero');
+        expect(block.textContent).toContain('Median tail96');
+        expect(block.querySelector('a')!.getAttribute('href')).toBe('/api/jobs/j/ngs-read-report?poly_a_tsv=true');
+    });
+    it('shows no poly(A) block when the run did not estimate tails', async () => {
+        get.mockResolvedValue({ data: { ...REPORT, poly_a: null } });
+        await mount();
+        expect(container.querySelector('[data-testid="poly-a-result"]')).toBeNull();
+    });
     it('reports a missing BAM instead of rendering an empty report', async () => {
         get.mockRejectedValue(new Error('This job published no reads BAM.'));
         await mount();
