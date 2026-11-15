@@ -5565,7 +5565,12 @@ class ExistingJobMaterializer:
             pinned_gpu: int | None = handoff["gpu_index"]
             existing_job = await self.core_session.get(Job, scheduler_job_id)
             if existing_job is not None:
-                params_match = dict(existing_job.params or {}) == authoritative_params
+                existing_params = dict(existing_job.params or {})
+                # Replay binds the submitted payload, not server-enriched Job params.
+                params_match = (
+                    existing_params.get(GLOBAL_RESOURCE_ADMISSION_PARAM) == handoff
+                    and existing_params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM) == dispatch_authority
+                )
                 if (
                     existing_job.model_id != expected_model_id
                     or existing_job.mode != expected_mode

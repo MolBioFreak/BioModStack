@@ -782,43 +782,60 @@ async def test_workspace_router_exposes_server_backed_creation(
 
 @pytest.mark.asyncio
 async def test_existing_job_materializer_preallocates_and_reuses_core_job_identity(tmp_path: Path):
-    from database import Job
+    from database import Base, Job
+    from services.resource_usage_evidence import build_resource_admission_handoff
+    from experiment_services import (
+        scheduler_job_id_for_attempt, _materialization_resource_authority,
+        _attach_materialization_resource_authority,
+    )
+    attempt_id = "12345678-1234-5234-9234-123456789012"
+    job_id = scheduler_job_id_for_attempt(attempt_id)
 
     core_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core.db'}")
     try:
         async with core_engine.begin() as connection:
-            await connection.run_sync(Job.__table__.create)
+            await connection.run_sync(Base.metadata.create_all)
         core_factory = async_sessionmaker(core_engine, expire_on_commit=False, class_=AsyncSession)
         payload = {
             "run_group_id": "run-group-id",
-            "scheduler_job_id": "12345678-1234-1234-1234-123456789012",
+            "scheduler_job_id": job_id,
+            "resource_admission": build_resource_admission_handoff(
+                admission_id="admission-1", run_attempt_id=attempt_id, canonical_job_id=job_id,
+                preparation_id="preparation-1", cpu_threads=1, dram_bytes=16 * 1024**3,
+                gpu_index=None, gpu_uuid=None, policy_source="project-scheduler",
+                policy_version="bms.resource-admission-policy.v1", owner="local-application-operator",
+                lease_token="lease-1", source_revision="1" * 40, source_tree="2" * 40,
+            ),
             "scheduler": {
                 "name": "materialized-job",
-                "model_id": "protenix",
+                "model_id": "esmfold2",
                 "mode": "predict",
                 "params": {
                     "seed": 101,
                     "sequence": "ACDEFGHIKLMNPQRSTVWY",
-                    "msa_provider": "colabfold_api",
                     "job_name": "materialized-job",
-                    "pred_method": "protenix",
-                    "structure_validator": "protenix",
-                    "workflow_adapter": "bms.core-job.protenix.adapter.v1",
+                    "pred_method": "esmfold2",
+                    "structure_validator": "esmfold2",
+                    "workflow_adapter": "bms.core-job.esmfold2.adapter.v1",
                 },
             },
         }
         async with core_factory() as session:
             materializer = ExistingJobMaterializer(session)
             first = await materializer.materialize("12345678-1234-5234-9234-123456789012", payload)
-            persisted = await session.get(Job, "12345678-1234-5234-9234-123456789012")
+            persisted = await session.get(Job, job_id)
             assert persisted is not None
-            assert dict(persisted.params or {}) == payload["scheduler"]["params"], (
+            handoff, dispatch = _materialization_resource_authority(attempt_id, payload)
+            expected = _attach_materialization_resource_authority(payload["scheduler"]["params"], handoff, dispatch)
+            expected["core_protein_scientific_contract"] = 1
+            expected["remote_result_policy"] = "manual"
+            assert dict(persisted.params or {}) == expected, (
                 persisted.params,
                 payload["scheduler"]["params"],
             )
             second = await materializer.materialize("12345678-1234-5234-9234-123456789012", payload)
             assert first == second
-            assert first["external_job_id"] == "12345678-1234-5234-9234-123456789012"
+            assert first["external_job_id"] == job_id
             assert (await session.execute(select(Job))).scalars().all().__len__() == 1
             conflict = {
                 **payload,
