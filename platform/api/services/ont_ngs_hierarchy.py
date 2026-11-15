@@ -412,23 +412,3 @@ async def resolve_ont_ngs_hierarchy_authority(
     return _bind_persisted_result_source_authority(job, hierarchy)
 
 
-async def resolve_ont_ngs_hierarchy_authority_for_reconciliation(
-    job: Any,
-    domain_session: AsyncSession,
-    experiment_session: AsyncSession,
-    *,
-    source_fastq_sha256: Any,
-    artifact_set_sha256: Any,
-    sequence_qc_manifest_sha256: Any,
-    verification_manifest_sha256: Any,
-    reference_sequence_sha256: Any,
-) -> OntNgsHierarchyAuthority:
-    hierarchy = await _resolve_ont_ngs_hierarchy_base(job, domain_session, experiment_session)
-    return bind_ont_ngs_hierarchy_source_authority(
-        hierarchy,
-        source_fastq_sha256=source_fastq_sha256,
-        artifact_set_sha256=artifact_set_sha256,
-        sequence_qc_manifest_sha256=sequence_qc_manifest_sha256,
-        verification_manifest_sha256=verification_manifest_sha256,
-        reference_sequence_sha256=reference_sequence_sha256,
-    )
