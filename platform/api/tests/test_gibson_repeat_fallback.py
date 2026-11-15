@@ -12,7 +12,7 @@ if str(API_DIR) not in sys.path:
     sys.path.insert(0, str(API_DIR))
 
 from services.assembly.pydna_gibson import design_gibson  # noqa: E402
-from services.assembly.types import AssemblyFragment  # noqa: E402
+from services.assembly.types import AssemblyError, AssemblyFragment  # noqa: E402
 
 
 def dna(seed: int, length: int) -> str:
@@ -66,3 +66,11 @@ def test_target_the_stock_assembler_handles_is_unchanged_and_not_flagged() -> No
     target = dna(7, 900)
     result = design_gibson(split(target, 3), preparations=["pcr"] * 3, circular=True, overlap=28)
     assert not any("overlap planner" in warning for warning in result.warnings)
+
+
+def test_fallback_can_be_switched_off_for_callers_with_their_own_breakpoints() -> None:
+    """Suggest picks repeat-aware breakpoints itself and must keep the stock refusal and its advice."""
+    target = repeat_target()
+    with pytest.raises(AssemblyError, match="pydna"):
+        design_gibson(split(target, 3), preparations=["pcr"] * 3, circular=True, overlap=30, min_anneal=18,
+                      planner_fallback=False)
