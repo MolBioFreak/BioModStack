@@ -104,12 +104,43 @@ def _dorado_version_compatible(observed: str, locked: str) -> bool:
     return bool(observed) and observed.split("+", 1)[0].strip() == str(locked).split("+", 1)[0].strip()
 
 
+_HASHED_VERSIONS: dict[tuple, str] = {}
+
+
+def _file_version(path: Path) -> str:
+    """Size, mtime and ctime of a file, as `stat -Lc '%s:%.9Y:%.9Z'` prints them."""
+    info = Path(path).stat()
+    return (f"{info.st_size}:{info.st_mtime_ns // 10**9}.{info.st_mtime_ns % 10**9:09d}"
+            f":{info.st_ctime_ns // 10**9}.{info.st_ctime_ns % 10**9:09d}")
+
+
 def _sha256(path: Path) -> str:
+    """SHA-256 of a file, read through once per file version in this process."""
+    path = Path(path)
+    before = path.stat()
+    key = (str(path), before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    known = _HASHED_VERSIONS.get(key)
+    if known is not None:
+        return known
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
-    return digest.hexdigest()
+    value = digest.hexdigest()
+    after = path.stat()
+    if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) == (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        _HASHED_VERSIONS[key] = value
+    return value
+
+
+def _known_or_hashed(path: Path, acquired: Any) -> str:
+    """The hash taken when a retained file was acquired, if this is still that version; otherwise a fresh one."""
+    info = Path(path).stat()
+    if (isinstance(acquired, dict) and re.fullmatch(r"[0-9a-f]{64}", str(acquired.get("sha256", "")))
+            and (acquired.get("bytes"), acquired.get("mtime_ns"), acquired.get("ctime_ns"))
+            == (info.st_size, info.st_mtime_ns, info.st_ctime_ns)):
+        return str(acquired["sha256"])
+    return _sha256(path)
 
 
 def load_lock(path: Path) -> dict[str, Any]:
@@ -201,7 +232,7 @@ def resolve_model(lock: dict[str, Any], molecule: str, quality: str) -> dict[str
 
 
 def _model_aggregate(model_dir: Path, binding: dict | None = None,
-                     observed: dict | None = None) -> tuple[str, int, int]:
+                     observed: dict | None = None, versions: dict | None = None) -> tuple[str, int, int]:
     if not model_dir.is_dir() or model_dir.is_symlink():
         raise ValueError(f"model identity directory is unavailable or unsafe: {model_dir}")
     digest = hashlib.sha256()
@@ -222,6 +253,8 @@ def _model_aggregate(model_dir: Path, binding: dict | None = None,
             raise ValueError(f"model alias identity mismatch: {path}")
         if observed is not None:
             observed[relative] = {'sha256': file_digest, 'bytes': size}
+        if versions is not None:
+            versions[relative] = _file_version(path)
         digest.update(relative.encode("utf-8") + b"\0" + str(size).encode("ascii") + b"\0" + file_digest.encode("ascii") + b"\n")
         count += 1
         total += size
@@ -230,12 +263,15 @@ def _model_aggregate(model_dir: Path, binding: dict | None = None,
 
 def verify_model_identity(model: dict[str, Any], model_dir: Path, binding: dict | None = None) -> dict[str, Any]:
     observed = {}
-    aggregate, count, total = _model_aggregate(Path(model_dir), binding, observed)
+    versions: dict[str, str] = {}
+    aggregate, count, total = _model_aggregate(Path(model_dir), binding, observed, versions)
     expected = (str(model["aggregate_sha256"]), int(model["files"]), int(model["bytes"]))
     actual = (aggregate, count, total)
     if actual != expected:
         raise ValueError(f"model identity mismatch for {model.get('id')}: expected {expected}, observed {actual}")
-    result = {"path": str(Path(model_dir).resolve()), "aggregate_sha256": aggregate, "files": count, "bytes": total}
+    # The versions let the basecall step see that these are the files hashed here, without hashing them again.
+    result = {"path": str(Path(model_dir).resolve()), "aggregate_sha256": aggregate, "files": count, "bytes": total,
+              "file_versions": versions}
     if binding and binding.get('retained') is True:
         members = binding.get('members', {})
         if observed == {name: {'sha256': row['sha256'], 'bytes': row['bytes']} for name, row in members.items()}:
@@ -243,7 +279,9 @@ def verify_model_identity(model: dict[str, Any], model_dir: Path, binding: dict 
     return result
 
 
-def _verify_scientific_tools(runtime_sif: Path, lock: dict[str, Any]) -> dict[str, Any]:
+def _verify_scientific_tools(runtime_sif: Path, lock: dict[str, Any],
+                             selected: set[str] | None = None) -> dict[str, Any]:
+    """Check the tools this run uses. With no selection every tool is checked."""
     expected = lock.get("scientific_tools")
     if not isinstance(expected, dict):
         raise ValueError("Dorado lock is missing scientific_tools")
@@ -255,6 +293,11 @@ def _verify_scientific_tools(runtime_sif: Path, lock: dict[str, Any]) -> dict[st
         "igv_reports": ["/opt/igv-reports/bin/pip", "show", "igv-reports"],
         "igv_create_report": ["create_report", "--help"],
     }
+    if selected is not None:
+        unknown = sorted(set(selected) - set(commands))
+        if unknown:
+            raise ValueError(f"unknown scientific tool selection: {unknown}")
+        commands = {name: command for name, command in commands.items() if name in selected}
     observed: dict[str, dict[str, Any]] = {}
     for name, command in commands.items():
         completed = subprocess.run(
@@ -287,7 +330,8 @@ def _verify_scientific_tools(runtime_sif: Path, lock: dict[str, Any]) -> dict[st
 
 
 def _verify_runtime_capabilities(runtime_sif: Path, lock: dict[str, Any], *, mode: str,
-                                 barcode_kit: str | None, modified_bases: str) -> dict[str, Any]:
+                                 barcode_kit: str | None, modified_bases: str,
+                                 scientific_tools: set[str] | None = None) -> dict[str, Any]:
     required = lock["required_runtime_capabilities"]
     commands: dict[str, set[str]] = {}
     primary = "duplex" if mode == "duplex" else "basecaller"
@@ -297,7 +341,7 @@ def _verify_runtime_capabilities(runtime_sif: Path, lock: dict[str, Any], *, mod
         commands["demux"] = set(required["demux"])
     if modified_bases != "none":
         commands["basecaller"].update(required["basecaller_modified_bases"])
-    evidence: dict[str, Any] = {"scientific_tools": _verify_scientific_tools(runtime_sif, lock)}
+    evidence: dict[str, Any] = {"scientific_tools": _verify_scientific_tools(runtime_sif, lock, scientific_tools)}
     for command, options in sorted(commands.items()):
         completed = subprocess.run(
             [container_executable("apptainer"), "exec", str(runtime_sif), "dorado", command, "--help"],
@@ -357,7 +401,8 @@ def _pod5_files(root: Path, allowed_ancillary: set[Path]) -> list[Path]:
     return sorted(files)
 
 
-def _read_pod5_inventory(files: list[Path], root: Path) -> tuple[dict[str, Any], set[str]]:
+def _read_pod5_inventory(files: list[Path], root: Path,
+                         acquired: dict | None = None) -> tuple[dict[str, Any], set[str]]:
     try:
         import pod5  # type: ignore
     except ImportError as exc:
@@ -413,8 +458,9 @@ def _read_pod5_inventory(files: list[Path], root: Path) -> tuple[dict[str, Any],
         entries.append({
             "path": str(path),
             "relative_path": path.relative_to(root).as_posix(),
-            "sha256": _sha256(path),
+            "sha256": _known_or_hashed(path, (acquired or {}).get(path.relative_to(root).as_posix())),
             "bytes": path.stat().st_size,
+            "file_version": _file_version(path),
             "read_count": count,
             "run_ids": sorted(file_runs),
         })
@@ -577,7 +623,8 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
                     pairs: Path | None = None, batch_size: int | None = None,
                     min_qscore: int = 10, device: str = "cuda:0", verify_assets: bool = True,
                     selected_binding: dict | None = None,
-                    allow_multiple_runs: bool = False) -> dict[str, Any]:
+                    allow_multiple_runs: bool = False,
+                    scientific_tools: set[str] | None = None) -> dict[str, Any]:
     lock = load_lock(Path(lock_path))
     molecule = str(molecule).strip().lower()
     quality = str(quality).strip().lower()
@@ -616,7 +663,9 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
         if value is not None:
             ancillary.add(_confined_file(Path(value), root, label))
     files = _pod5_files(root, ancillary)
-    inventory, read_ids = _read_pod5_inventory(files, root)
+    # A retained POD5 was hashed when it was acquired; the same version is not hashed again.
+    acquired_files = ((selected_binding or {}).get('inputs') or {}).get('files')
+    inventory, read_ids = _read_pod5_inventory(files, root, acquired_files if isinstance(acquired_files, dict) else None)
     _validate_chemistry(lock, molecule, inventory, allow_multiple_runs)
 
     model = resolve_model(lock, molecule, quality)
@@ -636,7 +685,9 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
     owned_inputs = selected_binding.get('inputs', {})
     if owned_inputs:
         observed_inputs = {item['relative_path']: {'sha256': item['sha256'], 'bytes': item['bytes']} for item in inventory['files']}
-        if owned_inputs.get('files') == observed_inputs and owned_inputs.get('representation_id'):
+        owned_identity = {name: {'sha256': row.get('sha256'), 'bytes': row.get('bytes')}
+                          for name, row in (owned_inputs.get('files') or {}).items() if isinstance(row, dict)}
+        if owned_identity == observed_inputs and owned_inputs.get('representation_id'):
             inventory['retained'] = True
             inventory['retained_source'] = {key: owned_inputs[key] for key in ('representation_id', 'manifest_sha256')}
     assets: dict[str, Any] = {"verified": False}
@@ -648,7 +699,8 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
         version = (completed.stdout or completed.stderr).strip().splitlines()[0] if (completed.stdout or completed.stderr).strip() else ""
         if completed.returncode != 0 or not _dorado_version_compatible(version, lock["dorado"]["version"]):
             raise ValueError("Dorado runtime version identity mismatch")
-        capabilities = _verify_runtime_capabilities(runtime_sif, lock, mode=mode, barcode_kit=barcode_kit, modified_bases=modified_bases)
+        capabilities = _verify_runtime_capabilities(runtime_sif, lock, mode=mode, barcode_kit=barcode_kit, modified_bases=modified_bases,
+                                                    scientific_tools=scientific_tools)
         verified_models = {"base": verify_model_identity(model, Path(model_root) / model["id"], model_bindings.get(model["id"]))}
         if stereo:
             verified_models["stereo"] = verify_model_identity(stereo, Path(model_root) / stereo["id"], model_bindings.get(stereo["id"]))
@@ -658,12 +710,14 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
                 for mod_model in modified_models
             }
         if image_identity is not None:
-            if verify_image(runtime_sif, image_identity["sha256"]) != image_identity:
+            # The image was hashed when it was located; here only its version is compared.
+            if verify_image(runtime_sif, image_identity["sha256"], _read_body=False) != image_identity:
                 raise ValueError("Dorado runtime canonical object identity changed during preflight")
             runtime_digest = image_identity["sha256"]
         else:
             runtime_digest = _sha256(runtime_sif)
-        assets = {"verified": True, "runtime_sif": {"path": str(runtime_sif), "sha256": runtime_digest, "version": version}, "capabilities": capabilities, "models": verified_models}
+        assets = {"verified": True, "runtime_sif": {"path": str(runtime_sif), "sha256": runtime_digest, "version": version,
+                                                      "file_version": _file_version(runtime_sif)}, "capabilities": capabilities, "models": verified_models}
 
     return {
         "schema": SCHEMA,
@@ -724,6 +778,7 @@ def main() -> int:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--selected-binding-json", default="{}")
     parser.add_argument("--allow-multiple-runs", action="store_true")
+    parser.add_argument("--scientific-tools", help="comma-separated tools this run uses; default checks all")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     payload = build_preflight(lock_path=args.lock, pod5_root=args.pod5_root, molecule=args.molecule,
@@ -731,7 +786,9 @@ def main() -> int:
         modified_bases=args.modified_bases, barcode_kit=args.barcode_kit, sample_sheet=args.sample_sheet,
         pairs=args.pairs, batch_size=args.batch_size, min_qscore=args.min_qscore,
         device=args.device, verify_assets=True, selected_binding=json.loads(args.selected_binding_json),
-        allow_multiple_runs=args.allow_multiple_runs)
+        allow_multiple_runs=args.allow_multiple_runs,
+        scientific_tools=({name for name in args.scientific_tools.split(",") if name}
+                          if args.scientific_tools is not None else None))
     _atomic_json(args.output, payload)
     return 0
 

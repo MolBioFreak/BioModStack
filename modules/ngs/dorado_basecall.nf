@@ -38,6 +38,11 @@ process DoradoPreflight {
     if (params.barcode_kit) optional += "--barcode-kit ${doradoShellQuote(params.barcode_kit)}"
     if (params.sample_sheet) optional += "--sample-sheet ${doradoShellQuote(params.sample_sheet)}"
     if (params.allow_multiple_pod5_runs == true) optional += "--allow-multiple-runs"
+    // Check only the tools this run uses: plain basecalling starts no modkit or IGV container.
+    def probedTools = ['samtools']
+    if (params.run_modkit != false) probedTools += 'modkit'
+    if (params.run_fastq_qc != false) probedTools += ['samtools_consensus', 'igv_reports', 'igv_create_report']
+    optional += "--scientific-tools ${probedTools.join(',')}"
     """
     set -euo pipefail
     lock_source=${lockPath}
@@ -134,6 +139,14 @@ process DoradoBasecall {
         declared_alias="\$(jq -r "\${json_key}.members" dorado_preflight.json | jq -r --arg rel "\${rel}" '.[\$rel].alias // empty')"
         [[ -n "\${declared_alias}" && "\$(readlink -- "\${file}")" == "\${declared_alias}" && -f "\${file}" ]] || { echo "undeclared model alias: \${file}" >&2; exit 1; }
       done < <(find "\${model_dir}" -type l -print0)
+      # Preflight hashed these files and recorded each one's version (size, mtime, ctime).
+      # Files still at those versions have the same bytes and are not hashed again.
+      local expected_versions observed_versions
+      expected_versions="\$(jq -r "\${json_key}.file_versions // {} | to_entries | sort_by(.key)[] | .key, .value" dorado_preflight.json)"
+      if [[ -n "\${expected_versions}" ]]; then
+        observed_versions="\$(while IFS= read -r -d '' file; do printf '%s\\n%s\\n' "\${file#\${model_dir}/}" "\$(stat -Lc '%s:%.9Y:%.9Z' "\${file}")"; done < <(find -L "\${model_dir}" -type f -print0 | LC_ALL=C sort -z))"
+        if [[ "\${observed_versions}" == "\${expected_versions}" ]]; then return 0; fi
+      fi
       inventory="\$(mktemp)"
       while IFS= read -r -d '' file; do
         rel="\${file#\${model_dir}/}"; size="\$(stat -Lc %s "\${file}")"; file_sha="\$(sha256sum "\${file}" | cut -d' ' -f1)"
@@ -164,18 +177,27 @@ process DoradoBasecall {
     }
 
     runtime_expected="\$(jq -r '.runtime.assets.runtime_sif.sha256' dorado_preflight.json)"
-    runtime_observed="\$(sha256sum /runtime/dorado.sif | cut -d' ' -f1)"
+    # Preflight hashed this image and recorded its version; the same version is not hashed again.
+    runtime_version="\$(jq -r '.runtime.assets.runtime_sif.file_version // empty' dorado_preflight.json)"
+    if [[ -n "\${runtime_version}" && "\$(stat -Lc '%s:%.9Y:%.9Z' /runtime/dorado.sif)" == "\${runtime_version}" ]]; then
+      runtime_observed="\${runtime_expected}"
+    else
+      runtime_observed="\$(sha256sum /runtime/dorado.sif | cut -d' ' -f1)"
+    fi
     [[ "\${runtime_observed}" == "\${runtime_expected}" ]] || { echo 'Dorado runtime changed after preflight' >&2; exit 1; }
 
     source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
     pod5_source=${doradoShellQuote(pod5_dir)}
     retained_pod5="\$(jq -r '.inputs.retained // false' dorado_preflight.json)"
     mkdir -p sealed_pod5 sealed_models
-    while IFS=\$'\t' read -r relative expected_sha expected_bytes; do
+    while IFS=\$'\t' read -r relative expected_sha expected_bytes expected_version; do
       [[ "\${relative}" != /* && "\${relative}" != *'..'* ]]
       source_file="\${pod5_source}/\${relative}"; target_file="sealed_pod5/\${relative}"
       [[ -f "\${source_file}" && ! -L "\${source_file}" ]]
-      [[ "\$(sha256sum "\${source_file}" | cut -d' ' -f1)" == "\${expected_sha}" && "\$(stat -c %s "\${source_file}")" == "\${expected_bytes}" ]] || { echo "POD5 input changed after preflight: \${relative}" >&2; exit 1; }
+      # Preflight hashed this file and recorded its version; the same version is not hashed again.
+      same_version=false
+      if [[ -n "\${expected_version}" && "\$(stat -Lc '%s:%.9Y:%.9Z' "\${source_file}")" == "\${expected_version}" ]]; then same_version=true; fi
+      [[ "\${same_version}" == true ]] || [[ "\$(sha256sum "\${source_file}" | cut -d' ' -f1)" == "\${expected_sha}" && "\$(stat -c %s "\${source_file}")" == "\${expected_bytes}" ]] || { echo "POD5 input changed after preflight: \${relative}" >&2; exit 1; }
       mkdir -p "\$(dirname "\${target_file}")"
       if [[ "\${retained_pod5}" == true ]]; then
         # Keep the owned source's ctime-bound receipt intact (no hardlink/chmod).
@@ -183,8 +205,9 @@ process DoradoBasecall {
       else
         ngs_input_snapshot "\${source_file}" "\${target_file}" false
       fi
-      [[ "\$(sha256sum "\${target_file}" | cut -d' ' -f1)" == "\${expected_sha}" ]] || { echo "POD5 snapshot identity mismatch: \${relative}" >&2; exit 1; }
-    done < <(jq -r '.inputs.files[] | [.relative_path,.sha256,.bytes] | @tsv' dorado_preflight.json)
+      # A retained file is used in place, so there is no copy to check; a copy is hashed once.
+      [[ "\${retained_pod5}" == true && "\${same_version}" == true ]] || [[ "\$(sha256sum "\${target_file}" | cut -d' ' -f1)" == "\${expected_sha}" ]] || { echo "POD5 snapshot identity mismatch: \${relative}" >&2; exit 1; }
+    done < <(jq -r '.inputs.files[] | [.relative_path,.sha256,.bytes,(.file_version // "")] | @tsv' dorado_preflight.json)
 
     if [[ -n "\${pair_relative}" ]]; then
       pair_sha="\$(jq -r '.pairs.sha256' dorado_preflight.json)"; pair_source="\${pod5_source}/\${pair_relative}"; pair_target="sealed_pod5/\${pair_relative}"

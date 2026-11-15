@@ -765,7 +765,9 @@ async def retained_pod5_launch_binding(session: AsyncSession, root: Path) -> dic
         try:
             for item in artifacts:
                 path = _revalidate_descriptor_artifact(item, authority='retained POD5 generation')
-                files[path.relative_to(root).as_posix()] = {'sha256': item['sha256'], 'bytes': item['bytes']}
+                # The version lets preflight see this is the file hashed at acquisition, without hashing it again.
+                files[path.relative_to(root).as_posix()] = {'sha256': item['sha256'], 'bytes': item['bytes'],
+                                                            'mtime_ns': item.get('mtime_ns'), 'ctime_ns': item.get('ctime_ns')}
         except (OSError, ValueError):
             continue
         return {'representation_id': record.id, 'manifest_sha256': record.manifest_sha256, 'files': files}

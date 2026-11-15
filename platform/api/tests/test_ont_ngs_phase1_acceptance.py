@@ -306,12 +306,14 @@ def test_generic_submit_rejects_server_controlled_provenance_and_runtime_roots(
         )
 
 
-def test_verification_workflow_requires_expected_reference() -> None:
-    with pytest.raises(ValueError, match="requires reference_fasta"):
-        _job_create_for_ont_submit(
-            "wf_clone_validation",
-            _request({"fastq_path": "/tmp/reads.fastq"}),
-        )
+def test_verification_workflow_runs_without_an_expected_reference() -> None:
+    # No expected sequence means assemble and annotate only; it is not refused.
+    job_data = _job_create_for_ont_submit(
+        "wf_clone_validation",
+        _request({"fastq_path": "/tmp/reads.fastq"}),
+    )
+    assert not job_data.params.get("reference_fasta")
+    assert job_data.params.get("fastq_path") == "/tmp/reads.fastq"
 
 
 def test_fastq_submission_cannot_claim_modkit_evidence() -> None:
