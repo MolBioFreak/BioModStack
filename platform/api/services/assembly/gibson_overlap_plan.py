@@ -16,6 +16,7 @@ LENGTH_STEPS = (0, 2, 4, 6, 8, 12, 16, 20)
 SEARCH_FRACTION = 0.15  # how far from an even split a cut may move, as a share of the fragment length
 MIN_SYNTHESIS_FRAGMENT = 125
 EDGE_MARGIN = 30
+MIN_RADIUS = 10  # a cut can always move this far from an even split
 
 
 @dataclass(frozen=True)
@@ -66,9 +67,9 @@ def best_cut(target: str, circular: bool, ideal: int, base_length: int, low: int
 
 
 def minimum_count(span: int, closed: bool, max_length: int, overlap: int) -> int:
-    """Fewest fragments that keep every one under max_length even after cuts move off an even split."""
+    """Fewest fragments that keep every one under max_length with the cuts allowed the least room to move."""
     count = 2 if closed else 1
-    while (span / count) * (1 + 2 * SEARCH_FRACTION) + overlap + LENGTH_STEPS[-1] > max_length:
+    while span / count + 2 * MIN_RADIUS + overlap + LENGTH_STEPS[-1] > max_length:
         count += 1
         if count > max(2, span // MIN_SYNTHESIS_FRAGMENT):
             break
@@ -80,15 +81,20 @@ def maximum_count(span: int, closed: bool) -> int:
 
 
 def cut_stretch(
-    target: str, circular: bool, low: int, high: int, count: int, overlap: int, *, closed: bool = False
+    target: str, circular: bool, low: int, high: int, count: int, overlap: int, *, closed: bool = False,
+    max_length: int | None = None,
 ) -> list[Cut] | None:
     """Overlap windows for a stretch [low, high) cut into `count` fragments.
 
     A closed stretch is the whole circle (count windows, one of them at the origin);
-    an open one needs count - 1 interior windows.
+    an open one needs count - 1 interior windows. With max_length, cuts only move as far from an even
+    split as keeps every fragment (its overlaps included) within that length.
     """
     span = high - low
-    radius = max(10, int(SEARCH_FRACTION * span / count))
+    radius = max(MIN_RADIUS, int(SEARCH_FRACTION * span / count))
+    if max_length is not None:
+        room = int((max_length - overlap - LENGTH_STEPS[-1] - span / count) // 2)
+        radius = max(MIN_RADIUS, min(radius, room))
     steps = range(count) if closed else range(1, count)
     cuts: list[Cut] = []
     for step in steps:

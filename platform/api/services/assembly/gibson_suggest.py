@@ -254,6 +254,7 @@ def _split_synthetic(frags: list[Frag], target: str, req: SuggestRequest, notes:
     closed = len(frags) == 1 and req.target.circular
     counts: dict[int, int] = {}
     ceilings: dict[int, int] = {}
+    limits: dict[int, int] = {}
     for i in stretches:
         frag = frags[i]
         span = frag.end - frag.start
@@ -262,7 +263,8 @@ def _split_synthetic(frags: list[Frag], target: str, req: SuggestRequest, notes:
             floor = 2
         else:
             floor = 1
-        counts[i] = max(floor, minimum_count(span, closed, cap - flanks * overlap, overlap)) if span + flanks * overlap > cap or floor > 1 else 1
+        limits[i] = cap - flanks * overlap
+        counts[i] = max(floor, minimum_count(span, closed, limits[i], overlap)) if span + flanks * overlap > cap or floor > 1 else 1
         ceilings[i] = maximum_count(span, closed)
         if counts[i] > ceilings[i]:
             return None
@@ -284,7 +286,8 @@ def _split_synthetic(frags: list[Frag], target: str, req: SuggestRequest, notes:
         if frag.kind != "synthesis" or count == 1:
             out.append(frag)
             continue
-        cuts = cut_stretch(target, req.target.circular, frag.start, frag.end, count, overlap, closed=closed)
+        cuts = cut_stretch(target, req.target.circular, frag.start, frag.end, count, overlap, closed=closed,
+                           max_length=limits[i])
         if cuts is None:
             return None
         spans = fragment_spans(cuts, frag.start, frag.end, closed=closed, size=n)
