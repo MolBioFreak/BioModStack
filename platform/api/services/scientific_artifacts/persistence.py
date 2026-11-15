@@ -26,29 +26,42 @@ _TRANSACTION_ID_KEY = "scientific_artifacts_transaction_id"
 
 @event.listens_for(Session, "after_commit")
 def _forget_committed_artifacts(session: Session) -> None:
-    artifacts = session.info.pop(_TRANSACTION_ARTIFACTS_KEY, ())
-    session.info.pop(_TRANSACTION_ID_KEY, None)
-    for artifact in artifacts:
-        finalize_artifact_publication(artifact, committed=True)
+    transaction = session.get_nested_transaction() or session.get_transaction()
+    publications = session.info.get(_TRANSACTION_ARTIFACTS_KEY, {})
+    artifacts = publications.pop(transaction, ())
+    session.info.get(_TRANSACTION_ID_KEY, {}).pop(transaction, None)
+    if transaction.nested:
+        # RELEASE SAVEPOINT transfers custody, not durability, to its parent.
+        publications.setdefault(transaction.parent, []).extend(artifacts)
+    else:
+        for artifact in artifacts:
+            finalize_artifact_publication(artifact, committed=True)
 
 
 @event.listens_for(Session, "after_rollback")
 def _cleanup_rolled_back_artifacts(session: Session) -> None:
-    artifacts = session.info.pop(_TRANSACTION_ARTIFACTS_KEY, ())
-    session.info.pop(_TRANSACTION_ID_KEY, None)
+    transaction = session.get_nested_transaction() or session.get_transaction()
+    artifacts = session.info.get(_TRANSACTION_ARTIFACTS_KEY, {}).pop(transaction, ())
+    session.info.get(_TRANSACTION_ID_KEY, {}).pop(transaction, None)
     for artifact in reversed(artifacts):
         guarded_delete_new_artifact(artifact)
 
 
 def _track_new_artifact(session: AsyncSession, artifact: Any) -> None:
     if artifact.transaction_id is not None:
-        session.sync_session.info.setdefault(_TRANSACTION_ARTIFACTS_KEY, []).append(
-            artifact
-        )
+        sync = session.sync_session
+        transaction = sync.get_nested_transaction() or sync.get_transaction()
+        sync.info.setdefault(_TRANSACTION_ARTIFACTS_KEY, {}).setdefault(
+            transaction, []
+        ).append(artifact)
 
 
 def _transaction_id(session: AsyncSession) -> str:
-    return session.sync_session.info.setdefault(_TRANSACTION_ID_KEY, uuid.uuid4().hex)
+    sync = session.sync_session
+    transaction = sync.get_nested_transaction() or sync.get_transaction() or sync.begin()
+    return sync.info.setdefault(_TRANSACTION_ID_KEY, {}).setdefault(
+        transaction, uuid.uuid4().hex
+    )
 
 
 async def publish_json_payload(
