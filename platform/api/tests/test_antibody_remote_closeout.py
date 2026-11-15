@@ -349,7 +349,7 @@ def test_actual_native_spawn_child_and_global_collection(tmp_path, monkeypatch, 
     from scripts.lib.component_adapter import runtime_from_environment
     from services.nextflow import compile_component_nextflow_invocation
     root = Path(__file__).resolve().parents[3]
-    jar = Path.home() / '.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar'
+    jar = Path(os.environ['BMS_TEST_NEXTFLOW_JAR'])
     assert jar.is_file(), 'runner must supply the existing offline jar'
     target = tmp_path / 'target.pdb'
     target.write_text('ATOM      1  CA  GLY T   1       0.000   0.000   0.000  1.00 90.00           C  \nEND\n')
