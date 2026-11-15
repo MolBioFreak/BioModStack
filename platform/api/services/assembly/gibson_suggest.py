@@ -29,6 +29,7 @@ from .gibson_overlap_plan import (
 from .pydna_gibson import design_gibson
 from .region_match import Matcher, Piece, Source, cover_target, reverse_complement
 from .repeat_breakpoints import RepeatAnalysis, choose_boundaries
+from .gibson_recut import SYNTHESIS_LIMIT, SYNTHETIC_FLAG
 from .types import AssemblyError, AssemblyFragment, JunctionSpec
 
 SMALL_MATCH = 150  # matched pieces shorter than this may be absorbed into synthesis (variant 3)
@@ -335,7 +336,8 @@ def _build_request(frags: list[Frag], target: str, req: SuggestRequest) -> tuple
                 b += overlap
             doubled = target + target if req.target.circular else target
             sequence = doubled[a:b] if a >= 0 else (target + target)[n + a:n + b]
-            entry.update(name=f"Synthetic {i + 1}", sequence=sequence, orientation="forward")
+            entry.update(name=f"Synthetic {i + 1}", sequence=sequence, orientation="forward",
+                         metadata={SYNTHETIC_FLAG: True, SYNTHESIS_LIMIT: req.max_synthesis_length or MAX_SYNTHESIS})
             out.append(FragmentOut(id=fid, name=entry["name"], preparation="synthesis", orientation="forward",
                                    sequence=sequence))
         else:

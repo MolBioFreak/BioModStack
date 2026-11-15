@@ -17,6 +17,7 @@ from .common import fragment_provenance_payload, orient_fragment
 from services.molbio_ops import _resolve_primer_binding_sites_canonical, reverse_complement
 
 from .gibson import effective_sequence, simulate_gibson
+from .gibson_recut import RecutResult, is_synthetic, recut_synthetic
 from .gibson_tm import TM_ASSUMPTIONS, TM_MODEL, primer_tm
 from .types import (
     AssemblyError,
@@ -295,6 +296,31 @@ def _resolve_junction_specs(
     return resolved
 
 
+def _recut_requested(oriented: list[OrientedFragment], circular: bool,
+                     specs: dict[int, tuple[int | None, str | None]]) -> RecutResult:
+    """Move the ends of BMS-synthesised fragments so each join the user gave an overlap has that overlap."""
+    parts = [index for index, item in enumerate(oriented) if len(item.sequence) > SHORT_FRAGMENT]
+    requests = [
+        (a, parts[(parts.index(a) + 1) % len(parts)], wanted)
+        for a, (wanted, _distribution) in sorted(specs.items()) if wanted is not None
+    ]
+    return recut_synthetic(oriented, [is_synthetic(item) for item in oriented], requests, circular, _existing_homology)
+
+
+def _apply_recut_notes(info, specs, recut: RecutResult) -> None:
+    """Say what happened at joins whose overlap the user set and the fragments already shared."""
+    for pair, (kind, length, span, _note) in list(info.items()):
+        a = pair[0]
+        if kind != "homology" or a not in specs or specs[a][0] is None:
+            continue
+        if a in recut.refused:
+            info[pair] = (kind, length, span, recut.refused[a])
+        elif a in recut.done:
+            info[pair] = (kind, length, span, "; ".join(recut.done[a]))
+        elif specs[a][0] == length:
+            info[pair] = (kind, length, span, None)
+
+
 def _custom_plan(oriented, preparations, circular, overlap, specs=None):
     """Tails only for junctions that lack homology; short parts ride on neighbours.
 
@@ -506,6 +532,11 @@ def _design_gibson(
         )
 
     specs = _resolve_junction_specs(oriented, circular, junctions)
+    supplied = oriented
+    recut: RecutResult | None = None
+    if any(chosen is not None for chosen, _distribution in specs.values()):
+        recut = _recut_requested(oriented, circular, specs)
+        oriented = recut.fragments
     custom = force_custom or bool(specs) or _needs_custom_design(oriented, preparations, circular)
     pydna_products = []
     info: dict[tuple[int, int], tuple[str, int, int, str | None]] = {}
@@ -522,6 +553,8 @@ def _design_gibson(
         except Exception as exc:
             detail = str(exc).strip() or type(exc).__name__
             raise AssemblyError(f"Gibson design failed: {detail}") from None
+        if recut is not None:
+            _apply_recut_notes(info, specs, recut)
         designed_seq = {
             i: (entries[i][0] if i in entries else oriented[i].sequence) for i in parts
         }
@@ -581,6 +614,11 @@ def _design_gibson(
     designed_fragments: list[DesignedFragment] = []
     validation_inputs: list[AssemblyFragment] = []
     warnings: list[str] = [note] if note else []
+    if recut is not None and recut.changed:
+        warnings.append(
+            f"Overlap re-cut on fragments BMS synthesised ({', '.join(recut.changed)}) to give the overlap you set; "
+            f"order the designed sequences, not the ones you started with"
+        )
     for index, (source, preparation) in enumerate(zip(oriented, preparations)):
         carried = index not in designed_seq
         designed_sequence = source.sequence if carried else designed_seq[index]
@@ -661,12 +699,16 @@ def _design_gibson(
             intended_sequence, primer.annealing_sequence,
             reverse=primer.direction == "reverse", circular=circular,
         )
-    source_provenance = _source_provenance(oriented, preparations)
+    source_provenance = _source_provenance(supplied, preparations)
+    for item, original, designed in zip(source_provenance, supplied, oriented):
+        if designed.sequence != original.sequence:  # the supplied bases stay on record next to the re-cut ones
+            item["recut_sequence_length"] = len(designed.sequence)
+            item["recut_sequence_sha256"] = _sha256(designed.sequence)
     selected_product = AssemblyProduct(
         mode="gibson",
         sequence=intended_sequence,
         circular=circular,
-        fragments=oriented,
+        fragments=supplied,
         junctions=validated.junctions,
         warnings=list(dict.fromkeys(warnings + validated.warnings)),
         validation_notes=[
