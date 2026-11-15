@@ -3583,7 +3583,7 @@ export interface AssemblyJunction {
 export type FivePrimePhosphate = 'unknown' | 'phosphorylated' | 'unphosphorylated';
 export interface AssemblyFragmentEnd { five_prime_phosphate?: FivePrimePhosphate }
 export interface AssemblyFragmentInput { features?: SequenceFeature[] | null }
-export interface AssemblyJunction { sealed?: 'both' | 'one_strand' | 'none' | 'unknown'; overlap_tm?: number | null; overlap_tm_2_4?: number | null }
+export interface AssemblyJunction { sealed?: 'both' | 'one_strand' | 'none' | 'unknown'; overlap_tm?: number | null; overlap_tm_2_4?: number | null; overlap_gc?: number | null; distribution?: GibsonJunctionDistribution | 'homology' | null }
 export interface GibsonPrimerSite { start: number; end: number; strand: 1 | -1 }
 export interface GibsonDesignedPrimer {
     tm_model?: string | null;
@@ -3616,6 +3616,14 @@ export interface SavedGibsonDesignRequest {
     overlap?: number;
     target_tm?: number;
     min_anneal?: number;
+    junctions?: GibsonJunctionInput[];
+}
+/** Per-junction user choice; `after_fragment_id` is the fragment on the LEFT of the join (the last one addresses the circular closure). */
+export type GibsonJunctionDistribution = 'split' | 'left' | 'right';
+export interface GibsonJunctionInput {
+    after_fragment_id: string;
+    overlap?: number | null;
+    distribution?: GibsonJunctionDistribution | null;
 }
 export const endOperations = (mode: 'preview' | 'apply', data: EndOperationRequest, signal?: AbortSignal) =>
     api.post<EndOperationResponse>(`/api/molbio/end-operations/${mode}`, data, { signal });
@@ -3631,6 +3639,12 @@ export interface SuggestGibsonRequest {
     min_match: number; overlap: number; target_tm: number; min_anneal: number;
     allow_synthesis: boolean; limit: number;
     fixed_boundaries?: number[]; protected_feature_ids?: string[]; max_pcr_length?: number;
+    fragment_count?: number | null; max_synthesis_length?: number | null;
+}
+export interface SuggestGibsonJunction {
+    left_id: string; right_id: string; overlap_length: number; overlap_sequence?: string;
+    overlap_tm?: number | null; overlap_tm_2_4?: number | null; overlap_gc?: number | null;
+    distribution?: GibsonJunctionDistribution | 'homology' | null; notes?: string[];
 }
 export interface SuggestGibsonFragment {
     id: string; name: string; preparation: 'pcr' | 'synthesis' | 'existing'; orientation: 'forward' | 'reverse';
@@ -3642,6 +3656,7 @@ export interface SuggestGibsonProposal {
     counts: { pcr: number; synthesis: number; existing: number };
     fragments: SuggestGibsonFragment[];
     design_request: SavedGibsonDesignRequest;
+    junctions?: SuggestGibsonJunction[];
     features: { kept: string[]; removed: string[]; clipped: string[] };
     notes: string[];
 }
@@ -3880,6 +3895,7 @@ export interface GibsonDesignRequest {
     selected_candidate_checksum?: string;
     new_name?: string;
     save_description?: string;
+    junctions?: GibsonJunctionInput[];
 }
 
 export interface GibsonDesignedPrimer {
