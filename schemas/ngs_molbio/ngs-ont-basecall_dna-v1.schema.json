@@ -503,6 +503,36 @@
       "x-bms-units": "not_applicable",
       "type": "string",
       "pattern": "^(?:cpu|cuda:(?:all|[0-9]+(?:,[0-9]+)*))$"
+    },
+    "barcode_both_ends": {
+      "default": false,
+      "type": "boolean",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "barcode_both_ends",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "boolean",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Require a barcode on both ends of a read (native barcoding kits)",
+      "x-bms-supported-runtime-range": "dorado=2.1.2",
+      "x-bms-ui-control": "checkbox",
+      "x-bms-units": "not_applicable"
+    },
+    "allow_multiple_pod5_runs": {
+      "default": false,
+      "type": "boolean",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "allow_multiple_pod5_runs",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "boolean",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Accept POD5 files that hold more than one sequencing run",
+      "x-bms-supported-runtime-range": "dorado=2.1.2",
+      "x-bms-ui-control": "checkbox",
+      "x-bms-units": "not_applicable"
     }
   },
   "required": [

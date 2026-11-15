@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "1d41fb50300a4e574670f6a02a0345e597ac9ed4",
   "baseline_source_tree": "af85061039a5fafdcb828336f09ea6355713d1a9",
-  "content_sha256": "4a4bafda03ab2df2307b502455ea1250c782fda602490005c41590b39c50c921",
+  "content_sha256": "23a461b990752dfa243d899bcae13d01576e8b897ffaea5159551ac46dd89b3a",
   "entries": [
     {
       "path": "schemas/ngs_molbio/domain-experiment-v2.schema.json",
@@ -443,9 +443,9 @@
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-basecall_dna-v1.schema.json",
-      "schema_canonical_sha256": "779c2735d4969d9ca98383b35f3c741d51a65ae19723c9b4e64209891da33352",
+      "schema_canonical_sha256": "2e99d30b94588adca95ced9ff3c3f487ce3b45611d7aca82fa48d41e5f785902",
       "schema_id": "bms.workflow-parameters.ngs.ont.basecall_dna.v1",
-      "schema_sha256": "a2790ce050af2236349fd570f34a87a666d8f60a989199a248e921f8f22ab286"
+      "schema_sha256": "dd6524dcf28389b5943c59504bbe3934c2ec15d61d476e1c6fba98a254a7c7e2"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-basecall_rna-v1.schema.json",

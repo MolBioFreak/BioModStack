@@ -41,3 +41,9 @@ def test_the_both_ends_choice_reaches_the_dorado_command_through_the_preflight()
     assert "command+=(--barcode-both-ends)" in text
     preflight = (REPO / "scripts/dorado_p4_preflight.py").read_text(encoding="utf-8")
     assert '"both_ends": True' in preflight and '"--barcode-both-ends"' in preflight
+
+
+def test_a_project_setup_can_carry_the_both_ends_and_multi_run_settings() -> None:
+    schema = json.loads((REPO / "schemas/ngs_molbio/ngs-ont-basecall_dna-v1.schema.json").read_text())
+    for key in ("barcode_both_ends", "allow_multiple_pod5_runs"):
+        assert schema["properties"][key]["type"] == "boolean" and schema["properties"][key]["default"] is False
