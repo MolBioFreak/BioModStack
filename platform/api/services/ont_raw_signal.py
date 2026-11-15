@@ -2403,14 +2403,49 @@ def _external_blow5_artifact_records(source: OntRawSignalRepresentation) -> tupl
     return blow5, index
 
 
+# A file version (device, inode, size, mtime, ctime) whose bytes were hashed once in
+# this process is not hashed again: the same version has the same bytes. A changed
+# file is a different version and is read in full.
+_VERIFIED_FILE_VERSIONS: dict[tuple[int, int, int, int, int], str] = {}
+_VERIFIED_FILE_VERSION_LIMIT = 512
+
+
+def _descriptor_sha256(descriptor: int) -> str:
+    """SHA-256 of an open regular file, read through once per file version."""
+    before = os.fstat(descriptor)
+    key = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    known = _VERIFIED_FILE_VERSIONS.get(key)
+    if known is not None:
+        return known
+    digest = hashlib.sha256()
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    while chunk := os.read(descriptor, 1024 * 1024):
+        digest.update(chunk)
+    after = os.fstat(descriptor)
+    value = digest.hexdigest()
+    if key == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        if len(_VERIFIED_FILE_VERSIONS) >= _VERIFIED_FILE_VERSION_LIMIT:
+            _VERIFIED_FILE_VERSIONS.pop(next(iter(_VERIFIED_FILE_VERSIONS)))
+        _VERIFIED_FILE_VERSIONS[key] = value
+    return value
+
+
+def _representation_files_view(representation: Any) -> Any:
+    """The fields the file checks read, so those checks can run off the event loop."""
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        format=representation.format, state=representation.state,
+        validation_receipts=representation.validation_receipts,
+        artifact_manifest=representation.artifact_manifest, manifest_sha256=representation.manifest_sha256,
+    )
+
+
 def _assert_external_blow5_artifact_identity(artifact: Mapping[str, Any], *, authority: str) -> dict[str, Any]:
     path, descriptor = _open_descriptor_confined_artifact(artifact, authority=authority)
     try:
         info = os.fstat(descriptor)
-        digest = hashlib.sha256()
-        while chunk := os.read(descriptor, 1024 * 1024):
-            digest.update(chunk)
-        if digest.hexdigest() != artifact.get("sha256") or info.st_size != artifact.get("bytes"):
+        observed_sha256 = _descriptor_sha256(descriptor)
+        if observed_sha256 != artifact.get("sha256") or info.st_size != artifact.get("bytes"):
             raise ValueError(f"{authority} bytes diverged from registration manifest")
         return {
             "device": info.st_dev,
@@ -2420,7 +2455,7 @@ def _assert_external_blow5_artifact_identity(artifact: Mapping[str, Any], *, aut
             "ctime_ns": info.st_ctime_ns,
             "root_device": artifact.get("governed_root_device"),
             "root_inode": artifact.get("governed_root_inode"),
-            "sha256": digest.hexdigest(),
+            "sha256": observed_sha256,
         }
     finally:
         os.close(descriptor)
@@ -2449,13 +2484,10 @@ def _verified_external_descriptor_identity(
         )
     ):
         raise ValueError(f"{authority} descriptor identity diverged")
-    os.lseek(file_descriptor, 0, os.SEEK_SET)
-    digest = hashlib.sha256()
-    while chunk := os.read(file_descriptor, 1024 * 1024):
-        digest.update(chunk)
+    observed_sha256 = _descriptor_sha256(file_descriptor)
     after = os.fstat(file_descriptor)
     identity = {
-        "sha256": digest.hexdigest(),
+        "sha256": observed_sha256,
         "bytes": after.st_size,
         "device": after.st_dev,
         "inode": after.st_ino,
@@ -2869,11 +2901,7 @@ def _open_descriptor_confined_artifact(
 def _revalidate_descriptor_artifact(artifact: Mapping[str, Any], *, authority: str) -> Path:
     path, descriptor = _open_descriptor_confined_artifact(artifact, authority=authority)
     try:
-        digest = hashlib.sha256()
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        while chunk := os.read(descriptor, 1024 * 1024):
-            digest.update(chunk)
-        if digest.hexdigest() != artifact.get("sha256"):
+        if _descriptor_sha256(descriptor) != artifact.get("sha256"):
             raise ValueError(f"{authority} digest diverged")
         return path
     finally:
@@ -3005,7 +3033,8 @@ async def request_waveform_lookup(
     representation = await session.get(OntRawSignalRepresentation, representation_id)
     if representation is None or representation.run_id != run_id or representation.observed_generation != observed_generation:
         raise ValueError("representation does not belong to the exact run generation")
-    _validated_blow5_paths(representation, read_id)
+    # File checks read from disk, so they run off the event loop.
+    await asyncio.to_thread(_validated_blow5_paths, _representation_files_view(representation), read_id)
     from sqlalchemy.exc import IntegrityError
     query = select(OntRawSignalLookup).where(
         OntRawSignalLookup.representation_id == representation_id,
@@ -3271,7 +3300,8 @@ async def claim_next_waveform_lookup(
         lookup.completed_at = _now()
         await session.commit()
         return None
-    blow5, index = _validated_blow5_paths(representation, lookup.read_id)
+    blow5, index = await asyncio.to_thread(
+        _validated_blow5_paths, _representation_files_view(representation), lookup.read_id)
     blow5_artifact = _artifact_for_resolved_path(representation, blow5, "blow5")
     index_artifact = _artifact_for_resolved_path(representation, index, "blow5_index")
     blow5_identity = _assert_external_blow5_artifact_identity(
@@ -3470,7 +3500,8 @@ async def finish_waveform_lookup(session: AsyncSession, lookup_id: str, claim_to
     representation = await session.get(OntRawSignalRepresentation, lookup.representation_id)
     if representation is None:
         raise ValueError("waveform representation authority disappeared")
-    blow5, index = _validated_blow5_paths(representation, lookup.read_id)
+    blow5, index = await asyncio.to_thread(
+        _validated_blow5_paths, _representation_files_view(representation), lookup.read_id)
     expected_source_identity = {
         "blow5": {
             key: _artifact_for_resolved_path(representation, blow5, "blow5")[key]
