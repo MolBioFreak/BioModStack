@@ -229,6 +229,39 @@ def test_junction_response_omits_gibson_only_fields_for_other_assemblies() -> No
     assert gibson["overlap_gc"] == 45.5 and gibson["distribution"] == "split"
 
 
+def test_golden_gate_solution_payload_omits_the_gibson_only_junction_keys() -> None:
+    """Golden Gate junction payloads stay byte-identical: the two Gibson-only keys never appear."""
+    from services.assembly.golden_gate_design_types import Solution
+    from services.assembly.types import AssemblyJunction
+
+    junction = AssemblyJunction(
+        left_fragment_id="a", right_fragment_id="b", left_fragment_name="A", right_fragment_name="B",
+        mode="golden_gate", overhang_sequence="AATT", junction_sequence="AATT",
+    )
+    solution = Solution.model_construct(
+        id="s", sequence="ACGT", topology="circular", display_origin=0, part_material_ids=[], mappings=[],
+        features=[], junctions=[junction], occurrences=[], exact_target_match=None, warnings=[],
+    )
+    row = solution.model_dump(mode="json")["junctions"][0]
+    assert "overlap_gc" not in row and "distribution" not in row
+    assert row["overhang_sequence"] == "AATT" and row["overlap_tm"] is None
+
+
+def test_retained_gibson_result_keeps_overlap_gc_and_distribution() -> None:
+    """Saving reloads the retained result through the declared types; the Gibson-only keys must survive."""
+    from pydantic import TypeAdapter
+
+    from services.assembly.types import GibsonDesignResult
+
+    result = design_gibson([frag(1), frag(2)], preparations=["pcr"] * 2, circular=True, overlap=24,
+                           junctions=[JunctionSpec("fragment-1", 30, "left")])
+    reloaded = TypeAdapter(GibsonDesignResult).validate_python(
+        TypeAdapter(GibsonDesignResult).dump_python(result, mode="json"))
+    first = reloaded.candidates[0].product.junctions[0]
+    assert (first.overlap_length, first.distribution) == (30, "left") and first.overlap_gc is not None
+    assert reloaded == result
+
+
 # --- 6. the real routes ---------------------------------------------------------------------------
 
 @pytest.fixture

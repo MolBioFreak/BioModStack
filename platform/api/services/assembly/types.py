@@ -92,7 +92,9 @@ class AssemblyJunction:
     overlap_tm_2_4: Optional[float] = None
     overlap_tm_model: Optional[str] = None
     # Gibson information only: overlap GC (percent) and which primers carry the overlap
-    # ("split" | "left" | "right", or "homology" when the parts already share it).
+    # ("split" | "left" | "right", or "homology" when the parts already share it). Must stay
+    # on this class: retained Gibson results are re-validated against it. Golden Gate and
+    # ligation payloads omit both keys while they are None.
     overlap_gc: Optional[float] = None
     distribution: Optional[str] = None
 

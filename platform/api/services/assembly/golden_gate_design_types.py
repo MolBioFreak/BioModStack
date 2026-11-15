@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from routers.molbio_ops import PrimerTmSettings, PrimerTmResult
 from services.primer_qc import PrimerQcMetrics, PrimerPairQcMetrics
@@ -201,6 +201,17 @@ class Solution(Closed):
     occurrences: list[AnalysisOccurrence]
     exact_target_match: bool | None
     warnings: list[str]
+
+    @field_serializer("junctions", mode="wrap")
+    def _omit_gibson_only_junction_keys(self, value, handler):
+        # overlap GC and primer distribution are Gibson information; Golden Gate payloads never carry them.
+        rows = handler(value)
+        for row in rows:
+            if isinstance(row, dict):
+                for key in ("overlap_gc", "distribution"):
+                    if row.get(key) is None:
+                        row.pop(key, None)
+        return rows
 
 
 class GoldenGateDesignResult(Closed):
