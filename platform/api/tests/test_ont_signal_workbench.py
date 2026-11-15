@@ -5664,3 +5664,57 @@ def test_migration_49_allows_fresh_attempt_for_failed_job_move_source(tmp_path: 
         ).fetchone()[0]
         assert "predecessor.source_job_id IS NULL) != (predecessor.external_registration_receipt_id IS NULL)" in sql
         assert "AND NEW.source_job_id IS predecessor.source_job_id" in sql
+
+
+@pytest.mark.asyncio
+async def test_a_finished_result_names_the_image_it_ran_on_even_if_the_tag_moved_meanwhile(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        service.EXTERNAL_MOVE_BAM_ROOT_ENV,
+        str(workbench_store.root / "missing-optional-external-root"),
+    )
+    worker = OntSignalWorker(workbench_store.factory, workbench_store.factory)
+    async with workbench_store.factory() as session:
+        created = await service.create_calibration_job(
+            session, run_id="run-1", observed_generation=1, raw_representation_id="raw-blow5-1",
+            move_source_id="ont-moves-ready", sample_count=2,
+        )
+        await session.commit()
+        job = await session.get(OntSignalCalibrationJob, created["calibration_job_id"])
+        source = await session.get(OntMoveTableSource, "ont-moves-ready")
+        report = _calibration_report(job=job, source=source)
+    claimed = await worker._claim(OntSignalCalibrationJob, "state")
+    assert claimed is not None
+    job_id, claim_token = claimed
+    output_root = workbench_store.root / "tag-move-runtime"
+    monkeypatch.setattr(worker, "_output_root", lambda: output_root)
+    monkeypatch.setattr(worker, "_container_user_identity", lambda: (1000, 1000))
+    tag = {"points_at": "a"}  # what the image tag resolves to right now
+    resolutions: list[str] = []
+
+    def resolve() -> dict[str, str]:
+        resolutions.append(tag["points_at"])
+        return {"image": f"sha256:{tag['points_at'] * 64}", "image_digest": tag["points_at"] * 64,
+                "upstream_version": "0.7.0", "upstream_commit": "5a2404f1f43bc3227a85475c59b2b77970078b2e", "network": "none"}
+
+    monkeypatch.setattr(worker, "_runtime_identity", resolve)
+    commands: list[list[str]] = []
+
+    async def fake_execute(command, kind, item_id, _claim_token, output_dir, _allowed=None, **_kwargs):
+        commands.append(list(command))
+        (Path(output_dir) / "calibration.json").write_text(json.dumps(report, sort_keys=True), encoding="utf-8")
+        tag["points_at"] = "b"  # the tag is rebuilt while the task runs
+        return {"argv_sha256": "1" * 64, "returncode": 0, "stdout_sha256": "2" * 64, "stderr_sha256": "3" * 64, "stderr_tail": ""}
+
+    monkeypatch.setattr(worker, "_execute", fake_execute)
+    await worker._process_calibration(job_id, claim_token)
+    assert f"sha256:{'a' * 64}" in commands[0] and f"sha256:{'b' * 64}" not in commands[0]
+    async with workbench_store.factory() as session:
+        published = await session.get(OntSignalCalibrationJob, job_id)
+        artifact = await session.get(OntSignalCalibrationArtifact, published.calibration_artifact_id)
+        assert artifact.runtime_identity["image_digest"] == "a" * 64
+        assert artifact.runtime_identity["image"] == f"sha256:{'a' * 64}"
+    # Resolved once, at dispatch; not again to describe the finished work.
+    assert resolutions == ["a"]

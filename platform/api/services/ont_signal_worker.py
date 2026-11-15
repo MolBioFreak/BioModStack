@@ -552,6 +552,8 @@ class OntSignalWorker:
         self._stop = asyncio.Event()
         self._child: asyncio.subprocess.Process | None = None
         self._active_container: tuple[str, str] | None = None
+        # The image each task was started with, kept until its result is recorded.
+        self._dispatched_runtime: dict[tuple[str, str], dict[str, str]] = {}
 
     async def start(self) -> bool:
         """Return False when the optional backend is absent; leave all work untouched.
@@ -668,8 +670,9 @@ class OntSignalWorker:
         broker_dir: Path,
         *,
         kind: str,
+        identity: dict[str, str] | None = None,
     ) -> list[str]:
-        identity = self._runtime_identity()
+        identity = identity or self._runtime_identity()
         runtime = configured_container_runtime()
         if runtime not in {"podman", "docker"}:
             raise RuntimeError("unsupported container runtime")
@@ -736,9 +739,10 @@ class OntSignalWorker:
                 "policy_sha256": policy_sha256, "wrapper_sha256": policy["wrapper_sha256"]}
 
     def _comparison_container_command(
-        self, stage: str, output_dir: Path, broker_dir: Path
+        self, stage: str, output_dir: Path, broker_dir: Path,
+        identity: dict[str, str] | None = None,
     ) -> list[str]:
-        identity = self._comparison_runtime_identity(stage)
+        identity = identity or self._comparison_runtime_identity(stage)
         runtime = configured_container_runtime()
         if runtime not in {"podman", "docker"}:
             raise RuntimeError("unsupported container runtime")
@@ -1081,6 +1085,15 @@ class OntSignalWorker:
         finally:
             connection.close()
 
+    def _runtime_that_ran(self, kind: str, item_id: str) -> dict[str, str]:
+        """The image a finished task was started with."""
+        dispatched = self._dispatched_runtime.get((kind, item_id))
+        if dispatched is not None:
+            return dict(dispatched)
+        if kind in {"squigulator_producer", "squigualiser_comparison_renderer"}:
+            return self._comparison_runtime_identity(kind)
+        return self._runtime_identity()
+
     async def _invoke(
         self,
         parents: RetainedParentSet | RetainedParentView,
@@ -1094,10 +1107,17 @@ class OntSignalWorker:
         broker_dir = Path(tempfile.mkdtemp(prefix=f"bms-ont-{kind}-", dir="/tmp"))
         os.chmod(broker_dir, 0o700)
         try:
+            # The image is resolved once, here. The command runs that image and the
+            # finished result is attributed to it, even if its tag moves meanwhile.
+            comparison = kind in {"squigulator_producer", "squigualiser_comparison_renderer"}
+            identity = self._comparison_runtime_identity(kind) if comparison else self._runtime_identity()
+            if len(self._dispatched_runtime) >= 64:
+                self._dispatched_runtime.pop(next(iter(self._dispatched_runtime)))
+            self._dispatched_runtime[(kind, item_id)] = identity
             command = (
-                self._comparison_container_command(kind, output_dir, broker_dir)
-                if kind in {"squigulator_producer", "squigualiser_comparison_renderer"}
-                else self._container_command(output_dir, broker_dir, kind=kind)
+                self._comparison_container_command(kind, output_dir, broker_dir, identity=identity)
+                if comparison
+                else self._container_command(output_dir, broker_dir, kind=kind, identity=identity)
             )
             return await self._execute(
                 command,
@@ -1864,7 +1884,7 @@ class OntSignalWorker:
                 move_source_id=job.move_source_id, basecall_model_id=report["basecall_model_id"],
                 sample_selection=report["sample_selection"], recommended_kmer_length=recommendation["kmer_length"],
                 recommended_signal_move_offset=recommendation["signal_move_offset"], score_evidence=report["score_evidence"],
-                runtime_identity={**self._runtime_identity(), **tool}, parent_sha256s=report["parent_sha256s"],
+                runtime_identity={**self._runtime_that_ran("calibration", item_id), **tool}, parent_sha256s=report["parent_sha256s"],
                 artifact_sha256=artifact_sha, created_at=self._now(),
             )
             session.add(artifact); await session.flush()
@@ -2043,7 +2063,7 @@ class OntSignalWorker:
             artifact = OntSignalMappingArtifact(
                 id=f"ont-signal-artifact-{uuid.uuid4().hex}", mapping_job_id=job.id, kind=artifact_kind,
                 managed_relative_path=str(artifact_path), media_type=media, sha256=digest, size_bytes=artifact_size,
-                parent_identities=parent_identities, runtime_identity=self._runtime_identity(), validation_receipt=validation,
+                parent_identities=parent_identities, runtime_identity=self._runtime_that_ran("mapping", item_id), validation_receipt=validation,
                 created_at=self._now(),
             )
             session.add(artifact)
@@ -2065,7 +2085,7 @@ class OntSignalWorker:
                 current = await session.get(OntSignalMappingJob, item_id)
                 if current is not None and current.cancel_requested_at is not None: raise asyncio.CancelledError()
                 raise TerminalFenceLost("mapping terminal publication fence was lost")
-            session.add(OntSignalMappingEvent(id=f"ont-signal-event-{uuid.uuid4().hex}", job_id=job.id, state="ready", reason_code=reason, receipt={"artifact_sha256": digest, "runtime": self._runtime_identity()}, created_at=self._now()))
+            session.add(OntSignalMappingEvent(id=f"ont-signal-event-{uuid.uuid4().hex}", job_id=job.id, state="ready", reason_code=reason, receipt={"artifact_sha256": digest, "runtime": self._runtime_that_ran("mapping", item_id)}, created_at=self._now()))
             parents.assert_unbroken()
             await session.commit()
 
@@ -2261,7 +2281,7 @@ class OntSignalWorker:
                 OntSquigualiserViewJob.lease_expires_at > self._now(),
             ).values(
                 output_manifest=manifest,
-                render_receipt={**(view.render_receipt or {}), "runtime": self._runtime_identity(), "selection_command": selection_receipt, "command": command_receipt, "parent_sha256s": expected_runtime_parents},
+                render_receipt={**(view.render_receipt or {}), "runtime": self._runtime_that_ran("view", item_id), "selection_command": selection_receipt, "command": command_receipt, "parent_sha256s": expected_runtime_parents},
                 state="ready", reason_code="bounded_squigualiser_view_ready", claim_token=None, lease_expires_at=None,
                 updated_at=self._now(), completed_at=self._now(),
             ))
@@ -2462,8 +2482,8 @@ class OntSignalWorker:
         if manifest.get("schema") != "bms.ont-signal-comparison-manifest.v1" or not isinstance(raw_artifacts, list):
             raise RuntimeError("comparison manifest artifact inventory is malformed")
         stage_receipts = {
-            "squigulator_producer": {**producer_receipt, "runtime_identity": self._comparison_runtime_identity("squigulator_producer")},
-            "squigualiser_comparison_renderer": {**renderer_receipt, "runtime_identity": self._comparison_runtime_identity("squigualiser_comparison_renderer")},
+            "squigulator_producer": {**producer_receipt, "runtime_identity": self._runtime_that_ran("squigulator_producer", item_id)},
+            "squigualiser_comparison_renderer": {**renderer_receipt, "runtime_identity": self._runtime_that_ran("squigualiser_comparison_renderer", item_id)},
         }
         manifest = {**manifest, "parents": expected_parents,
                     "runtime_identities": {key: value["runtime_identity"] for key, value in stage_receipts.items()},

@@ -1442,14 +1442,17 @@ def test_worker_uses_short_private_broker_socket_path_for_deep_output_roots(
     worker = OntSignalWorker(None, None)
     seen: dict[str, Path] = {}
 
-    def fake_container_command(output: Path, broker: Path, *, kind: str) -> list[str]:
+    def fake_container_command(output: Path, broker: Path, *, kind: str, identity: dict[str, str] | None = None) -> list[str]:
         seen["broker"] = broker
+        # The image is resolved once at dispatch and handed to the command.
+        assert identity == {"image": "sha256:" + "a" * 64, "image_digest": "a" * 64}
         assert len(str(broker / "parents.sock").encode()) < 108
         return ["runtime", "run"]
 
     async def fake_execute(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {"ok": True}
 
+    monkeypatch.setattr(worker, "_runtime_identity", lambda: {"image": "sha256:" + "a" * 64, "image_digest": "a" * 64})
     monkeypatch.setattr(worker, "_container_command", fake_container_command)
     monkeypatch.setattr(worker, "_execute", fake_execute)
     result = asyncio.run(
