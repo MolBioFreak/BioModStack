@@ -252,8 +252,9 @@ process CloneValidationAdapter {
         --threads ${task.cpus} \
         --samtools-cmd "\${SAMTOOLS_CMD[@]}" || rm -f consensus_pileup.ab1
     total_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -F 2304 "${aligned_bam}")
-    mapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -F 2308 "${aligned_bam}")
     unmapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -f 4 -F 2304 "${aligned_bam}")
+    # Every primary read is either mapped or unmapped, so the mapped count needs no third pass.
+    mapped_reads=\$((total_reads - unmapped_reads))
     {
         printf 'metric\tvalue\n'
         printf 'total_reads\t%s\n' "\${total_reads}"

@@ -44,7 +44,20 @@ class SequenceEvidenceUnavailable(ValueError):
     """An incomplete observation must produce REVIEW, not a sequence failure."""
 
 
+_HASHED_VERSIONS: dict[tuple, str] = {}
+
+
 def sha256_file(path: Path) -> str:
+    """SHA-256 of a file. One run names the same file in several records; each version is read once."""
+    info = path.stat()
+    key = (str(path.resolve()), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+    known = _HASHED_VERSIONS.get(key)
+    if known is None:
+        known = _HASHED_VERSIONS[key] = _sha256_file_uncached(path)
+    return known
+
+
+def _sha256_file_uncached(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
