@@ -24,6 +24,8 @@ export interface OntReadReport {
         reference_count?: number; references_with_reads?: number; reference_list_limit?: number;
     };
     move_tagged_reads: number;
+    /** Whether the quick squiggle can read this run's own POD5 and basecall BAM. */
+    quick_squiggle?: { available: boolean; reason: string | null };
     molecule_type?: 'dna' | 'rna';
     modifications: {
         probability_threshold: number;
@@ -66,6 +68,8 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
     const bins = report.read_length_histogram.bins;
     // Past the read cap every figure covers only the first reads in file order.
     const capped = Boolean(report.truncated_at_reads);
+    // The quick viewer is offered only when it can read its own POD5; otherwise the workbench is the way in.
+    const quickSquiggle = report.move_tagged_reads > 0 && report.quick_squiggle?.available === true;
     const listedReferences = Object.keys(align.reads_per_reference).length;
     const referencesWithReads = align.references_with_reads ?? listedReferences;
     const cards: Array<[string, string, string]> = [
@@ -75,7 +79,8 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
         ['Mean Q', report.mean_qscore == null ? '—' : report.mean_qscore.toFixed(1), `median ${report.median_qscore?.toFixed(1) ?? '—'}`],
         ['≥Q10 / ≥Q20', report.reads ? `${pct(report.reads_q10_or_better / report.reads, 0)} / ${pct(report.reads_q20_or_better / report.reads, 0)}` : '—', 'share of reads'],
         ['Mapped', align.aligned ? `${n(align.mapped_reads)} / ${n(report.reads)}` : 'not aligned', align.aligned ? `${align.reference_count ?? align.references.length} reference contig(s)` : 'no reference supplied'],
-        ['Move tables', n(report.move_tagged_reads), report.move_tagged_reads ? 'squiggles below' : 'enable "emit moves" for squiggles'],
+        ['Move tables', n(report.move_tagged_reads), !report.move_tagged_reads ? 'enable "emit moves" for squiggles'
+            : quickSquiggle ? 'squiggles below' : onOpenSignal ? 'open in the signal workbench' : 'no raw signal on this run'],
     ];
     return (
         <div className="space-y-3" data-testid="ont-read-report">
@@ -183,7 +188,17 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
                 </section>
             )}
 
-            {report.move_tagged_reads > 0 && <OntReadSquigglePanel jobId={jobId} />}
+            {quickSquiggle && <OntReadSquigglePanel jobId={jobId} />}
+            {report.move_tagged_reads > 0 && !quickSquiggle && (
+                <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs" data-testid="quick-squiggle-unavailable">
+                    <h4 className="text-sm font-semibold text-[var(--text-primary)]">Squiggle</h4>
+                    <p className="mt-1 text-[var(--text-secondary)]">
+                        These reads carry move tables. {report.quick_squiggle?.reason ?? 'The quick squiggle needs this run\'s own POD5.'}
+                        {onOpenSignal ? ' The signal workbench has the raw signal bound to this result.' : ''}
+                    </p>
+                    {onOpenSignal && <button type="button" onClick={onOpenSignal} className="mt-2 rounded border border-[var(--border-primary)] px-2 py-1 text-xs">Open the signal workbench</button>}
+                </section>
+            )}
 
             <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs">
                 <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Programs and read groups</summary>

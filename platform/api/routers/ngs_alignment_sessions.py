@@ -1446,10 +1446,13 @@ async def get_ngs_read_report(
             public = {**metadata, "filename": chosen.get("filename") or Path(str(chosen.get("relative_path") or "")).name,
                       "url": chosen.get("url")}
             molecule = (authorized_job.params or {}).get("ont_molecule_type") if isinstance(authorized_job.params, dict) else None
-            return await run_in_threadpool(
+            report = await run_in_threadpool(
                 build_read_report, Path(path), artifact=public,
                 molecule_type=str(molecule) if molecule else None,
             )
+            # The quick squiggle reads this run's own POD5; say whether it can before the page offers it.
+            report["quick_squiggle"] = quick_squiggle_availability(authorized_job, artifacts)
+            return report
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
     except OntReadReportError as exc:
@@ -1457,21 +1460,34 @@ async def get_ngs_read_report(
                                job_id=job_id, resource="artifact") from exc
 
 
-async def _job_basecall_bam_and_pod5(job_id: str, authorized_job: Job, pinned_root: Path) -> tuple[Path, Path]:
-    """Move-tagged basecall BAM and the job's own POD5 input, both job-owned."""
+def _job_pod5_input(authorized_job: Job) -> tuple[Path | None, str | None]:
+    """This run's own POD5 input, or why it cannot be read."""
     from paths import get_allowed_roots
-
     params = authorized_job.params if isinstance(authorized_job.params, dict) else {}
     raw_pod5 = params.get("pod5_dir")
     if not isinstance(raw_pod5, str) or not raw_pod5.strip():
-        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
-                               message="This run did not start from POD5, so it has no raw signal.",
-                               job_id=job_id, resource="artifact")
+        return None, "This run did not start from POD5, so it has no raw signal."
     pod5_dir = Path(raw_pod5).resolve()
     roots = [Path(root).resolve() for root in get_allowed_roots().values()]
     if not pod5_dir.exists() or not any(pod5_dir == root or root in pod5_dir.parents for root in roots):
-        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
-                               message="This run's POD5 input is no longer available.",
+        return None, "This run's POD5 input is no longer available."
+    return pod5_dir, None
+
+
+def quick_squiggle_availability(authorized_job: Job, artifacts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Whether the quick squiggle has both things it reads: the run's POD5 and its basecall BAM."""
+    _pod5_dir, reason = _job_pod5_input(authorized_job)
+    if reason is None and not any(item.get("state") == "present" and str(item.get("relative_path") or "") == "basecall/calls.bam"
+                                  for item in artifacts):
+        reason = "This run published no basecall BAM."
+    return {"available": reason is None, "reason": reason}
+
+
+async def _job_basecall_bam_and_pod5(job_id: str, authorized_job: Job, pinned_root: Path) -> tuple[Path, Path]:
+    """Move-tagged basecall BAM and the job's own POD5 input, both job-owned."""
+    pod5_dir, reason = _job_pod5_input(authorized_job)
+    if pod5_dir is None:
+        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND", message=str(reason),
                                job_id=job_id, resource="artifact")
     artifacts = await run_in_threadpool(
         service.build_ngs_package_artifacts, job_id, **_job_package_authority(authorized_job),
@@ -1525,7 +1541,9 @@ async def get_ngs_read_squiggle(
     try:
         async with _validated_pinned_result_root(authorized_job) as pinned_root:
             bam, pod5_dir = await _job_basecall_bam_and_pod5(job_id, authorized_job, pinned_root)
-            return await run_in_threadpool(read_squiggle, bam, pod5_dir, read_id, start_base=start_base, bases=bases)
+            molecule = (authorized_job.params or {}).get("ont_molecule_type") if isinstance(authorized_job.params, dict) else None
+            return await run_in_threadpool(read_squiggle, bam, pod5_dir, read_id, start_base=start_base, bases=bases,
+                                           molecule_type=str(molecule) if molecule else None)
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="read") from exc
     except OntReadReportError as exc:

@@ -10,7 +10,7 @@ import pod5
 import pysam
 import pytest
 
-from services.ont_read_report import OntReadReportError
+from services.ont_read_report import RNA_MOD_CODE_NAMES, OntReadReportError
 from services.ont_read_squiggle import list_reads, read_squiggle
 
 READ_ID = "3f1c2b8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
@@ -38,8 +38,11 @@ def _write_pod5(path: Path, samples: int) -> None:
         writer.add_read(read)
 
 
-def _write_bam(path: Path, sequence: str, moves: list[int], trimmed: int) -> None:
+def _write_bam(path: Path, sequence: str, moves: list[int], trimmed: int, *, ns: int | None = None,
+               model: str | None = None) -> None:
     header = {"HD": {"VN": "1.6"}}
+    if model:
+        header["RG"] = [{"ID": "rg", "DS": f"runid=r basecall_model={model}"}]
     with pysam.AlignmentFile(str(path), "wb", header=header) as handle:
         read = pysam.AlignedSegment(handle.header)
         read.query_name = READ_ID
@@ -48,6 +51,8 @@ def _write_bam(path: Path, sequence: str, moves: list[int], trimmed: int) -> Non
         read.query_qualities = pysam.qualitystring_to_array("5" * len(sequence))
         read.set_tag("qs", 20.0)
         read.set_tag("ts", trimmed)
+        if ns is not None:
+            read.set_tag("ns", ns)
         read.set_tag("mv", array("b", [6, *moves]))
         read.set_tag("MM", "A+a?,1;")  # second A is called
         read.set_tag("ML", [240])
@@ -96,3 +101,70 @@ def test_squiggle_refuses_reads_without_moves_or_signal(tmp_path: Path) -> None:
     _write_bam(bam, "CAG", [1, 0, 1, 1, 0, 0, 1, 1], 0)
     with pytest.raises(OntReadReportError, match="move table does not match"):
         read_squiggle(bam, pod5_dir, READ_ID)
+
+
+MOVES = [1, 0, 1, 1, 0, 0, 1, 1]  # in signal order, bases start at blocks 0, 2, 3, 6, 7
+
+
+def _setup(tmp_path: Path, *, trimmed: int, samples: int, ns: int | None, model: str | None = None) -> tuple[Path, Path]:
+    pod5_dir = tmp_path / "pod5"
+    pod5_dir.mkdir()
+    _write_pod5(pod5_dir / "reads.pod5", samples=samples)
+    bam = tmp_path / "calls.bam"
+    _write_bam(bam, "CAGAT", MOVES, trimmed, ns=ns, model=model)
+    return bam, pod5_dir
+
+
+def test_signal_past_the_last_whole_block_stays_with_the_last_base(tmp_path: Path) -> None:
+    # 12 trimmed + 8 blocks of 6 = 60; the basecaller called up to sample 64 of 67.
+    bam, pod5_dir = _setup(tmp_path, trimmed=12, samples=67, ns=64)
+    view = read_squiggle(bam, pod5_dir, READ_ID, start_base=1, bases=10)
+    assert view["final_partial_block_samples"] == 4 and view["signal_order"] == "5_prime_first"
+    assert [(b["base"], b["sample_start"], b["sample_end"]) for b in view["bases"]] == [
+        ("A", 0, 6), ("G", 6, 24), ("A", 24, 30), ("T", 30, 40),
+    ]
+    assert len(view["signal_pa"]) == 40
+    assert view["signal_pa"][-1] == float(63 % 200)  # the last called sample, not sample 59
+
+
+def test_an_ns_that_breaks_the_partial_block_rule_is_not_used(tmp_path: Path) -> None:
+    # A whole stride or more past the blocks is not a partial block; the whole blocks stand.
+    bam, pod5_dir = _setup(tmp_path, trimmed=12, samples=90, ns=66)
+    view = read_squiggle(bam, pod5_dir, READ_ID, start_base=1, bases=10)
+    assert view["final_partial_block_samples"] == 0 and view["bases"][-1]["sample_end"] == 36
+
+
+def test_rna_signal_runs_against_the_called_sequence(tmp_path: Path) -> None:
+    bam, pod5_dir = _setup(tmp_path, trimmed=12, samples=67, ns=64, model="rna004_130bps_hac@v5.1.0")
+    view = read_squiggle(bam, pod5_dir, READ_ID, start_base=0, bases=10)
+    assert view["signal_order"] == "3_prime_first" and view["sample_offset"] == 12
+    # The first signal block belongs to the last called base; the partial block ends the first called base.
+    assert [(b["index"], b["base"], b["sample_start"], b["sample_end"]) for b in view["bases"]] == [
+        (4, "T", 0, 12), (3, "A", 12, 18), (2, "G", 18, 36), (1, "A", 36, 42), (0, "C", 42, 52),
+    ]
+    assert view["bases"][1]["modifications"] == {f"A+{RNA_MOD_CODE_NAMES.get('a', 'a')}": round(240.5 / 256, 4)}
+    # A window is chosen in sequence positions and drawn from the matching stretch of signal.
+    window = read_squiggle(bam, pod5_dir, READ_ID, start_base=3, bases=10)
+    assert [(b["index"], b["sample_start"], b["sample_end"]) for b in window["bases"]] == [(4, 0, 12), (3, 12, 18)]
+    assert window["sample_offset"] == 12 and len(window["signal_pa"]) == 18
+    # The same BAM read as DNA keeps the forward order.
+    assert read_squiggle(bam, pod5_dir, READ_ID, molecule_type="dna")["signal_order"] == "5_prime_first"
+
+
+def test_quick_squiggle_is_offered_only_when_its_own_pod5_and_basecall_bam_are_there(tmp_path: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+    import paths
+    from routers import ngs_alignment_sessions as router
+    pod5_dir = tmp_path / "inputs" / "pod5"
+    pod5_dir.mkdir(parents=True)
+    monkeypatch.setattr(paths, "get_allowed_roots", lambda: {"inputs": tmp_path / "inputs"})
+    calls = [{"state": "present", "relative_path": "basecall/calls.bam"}]
+    job = lambda **params: SimpleNamespace(params=params)
+    assert router.quick_squiggle_availability(job(pod5_dir=str(pod5_dir)), calls) == {"available": True, "reason": None}
+    # External BAM with move tags, no POD5 of its own.
+    assert router.quick_squiggle_availability(job(bam_path="/x/moves.bam"), calls) == {
+        "available": False, "reason": "This run did not start from POD5, so it has no raw signal."}
+    assert router.quick_squiggle_availability(job(pod5_dir=str(tmp_path / "inputs" / "gone")), calls)["reason"] == "This run's POD5 input is no longer available."
+    assert router.quick_squiggle_availability(job(pod5_dir=str(tmp_path)), calls)["available"] is False  # outside the allowed roots
+    assert router.quick_squiggle_availability(job(pod5_dir=str(pod5_dir)), [{"state": "present", "relative_path": "align/aligned.bam"}]) == {
+        "available": False, "reason": "This run published no basecall BAM."}

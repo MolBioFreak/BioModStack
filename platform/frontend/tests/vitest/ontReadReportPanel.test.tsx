@@ -25,6 +25,7 @@ const REPORT = {
     read_length_histogram: { bin_width_bp: 100, bins: [{ start_bp: 5400, end_bp_exclusive: 5500, read_count: 12, base_count: 65630 }] },
     alignment: { aligned: false, mapped_reads: 0, unmapped_reads: 12, secondary_records: 0, supplementary_records: 0, references: [], reads_per_reference: {} },
     move_tagged_reads: 12,
+    quick_squiggle: { available: true, reason: null },
     modifications: { probability_threshold: 0.5, by_code: [
         { code: 'A+6mA', called_sites: 4291, modified_sites: 334, reads: 12, modified_fraction: 0.077837 },
         { code: 'C+5mC', called_sites: 5258, modified_sites: 9, reads: 12, modified_fraction: 0.001712 },
@@ -92,6 +93,23 @@ describe('OntReadReportPanel', () => {
         expect(onOpenSignal).toHaveBeenCalled();
     });
 
+    it('does not open the quick squiggle when the run has no POD5 of its own, and points to the workbench', async () => {
+        const external = { ...REPORT, quick_squiggle: { available: false, reason: 'This run did not start from POD5, so it has no raw signal.' } };
+        get.mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('ngs-read-report') ? external : READS }));
+        const onOpenSignal = vi.fn();
+        await mount(onOpenSignal);
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+        expect(get.mock.calls.some(call => String(call[0]).includes('ngs-squiggle'))).toBe(false);
+        expect(container.querySelector('[aria-label="Squiggle viewer"]')).toBeNull();
+        expect(container.querySelector('[role="alert"]')).toBeNull();
+        const note = container.querySelector('[data-testid="quick-squiggle-unavailable"]')!;
+        expect(note.textContent).toContain('This run did not start from POD5, so it has no raw signal.');
+        expect(container.querySelector('[aria-label="Read summary"]')!.textContent).toContain('open in the signal workbench');
+        await act(async () => Array.from(note.querySelectorAll('button')).find(node => node.textContent === 'Open the signal workbench')!.click());
+        expect(onOpenSignal).toHaveBeenCalledTimes(1);
+        // The read report itself is still shown.
+        expect(container.querySelector('[data-motif-code="A+6mA@GATC"]')).not.toBeNull();
+    });
     it('labels every figure as capped past the read cap and says when the reference list is cut', async () => {
         const capped = { ...REPORT, truncated_at_reads: 200000, alignment: {
             ...REPORT.alignment, aligned: true, mapped_reads: 12, unmapped_reads: 0,
