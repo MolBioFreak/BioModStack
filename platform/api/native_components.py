@@ -85,6 +85,7 @@ PROCESS_CONTRACTS = {
     'modules/ngs/bam_prepare.nf:BamToFastqForQC': (('dorado_cpu',), ('tuple path(bam), path(bai)',), ('path "reads_for_qc.fastq", emit: fastq', 'path "bam_to_fastq_for_qc.log", emit: log'), ('modules/ngs/publication.nf',), ()),
     'modules/ngs/bam_prepare.nf:PrepareReferenceForIGV': (('dorado_cpu',), ("path reference, stageAs: 'expected-reference-source.fasta'",), ('path "reference.fasta", emit: reference_copy', 'path "reference.fasta.fai", emit: reference_index', 'path "reference_prepare.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
     'modules/ngs/clone_validation.nf:RunCloneValidation': (('wf_clone',), ('tuple path(bam), val(reference_fasta)',), ('env published_directory, emit: out', 'path "wf_clone_out/**", type: \'file\', hidden: true, emit: publication_files', 'path "wf_clone.log", emit: log', 'path "runtime_provenance.json", emit: runtime_provenance', 'path "input_model_provenance.json", emit: input_model_provenance', 'path "wf_clone_out/wf-clone-validation-report.html", emit: report', 'path "wf_clone_out/sample_status.txt", emit: sample_status'), ('scripts/validate_clone_input_model.py', 'scripts/validate_wf_clone_runtime.py', 'modules/ngs/publication.nf'), ()),
+    'modules/ngs/clone_validation.nf:HostComposition': (('fastq_qc_cpu',), ('tuple path(aligned_bam), path(aligned_bai)', "path host_reference, stageAs: 'host_reference.fasta'"), ('path "host_composition.json", emit: composition, optional: true',), ('scripts/build_host_composition.py',), ()),
     'modules/ngs/clone_validation.nf:CloneValidationAdapter': (('fastq_qc_cpu',), ('path result_root', 'path runtime_provenance', 'tuple path(aligned_bam), path(aligned_bai)', "path reference, stageAs: 'authoritative_reference.fasta'"), ('path "adapter_manifest.json", emit: manifest', 'env published_directory, emit: verification_input', 'path "verification_input/**", type: \'file\', hidden: true, optional: true, emit: publication_files', 'path "per_base_support.tsv", emit: per_base_support', 'path "consensus_pileup.ab1", emit: pileup_chromatogram, optional: true', 'path "plasmid_summary/*", emit: plasmid_summary, optional: true', 'path "alignment_stats.tsv", emit: alignment_stats', 'path "dimer_breakpoint_call.tsv", emit: breakpoint_call', 'path "dimer_secondary_summary.tsv", emit: secondary_summary'), ('scripts/adapt_wf_clone_validation.py', 'scripts/build_construct_verification_input.py', 'scripts/build_fastq_support_tables.py', 'scripts/write_pileup_ab1.py', 'scripts/build_plasmid_summary.py', 'modules/ngs/publication.nf'), ()),
     'modules/ngs/clone_validation.nf:ComparePlasmidConsensus': (('fastq_qc_cpu',), ('path verification_input', 'path read_consensus'), ('env published_directory, emit: verification_input', 'path "compared_verification_input/**", type: \'file\', hidden: true, emit: publication_files', "path 'compared_verification_input/consensus_comparison.json', emit: comparison"), ('scripts/compare_plasmid_consensus.py', 'scripts/verify_construct.py', 'scripts/plasmid_evidence.py', 'scripts/plasmid_circular.py', 'modules/ngs/publication.nf'), ()),
     'modules/ngs/comparison_panel_attribution.nf:ComparisonPanelAttribution': (('dorado_cpu',), ('path fastq', 'path expected_reference', 'path snapshot'), ("path 'comparison_panel.fasta', emit: reference", "path 'comparison_panel_expected_reference.fasta', emit: expected_reference", "path 'comparison_panel_source.fastq', emit: source_fastq", "path 'comparison_panel_normalized.fastq', emit: normalized_fastq", "path 'comparison_panel_occurrence_map.json', emit: occurrence_map", "path 'comparison_panel.bam', emit: bam", "path 'comparison_panel.bam.bai', emit: bai", "path 'comparison_panel_summary.json', emit: summary"), (), ()),
@@ -1437,6 +1438,8 @@ def _append_ngs(a, workflow, yes):
             extra=tuple(row.logical_id for row in dependencies)),)
         aligned = a.chain(['DoradoAlign'], tuple(dict.fromkeys((*clone, *after))))
         a.chain(['CloneValidationAdapter'], tuple(dict.fromkeys((*clone, *aligned))))
+        if p.get('wf_clone_host_reference'):
+            a.stage('HostComposition', aligned)
         return True
     if workflow in {'wf_clone_validation', 'ont_construct_screening'}:
         # These entrypoints share the assembled/read-guided evidence graph.
@@ -1451,6 +1454,8 @@ def _append_ngs(a, workflow, yes):
             clone = (a.stage('RunCloneValidation', after,
                 extra=tuple(row.logical_id for row in dependencies)),)
             adapter = a.chain(['CloneValidationAdapter'], tuple(dict.fromkeys((*clone, *after))))
+            if workflow == 'wf_clone_validation' and p.get('wf_clone_host_reference'):
+                a.stage('HostComposition', after)
         qc, dimer_after = (), ()
         if run_qc:
             reads = a.chain(['BamToFastqForQC'], after) if not fastq else ()

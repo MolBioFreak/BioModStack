@@ -67,6 +67,10 @@ it('shows the summary numbers, map, plots, gel, chromatogram and every published
     const text = container.textContent!;
     expect(text).toContain('Plasmid summary · JAN26-EL-Q2-01');
     expect(text).toContain('Assembled from reads. No expected sequence was given.');
+    // No host reference was given: the two tiles say so instead of showing a number.
+    expect(text).toContain('E. coli genomic DNA—needs a host reference');
+    expect(text).toContain('Share of sample— / —molar / mass');
+    expect(container.querySelector('[data-testid="plasmid-host-composition"]')).toBeNull();
     for (const value of ['5,569 bp', '61,708', '315,879,481 bp', '61,500 / 61,708', '56,292×', '100.00%', 'Depth 49,295 to 56,893.']) expect(text).toContain(value);
     // The existing plasmid viewer draws the map from the consensus and the annotation file.
     expect(viewer.props!.viewMode).toBe('circular');
@@ -88,6 +92,26 @@ it('shows the summary numbers, map, plots, gel, chromatogram and every published
     await act(async () => igv.click());
     expect(onOpenIgv).toHaveBeenCalledTimes(1);
     expect(buttons.find(button => button.textContent === 'Open squiggles')!.disabled).toBe(true);
+});
+
+it('reports host DNA over the whole read population and labels the molar and mass shares as estimates', async () => {
+    const withHost: PlasmidSummaryResponse = { ...response(), host_composition: {
+        schema: 'bms.ngs.host-composition.v1',
+        denominator: { total_reads: 4200, total_bases: 20291787, source: 'population.fastq' },
+        categories: {
+            plasmid: { reads: 3990, bases: 19650000, read_fraction: 0.95, base_fraction: 0.9684 },
+            host: { reads: 200, bases: 600000, read_fraction: 200 / 4200, base_fraction: 0.02957 },
+            ambiguous: { reads: 0, bases: 0, read_fraction: 0, base_fraction: 0 },
+            unclassified: { reads: 10, bases: 41787, read_fraction: 10 / 4200, base_fraction: 0.00206 },
+        },
+        estimate: { host_mass_fraction: 0.0296, host_molar_fraction: 0.0000366, method: 'aligned bases divided by molecule length', checked_against_known_mixture: false },
+    } };
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => (path.endsWith('/ngs-plasmid-summary') ? { data: withHost } : { data: 'not a table' }) as never);
+    await mount();
+    const text = container.textContent!;
+    expect(text).toContain('E. coli genomic DNA4.76%200 of 4,200 reads · 2.96% of bases');
+    expect(text).toContain('Share of sample0.004% / 2.96%host, molar / mass · estimate, not checked against a known mixture');
+    expect(container.querySelector('[data-testid="plasmid-host-composition"]')!.textContent).toContain('Of 4,200 reads: 3,990 plasmid, 200 host, 0 ambiguous, 10 unclassified.');
 });
 
 it('stays out of the way for a job that published no plasmid summary', async () => {

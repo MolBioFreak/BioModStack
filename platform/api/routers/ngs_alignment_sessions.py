@@ -1351,10 +1351,16 @@ async def get_ngs_plasmid_summary(
             path = await _plasmid_summary_path(job_id, authorized_job, pinned_root, chosen["artifact_id"])
             document = await run_in_threadpool(lambda: json.loads(path.read_text(encoding="utf-8")))
             files = plasmid_summary.select_summary_files(artifacts)
+            host_item = plasmid_summary.select_host_composition_artifact(artifacts)
+            host_composition = None
+            if host_item is not None:
+                host_path = await _plasmid_summary_path(job_id, authorized_job, pinned_root, host_item["artifact_id"])
+                host_composition = await run_in_threadpool(lambda: json.loads(host_path.read_text(encoding="utf-8")))
         inside, left_out = plasmid_summary.plan_zip(files)
         public = lambda item: {key: item[key] for key in ("key", "label", "format", "url", "size_bytes", "filename")}
         return {
             "schema": "bms.ngs.plasmid-summary-response.v1", "job_id": job_id, "summary": document,
+            "host_composition": host_composition,
             "files": [public(item) for item in files],
             "download_all": {"url": f"/api/jobs/{job_id}/ngs-plasmid-summary/download-all",
                              "included": [item["key"] for item in inside],

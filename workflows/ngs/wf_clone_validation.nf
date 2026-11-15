@@ -16,7 +16,7 @@ include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
 include { ConstructVerify } from '../../modules/ngs/construct_verify.nf'
-include { RunCloneValidation; CloneValidationAdapter; ComparePlasmidConsensus } from '../../modules/ngs/clone_validation.nf'
+include { RunCloneValidation; CloneValidationAdapter; ComparePlasmidConsensus; HostComposition } from '../../modules/ngs/clone_validation.nf'
 include { ModkitAnalysis } from '../../modules/ngs/modkit_analysis.nf'
 
 include { reportStage } from '../../modules/ngs/stage_reporting.nf'
@@ -201,6 +201,9 @@ workflow WF_CLONE_VALIDATION {
             DoradoAlign.out.aligned,
             consensus,
         )
+        if (params.wf_clone_host_reference && params.wf_clone_host_reference.toString().trim()) {
+            HostComposition(DoradoAlign.out.aligned, Channel.of(file(params.wf_clone_host_reference.toString().trim())))
+        }
         // FASTQ carries no MM/ML tags, so there is nothing for modkit to read.
         if (params.run_modkit == true && !has_fastq) {
             ModkitAnalysis(DoradoAlign.out.aligned, consensus)
@@ -220,6 +223,9 @@ workflow WF_CLONE_VALIDATION {
         analysis_bam,
         Channel.of(reference_file),
     )
+    if (params.wf_clone_host_reference && params.wf_clone_host_reference.toString().trim()) {
+        HostComposition(analysis_bam, Channel.of(file(params.wf_clone_host_reference.toString().trim())))
+    }
     def verificationInput = CloneValidationAdapter.out.verification_input
     def breakpointEvidence = CloneValidationAdapter.out.breakpoint_call
     def secondaryEvidence = CloneValidationAdapter.out.secondary_summary

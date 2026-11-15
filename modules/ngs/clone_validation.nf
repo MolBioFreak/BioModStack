@@ -278,6 +278,39 @@ process CloneValidationAdapter {
     """
 }
 
+process HostComposition {
+    label 'fastq_qc_cpu'
+    publishDir "${params.out_dir}/assembly/adapter/plasmid_summary", mode: 'copy'
+    tag "host_composition"
+    input:
+    tuple path(aligned_bam), path(aligned_bai)
+    path host_reference, stageAs: 'host_reference.fasta'
+    output:
+    path "host_composition.json", emit: composition, optional: true
+    script:
+    def sampleName = (params.wf_clone_sample ?: params.name ?: (params.job_id ? "nanopore_${params.job_id}" : "nanopore"))
+        .toString()
+        .replaceAll(/[^A-Za-z0-9._-]/, "_")
+    def codeRoot = params.code_root ?: projectDir
+    def builder = shellQuote("${codeRoot}/scripts/build_host_composition.py")
+    """
+    set -uo pipefail
+    # Every read of the run, counted once: plasmid, host, ambiguous or unclassified.
+    # An extra figure for the summary page, never a completion condition.
+    (
+        samtools fastq -F 2304 -n "${aligned_bam}" > population.fastq &&
+        samtools view -h -F 4 "${aligned_bam}" | cut -f 1-6 > plasmid.sam &&
+        minimap2 -a -x map-ont --secondary=no -t ${task.cpus} host_reference.fasta population.fastq 2> host_alignment.log | cut -f 1-6 > host.sam &&
+        python3 ${builder} \
+            --sample "${sampleName}" \
+            --reads-fastq population.fastq \
+            --plasmid-sam plasmid.sam \
+            --host-sam host.sam \
+            --out host_composition.json
+    ) || rm -f host_composition.json
+    rm -f population.fastq plasmid.sam host.sam
+    """
+}
 process ComparePlasmidConsensus {
     label 'fastq_qc_cpu'
     publishDir "${params.out_dir}/assembly/comparison", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", saveAs: { name -> name ==~ /.*\.(fasta|fastq)(\.gz)?$/ ? name : null }

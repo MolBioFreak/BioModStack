@@ -41,6 +41,14 @@ def test_read_qc_result_uses_its_own_files_and_absent_files_are_not_listed():
     assert summary.select_summary_artifact([artifact("align/aligned.bam")]) is None
 
 
+def test_host_composition_is_offered_only_when_the_run_published_it():
+    assert summary.select_host_composition_artifact(CLONE) is None
+    with_host = CLONE + [artifact("assembly/adapter/plasmid_summary/host_composition.json")]
+    assert summary.select_host_composition_artifact(with_host)["relative_path"].endswith("host_composition.json")
+    assert "host_composition" in [item["key"] for item in summary.select_summary_files(with_host)]
+    assert "host_composition" not in [item["key"] for item in summary.select_summary_files(CLONE)]
+
+
 def test_two_assemblies_in_one_result_are_not_guessed_between():
     files = summary.select_summary_files([artifact("assembly/wf_clone_out/a.final.fasta"),
                                           artifact("assembly/wf_clone_out/b.final.fasta")])

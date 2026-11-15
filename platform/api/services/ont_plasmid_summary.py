@@ -27,6 +27,7 @@ _FILES = (
     ("virtual_gel", "Virtual gel", "SVG", ("assembly/adapter/plasmid_summary", "fastq_qc/plasmid_summary"), "virtual_gel.svg", False),
     ("sample_summary", "Sample summary", "TXT", ("assembly/adapter/plasmid_summary", "fastq_qc/plasmid_summary"), "sample_summary.txt", False),
     ("run_summary", "Run summary", "CSV", ("assembly/adapter/plasmid_summary", "fastq_qc/plasmid_summary"), "run_summary.csv", False),
+    ("host_composition", "Sample composition", "JSON", ("assembly/adapter/plasmid_summary",), "host_composition.json", False),
     ("alignments", "Alignments", "BAM", ("align", "fastq_qc"), "aligned.bam", True),
     ("alignments_index", "Alignments index", "BAI", ("align", "fastq_qc"), "aligned.bam.bai", True),
 )
@@ -45,6 +46,11 @@ def select_summary_artifact(artifacts: Iterable[dict[str, Any]]) -> dict[str, An
         if found is not None:
             return found
     return None
+
+
+def select_host_composition_artifact(artifacts: Iterable[dict[str, Any]]) -> dict[str, Any] | None:
+    """The host share of the read population, present only when the run was given a host reference."""
+    return _present(artifacts).get("assembly/adapter/plasmid_summary/host_composition.json")
 
 
 def select_summary_files(artifacts: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

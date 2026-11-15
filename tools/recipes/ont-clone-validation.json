@@ -13,7 +13,7 @@
       "https://github.com/mmcguffi/pLannotate"
     ]
   },
-  "notes": "Runs scripts/provision_wf_clone_runtime.py, which pulls Oxford Nanopore's published images named in config/ngs/wf_clone_validation_v1.8.4.lock.json and builds medaka from apptainer/medaka.def. The script checks each file against the hash in the lock; an image converted on your machine can differ from that hash, and the script then stops. For Canu assembly run the script yourself with --assembly-tool canu. Not yet built from clean by us: expect to fix things. It also installs the Nextflow 25.10.0 launcher and framework jar the pipeline runs under, checked against the lock; Java 17 or later must be on the machine.",
+  "notes": "Runs scripts/provision_wf_clone_runtime.py, which pulls Oxford Nanopore's published images named in config/ngs/wf_clone_validation_v1.8.4.lock.json and builds medaka from apptainer/medaka.def. The script checks each file against the hash in the lock; an image converted on your machine can differ from that hash, and the script then stops. For Canu assembly run the script yourself with --assembly-tool canu. Not yet built from clean by us: expect to fix things. It also installs the Nextflow 25.10.0 launcher and framework jar the pipeline runs under, checked against the lock; Java 17 or later must be on the machine. The optional host reference is the public E. coli K-12 MG1655 genome from NCBI; give its path in the clone form's Host reference field, or give your own strain's FASTA there instead.",
   "images": [
     {
       "filename": "ont-clone-v1.8.4",
@@ -42,5 +42,25 @@
       ]
     }
   ],
-  "weights": []
+  "weights": [
+    {
+      "id": "ecoli-k12-mg1655-host-reference",
+      "required": false,
+      "approx_size_gb": 0.002,
+      "present_if": [
+        "ngs/host-references/GCF_000005845.2_ASM584v2_genomic.fna.gz"
+      ],
+      "fetch": {
+        "type": "url",
+        "source": "NCBI RefSeq GCF_000005845.2 (Escherichia coli K-12 MG1655)",
+        "files": [
+          {
+            "url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/005/845/GCF_000005845.2_ASM584v2/GCF_000005845.2_ASM584v2_genomic.fna.gz",
+            "dest": "ngs/host-references/GCF_000005845.2_ASM584v2_genomic.fna.gz",
+            "sha256": "a96d3cfa58c88d477013c768f90a11d2386d42a70d566abfb6d9013dcbd24255"
+          }
+        ]
+      }
+    }
+  ]
 }

@@ -28,9 +28,20 @@ export interface PlasmidSummaryResponse {
         features: Array<{ name: string; start: number; end: number; strand: 1 | -1 }>;
         features_source: string | null;
     };
+    host_composition?: HostComposition | null;
     files: PlasmidSummaryFile[];
     download_all: { url: string; included: string[]; left_out: string[] };
 }
+
+interface HostCategory { reads: number; bases: number; read_fraction: number | null; base_fraction: number | null }
+export interface HostComposition {
+    schema: 'bms.ngs.host-composition.v1';
+    denominator: { total_reads: number; total_bases: number; source: string };
+    categories: Record<'plasmid' | 'host' | 'ambiguous' | 'unclassified', HostCategory>;
+    estimate: { host_mass_fraction: number; host_molar_fraction: number; method: string; checked_against_known_mixture: boolean } | null;
+}
+
+const percent = (value: number | null | undefined) => (value == null ? '—' : `${(value * 100).toFixed(value > 0 && value < 0.001 ? 3 : 2)}%`);
 
 /** The job's plasmid summary, or null when the job published none. */
 export async function fetchPlasmidSummary(jobId: string): Promise<PlasmidSummaryResponse | null> {
@@ -76,6 +87,13 @@ export function PlasmidSummaryPanel({ jobId, onOpenIgv, onOpenSignal }: PlasmidS
         ['Mean coverage', coverage.mean_depth == null ? '—' : `${Math.round(coverage.mean_depth).toLocaleString()}×`, 'aligned depth'],
         ['Covered', coverage.covered_fraction == null ? '—' : `${(coverage.covered_fraction * 100).toFixed(2)}%`, 'positions with reads'],
     ];
+    const host = data.host_composition?.schema === 'bms.ngs.host-composition.v1' ? data.host_composition : null;
+    tiles.push(
+        ['E. coli genomic DNA', host ? percent(host.categories.host.read_fraction) : '—',
+            host ? `${n(host.categories.host.reads)} of ${n(host.denominator.total_reads)} reads · ${percent(host.categories.host.base_fraction)} of bases` : 'needs a host reference'],
+        ['Share of sample', host?.estimate ? `${percent(host.estimate.host_molar_fraction)} / ${percent(host.estimate.host_mass_fraction)}` : '— / —',
+            host?.estimate ? 'host, molar / mass · estimate, not checked against a known mixture' : 'molar / mass'],
+    );
     const perBase = file('per_base_table');
     return (
         <section className="space-y-3 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" data-testid="plasmid-summary" aria-label="Plasmid summary">
@@ -97,7 +115,7 @@ export function PlasmidSummaryPanel({ jobId, onOpenIgv, onOpenSignal }: PlasmidS
                         className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-[var(--accent-primary)]">Download all</a>
                 </div>
             </div>
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6" aria-label="Summary numbers">
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8" aria-label="Summary numbers">
                 {tiles.map(([label, value, detail]) => (
                     <div key={label} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
                         <div className="text-[11px] text-[var(--text-secondary)]">{label}</div>
@@ -162,6 +180,13 @@ export function PlasmidSummaryPanel({ jobId, onOpenIgv, onOpenSignal }: PlasmidS
                     </svg>
                 </div>
             </div>
+            {host && (
+                <p className="text-[11px] text-[var(--text-secondary)]" data-testid="plasmid-host-composition">
+                    Of {n(host.denominator.total_reads)} reads: {n(host.categories.plasmid.reads)} plasmid, {n(host.categories.host.reads)} host,{' '}
+                    {n(host.categories.ambiguous.reads)} ambiguous, {n(host.categories.unclassified.reads)} unclassified. Host identity is counted separately from monomer, multimer and fragment structure.
+                    {host.estimate && ` Molar and mass shares are estimates from ${host.estimate.method}.`}
+                </p>
+            )}
             {perBase?.url && (
                 <PileupChromatogram tableUrl={perBase.url} ab1Url={file('chromatogram')?.url ?? null}
                     coordinateLabel={summary.coordinates === 'consensus' ? 'consensus' : 'expected sequence'} />
