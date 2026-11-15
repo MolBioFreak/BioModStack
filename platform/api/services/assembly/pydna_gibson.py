@@ -224,6 +224,17 @@ SHORT_FRAGMENT = 40
 MIN_HOMOLOGY = 15
 
 
+class _StockAssemblerRefused(AssemblyError):
+    """The stock pydna path could not design or enumerate this target (repeats make its overlap
+    search ambiguous). design_gibson answers it with the overlap planner instead of refusing."""
+
+
+PLANNER_FALLBACK_NOTE = (
+    "pydna's own assembler could not resolve this target unambiguously (repeated sequence), so the "
+    "overlap planner designed the primers; the design was still validated independently by simulate_gibson"
+)
+
+
 def _existing_homology(left: str, right: str) -> int:
     """Longest exact terminal overlap (>= 15 nt, <= 80) a pair already shares."""
     top = min(len(left) - 1, len(right) - 1, 80)
@@ -445,8 +456,35 @@ def design_gibson(
     """Design and independently validate one bounded ordered Gibson assembly.
 
     ``junctions`` optionally sets the overlap length and which primers carry it for the join after
-    named fragments; every other join follows ``overlap``.
+    named fragments; every other join follows ``overlap``. A target the stock pydna assembler cannot
+    resolve (repeats) is designed by the overlap planner instead of being refused.
     """
+    arguments = dict(
+        preparations=preparations, circular=circular, overlap=overlap, target_tm=target_tm,
+        min_anneal=min_anneal, max_candidates=max_candidates, junctions=junctions,
+    )
+    try:
+        return _design_gibson(fragments, **arguments)
+    except _StockAssemblerRefused as refusal:
+        try:
+            return _design_gibson(fragments, **arguments, force_custom=True, note=PLANNER_FALLBACK_NOTE)
+        except AssemblyError as exc:
+            raise AssemblyError(f"{refusal}; the overlap planner could not design it either: {exc}") from None
+
+
+def _design_gibson(
+    fragments: list[AssemblyFragment],
+    *,
+    preparations: list[FragmentPreparation],
+    circular: bool,
+    overlap: int,
+    target_tm: float,
+    min_anneal: int,
+    max_candidates: int,
+    junctions: list[JunctionSpec] | None,
+    force_custom: bool = False,
+    note: str | None = None,
+) -> GibsonDesignResult:
     _validate_request(
         fragments,
         preparations,
@@ -464,7 +502,7 @@ def design_gibson(
         )
 
     specs = _resolve_junction_specs(oriented, circular, junctions)
-    custom = bool(specs) or _needs_custom_design(oriented, preparations, circular)
+    custom = force_custom or bool(specs) or _needs_custom_design(oriented, preparations, circular)
     pydna_products = []
     info: dict[tuple[int, int], tuple[str, int, int, str | None]] = {}
     entries: dict[int, tuple] = {}
@@ -499,7 +537,7 @@ def design_gibson(
                 circular=circular,
             )
             if len(pydna_designed) != len(oriented):
-                raise AssemblyError(
+                raise _StockAssemblerRefused(
                     "pydna could not preserve every ordered source fragment"
                 )
 
@@ -524,7 +562,7 @@ def design_gibson(
             raise
         except Exception as exc:
             detail = str(exc).strip() or type(exc).__name__
-            raise AssemblyError(f"pydna Gibson design failed: {detail}") from None
+            raise _StockAssemblerRefused(f"pydna Gibson design failed: {detail}") from None
         designed_seq = {}
         for i, designed in enumerate(pydna_designed):
             designed_seq[i] = str(designed.seq).upper()
@@ -538,7 +576,7 @@ def design_gibson(
     primers: list[GeneratedPrimer] = []
     designed_fragments: list[DesignedFragment] = []
     validation_inputs: list[AssemblyFragment] = []
-    warnings: list[str] = []
+    warnings: list[str] = [note] if note else []
     for index, (source, preparation) in enumerate(zip(oriented, preparations)):
         carried = index not in designed_seq
         designed_sequence = source.sequence if carried else designed_seq[index]
@@ -644,7 +682,7 @@ def design_gibson(
             key=lambda sequence: (sequence != intended_key, _sha256(sequence)),
         )[:max_candidates]
         if intended_key not in ordered_sequences:
-            raise AssemblyError(
+            raise _StockAssemblerRefused(
                 "pydna produced no exact candidate for the intended ordered assembly"
             )
 
