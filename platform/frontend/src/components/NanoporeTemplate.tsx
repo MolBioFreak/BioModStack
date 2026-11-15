@@ -1042,7 +1042,12 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         ? selectedMolbioRevision?.content_length
         : selectedReferenceDetailQuery.data?.payload.contigs?.[0]?.length;
     const managedReferenceBlocker = useMemo(() => {
-        if (!exactDomainExperimentId) return 'Select an exact NGS/MolBio Domain Experiment.';
+        if (!exactDomainExperimentId) {
+            // No Project open: a basecall, or an analysis against a saved sequence, runs on its own.
+            if (molbioRevisionPairError) return molbioRevisionPairError;
+            if (usesMolBioReceiptLane) return selectedMolbioSequence && selectedMolbioRevision ? null : 'Select a version of the saved sequence.';
+            return requiresReference ? 'Choose a reference sequence: paste or upload one below, pick a saved one, or open a Project.' : null;
+        }
         if (!exactStateRevisionId) return 'Select an exact local state revision.';
         if (!availability.canMutateDomain) return availability.reason;
         if (!requiresReference && !selectedMolbioSequenceId && !selectedManagedReferenceRevisionId) return null;
@@ -1813,12 +1818,13 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     <div className="mb-3">
                         <h3 className="text-sm font-semibold text-[var(--text-primary)]">{requiresReference ? 'This analysis needs a reference sequence' : 'Optional reference sequence'}</h3>
                         <p className="mt-1 text-xs text-[var(--text-secondary)]">{requiresReference ? 'Pick a sequence already in this Project, or add one below: paste it, upload FASTA/GenBank/CSV files, or choose saved sequences from Molecular Tools.' : (assembleOnly ? 'The assembled consensus is annotated and reported. Expected-sequence checks are not run.' : 'Basecalling works without a reference. Add one if you also want reads aligned and checked against it.')}</p>
+                        {!exactDomainExperimentId && <p data-testid="ngs-no-project-note" className="mt-2 text-xs text-[var(--text-secondary)]">No Project is open, so this job runs on its own. <Link to="/projects" className="underline">Open a Project</Link> to keep the job and its sequences together (preferred).</p>}
                         {requiresReference && exactDomainExperimentId && molbioSequences.length === 0 && !molbioSequencesQuery.isLoading && !exactStateRevisionQuery.isLoading && (
                             <p role="alert" className="mt-2 rounded border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-2 text-xs text-[var(--warning)]">This Project has no reference sequences yet. Add one or several below.</p>
                         )}
                     </div>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                        <label className="text-xs text-[var(--text-secondary)]">Project sequence
+                        <label className="text-xs text-[var(--text-secondary)]">{exactDomainExperimentId ? 'Project sequence' : 'Saved sequence'}
                             <select
                                 value={selectedMolbioSequenceId}
                                 onChange={(event) => {
@@ -1829,7 +1835,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-2 text-sm text-[var(--text-primary)]"
                                 data-testid="molbio-sequence-selector"
                             >
-                                <option value="">Select a Project sequence…</option>
+                                <option value="">{exactDomainExperimentId ? 'Select a Project sequence…' : 'Select a saved sequence…'}</option>
                                 {molbioSequences.map((sequence) => <option key={sequence.id} value={sequence.id}>{sequence.name}</option>)}
                             </select>
                         </label>
@@ -1871,7 +1877,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     <div className="mt-3">
                         <ReferenceSequenceInputs key={exactDomainExperimentId} onAdded={(records, nextStateId) => {
                             if (nextStateId) experimentContext.setStateRevisionId(nextStateId);
-                            if (records.length === 1 && nextStateId && records[0].revision_id) {
+                            if (records.length === 1 && (nextStateId || !exactDomainExperimentId) && records[0].revision_id) {
                                 setSelectedMolbioSequenceId(records[0].sequence_id);
                                 setSelectedMolbioRevisionId(records[0].revision_id);
                                 setApprovedComparisonPanelId('');

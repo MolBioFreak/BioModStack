@@ -13,8 +13,13 @@ import { NanoporeTemplate } from '../../src/components/NanoporeTemplate';
 // The mounted form, shared plan dialog, placement/policy controls and API
 // helpers/interceptors are real. Only transport and surrounding workspace/GPU
 // discovery are doubled: no service or scientific execution is contacted.
+const projectState = vi.hoisted(() => ({ open: true }));
 vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
-    useGlobalExperimentContext: () => ({
+    useGlobalExperimentContext: () => !projectState.open ? {
+        workspaceId: null, globalExperimentId: null, stateRevisionId: null, selectedDomainExperiment: null,
+        availability: { canMutateDomain: false, reason: 'Select a Project (workspace), Global Experiment, and NGS/MolBio Domain Experiment.' },
+        contextHref: (path: string) => path, setStateRevisionId: () => {},
+    } : ({
         workspaceId: 'workspace-1', globalExperimentId: 'experiment-1', stateRevisionId: 'state-1',
         selectedDomainExperiment: { domain_experiment_id: 'domain-1' },
         availability: { canMutateDomain: true, reason: '' }, contextHref: (path: string) => path,
@@ -94,6 +99,7 @@ beforeEach(() => {
     container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
 });
 afterEach(() => {
+    projectState.open = true;
     act(() => root.unmount()); container.remove(); client.clear(); api.defaults.adapter = originalAdapter; vi.unstubAllGlobals();
     expect(unexpected).toEqual([]);
 });
@@ -358,6 +364,26 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(submits()[0].url).toBe('/api/ont/ngs/ont_basecall_rna/submit');
         expect(capturedRequest().params).toMatchObject({ ont_molecule_type: 'rna', run_modkit: false });
+    });
+    it('submits a plain POD5 basecall with no Project open', async () => {
+        projectState.open = false;
+        await mount({ ...base, runModkit: false });
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.managed_reference).toBeUndefined();
+        expect(submits()[0].body.params.molbio_ngs_receipt_id).toBeUndefined();
+    });
+    it('submits an analysis against a saved sequence with no Project open', async () => {
+        projectState.open = false;
+        await mount({ ...base, runFastqQc: true, molbioSequenceId: 'sequence-1', molbioRevisionId: 'revision-1' });
+        expect(container.querySelector('[data-testid="ngs-no-project-note"]')?.textContent).toContain('Open a Project');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params.molbio_ngs_receipt_id).toBe('new-receipt');
+    });
+    it('asks for a reference, not a Project, when an analysis needs one and no Project is open', async () => {
+        projectState.open = false;
+        await act(async () => root.render(React.createElement(QueryClientProvider, { client }, <MemoryRouter><NanoporeTemplate onBack={() => {}} initialValues={{ ...base, runFastqQc: true }} /></MemoryRouter>)));
+        await until(() => expect(button('Review and submit').title).toContain('Choose a reference sequence'));
+        expect(button('Review and submit').disabled).toBe(true);
     });
     it('offers four barcode kits and the both-ends box for native kits only', async () => {
         await mount({ ...base, barcodeKit: 'SQK-NBD114-24', barcodeBothEnds: true });
