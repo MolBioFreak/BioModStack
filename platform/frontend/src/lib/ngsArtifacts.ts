@@ -31,6 +31,12 @@ export function useNgsArtifacts(jobId: string | null, enabled = true) {
 }
 
 /** Resolve only a public catalog URL, never construct a generic file route. */
+/** True when the job published a reads BAM the read report can summarise (not an index, not a dimer subset). */
+export function hasPublishedReadsBam(artifacts: NgsPackageArtifact[] = []): boolean {
+    return artifacts.some(a => a.state === 'present' && Boolean(a.url) && /\.bam$/i.test(a.filename || '')
+        && !/dimer/i.test(`${a.source}/${a.filename}`));
+}
+
 export function ngsArtifactUrl(path: string, jobId: string | undefined, artifacts: NgsPackageArtifact[] = []): string | null {
     if (!jobId) return null;
     const prefix = `/api/jobs/${encodeURIComponent(jobId)}/ngs-artifacts/`;

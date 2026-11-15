@@ -223,6 +223,26 @@ describe('NGS authoritative stage presentation', () => {
         await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Show advanced controls')!.click());
         expect([...container.querySelectorAll('select')].find(select => select.querySelector('option[value="canu"]'))?.value).toBe('canu');
     });
+    it.each([
+        ['a FASTQ run that published aligned reads', { fastq_path: '/in/reads.fastq', ont_workflow_id: 'ont_clone_validation' }, 'align', 'aligned.bam', true],
+        ['a BAM run that published no reads', { bam_path: '/in/reads.bam', ont_workflow_id: 'ont_align_bam' }, 'assembly', 'report.html', false],
+    ])('offers the read report by what the run published: %s', async (_name, params, source, filename, expected) => {
+        Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+        const job = { id: 'job-123', name: 'Published reads', model_id: 'nanopore', mode: 'clone_validation', status: 'completed', params, created_at: '2026-09-01T00:00:00Z', stage_outputs: {} };
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [job], total: 1 } });
+        ngsApiMocks.fetchFullJob.mockResolvedValue(job);
+        ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { job_id: job.id, stage_outputs: {} } });
+        const url = '/api/jobs/job-123/ngs-artifacts/' + 'a'.repeat(64);
+        vi.mocked(api.get).mockImplementation(async (path: string) => {
+            if (path === '/api/jobs/job-123/ngs-artifacts') return { data: { job_id: job.id, artifacts: [{ artifact_id: 'a'.repeat(64), kind: 'native', source, state: 'present', url, size_bytes: 500, filename }] } } as never;
+            throw Object.assign(new Error('not found'), { response: { status: 404 } });
+        });
+        await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/ngs?section=analyses&job_id=job-123']}><NGSToolkit /></MemoryRouter></QueryClientProvider>));
+        await waitUntil(() => expect(container.querySelector(`a[href="${url}"]`)).not.toBeNull());
+        await flush();
+        const asked = vi.mocked(api.get).mock.calls.some(call => call[0] === '/api/jobs/job-123/ngs-read-report');
+        expect(asked).toBe(expected);
+    });
     it('opens native clone downloads and recovers the catalog in the actual toolkit cache', async () => {
         Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
         const job = { id: 'job-123', name: 'Native clone outputs', model_id: 'nanopore', mode: 'clone_validation', status: 'completed', params: {}, created_at: '2026-09-01T00:00:00Z', stage_outputs: { wf_clone_validation: ['bms_results/job-123/assembly/wf-clone-validation-report.html'] } };

@@ -1,4 +1,4 @@
-import { ngsArtifactUrl, useNgsArtifacts, type NgsPackageArtifact } from '../lib/ngsArtifacts';
+import { hasPublishedReadsBam, ngsArtifactUrl, useNgsArtifacts, type NgsPackageArtifact } from '../lib/ngsArtifacts';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { JobStageProgress } from './JobStageProgress';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -2525,7 +2525,6 @@ export function NGSToolkit() {
         ? selectedJobParams.run_fastq_qc !== false
         : selectedJobParams.run_multimer_qc !== false;
     const isCanonicalFastqQcRun = isFastqOnlyRun && selectedOntWorkflowId === 'ont_fastq_qc' && fastqQcStageSelected;
-    const showOntReadReport = !isCanonicalFastqQcRun && selectedJob?.status === 'completed' && !!selectedOntWorkflowId && /^ont_/.test(selectedOntWorkflowId) && (hasPod5Input || hasBamInput);
     const sequenceQcManifestState = useSequenceQcManifest(selectedJob?.id, selectedJob?.status);
     const ontFastqQcResultState = useOntFastqQcResult(
         selectedJob?.id,
@@ -2560,9 +2559,12 @@ export function NGSToolkit() {
     const alignmentSessions = alignmentAuthorityBinding.sessions;
     const alignmentSessionsError = alignmentSessionsQueryError ?? alignmentAuthorityBinding.error;
     const shouldShowMethylationInspector = !isFastqOnlyRun;
-    const shouldShowMultimerInspector = hasFastqInput;
     const artifactQuery = useNgsArtifacts(selectedJob?.id || null);
     const packageArtifacts = artifactQuery.data?.artifacts;
+    // What the run published decides what opens. Only when the catalog cannot be read do the run's inputs stand in for it.
+    const showOntReadReport = !isCanonicalFastqQcRun && selectedJob?.status === 'completed'
+        && (packageArtifacts ? hasPublishedReadsBam(packageArtifacts)
+            : artifactQuery.isError && !!selectedOntWorkflowId && /^ont_/.test(selectedOntWorkflowId) && (hasPod5Input || hasBamInput));
     const toStreamHref = useCallback((path: string, jobId?: string) => ngsArtifactUrl(path, jobId, packageArtifacts), [packageArtifacts]);
     const toDownloadHref = toStreamHref;
     const igvArtifacts = useMemo(
@@ -2576,6 +2578,10 @@ export function NGSToolkit() {
     const methylationArtifacts = useMemo(
         () => resolveMethylationArtifacts(selectedJob, stageOutputs, packageArtifacts || []),
         [selectedJob, stageOutputs, packageArtifacts]
+    );
+    // BAM and POD5 runs publish the same read QC tables as FASTQ runs.
+    const shouldShowMultimerInspector = hasFastqInput || Boolean(
+        multimerArtifacts.summaryUrl || multimerArtifacts.lengthsUrl || multimerArtifacts.candidatesUrl || multimerArtifacts.dimerSummaryUrl
     );
     const igvSourcePaths = useMemo(() => {
         const allPaths = dedupePaths(collectStageOutputPaths(stageOutputs));
