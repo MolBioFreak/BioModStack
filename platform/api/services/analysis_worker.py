@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime
 import os
@@ -84,20 +85,23 @@ class AnalysisWorker:
     async def stop(self) -> None:
         self._stop_event.set()
         if self._task:
-            await self._task
-            self._task = None
+            try:
+                await self._task
+            finally:
+                self._task = None
 
     async def _run_loop(self) -> None:
-        await self._recover_orphaned_runs()
-        while not self._stop_event.is_set():
-            await self._reconcile_processes()
-            await self._launch_available_runs()
-            try:
-                await asyncio.wait_for(self._stop_event.wait(), timeout=self._poll_interval)
-            except asyncio.TimeoutError:
-                continue
-
-        await self._terminate_running_processes()
+        try:
+            await self._recover_orphaned_runs()
+            while not self._stop_event.is_set():
+                await self._reconcile_processes()
+                await self._launch_available_runs()
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=self._poll_interval)
+                except asyncio.TimeoutError:
+                    continue
+        finally:
+            await self._terminate_running_processes()
 
     async def _recover_orphaned_runs(self) -> None:
         async with self._db_session_factory() as session:
@@ -153,66 +157,69 @@ class AnalysisWorker:
 
         async with self._db_session_factory() as session:
             result = await session.execute(
-                select(AnalysisRun)
+                select(AnalysisRun.resource_class)
                 .where(AnalysisRun.status == "queued")
-                .order_by(AnalysisRun.queued_at.asc())
-                .limit(64)
+                .distinct()
+                .order_by(AnalysisRun.resource_class)
             )
-            queued_runs = list(result.scalars().all())
-            if not queued_runs:
-                return
+            queued_runs = []
+            for resource_class in result.scalars().all():
+                slots = _max_runs_for_class(resource_class) - running_by_class.get(resource_class, 0)
+                if slots <= 0:
+                    continue
+                result = await session.execute(
+                    select(AnalysisRun)
+                    .where(AnalysisRun.status == "queued", AnalysisRun.resource_class == resource_class)
+                    .order_by(AnalysisRun.queued_at.asc(), AnalysisRun.id.asc())
+                    .limit(slots)
+                )
+                queued_runs.extend(result.scalars().all())
 
             for run in queued_runs:
                 resource_class = str(run.resource_class or "cpu_heavy")
                 max_runs = _max_runs_for_class(resource_class)
                 if running_by_class.get(resource_class, 0) >= max_runs:
                     continue
-                manifest = run.artifact_manifest if isinstance(run.artifact_manifest, dict) else None
-                if not manifest:
-                    manifest = build_artifact_manifest_for_run(run)
-                    run.artifact_manifest = manifest
-
-                stdout_path = Path(str(manifest["stdout_log"]))
-                stderr_path = Path(str(manifest["stderr_log"]))
-                from paths import resolve_allowed_path
-
-                stdout_file = resolve_allowed_path(str(stdout_path))
-                stderr_file = resolve_allowed_path(str(stderr_path))
-                stdout_file.parent.mkdir(parents=True, exist_ok=True)
-                stderr_file.parent.mkdir(parents=True, exist_ok=True)
-
-                run.status = "running"
-                run.started_at = datetime.utcnow()
-                run.error_message = None
-                await session.flush()
-
-                stdout_handle = open(stdout_file, "ab")
-                stderr_handle = open(stderr_file, "ab")
-                api_root = Path(__file__).resolve().parents[1]
-                env = dict(os.environ)
-                cpu_threads = str(_threads_for_class(resource_class))
-                env["BMS_ANALYSIS_CPUS"] = cpu_threads
-                env["OMP_NUM_THREADS"] = cpu_threads
-                env["OPENBLAS_NUM_THREADS"] = cpu_threads
-                env["MKL_NUM_THREADS"] = cpu_threads
-                env["NUMEXPR_NUM_THREADS"] = cpu_threads
                 try:
-                    process = subprocess.Popen(
-                        [sys.executable, "-m", "services.analysis_subprocess", run.id],
-                        cwd=str(api_root),
-                        stdout=stdout_handle,
-                        stderr=stderr_handle,
-                        env=env,
-                    )
+                    with ExitStack() as logs:
+                        manifest = run.artifact_manifest if isinstance(run.artifact_manifest, dict) else None
+                        if not manifest:
+                            manifest = build_artifact_manifest_for_run(run)
+                            run.artifact_manifest = manifest
+
+                        stdout_path = Path(str(manifest["stdout_log"]))
+                        stderr_path = Path(str(manifest["stderr_log"]))
+                        from paths import resolve_allowed_path
+
+                        stdout_file = resolve_allowed_path(str(stdout_path))
+                        stderr_file = resolve_allowed_path(str(stderr_path))
+                        stdout_file.parent.mkdir(parents=True, exist_ok=True)
+                        stderr_file.parent.mkdir(parents=True, exist_ok=True)
+
+                        run.status = "running"
+                        run.started_at = datetime.utcnow()
+                        run.error_message = None
+                        await session.flush()
+
+                        stdout_handle = logs.enter_context(open(stdout_file, "ab"))
+                        stderr_handle = logs.enter_context(open(stderr_file, "ab"))
+                        api_root = Path(__file__).resolve().parents[1]
+                        env = dict(os.environ)
+                        cpu_threads = str(_threads_for_class(resource_class))
+                        env["BMS_ANALYSIS_CPUS"] = cpu_threads
+                        env["OMP_NUM_THREADS"] = cpu_threads
+                        env["OPENBLAS_NUM_THREADS"] = cpu_threads
+                        env["MKL_NUM_THREADS"] = cpu_threads
+                        env["NUMEXPR_NUM_THREADS"] = cpu_threads
+                        process = subprocess.Popen(
+                            [sys.executable, "-m", "services.analysis_subprocess", run.id],
+                            cwd=str(api_root),
+                            stdout=stdout_handle,
+                            stderr=stderr_handle,
+                            env=env,
+                        )
+                        logs.pop_all()  # Handles now belong to the running process.
                 except Exception as exc:
-                    try:
-                        stdout_handle.close()
-                    except Exception:
-                        pass
-                    try:
-                        stderr_handle.close()
-                    except Exception:
-                        pass
                     run.status = "failed"
                     run.error_message = f"Failed to launch analysis subprocess: {exc}"
                     run.completed_at = datetime.utcnow()
