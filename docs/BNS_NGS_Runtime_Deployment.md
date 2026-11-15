@@ -18,7 +18,7 @@ changes in the audited NGS runtime paths.
 | samtools | 1.24 in Dorado runtime | Mapping products, Bayesian consensus and QC |
 | modkit | 0.6.4 | Modified-base summaries / methylation analysis |
 | igv-reports | 1.16.3, bundled IGV.js 3.5.2 | Standalone alignment / variant reports |
-| wf-clone-validation | v1.8.4, BMS compatibility commit a575ddbc5513759a962cf41f8f64d7b246662bdc | Clone assembly and validation |
+| wf-clone-validation | v1.8.4, BMS compatibility commit ebc97a46a08dc79eb5628a00f680db18aef9865d | Clone assembly and validation |
 | Flye, Canu, wf-common | Exact images in the clone-validation lock | Assembly and native EPI2ME workflow stages |
 | Medaka | 2.2.2; all five model archives checked by SHA-256 | Consensus polishing |
 | pLannotate | 2.0.0 in the API annotation environment; locked workflow image | Sequence annotation / clone reports |

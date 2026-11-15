@@ -67,7 +67,7 @@ def test_cli_prints_the_resolved_location(install, capsys, monkeypatch):
     _, data = install
     monkeypatch.setattr("sys.argv", ["validate", "--lock", str(LOCK), "--resolve", "patched_source.path"])
     assert main() == 0
-    assert capsys.readouterr().out.strip() == str(data / "ngs/wf-clone-validation/v1.8.4-bms.2")
+    assert capsys.readouterr().out.strip() == str(data / "ngs/wf-clone-validation/v1.8.4-bms.3")
 
 
 def test_container_config_binds_images_under_the_resolved_cache(install, monkeypatch):

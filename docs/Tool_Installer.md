@@ -155,6 +155,7 @@ Every image BMS uses has a recipe. Only Dorado, Boltz-2, Protenix and GROMACS ar
 Known gaps, stated in the recipe notes as well:
 
 - `ont-signal-tools` and `ont-clone-validation`: the signal workbench and the clone-validation validator compare an image id or file hash against a value recorded in this repository. An image you build or convert yourself gets its own id.
+- The clone pipeline source is upstream v1.8.4 plus `patches/wf-clone-validation-v1.8.4-nextflow25.patch`: two Nextflow 25 naming fixes, one model name, and one upstream bug fix (with a host reference and a regions file, the host filter read `mapped.bam`, a file its step never writes; it now reads the host BAM it does write). The recipe materializes it as `v1.8.4-bms.3`; an older `v1.8.4-bms.2` directory is left alone and can be deleted.
 - `ont-clone-validation` also installs its own Nextflow 25.10.0 launcher and framework under `${BMS_RUNTIME_HOME}/nextflow-25.10.0/`, by URL and SHA-256 from `config/ngs/wf_clone_validation_v1.8.4.lock.json`. The app keeps its embedded Nextflow for everything else. Run the recipe once from Tools before the first clone validation, or set `BMS_NEXTFLOW_EXECUTABLE` to a 25.10.0 launcher you already have. Annotation uses pLannotate 2.0.0 from `docker/plannotate-conda-linux-64.lock`.
 - `md-preparation`: the definition unpacks a conda-pack archive that is not shipped.
 - `confornets`: this repository has no definition for the base image, only for the patch on top of it.
