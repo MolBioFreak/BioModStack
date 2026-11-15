@@ -78,6 +78,14 @@ function Num({ label, value, onChange }: { label: string; value: number; onChang
             onChange={(e) => onChange(Number(e.target.value))} /></label>;
 }
 
+/** Optional whole-number input: blank means "not set" and is not sent. */
+function OptNum({ label, value, onChange, min }: { label: string; value: string; onChange: (v: string) => void; min: number }) {
+    return <label className="flex flex-col gap-1 text-slate-400">{label}
+        <input type="number" min={min} step={1} aria-label={label} placeholder="auto" className="w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={value}
+            onChange={(e) => onChange(e.target.value)} /></label>;
+}
+const optionalCount = (text: string, min: number) => { const n = Number(text); return text.trim() !== '' && Number.isInteger(n) && n >= min ? n : null; };
+
 function GibsonProposal({ proposal, onUse }: { proposal: SuggestGibsonProposal; onUse: (design: SavedGibsonDesignRequest) => void }) {
     const synthBp = proposal.fragments.filter((f) => f.preparation === 'synthesis').reduce((n, f) => n + (f.sequence?.length ?? 0), 0);
     return <PlanCard rank={proposal.rank} featured={proposal.rank === 1} title={proposal.summary}
@@ -86,6 +94,13 @@ function GibsonProposal({ proposal, onUse }: { proposal: SuggestGibsonProposal; 
         <ul className="space-y-0.5 text-[#dbe4f5]">{proposal.fragments.map((f) => <li key={f.id} className="break-words">
             {f.name}: {f.preparation}{f.source ? ` from ${f.source.id} ${f.source.start}–${f.source.end} (${f.source.strand === -1 ? '−' : '+'}${f.source.wraps_origin ? ', across origin' : ''})` : ''}{f.sequence ? ` · ${f.sequence.length} bp` : ''}
         </li>)}</ul>
+        {!!proposal.junctions?.length && <ul aria-label="Junction overlaps" className="space-y-0.5 text-[#a6b3ca]">{proposal.junctions.map((j, i) => {
+            const nameOf = (id: string) => proposal.fragments.find((f) => f.id === id)?.name ?? id;
+            return <li key={`${j.left_id}:${j.right_id}:${i}`} className="break-words">
+                {nameOf(j.left_id)} → {nameOf(j.right_id)}: {j.overlap_length} nt{j.overlap_tm != null ? ` · Tm ${j.overlap_tm.toFixed(1)} °C` : ''}{j.overlap_gc != null ? ` · GC ${j.overlap_gc.toFixed(1)} %` : ''}
+                {j.notes?.map((n, k) => <span key={k} className="block text-[#ffb84a]">{n}</span>)}
+            </li>;
+        })}</ul>}
     </PlanCard>;
 }
 
@@ -148,6 +163,8 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
     const [targetTm, setTargetTm] = useState(60);
     const [minAnneal, setMinAnneal] = useState(13);
     const [minMatch, setMinMatch] = useState(30);
+    const [gibsonFragmentCount, setGibsonFragmentCount] = useState('');
+    const [maxSynthesisLength, setMaxSynthesisLength] = useState('');
     const [boundaries, setBoundaries] = useState('');
     const [enzyme, setEnzyme] = useState('');
     const [ggMode, setGgMode] = useState<'split' | 'fragments'>('split'); // GG-FRAGMENTS
@@ -215,6 +232,8 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                         ...(m.features ? { features: m.features } : {}),
                     })),
                     min_match: minMatch, overlap, target_tm: targetTm, min_anneal: minAnneal, allow_synthesis: true, limit: 3,
+                    ...(optionalCount(gibsonFragmentCount, 2) != null ? { fragment_count: optionalCount(gibsonFragmentCount, 2) } : {}),
+                    ...(optionalCount(maxSynthesisLength, 1) != null ? { max_synthesis_length: optionalCount(maxSynthesisLength, 1) } : {}),
                     ...(numbers(boundaries).length ? { fixed_boundaries: numbers(boundaries) } : {}),
                 };
                 const { data } = await suggestGibsonPlan(body);
@@ -361,12 +380,14 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                     <button type="button" className="shrink-0 text-slate-400" onClick={() => setSources((list) => list.filter((_, j) => j !== i))}>Remove</button></li>)}</ul>
             </fieldset>}
 
-            {method === 'gibson' && <SetupGroup title="Overlaps and primers">
+            {method === 'gibson' && <SetupGroup title="Overlaps and primers" hint="Overlap is the minimum overlap length; leave Fragment count blank to let BMS choose, and Max synthesis length blank for 3000 nt.">
                 <div className="flex flex-wrap gap-3">
                     <Num label="Overlap (nt)" value={overlap} onChange={setOverlap} />
                     <Num label="Target Tm (°C)" value={targetTm} onChange={setTargetTm} />
                     <Num label="Min anneal (nt)" value={minAnneal} onChange={setMinAnneal} />
                     <Num label="Min match (nt)" value={minMatch} onChange={setMinMatch} />
+                    <OptNum label="Fragment count" min={2} value={gibsonFragmentCount} onChange={setGibsonFragmentCount} />
+                    <OptNum label="Max synthesis length" min={1} value={maxSynthesisLength} onChange={setMaxSynthesisLength} />
                 </div>
             </SetupGroup>}
             {method === 'golden_gate' && <div className="space-y-2">
