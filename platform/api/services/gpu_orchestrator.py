@@ -673,7 +673,7 @@ def _recover_rfantibody_parent_after_child_wait(job: Any, child_wait_success: Di
 
 
 async def _commit_reconciled_job_mutations(session: Any) -> int:
-    """Publish worker recovery mutations only if the row remains active.
+    """Publish worker recovery mutations only if the observed running attempt is unchanged.
 
     Completion polling works on ORM snapshots that can be stale while an operator
     cancels a job or opens a review gate.  Expunge those snapshots and replay their
@@ -683,7 +683,7 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
     from sqlalchemy import inspect, update
     from database import Job, MdRun
 
-    pending: list[tuple[str, dict[str, Any]]] = []
+    pending: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
     for candidate in list(session.dirty):
         if not isinstance(candidate, Job):
             continue
@@ -715,11 +715,21 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
             values["params"] = release_scheduler_gpu_assignment(getattr(candidate, "params", {}))
             values["assigned_gpu"] = None
         if values:
-            pending.append((str(candidate.id), values))
+            observed = {}
+            for key in (
+                "params", "assigned_gpu", "started_at", "nextflow_run_id",
+                "remote_attempt_id", "retry_count", "execution_target_id",
+            ):
+                attribute = state.attrs[key]
+                observed[key] = (
+                    attribute.history.deleted[0]
+                    if attribute.history.deleted else attribute.value
+                )
+            pending.append((str(candidate.id), values, observed))
         session.expunge(candidate)
 
     applied = 0
-    for job_id, values in pending:
+    for job_id, values, observed in pending:
         transition = await session.execute(
             update(Job)
             .where(
@@ -727,6 +737,7 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
                 Job.status == "running",
                 Job.queue_status == "running",
                 Job.awaiting_input.is_(False),
+                *(getattr(Job, key) == value for key, value in observed.items()),
             )
             .values(**values)
         )

@@ -38,7 +38,7 @@ async def test_remote_vram_budget_allows_exactly_one_concurrent_claim(tmp_path: 
     from services.remote_execution import targets
     async def telemetry(target):
         return dict(available=True, gpus=[dict(index=0, uuid="GPU-remote", memory_total_mb=7000,
-                                              memory_used_mb=0, utilization=99)])
+                                              memory_used_mb=0, utilization=0)])
     monkeypatch.setattr(targets, "remote_target_telemetry", telemetry)
     monkeypatch.setattr(gpu_module, "read_scheduler_config", lambda: {"global": {
         "target_vram_fill": 0.75, "vram_safety_margin_mb": 0}})
@@ -388,18 +388,25 @@ def test_terminal_nextflow_history_overrides_gpu_activity_liveness_hint() -> Non
     assert _has_terminal_nextflow_history(None) is False
 
 
-def test_terminal_history_requires_output_root_for_native_rfd3() -> None:
-    job = SimpleNamespace(
-        model_id="protein_local_redesign",
-        mode="partial_diffusion",
-        params={"redesign_mode": "partial_diffusion"},
-    )
+@pytest.mark.parametrize(("model_id", "mode", "requires_designs"), [
+    ("protein_local_redesign", "partial_diffusion", False),
+    ("boltz2", "predict", True),
+])
+def test_terminal_history_respects_native_publication_owner(model_id, mode, requires_designs) -> None:
+    job = Job(model_id=model_id, mode=mode, params={}, provenance={})
 
-    assert _job_requires_result_output_for_terminal_history(job) is True
+    assert _job_requires_result_output_for_terminal_history(job) is requires_designs
 
 
 @pytest.mark.asyncio
-async def test_worker_recovery_publish_does_not_overwrite_concurrent_cancellation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("new_values", [
+    {"status": "cancelled", "queue_status": "cancelled", "awaiting_input": False},
+    {"params": {"gpu_id": 2, "new_input": True}},
+    {"assigned_gpu": 2},
+    {"retry_count": 1, "started_at": datetime(2026, 1, 2)},
+    {"status": "running"},
+])
+async def test_worker_recovery_publish_does_not_overwrite_concurrent_update(tmp_path: Path, new_values) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'recovery.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -408,7 +415,8 @@ async def test_worker_recovery_publish_does_not_overwrite_concurrent_cancellatio
     async with factory() as seed:
         seed.add(Job(
             id="recovery-race", name="recovery-race", model_id="boltz2", mode="predict",
-            params={}, status="running", queue_status="running", awaiting_input=False,
+            params={"gpu_id": 0}, assigned_gpu=0,
+            status="running", queue_status="running", awaiting_input=False,
             awaiting_payload={}, retry_count=0, max_retries=2,
         ))
         await seed.commit()
@@ -422,16 +430,23 @@ async def test_worker_recovery_publish_does_not_overwrite_concurrent_cancellatio
         async with factory() as cancellation:
             await cancellation.execute(
                 update(Job).where(Job.id == "recovery-race").values(
-                    status="cancelled", queue_status="cancelled", awaiting_input=False,
+                    **new_values,
                 )
             )
             await cancellation.commit()
 
-        assert await _commit_reconciled_job_mutations(worker) == 0
+        unchanged = new_values == {"status": "running"}
+        assert await _commit_reconciled_job_mutations(worker) == int(unchanged)
 
     async with factory() as verify:
         final = (await verify.execute(select(Job).where(Job.id == "recovery-race"))).scalar_one()
-        assert (final.status, final.queue_status) == ("cancelled", "cancelled")
+        if unchanged:
+            assert (final.status, final.queue_status) == ("failed", "failed")
+        else:
+            for key, value in new_values.items():
+                assert getattr(final, key) == value
+            if "status" not in new_values:
+                assert (final.status, final.queue_status) == ("running", "running")
     await engine.dispose()
 
 
