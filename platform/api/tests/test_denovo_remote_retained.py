@@ -211,7 +211,8 @@ def test_pack_and_downstream_layout_use_declared_owner(tmp_path, monkeypatch, se
     (weights / 'tiny').symlink_to(layout)
     declared = model_registry.model_acquisition_plan('tiny')
     calls = []
-    def acquisition(owner):
+    def acquisition(owner, *, include_optional=False):
+        assert include_optional is True
         calls.append(owner)
         return declared if owner == 'tiny' else {'artifacts': []}
     monkeypatch.setattr(model_registry, 'model_acquisition_plan', acquisition)

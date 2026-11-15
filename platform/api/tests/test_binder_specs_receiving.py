@@ -82,8 +82,8 @@ async def test_ordinary_esmf_round_request_admission_compiler_and_real_native_wr
     before = deepcopy(child.model_dump())
     assert (child.model_id, child.mode, child.execution_target_id) == ('esmfold2', 'predict', root.execution_target_id)
     assert child.params['complex_components'] == [
-        {'id': 'A', 'type': 'protein', 'sequence': 'A'},
-        {'id': 'B', 'type': 'protein', 'sequence': 'G'},
+        {'id': 'A', 'type': 'protein', 'sequence': 'A', 'modifications': []},
+        {'id': 'B', 'type': 'protein', 'sequence': 'G', 'modifications': []},
     ]
     assert child.params['sequence'] == 'A'  # Valid binder summary, not another native component.
     assert [component['role'] for component in binding['input_components']] == ['binder', 'target']
@@ -118,7 +118,7 @@ async def test_ordinary_esmf_round_request_admission_compiler_and_real_native_wr
     wire.pop('esmf_complex_components_file')
     argv, receipt = wrapper.compile_workflow_request(wire, {})
     flags = dict(zip(argv[::2], argv[1::2]))
-    actual = json.loads(flags['--complex-components-json'])
+    actual = json.loads(flags['--complex-components-json'])['components']
     assert [(c['id'], c['sequence']) for c in actual] == [('A', 'A'), ('B', 'G')]
     assert flags.get('--sequence') in (None, '')
     for key, expected in [('num_loops', 7), ('num_sampling_steps', 23), ('num_diffusion_samples', 3), ('seed', 0)]:

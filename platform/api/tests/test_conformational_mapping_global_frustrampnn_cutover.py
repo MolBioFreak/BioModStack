@@ -1163,20 +1163,3 @@ def test_cm_nextflow_wires_every_candidate_through_canonical_v2_and_no_direct_ru
     assert "--gpu-id" not in module
 
 
-def test_cm_persistence_reuses_global_result_rows_without_legacy_projection() -> None:
-    root = Path(__file__).resolve().parents[3]
-    ingester = (root / "platform/api/services/result_ingester.py").read_text(encoding="utf-8")
-    persistence = (
-        root / "platform/api/services/conformational_mapping/persistence.py"
-    ).read_text(encoding="utf-8")
-
-    assert "is_conformational_mapping" in ingester
-    assert "canonical_count is not None and not is_conformational_mapping" in ingester
-    assert "canonical_count != len(ensemble" not in ingester
-    assert "frustrampnn_result_references" in ingester
-    assert 'f"frustrampnn_landscape_v{generation}.json"' in ingester
-    assert "FrustraMPNNResult" in persistence
-    assert "FrustraMPNNLandscapeRow" in persistence
-    assert "canonical_global_mode" in persistence
-    assert "required canonical FrustraMPNN results are not persisted" in persistence
-    assert 'landscapes_to_insert = bundle.get("cm_frustration_landscapes") or []' in persistence

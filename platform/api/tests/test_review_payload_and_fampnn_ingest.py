@@ -824,7 +824,8 @@ TER
 END
 """)
 
-    metrics = _extract_fampnn_metrics(None, pdb_path)
+    assert _extract_fampnn_metrics(None, pdb_path)["avg_psce"] is None
+    metrics = _extract_fampnn_metrics(None, pdb_path, allow_structure_psce=True)
 
     assert metrics["avg_psce"] == 1.5
     assert metrics["max_residue_psce"] == 3.0
@@ -850,7 +851,8 @@ TER
 END
 """)
 
-    metrics = _extract_fampnn_metrics(None, pdb_path)
+    assert _extract_fampnn_metrics(None, pdb_path)["avg_psce"] is None
+    metrics = _extract_fampnn_metrics(None, pdb_path, allow_structure_psce=True)
 
     assert metrics["binder_length"] == 10
     assert metrics["binder_sequence"] == "QVQLQESGGG"

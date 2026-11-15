@@ -108,7 +108,11 @@ async def test_blind_pose_zero_design_publication_attaches_and_reopens(stores, m
         (output / 'manifest.json').write_text(json.dumps({'workflow': 'esmfold2', 'sequence_name': key,
             'sample_count': 1, 'samples': [{'sample_id': sample, 'cif': sample + '.cif', 'metrics': sample + '.metrics.json'}]}))
 
-    monkeypatch.setattr('run_binder_blind_pose.subprocess.run', fixture_native)
+    def batch(command, check):
+        assert check and command[-2] == '--request-file'
+        for request in json.loads(Path(command[-1]).read_text()):
+            fixture_native(request['argv'], check)
+    monkeypatch.setattr('run_binder_blind_pose.subprocess.run', batch)
     output = root / 'results' / 'diagnostic'
     run(directory / 'selection.json', directory, directory / 'target.pdb', output / 'blind_pose_results',
         model_variant='fast', model_id_or_path='', num_loops=1, num_sampling_steps=25,
