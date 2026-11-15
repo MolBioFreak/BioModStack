@@ -78,6 +78,10 @@ def _write_completed_replica(parent_root: Path, parent_id: str) -> tuple[Path, s
 
 
 class _AcceptingRegistry:
+    def parameter_diagnostics(self, model_id, params):
+        from model_registry import get_registry
+        return get_registry().parameter_diagnostics(model_id, params)
+
     def reload(self) -> None:
         return None
 

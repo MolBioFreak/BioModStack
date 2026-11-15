@@ -169,7 +169,7 @@ async def test_completed_pass_is_reused_instead_of_downloaded_again(tmp_path, mo
     declared = {(item.sha256, item.size_bytes) for item in retry.runtime_weights}
     assert {(item['sha256'], item['size_bytes']) for item in delivered} >= declared
     assert len(uploads) == 2  # each bundle's listing, and no weight member
-    assert all(Path(entry).name.startswith('bms-cache-batch-') for entry in uploads)
+    assert all(Path(entry).name == 'listing.json' for entry in uploads)
     root = Path(retry.envelope.environment['BMS_WEIGHTS'])
     assert (root / 'boltz/model.ckpt').read_bytes() == members['boltz/model.ckpt']
     assert (root / 'protenix/large.ckpt').read_bytes() == absent['payload']

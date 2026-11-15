@@ -123,7 +123,7 @@ async def test_marked_spatial_applicability_agrees_with_routes(tmp_path, monkeyp
                 assert detail.status_code == 200, detail.text
                 assert detail.json()['scientific_structure_document'] is None
                 structure = await client.get(f'/designs/{row.id}/pdb')
-                if model == 'protenix':
+                if model in {'protenix', 'esmfold2', 'esmfold2_experimental'}:
                     assert structure.status_code == 409  # copied Boltz custody is not Protenix authority
                 else:
                     assert structure.status_code == 200 and b'ATOM' in structure.content
@@ -131,7 +131,8 @@ async def test_marked_spatial_applicability_agrees_with_routes(tmp_path, monkeyp
                     response = await client.get(f'/designs/{row.id}/{metric_path}')
                     assert response.status_code == 200, response.text
                     assert response.json()['reason'] == ('missing_or_invalid_protenix_native_evidence'
-                        if model == 'protenix' else 'unsupported_model_native_spatial_metric')
+                        if model == 'protenix' else 'missing_or_invalid_esmfold2_native_evidence'
+                        if model in {'esmfold2', 'esmfold2_experimental'} else 'unsupported_model_native_spatial_metric')
             from routers.designs import get_residue_metrics, get_chain_metrics, get_pae_data
             from services.core_protein_scientific_contract import compute_persisted_native_metric, compute_persisted_pae
             for name, endpoint in [('residue_plddt', get_residue_metrics), ('chain_metrics', get_chain_metrics)]:
@@ -139,13 +140,14 @@ async def test_marked_spatial_applicability_agrees_with_routes(tmp_path, monkeyp
                 expected = await compute_persisted_native_metric(row, name, session)
                 assert direct.model_dump(mode='json') == expected.model_dump(mode='json')
                 assert direct.reason == ('missing_or_invalid_protenix_native_evidence'
-                    if model == 'protenix' else 'unsupported_model_native_spatial_metric')
+                    if model == 'protenix' else 'missing_or_invalid_esmfold2_native_evidence'
+                        if model in {'esmfold2', 'esmfold2_experimental'} else 'unsupported_model_native_spatial_metric')
             expected, _, _ = await compute_persisted_pae(row, {}, session)
             direct = await get_pae_data(row.id, 300, session)
             assert direct.reason == expected['reason']
             from services.analysis_subprocess import _dispatch_ipsae_interface
             assert (await _dispatch_ipsae_interface(row, {}, session))[0]['reason'] == (
-                'missing_or_invalid_producer_identity_or_roles' if model == 'protenix' else expected['reason'])
+                'missing_or_invalid_producer_identity_or_roles' if model in {'protenix', 'esmfold2', 'esmfold2_experimental'} else expected['reason'])
             if model == 'esmfold2':
                 # Actual persisted-analysis worker must publish the same explicit
                 # unsupported state as the direct endpoint, not a Boltz error.
@@ -164,7 +166,7 @@ async def test_marked_spatial_applicability_agrees_with_routes(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_frustra_failure_rolls_back_native_publication(tmp_path):
+async def test_frustra_failure_preserves_committed_primary_publication(tmp_path):
     publication(tmp_path)
     factory, engine = await setup(tmp_path)
     try:
@@ -176,9 +178,13 @@ async def test_frustra_failure_rolls_back_native_publication(tmp_path):
             with pytest.raises(RuntimeError):
                 await ingest_job_results('job', str(tmp_path), session)
         async with factory() as session:
-            assert list((await session.execute(select(Design))).scalars()) == []
+            rows = list((await session.execute(select(Design))).scalars())
+            assert len(rows) == 1
+            assert list((await session.scalars(select(FrustraMPNNResult))).all()) == []
+            from services.boltz_scientific_consumer import verified_boltz_design
+            assert (await verified_boltz_design(rows[0], session))['artifacts']['structure']['sha256']
             current = await session.get(Job, 'job')
-            assert 'core_protein_candidate_publication' not in current.provenance
+            assert 'core_protein_candidate_publication' in current.provenance
     finally:
         await engine.dispose()
 

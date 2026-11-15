@@ -890,7 +890,7 @@ async def test_cm3_004dc_submit_route_persists_state_comparison_authority(
                 name="state authority route",
                 backend="protenix_v2_ensemble",
                 ordered_seeds=[101, 202], samples_per_seed=1,
-                feature_policy=_request_params("protenix_v2_ensemble")["feature_policy"],
+                feature_policy={**_request_params("protenix_v2_ensemble")["feature_policy"], "rna_msa_enabled": False},
                 runtime_policy={"use_default_params": True},
                 analysis_policy=_request_params("protenix_v2_ensemble")["analysis_policy"],
                 registered_snapshot_id="snapshot",
@@ -913,7 +913,7 @@ async def test_cm3_004dc_submit_route_persists_state_comparison_authority(
         from database import Job
         job = await session.get(Job, response["job_id"])
         assert job is not None and job.status == "queued"
-        assert persisted.request_json["feature_policy"]["rna_msa_enabled"] is True
+        assert persisted.request_json["feature_policy"]["rna_msa_enabled"] is False
         monkeypatch.setenv("BMS_RESULTS_DIR", str(tmp_path / "results"))
         monkeypatch.setattr(nextflow, "get_results_dir", lambda: tmp_path / "results")
         invocation = nextflow.compile_nextflow_invocation(

@@ -22,6 +22,7 @@ from services import gpu_orchestrator as gpu, nextflow
 from services.md import lifecycle
 from services.remote_execution.targets import ExecutionTargetError, selected_plan_target_resources
 from test_md_job_v2_contract import _catalog, _v2_spec
+from test_molecular_dynamics_orchestration import _AcceptingRegistry
 
 
 @pytest_asyncio.fixture
@@ -71,9 +72,12 @@ def test_selected_descendant_projection_requires_one_shared_gpu(engine, target):
 async def test_real_create_job_v2_reserves_descendants_and_initializes(store, tmp_path, monkeypatch):
     from services.md.launch_contract import normalize_md_job_spec, materialize_md_job_spec
     catalog = _catalog()
+    from services.md import launch_contract
+    monkeypatch.setattr(launch_contract, '_bound_engine_runtime_identity',
+        lambda: {'image_name': 'gromacs.sif', 'sif_sha256': 'a' * 64})
     monkeypatch.setattr(jobs, 'require_molecular_dynamics_feature', lambda _: None)
     monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda _: None)
-    monkeypatch.setattr(jobs, 'get_registry', lambda: SimpleNamespace(reload=lambda: None, validate_job_params=lambda *a: []))
+    monkeypatch.setattr(jobs, 'get_registry', _AcceptingRegistry)
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
     monkeypatch.setattr(jobs, 'normalize_md_job_spec', lambda **kw: normalize_md_job_spec(**kw, chemistry_catalog=catalog))
     monkeypatch.setattr(jobs, 'materialize_md_job_spec', lambda **kw: materialize_md_job_spec(**kw, chemistry_catalog=catalog))
@@ -102,7 +106,7 @@ async def test_accepted_v1_caller_hands_unchanged_normalized_request_to_existing
     request.pop('chemistry')
     monkeypatch.setattr(jobs, 'require_molecular_dynamics_feature', lambda _: None)
     monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda _: None)
-    monkeypatch.setattr(jobs, 'get_registry', lambda: SimpleNamespace(reload=lambda: None, validate_job_params=lambda *a: []))
+    monkeypatch.setattr(jobs, 'get_registry', _AcceptingRegistry)
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
     monkeypatch.setattr(jobs, 'normalize_md_job_spec', lambda **kw: kw['params']['md_job_spec'])
     monkeypatch.setattr(jobs, 'materialize_md_job_spec', lambda **kw: dict(kw['params']))

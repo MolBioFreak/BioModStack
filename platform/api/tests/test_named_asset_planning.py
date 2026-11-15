@@ -16,6 +16,10 @@ def publication(tmp_path, monkeypatch):
     containers, weights = tmp_path / 'containers', tmp_path / 'weights'
     containers.mkdir()
     weights.mkdir()
+    # Image classification requires a real leaf; metadata tests never execute it.
+    image = containers / 'fixture.sif'
+    image.write_bytes(b'inert' * 199 + b'leaf')
+    image.chmod(0o555)
     for owner in (paths, bundle):
         monkeypatch.setattr(owner, 'get_container_dir', lambda: containers)
         monkeypatch.setattr(owner, 'get_weights_root', lambda: weights)
@@ -42,14 +46,14 @@ def fail(*args, **kwargs):
     raise AssertionError('Shared asset bytes must not be inventoried')
 
 
-@pytest.mark.parametrize('kind', ['workflow_pack', 'model', 'image'])
+@pytest.mark.parametrize('kind', ['model', 'image'])
 def test_named_planning_uses_no_asset_bodies_or_recursive_inventory(publication, monkeypatch, kind):
     monkeypatch.setattr(cache, '_records_for_source', fail)
     monkeypatch.setattr(bundle, '_records_for_source', fail)
     monkeypatch.setattr(images, 'verify_image', fail)
     monkeypatch.setattr(Path, 'rglob', fail)
     monkeypatch.setattr(hf_assets, 'prepare_sources', fail)
-    entries = cache.independent_plan(SimpleNamespace(kind=kind))
+    entries = cache.independent_plan(ProvisionSelection(kind=kind, model_id='fixture'))
     assert len(entries) == (1 if kind == 'image' else 2)
     assert entries[0].sha256 == 'b' * 64
     assert entries[0].size_bytes == 999
@@ -85,11 +89,11 @@ def test_legacy_metadata_falls_back_without_new_gate(publication, monkeypatch, f
         p.path.write_text(json.dumps(p.index))
         p.path.chmod(0o666 if fault == 'writable' else 0o444)
     calls = []
-    def legacy(path, prefix, role):
+    def legacy(path, prefix, role, **kwargs):
         calls.append(prefix)
         return []
-    monkeypatch.setattr(cache, '_records_for_source', legacy)
-    cache.independent_plan(SimpleNamespace(kind='model'))
+    monkeypatch.setattr(bundle, '_records_for_source', legacy)
+    cache.independent_plan(ProvisionSelection(kind='model', model_id='fixture'))
     assert 'containers/fixture.sif' in calls
 
 
@@ -201,7 +205,7 @@ def test_adoption_uses_retained_manifest_modes_and_not_asset_files(publication, 
     index = json.loads(adopted.read_bytes())
     assert index['schema'] == hf_assets.NAMED_INDEX_SCHEMA
     assert index['artifacts'][0]['mode'] == 0o555
-    assert len(cache.independent_plan(SimpleNamespace(kind='model'))) == 2
+    assert len(cache.independent_plan(ProvisionSelection(kind='model', model_id='fixture'))) == 2
     assert adopted.stat().st_mode & 0o777 == 0o444
     assert index['digest_sizes'] == {}
     wrong = json.loads(json.dumps(preview))

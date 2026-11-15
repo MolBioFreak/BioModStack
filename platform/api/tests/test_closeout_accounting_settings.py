@@ -155,7 +155,7 @@ def test_source_inventory_first_ingestion(tmp_path, component, damage):
         (original['complex_components'][0] if component else original).pop('msa_path')
     elif component:
         idx = argv.index('--complex-components-json') + 1
-        components = json.loads(argv[idx]); components[0].pop('msa_path')
+        components = json.loads(argv[idx]); components['components'][0].pop('msa_path')
         argv[idx] = json.dumps(components)
     else:
         argv[argv.index('--msa-path') + 1] = ''

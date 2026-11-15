@@ -71,7 +71,7 @@ async def test_unsupported_marked_owner_reason_survives_asgi(tmp_path):
             session.add(owner)
             await session.commit()
             await ingest_job_results('job', str(tmp_path), session)
-            owner.model_id = 'protenix'
+            owner.model_id = 'boltzgen_child'
             await session.commit()
             app = FastAPI()
             app.include_router(router, prefix='/designs')
@@ -89,7 +89,7 @@ async def test_unsupported_marked_owner_reason_survives_asgi(tmp_path):
                 assert structure.status_code == 200
                 metric = (await client.get(f"/designs/{point['id']}/residue-metrics")).json()
                 assert metric['status'] == 'unavailable'
-                assert point['publication_state'] == {'state': 'unavailable', 'value': None, 'reason_code': 'missing_canonical_publication'}
+                assert point['publication_state'] == {'state': 'invalid', 'value': None, 'reason_code': 'invalid_canonical_publication'}
                 if os.environ.get('BMS_UNSUPPORTED_ANALYTICS_WIRE'):
                     Path(os.environ['BMS_UNSUPPORTED_ANALYTICS_WIRE']).write_text(json.dumps(wire))
     finally:

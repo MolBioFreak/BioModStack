@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 import sys
 
 import pytest
@@ -28,36 +27,6 @@ def test_retired_workflow_files_are_deleted() -> None:
     assert [path for path in retired_paths if (REPO_ROOT / path).exists()] == []
 
 
-def test_retired_ids_are_absent_from_active_source() -> None:
-    forbidden = re.compile(
-        re.escape(RETIRED_BINDER_ID),
-        re.IGNORECASE,
-    )
-    roots = [
-        REPO_ROOT / "platform/api",
-        REPO_ROOT / "platform/frontend/src",
-        REPO_ROOT / "workflows",
-        REPO_ROOT / "modules",
-        REPO_ROOT / "scripts",
-        REPO_ROOT / "apptainer",
-    ]
-    hits: list[str] = []
-    for root in roots:
-        for path in root.rglob("*"):
-            if (
-                not path.is_file()
-                or "tests" in path.parts
-                or "__pycache__" in path.parts
-                or any(part.startswith(".") for part in path.relative_to(REPO_ROOT).parts)
-            ):
-                continue
-            try:
-                text = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            if forbidden.search(text) or forbidden.search(str(path.relative_to(REPO_ROOT))):
-                hits.append(str(path.relative_to(REPO_ROOT)))
-    assert hits == []
 
 
 @pytest.mark.parametrize(

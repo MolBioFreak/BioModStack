@@ -48,6 +48,7 @@ async def test_resealed_criteria_rejected_before_first_ingestion(tmp_path, monke
             with pytest.raises(ValueError, match='filter'):
                 await result_ingester.ingest_job_results(owner.id, str(tmp_path), db)
             assert not calls
+            await db.refresh(owner)
             assert 'rf_filter_stages' not in owner.provenance
     finally:
         await engine.dispose()

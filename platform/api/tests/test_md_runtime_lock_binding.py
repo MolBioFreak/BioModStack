@@ -19,7 +19,13 @@ def md_package(package, monkeypatch):
     monkeypatch.setenv('BMS_FEATURE_MOLECULAR_DYNAMICS', '1')
     roots, release, job, target, _ = package
     job.model_id, job.mode = 'molecular_dynamics', 'simulate'
-    job.params = {'md_config': {'engine': 'gromacs', 'replicas': 1}}
+    from test_md_job_v2_contract import _v2_spec, ONE_AKI_FIXTURE
+    from test_md_typed_launch import _profile, CATALOG_DIGEST
+    config = _v2_spec(_profile(), CATALOG_DIGEST)
+    source = roots['inputs'] / 'source.pdb'
+    source.write_bytes(ONE_AKI_FIXTURE.read_bytes())
+    config['input']['structure'] = str(source)
+    job.params = {'md_config': config}
     for name in ('md-preparation-v1.sif', 'gromacs-md-2025.3.sif', 'md-analysis-1.0.0.sif'):
         (roots['containers'] / name).write_bytes(b'inert runtime fixture; never executed')
     lock = roots['data'] / 'md-preparation/env-v1-explicit.txt'
@@ -47,16 +53,14 @@ async def test_configured_md_preview_resolves_real_runtime_leaves(md_package, mo
     preview, entries = cache.independent_preview(selection, target, compiled_plan=plan)
     assert not preview.blockers
     assert preview.plan_sha256 == plan.plan_sha256
-    assert json.loads(plan.native_parameters_json)['md_preparation_runtime_lock'] == str(lock)
+    # Dependency-only preview has no resolved guided structure or Amber owner.
+    assert 'md_preparation_runtime_lock' not in json.loads(plan.native_parameters_json)
     records, _ = cache.workflow_plan(selection, compiled_plan=plan)
-    selected = next(row for row in records if row.remote_destination == 'data/md-preparation/env-v1-explicit.txt')
-    assert selected.source == lock
-    assert selected.sha256 == hashlib.sha256(lock.read_bytes()).hexdigest()
-    assert selected.size_bytes == lock.stat().st_size
+    assert not any(row.remote_destination == 'data/md-preparation/env-v1-explicit.txt' for row in records)
     assert 'md_preparation_runtime_lock' not in json.loads(plan.requested_json)
     lock.unlink()
     unavailable, _ = cache.independent_preview(selection, target, compiled_plan=plan)
-    assert any(reason.startswith('host_asset_unavailable:') for reason in unavailable.blockers)
+    assert not unavailable.blockers
 
 
 def test_md_compiler_lock_relocates_through_actual_bundle(md_package):

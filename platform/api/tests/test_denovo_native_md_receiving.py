@@ -10,12 +10,12 @@ from model_registry import selected_execution_metadata
 
 @pytest.fixture
 def current_project_store(monkeypatch, tmp_path, request):
-    # Reuse the real two-store fixture; its caller predates the added pytest request argument.
+    # Forward the real pytest request through the remote two-store fixture.
     from types import SimpleNamespace
     from tests import test_md_typed_launch as typed
     original = typed.project_context_preview_store.__wrapped__
     monkeypatch.setattr(typed, 'project_context_preview_store', SimpleNamespace(
-        __wrapped__=lambda patcher, root: original(patcher, root, request)))
+        __wrapped__=lambda patcher, root, _request: original(patcher, root, request)))
     yield from remote_project_store.__wrapped__(monkeypatch, tmp_path)
 
 

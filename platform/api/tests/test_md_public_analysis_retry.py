@@ -36,6 +36,10 @@ async def public(session, method="POST"):
 
 
 def retained(tmp_path, monkeypatch, target, *, replicas=1, root_state='failed', active=False):
+    import biomodstack_local_resources as local
+    capacity = SimpleNamespace(cpu_threads=64, memory_bytes=64 * 1024**3)
+    monkeypatch.setattr(local, 'applied_local_policy', lambda: capacity)
+    monkeypatch.setattr(local, 'detect_local_capacity', lambda: capacity)
     root, spec = _tree(tmp_path, monkeypatch)
     if root_state == 'completed':
         spec['analysis'] = {}

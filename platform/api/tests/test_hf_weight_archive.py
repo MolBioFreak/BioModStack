@@ -357,17 +357,17 @@ async def test_controller_takes_the_shared_tree_from_one_archive(tmp_path, monke
     assert [item.role for item in issued] == ['weights', 'weights']
     assert any(request['action'] == 'unpack_weights_archive' for request in calls)
     # Only the bundle listing was relayed as files; no weight member was.
-    assert len(uploads) == 1 and Path(uploads[0]).name.startswith('bms-cache-batch-')
+    assert len(uploads) == 1 and uploads[0] == str(bundle.runtime_transfers[0].source)
     relayed = [request for request in calls if request['action'] in {'ingest', 'ingest_many'}]
-    assert sum(len(entry.get('artifacts', [])) for entry in relayed) == 1
+    assert sum(1 if entry['action'] == 'ingest' else len(entry['artifacts']) for entry in relayed) == 1
     # The worker published the shared view from verified objects alone.
     root = Path(bundle.envelope.environment['BMS_WEIGHTS'])
     for name, data in members.items():
         assert (root / name).read_bytes() == data
     assert (root / absent['row']['name']).read_bytes() == absent['payload']
     assert {item.sha256 for item in bundle.runtime_weights} <= {item['sha256'] for item in receipts}
-    # One further receipt is the bundle's own runtime listing, staged first.
-    assert len(receipts) == len(bundle.runtime_weights) + 1
+    # The listing is staged above, not returned as a scientific weight receipt.
+    assert len(receipts) == len(bundle.runtime_weights)
     assert not list((Path(connection.remote_root) / 'cache/artifacts/v1/incoming').glob('*/*'))
 
 
