@@ -74,7 +74,10 @@ async def test_remote_cycle_cp4_never_claims_one_gpu(workers, monkeypatch, case)
             assert assignment['gpu_indices'] == [0, 1, 2, 3]
             assert len(assignment['admission_snapshot']['devices']) == 4
             assert launched[0]['params']['bcp_size_cp'] == 4
-            assert target.leased_job_id == job.id
+            from services.remote_execution.claims import job_has_claim
+            assert job_has_claim(target, job)
+            assert assignment['policy'] == 'vram_packing'
+            assert target.leased_job_id is None
         else:
             assert not launched
             assert target.leased_job_id is None

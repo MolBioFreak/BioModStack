@@ -52,7 +52,7 @@ async def test_round_metadata_reaches_native_comparison(selected, setup_store, m
     assert step['state'] == 'queued', progress
     child = await session.get(Job, step['job_id'])
     metadata = child.provenance[rounds.STEP]
-    assert all(set(c) == {'id', 'type', 'sequence'} for c in child.params['complex_components'])
+    assert all(set(c) == {'id', 'type', 'sequence', 'modifications'} for c in child.params['complex_components'])
     assert metadata['input_components'][0]['reference_residues'][0] == {
         'chain_id': 'B', 'auth_seq_id': 1, 'insertion_code': ''}
     if not same_document and not producer_mapping:

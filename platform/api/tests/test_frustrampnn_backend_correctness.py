@@ -244,7 +244,8 @@ def test_governed_multipart_openapi_declares_every_accepted_form_field() -> None
     upload, upload_required = _multipart_properties(
         app, "/api/frustrampnn/jobs/uploads/analyze"
     )
-    assert set(upload) == {"pdb_file", "frustrampnn_settings"}
+    assert set(upload) == {"pdb_file", "frustrampnn_settings",
+                           "execution_target_id", "launch_context_id", "idempotency_key"}
     assert upload_required == {"pdb_file"}
     assert upload["pdb_file"]["contentMediaType"] == "application/octet-stream"
     assert "64 MiB" in upload["pdb_file"]["description"]
