@@ -36,6 +36,7 @@ process DoradoPreflight {
     if (params.dorado_batch_size != null && params.dorado_batch_size.toString().trim()) optional += "--batch-size ${doradoShellQuote(params.dorado_batch_size)}"
     if (params.duplex_pairs) optional += "--pairs ${doradoShellQuote(params.duplex_pairs)}"
     if (params.barcode_kit) optional += "--barcode-kit ${doradoShellQuote(params.barcode_kit)}"
+    if (params.barcode_kit && params.barcode_both_ends == true) optional += "--barcode-both-ends"
     if (params.sample_sheet) optional += "--sample-sheet ${doradoShellQuote(params.sample_sheet)}"
     if (params.allow_multiple_pod5_runs == true) optional += "--allow-multiple-runs"
     // Check only the tools this run uses: plain basecalling starts no modkit or IGV container.
@@ -122,6 +123,7 @@ process DoradoBasecall {
     min_qscore="\$(jq -r '.execution_policy.min_qscore' dorado_preflight.json)"
     pair_relative="\$(jq -r '.pairs.relative_path // empty' dorado_preflight.json)"
     barcode_kit="\$(jq -r '.barcoding.kit // empty' dorado_preflight.json)"
+    barcode_both_ends="\$(jq -r '.barcoding.both_ends // false' dorado_preflight.json)"
     sample_relative="\$(jq -r '.barcoding.sample_sheet.relative_path // empty' dorado_preflight.json)"
     mapfile -t mod_model_ids < <(jq -r '.selection.modified_bases_model_ids[]?' dorado_preflight.json)
     for mod_model_id in "\${mod_model_ids[@]}"; do [[ "\${mod_model_id}" =~ ^[A-Za-z0-9_.@-]+\$ ]]; done
@@ -259,6 +261,7 @@ process DoradoBasecall {
     if [[ "\${mode}" == simplex ]]; then command+=(--min-qscore "\${min_qscore}"); fi
     if [[ -n "\${pair_relative}" ]]; then command+=(--pairs "\${pod5_root}/\${pair_relative}"); fi
     if [[ -n "\${barcode_kit}" ]]; then command+=(--kit-name "\${barcode_kit}"); fi
+    if [[ -n "\${barcode_kit}" && "\${barcode_both_ends}" == true ]]; then command+=(--barcode-both-ends); fi
     if [[ -n "\${sample_relative}" ]]; then command+=(--sample-sheet "\${pod5_root}/\${sample_relative}"); fi
     if (( \${#mod_model_ids[@]} )); then
       mod_model_paths=()

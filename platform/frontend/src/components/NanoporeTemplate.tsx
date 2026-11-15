@@ -602,6 +602,7 @@ function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse, e
 // ============================================================================
 // Main Component
 // ============================================================================
+type BarcodeKit = '' | 'SQK-RBK114-24' | 'SQK-RBK114-96' | 'SQK-NBD114-24' | 'SQK-NBD114-96';
 export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProps) {
     const experimentContext = useGlobalExperimentContext();
     const {
@@ -738,7 +739,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         ? pinnedBasecallerModel : cloneModelSchema.default;
     const declaredCloneModel = wfCloneBasecallerModel ?? recommendedCloneModel;
     const [duplexPairs, setDuplexPairs] = useState(initialValues?.duplexPairs as string || '');
-    const [barcodeKit, setBarcodeKit] = useState<'' | 'SQK-RBK114-96'>((initialValues?.barcodeKit as '' | 'SQK-RBK114-96' | undefined) ?? '');
+    const [barcodeKit, setBarcodeKit] = useState<BarcodeKit>((initialValues?.barcodeKit as BarcodeKit | undefined) ?? '');
+    const [barcodeBothEnds, setBarcodeBothEnds] = useState(initialValues?.barcodeBothEnds === true);
+    // Native kits put a barcode on both ends of a molecule; rapid kits on one.
+    const nativeBarcodeKit = barcodeKit.startsWith('SQK-NBD');
     const [sampleSheet, setSampleSheet] = useState(initialValues?.sampleSheet as string || '');
     const [sampleSheetBlocker, setSampleSheetBlocker] = useState('');
     const [selectedModifications, setSelectedModifications] = useState<string[]>(() => parseModifiedBases(initialValues?.modifiedBases as string | undefined));
@@ -1238,6 +1242,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     modified_bases: modifiedBases,
                     duplex_pairs: doradoMode === 'duplex' ? duplexPairs : undefined,
                     barcode_kit: barcodeKit || undefined,
+                    ...(nativeBarcodeKit && barcodeBothEnds && { barcode_both_ends: true }),
                     sample_sheet: barcodeKit ? (sampleSheet || undefined) : undefined,
                     trim_adapters: trimAdapters,
                     emit_summary: emitSummary,
@@ -1951,14 +1956,27 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     {selectedWorkflow === 'dna' && doradoMolecule === 'dna' && doradoMode === 'simplex' && (
                         <div className="grid grid-cols-2 gap-3">
                             <label className="text-sm text-[var(--text-secondary)]">Barcoding<select aria-label="Barcoding" value={barcodeKit} onChange={(event) => {
-                                const value = event.target.value as '' | 'SQK-RBK114-96';
+                                const value = event.target.value as BarcodeKit;
                                 setBarcodeKit(value);
                                 if (value) { setRunModkit(false); setRunAssembly(false); }
                                 else setSampleSheet('');
                             }} className="mt-1 block w-full bg-[var(--bg-tertiary)] rounded p-2 disabled:opacity-40">
                                 <option value="">No barcoding</option>
-                                <option value="SQK-RBK114-96">SQK-RBK114-96</option>
+                                <optgroup label="Rapid barcoding">
+                                    <option value="SQK-RBK114-24">SQK-RBK114-24</option>
+                                    <option value="SQK-RBK114-96">SQK-RBK114-96</option>
+                                </optgroup>
+                                <optgroup label="Native barcoding">
+                                    <option value="SQK-NBD114-24">SQK-NBD114-24</option>
+                                    <option value="SQK-NBD114-96">SQK-NBD114-96</option>
+                                </optgroup>
                             </select></label>
+                            {nativeBarcodeKit && (
+                                <label className="flex items-center gap-2 self-end pb-2 text-sm text-[var(--text-primary)]">
+                                    <input type="checkbox" aria-label="Require a barcode on both ends" checked={barcodeBothEnds} onChange={(event) => setBarcodeBothEnds(event.target.checked)} className="w-4 h-4 rounded border-[var(--border-primary)]" />
+                                    Require a barcode on both ends
+                                </label>
+                            )}
                             {barcodeKit && <div className="col-span-2"><BarcodeSampleSheet path={sampleSheet} kit={barcodeKit} onChange={setSampleSheet} onBlocker={setSampleSheetBlocker} /></div>}
                         </div>
                     )}

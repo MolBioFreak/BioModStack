@@ -441,7 +441,8 @@ async def _authorized_barcode_source(job_id: str, request: Request, session: Asy
         raise HTTPException(status_code=404, detail="Nanopore source job not found")
     if job.mode != "basecall_dna":
         raise HTTPException(status_code=422, detail="Source job is not a DNA barcode-basecalling job")
-    if str((job.params or {}).get("barcode_kit") or "").strip() != "SQK-RBK114-96":
+    from services.ont_ngs_contract import accepted_barcode_kits  # noqa: PLC0415
+    if str((job.params or {}).get("barcode_kit") or "").strip() not in accepted_barcode_kits():
         raise HTTPException(status_code=422, detail="Source job is not bound to the locked barcode kit")
     if job.status != "completed":
         raise HTTPException(status_code=409, detail="Source barcode job is not complete")

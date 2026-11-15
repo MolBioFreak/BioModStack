@@ -5,7 +5,7 @@ import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 const mocks=vi.hoisted(()=>({uploadFile:vi.fn()}));vi.mock('../../src/lib/api',()=>mocks);
 import {BarcodeSampleSheet} from '../../src/components/ngs/BarcodeSampleSheet';
 let host:HTMLDivElement,root:Root,client:QueryClient;const blocker=vi.fn();
-function Harness(){const [path,setPath]=useState('');return <BarcodeSampleSheet path={path} kit="SQK-RBK114-96" onChange={setPath} onBlocker={blocker}/>;}
+function Harness({kit='SQK-RBK114-96'}:{kit?:string}){const [path,setPath]=useState('');return <BarcodeSampleSheet path={path} kit={kit} onChange={setPath} onBlocker={blocker}/>;}
 const button=(text:string)=>Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(node=>node.textContent===text)!;
 async function settle(){await act(async()=>{await new Promise(resolve=>setTimeout(resolve,0));});}
 async function click(text:string){await act(async()=>button(text).click());await settle();}
@@ -24,4 +24,12 @@ it('creates the pinned Dorado CSV from pasted barcode/sample rows and clears sta
 it('rejects duplicate barcode/sample rows without uploading a sheet',async()=>{
     await click('Enter barcode samples');await input('POD5 experiment name','runA');await input('Flow cell ID','FC123');await input('Paste barcode sample rows','barcode01,A\nbarcode01,B');await click('Apply pasted rows');await click('Save sample sheet');
     expect(host.querySelector('[role="alert"]')!.textContent).toContain('different barcode');expect(mocks.uploadFile).not.toHaveBeenCalled();
+});
+it('lists barcodes 01 to 24 for a 24-barcode kit and 96 for a 96 kit',async()=>{
+    await act(async()=>root.render(<QueryClientProvider client={client}><Harness kit="SQK-NBD114-24"/></QueryClientProvider>));await settle();
+    await click('Enter barcode samples');
+    expect(host.querySelectorAll('select[aria-label="Barcode 1"] option')).toHaveLength(24);
+    expect(host.textContent).toContain('barcode01–barcode24');
+    await act(async()=>root.render(<QueryClientProvider client={client}><Harness kit="SQK-NBD114-96"/></QueryClientProvider>));await settle();
+    expect(host.querySelectorAll('select[aria-label="Barcode 1"] option')).toHaveLength(96);
 });

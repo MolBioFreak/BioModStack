@@ -62,7 +62,10 @@
       "anyOf": [
         {
           "enum": [
-            "SQK-RBK114-96"
+            "SQK-RBK114-24",
+            "SQK-RBK114-96",
+            "SQK-NBD114-24",
+            "SQK-NBD114-96"
           ]
         },
         {

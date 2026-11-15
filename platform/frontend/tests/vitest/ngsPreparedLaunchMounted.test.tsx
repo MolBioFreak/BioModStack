@@ -359,6 +359,21 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         expect(submits()[0].url).toBe('/api/ont/ngs/ont_basecall_rna/submit');
         expect(capturedRequest().params).toMatchObject({ ont_molecule_type: 'rna', run_modkit: false });
     });
+    it('offers four barcode kits and the both-ends box for native kits only', async () => {
+        await mount({ ...base, barcodeKit: 'SQK-NBD114-24', barcodeBothEnds: true });
+        const kits = Array.from(container.querySelectorAll<HTMLOptionElement>('select[aria-label="Barcoding"] option')).map(option => option.value);
+        expect(kits).toEqual(['', 'SQK-RBK114-24', 'SQK-RBK114-96', 'SQK-NBD114-24', 'SQK-NBD114-96']);
+        expect(container.querySelector('input[aria-label="Require a barcode on both ends"]')).not.toBeNull();
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-NBD114-24', barcode_both_ends: true });
+    });
+    it('shows no both-ends box for a rapid kit and sends no both-ends setting', async () => {
+        await mount({ ...base, barcodeKit: 'SQK-RBK114-24', barcodeBothEnds: true });
+        expect(container.querySelector('input[aria-label="Require a barcode on both ends"]')).toBeNull();
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-RBK114-24' });
+        expect(capturedRequest().params).not.toHaveProperty('barcode_both_ends');
+    });
     it('offers DNA calling options once and submits modification tags without adding methylation analysis', async () => {
         await mount();
         expect(container.querySelector('[data-ngs-workflow-key="duplex"]')).toBeNull();

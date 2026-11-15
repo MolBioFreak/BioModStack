@@ -79,7 +79,7 @@ def prepare_dorado_demux_products(job: Any, *, read_root: Path, persisted_root: 
     from services import ont_ngs_contract
     from services.ont_barcode_units import _resolve_barcode_catalogs, BarcodeProductContainmentError
 
-    if job.model_id != "nanopore" or job.mode != "basecall_dna" or str((job.params or {}).get("barcode_kit") or "") != "SQK-RBK114-96":
+    if job.model_id != "nanopore" or job.mode != "basecall_dna" or str((job.params or {}).get("barcode_kit") or "") not in ont_ngs_contract.accepted_barcode_kits():
         raise DoradoProductsUnavailable(status_code=422, detail="dorado_demux is valid only for locked barcoded DNA jobs")
     if not persisted_root.is_absolute():
         raise OntNgsCompletionError("Dorado persisted destination must be absolute")

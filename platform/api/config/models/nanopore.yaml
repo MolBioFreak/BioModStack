@@ -403,7 +403,12 @@ params:
     type: string
     description: Locked inline barcode-classification kit
     required: false
-    enum: [SQK-RBK114-96]
+    enum: [SQK-RBK114-24, SQK-RBK114-96, SQK-NBD114-24, SQK-NBD114-96]
+  - name: barcode_both_ends
+    type: boolean
+    description: Require a barcode on both ends of a read (native barcoding kits)
+    required: false
+    default: false
 
   - name: sample_sheet
     type: file

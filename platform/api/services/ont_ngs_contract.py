@@ -591,6 +591,11 @@ def samtools_consensus_setting() -> dict[str, Any]:
     )["properties"]["samtools_consensus_config"]
 
 
+def accepted_barcode_kits() -> frozenset[str]:
+    """The kits the Dorado lock lists; every other place follows this list."""
+    return frozenset(json.loads(DORADO_LOCK_PATH.read_bytes())["barcoding"]["accepted_kits"])
+
+
 def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | None) -> dict[str, Any]:
     """Apply canonical ONT product/quality defaults without mutating caller params."""
     canonical_id = resolve_ont_workflow_alias(workflow_id)
@@ -636,7 +641,7 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
             if (
                 key.startswith(("dorado_", "gpu_", "msa_", "anarcii_"))
                 or key in {
-                    "basecalling_mode", "barcode_kit", "sample_sheet", "duplex_pairs",
+                    "basecalling_mode", "barcode_kit", "barcode_both_ends", "sample_sheet", "duplex_pairs",
                     "modified_bases", "min_qscore", "pinned_gpu", "pinned_gpus",
                     "cuda_visible_devices", "cpus_per_gpu",
                     # Tail length is estimated while basecalling, so only a POD5 run carries it.
@@ -701,6 +706,12 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     sample_sheet = str(normalized.get("sample_sheet") or "").strip() or None
     if sample_sheet and not barcode_kit:
         raise ValueError("sample_sheet requires barcode_kit")
+    # Native kits carry a barcode on both ends; a rapid kit has one, so the option does not apply there.
+    both_ends = normalized.pop("barcode_both_ends", False)
+    if not isinstance(both_ends, bool):
+        raise ValueError("barcode_both_ends must be boolean")
+    if both_ends and barcode_kit in lock["barcoding"].get("both_ends_kits", ()):
+        normalized["barcode_both_ends"] = True
     duplex_pairs = str(normalized.get("duplex_pairs") or "").strip() or None
     if basecall_mode == "duplex" and not duplex_pairs:
         raise ValueError("duplex mode requires duplex_pairs")

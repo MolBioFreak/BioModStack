@@ -52,6 +52,7 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         doradoMode: p.dorado_basecall_mode || 'simplex',
         duplexPairs: p.duplex_pairs || '',
         barcodeKit: p.barcode_kit || '',
+        barcodeBothEnds: p.barcode_both_ends === true,
         sampleSheet: p.sample_sheet || '',
         modifiedBases: p.modified_bases || 'none',
         trimAdapters: p.trim_adapters !== false,

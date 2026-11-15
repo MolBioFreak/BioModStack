@@ -620,6 +620,7 @@ def _validate_sample_sheet(path: Path, root: Path, barcode_kit: str, inventory: 
 def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality: str, mode: str,
                     model_root: Path, runtime_sif: Path, modified_bases: str = "none",
                     barcode_kit: str | None = None, sample_sheet: Path | None = None,
+                    barcode_both_ends: bool = False,
                     pairs: Path | None = None, batch_size: int | None = None,
                     min_qscore: int = 10, device: str = "cuda:0", verify_assets: bool = True,
                     selected_binding: dict | None = None,
@@ -734,7 +735,10 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
             "modified_bases_model_ids": [mod_model["id"] for mod_model in modified_models],
         },
         "pairs": pairs_record,
-        "barcoding": {"kit": barcode_kit, "sample_sheet": sheet_record, "sample_sheet_sha256": sheet_record["sha256"] if sheet_record else None},
+        "barcoding": {"kit": barcode_kit,
+                      **({"both_ends": True} if barcode_kit and barcode_both_ends
+                         and barcode_kit in lock["barcoding"].get("both_ends_kits", ()) else {}),
+                      "sample_sheet": sheet_record, "sample_sheet_sha256": sheet_record["sha256"] if sheet_record else None},
         "execution_policy": {
             "device": str(device),
             "batch_size": batch,
@@ -771,6 +775,7 @@ def main() -> int:
     parser.add_argument("--runtime-sif", required=True, type=Path)
     parser.add_argument("--modified-bases", default="none")
     parser.add_argument("--barcode-kit")
+    parser.add_argument("--barcode-both-ends", action="store_true")
     parser.add_argument("--sample-sheet", type=Path)
     parser.add_argument("--pairs", type=Path)
     parser.add_argument("--batch-size", type=int)
@@ -784,6 +789,7 @@ def main() -> int:
     payload = build_preflight(lock_path=args.lock, pod5_root=args.pod5_root, molecule=args.molecule,
         quality=args.quality, mode=args.mode, model_root=args.model_root, runtime_sif=args.runtime_sif,
         modified_bases=args.modified_bases, barcode_kit=args.barcode_kit, sample_sheet=args.sample_sheet,
+        barcode_both_ends=args.barcode_both_ends,
         pairs=args.pairs, batch_size=args.batch_size, min_qscore=args.min_qscore,
         device=args.device, verify_assets=True, selected_binding=json.loads(args.selected_binding_json),
         allow_multiple_runs=args.allow_multiple_runs,
