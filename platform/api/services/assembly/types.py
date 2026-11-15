@@ -91,6 +91,19 @@ class AssemblyJunction:
     overlap_tm: Optional[float] = None
     overlap_tm_2_4: Optional[float] = None
     overlap_tm_model: Optional[str] = None
+    # Gibson information only: overlap GC (percent) and which primers carry the overlap
+    # ("split" | "left" | "right", or "homology" when the parts already share it).
+    overlap_gc: Optional[float] = None
+    distribution: Optional[str] = None
+
+
+@dataclass(frozen=True, slots=True)
+class JunctionSpec:
+    """A user's choice for the join after one Gibson fragment (None = automatic)."""
+
+    after_fragment_id: str
+    overlap: Optional[int] = None
+    distribution: Optional[str] = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -88,6 +88,7 @@ from services.assembly.types import (
     AssemblyProduct,
     FragmentEnd,
     GibsonDesignResult,
+    JunctionSpec,
 )
 from services.molbio_ops import pcr_product, apply_mutations, reverse_complement, clean_sequence
 from services.primer_thermo import PrimerThermoError, PrimerThermoRequest, PrimerThermoResponse, analyze_primer_thermo
@@ -999,13 +1000,19 @@ class AssemblyJunctionResponse(BaseModel):
     overlap_tm: Optional[float] = None
     overlap_tm_2_4: Optional[float] = None
     overlap_tm_model: Optional[str] = None
+    overlap_gc: Optional[float] = None
+    distribution: Optional[Literal["split", "left", "right", "homology"]] = None
     sealed: Literal["both", "one_strand", "none", "unknown"] = "unknown"
 
     @model_serializer(mode="wrap")
     def _omit_unknown_sealed(self, handler):
         data = handler(self)
-        if isinstance(data, dict) and data.get("sealed") == "unknown":
-            data.pop("sealed")
+        if isinstance(data, dict):
+            if data.get("sealed") == "unknown":
+                data.pop("sealed")
+            for key in ("overlap_gc", "distribution"):
+                if data.get(key) is None:
+                    data.pop(key, None)
         return data
 
 
@@ -1147,6 +1154,16 @@ class GibsonDesignFragmentSchema(AssemblyFragmentSchema):
     preparation: Literal["pcr", "ready_linear"] = "pcr"
 
 
+class GibsonJunctionChoice(BaseModel):
+    """One join the user shapes by hand; anything left null is automatic."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    after_fragment_id: str = Field(min_length=1, max_length=200)
+    overlap: Optional[int] = Field(default=None, ge=15, le=80)
+    distribution: Optional[Literal["split", "left", "right"]] = None
+
+
 class GibsonDesignRequest(BaseModel):
     computation_id: Optional[str] = None
     fragments: List[GibsonDesignFragmentSchema]
@@ -1154,6 +1171,7 @@ class GibsonDesignRequest(BaseModel):
     overlap: int = Field(default=30, ge=15, le=80)
     target_tm: float = Field(default=60.0, ge=45.0, le=72.0, allow_inf_nan=False)
     min_anneal: int = Field(default=13, ge=10, le=30)
+    junctions: Optional[List[GibsonJunctionChoice]] = Field(default=None, max_length=50)
     selected_candidate_checksum: Optional[str] = None
     new_name: Optional[str] = None
     save_description: Optional[str] = None
@@ -1493,6 +1511,8 @@ def assembly_junction_to_response(
         overlap_tm=junction.overlap_tm,
         overlap_tm_2_4=junction.overlap_tm_2_4,
         overlap_tm_model=junction.overlap_tm_model,
+        overlap_gc=junction.overlap_gc,
+        distribution=junction.distribution,
         sealed=junction.sealed,
     )
 
@@ -2724,6 +2744,12 @@ def _assembly_request_fingerprint(request: BaseModel) -> str:
     for fragment in values.get("fragments", []):
         fragment.pop("source_name", None)
         fragment.pop("name", None)
+    if "junctions" in values:
+        choices = [item for item in (values["junctions"] or []) if item.get("overlap") is not None or item.get("distribution") is not None]
+        if choices:
+            values["junctions"] = sorted(choices, key=lambda item: item["after_fragment_id"])
+        else:
+            del values["junctions"]
     return canonical_request_fingerprint(values)
 
 
@@ -2784,6 +2810,9 @@ def _execute_gibson_design(request: GibsonDesignRequest) -> GibsonDesignResult:
         overlap=request.overlap,
         target_tm=request.target_tm,
         min_anneal=request.min_anneal,
+        junctions=[
+            JunctionSpec(item.after_fragment_id, item.overlap, item.distribution) for item in request.junctions
+        ] if request.junctions else None,
     )
 
 
