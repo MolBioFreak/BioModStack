@@ -25,6 +25,7 @@ def test_manual_mutagenesis_iteration_job_preserves_boltz_runtime_params(monkeyp
         name="manual_source",
         parent_job_id="root-job",
         pinned_gpu=0,
+        execution_target_id=None,
         params={
             "boltz_use_msa": True,
             "boltz_sampling_steps": 1000,
@@ -107,6 +108,7 @@ def test_cdr_indel_iteration_job_preserves_boltz_runtime_params(monkeypatch, tmp
         id="root-job",
         name="root",
         pinned_gpu=0,
+        execution_target_id=None,
         params={
             "boltz_use_msa": True,
             "boltz_sampling_steps": 1000,

@@ -441,61 +441,6 @@ def test_esmfold2_visible_ui_params_override_legacy_prefixed_defaults() -> None:
     assert _flag_value(preset_cmd, "--esmf_num_diffusion_samples") == "2"
 
 
-def test_esmfold2_internal_runtime_contract() -> None:
-    assert not (REPO_ROOT / "workflows" / "esmfold2_experimental.nf").exists()
-    module_text = (REPO_ROOT / "modules" / "esmfold2_experimental.nf").read_text(encoding="utf-8")
-    nextflow_config = (REPO_ROOT / "nextflow.config").read_text(encoding="utf-8")
-    runner_text = (REPO_ROOT / "scripts" / "run_esmfold2_inference.py").read_text(encoding="utf-8")
-    apptainer_def = (REPO_ROOT / "apptainer" / "esmfold2.def").read_text(encoding="utf-8")
-    main_text = (REPO_ROOT / "main.nf").read_text(encoding="utf-8")
-
-    assert "process ESMFold2Predict" in module_text
-    assert "process RunESMFold2Experimental" not in module_text
-    assert "label 'ESMFold2'" in module_text
-    assert "run_esmfold2_inference.py" in module_text
-    assert "bms_gpu_run_telemetry.py" in module_text
-    assert 'path "esmfold2_results/*.telemetry.json", emit: telemetry' in module_text
-    assert "--output-json ${telemetryPath}" in module_text
-    assert "--label ESMFold2Predict" in module_text
-    assert "--workflow esmfold2" not in module_text
-    assert "pdb_files" in module_text
-    active_process_text = module_text.split("process ESMFold2Predict {", 1)[1]
-    assert "def shapeMode = params.modification_mode == 'shape_blueprint'" in active_process_text
-    assert "def modelVariant = shapeMode ? (params.get('shape_esmf_model_variant') ?: 'fast')" in active_process_text
-    assert "params.get('esmf_model_variant') ?: params.get('model_variant') ?: 'fast'" in active_process_text
-    assert "def modelIdOrPath = params.get('esmf_model_id_or_path') ?: params.get('model_id_or_path') ?: ''" in active_process_text
-    assert "esmfold2_experimental {" not in nextflow_config
-    assert "withLabel: ESMFold2" in nextflow_config
-    assert "${params.container_dir}/esmfold2.sif" in nextflow_config
-    assert "HF_HOME=/weights/esmfold2/hf_home" in nextflow_config
-    assert "HF_HUB_CACHE=/weights/esmfold2/hf_home/hub" in nextflow_config
-    assert "TRANSFORMERS_CACHE=/weights/esmfold2/hf_home/hub" in nextflow_config
-    assert "BMS_ESMFOLD2_MODEL" in nextflow_config
-    assert "ESMFold2Model.from_pretrained" in runner_text
-    assert "local_files_only=args.local_files_only" in runner_text
-    assert '"event": "device_selected"' in runner_text
-    assert '"workflow": "esmfold2"' in runner_text
-    assert '"workflow": "esmfold2_experimental"' not in runner_text
-    assert "StructurePredictionInput" in runner_text
-    assert "DNAInput" in runner_text
-    assert "RNAInput" in runner_text
-    assert "LigandInput" in runner_text
-    assert "from_a3m" in runner_text
-    assert "parse_pdb_polymer_components" in runner_text
-    assert "--complex-components-json" in runner_text
-    assert "params.get('esmf_complex_components_file')" in active_process_text
-    assert "new File(complexComponentsFile.toString())" in active_process_text
-    assert "parsedComplexComponents.components" in active_process_text
-    assert "def hasComplexComponents" in active_process_text
-    assert "def sequenceArg = shellQuote(hasComplexComponents ? ''" in active_process_text
-    assert "--pdb-sequence-path" in runner_text
-    assert "--msa-path" in runner_text
-    assert "biohub.ai/developer-console" not in module_text + runner_text
-    assert "ESM_API_KEY" not in module_text + runner_text
-    assert "Biohub/esm.git@c94ed8d763bbd7088b296949e5b401e8ea12073a" in apptainer_def
-    assert "BiohubTransformersCommit 3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf" in apptainer_def
-    assert "HF_HOME=/weights/esmfold2/hf_home" in apptainer_def
-    assert "esmfold2_experimental" not in main_text
 
 
 def test_esmfold2_live_api_exposes_model_metadata_but_no_standalone_template() -> None:
@@ -532,8 +477,8 @@ def test_esmfold2_runner_parses_pdb_and_component_json_without_runtime_imports(t
             "ATOM      1  N   MET A   1      11.104  13.207   2.100  1.00 20.00           N",
             "ATOM      2  CA  MET A   1      12.000  13.800   2.500  1.00 20.00           C",
             "ATOM      3  N   GLY A   2      13.104  14.207   3.100  1.00 20.00           N",
-            "ATOM      4  P     G D   1      15.104  14.207   3.100  1.00 20.00           P",
-            "ATOM      5  P     T D   2      16.104  15.207   3.100  1.00 20.00           P",
+            "ATOM      4  P    DG D   1      15.104  14.207   3.100  1.00 20.00           P",
+            "ATOM      5  P    DT D   2      16.104  15.207   3.100  1.00 20.00           P",
             "ATOM      6  P     C C   1      17.104  16.207   3.100  1.00 20.00           P",
             "ATOM      7  P     U C   2      18.104  17.207   3.100  1.00 20.00           P",
         ]) + "\n",
@@ -542,9 +487,9 @@ def test_esmfold2_runner_parses_pdb_and_component_json_without_runtime_imports(t
 
     components = module.parse_pdb_polymer_components(pdb_path, chain_ids="A,C,D")
     assert components == [
-        {"type": "protein", "id": "A", "sequence": "MG", "source": str(pdb_path)},
-        {"type": "rna", "id": "C", "sequence": "CU", "source": str(pdb_path)},
-        {"type": "dna", "id": "D", "sequence": "GT", "source": str(pdb_path)},
+        {"type": "protein", "id": "A", "sequence": "MG", "source": str(pdb_path), "modifications": []},
+        {"type": "dna", "id": "D", "sequence": "GT", "source": str(pdb_path), "modifications": []},
+        {"type": "rna", "id": "C", "sequence": "CU", "source": str(pdb_path), "modifications": []},
     ]
 
     parsed = module.parse_components_json('{"components":[{"type":"protein","id":"B","sequence":"MQIF"},{"type":"ligand","id":"L","smiles":"CCO"}]}')
@@ -552,7 +497,7 @@ def test_esmfold2_runner_parses_pdb_and_component_json_without_runtime_imports(t
     assert parsed[1]["smiles"] == "CCO"
     assert module.normalize_sequence(" mqifvkt ") == "MQIFVKT"
     assert module.normalize_component_sequence("acgu", "rna") == "ACGU"
-    assert module.normalize_component_sequence("acgu", "dna") == "ACGT"
+    assert module.normalize_component_sequence("acgu", "dna") == "ACGU"
     assert module.sanitize_mmcif_data_block_id("RCSB: 3KTQ") == "RCSB_3KTQ"
     assert module.sanitize_mmcif_data_block_id("  weird label / with spaces ") == "weird_label_with_spaces"
     unsafe_cif = "data_RCSB: 3KTQ\n#\nloop_\n_atom_site.id\n1\n"

@@ -220,7 +220,11 @@ async def test_request_leaf_cpu_fixture_attachment_and_readback(source, monkeypa
         (output / 'manifest.json').write_text(json.dumps({'workflow': 'esmfold2', 'sequence_name': key,
                                                            'sample_count': 1, 'samples': [{
             'sample_id': sample, 'cif': sample + '.cif', 'metrics': sample + '.metrics.json'}]}))
-    monkeypatch.setattr('run_binder_blind_pose.subprocess.run', native)
+    def batch(command, check):
+        assert check and command[-2] == '--request-file'
+        for request in json.loads(Path(command[-1]).read_text()):
+            native(request['argv'], check)
+    monkeypatch.setattr('run_binder_blind_pose.subprocess.run', batch)
     output = tmp_path / 'results'
     run(directory / 'selection.json', directory, directory / 'target.pdb', output / 'blind_pose_results',
         model_variant='fast', model_id_or_path='', num_loops=1, num_sampling_steps=25,
@@ -398,7 +402,11 @@ async def test_successful_job_finalizes_blind_evidence_without_a_new_design(sour
             'samples': [{'sample_id': sample, 'cif': sample + '.cif',
                          'metrics': sample + '.metrics.json'}]}))
 
-    monkeypatch.setattr('run_binder_blind_pose.subprocess.run', native)
+    def batch(command, check):
+        assert check and command[-2] == '--request-file'
+        for request in json.loads(Path(command[-1]).read_text()):
+            native(request['argv'], check)
+    monkeypatch.setattr('run_binder_blind_pose.subprocess.run', batch)
     output = tmp_path / 'finished'
     run(directory / 'selection.json', directory, directory / 'target.pdb',
         output / 'blind_pose_results', model_variant='fast', model_id_or_path='',

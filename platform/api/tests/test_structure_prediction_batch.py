@@ -33,16 +33,16 @@ def test_normalize_structure_geometry_params_maps_legacy_flags() -> None:
     )
 
     assert params["boltz_target_geometry_mode"] == "conditioned"
-    assert params["protenix_target_geometry_mode"] == "conditioned"
+    assert "protenix_target_geometry_mode" not in params
     assert params["target_geometry_mode"] == "conditioned"
     assert params["boltz_anchor_target"] is True
-    assert params["protenix_anchor_target"] is True
+    assert params["protenix_anchor_target"] is False
     assert params["protenix_use_template"] is True
     assert params["target_template_threshold_angstrom"] == 2.5
     assert params["strict_target_rmsd"] == 1.25
 
 
-def test_normalize_boltz_no_msa_quality_params_clamps_unsafe_predict_settings() -> None:
+def test_normalize_boltz_no_msa_quality_params_preserves_explicit_native_settings() -> None:
     params = _normalize_boltz_no_msa_quality_params(
         "boltz2",
         "predict",
@@ -53,8 +53,8 @@ def test_normalize_boltz_no_msa_quality_params_clamps_unsafe_predict_settings() 
         },
     )
 
-    assert params["boltz_sampling_steps"] == 50
-    assert params["boltz_recycling_steps"] == 3
+    assert params["boltz_sampling_steps"] == 10
+    assert params["boltz_recycling_steps"] == 1
 
 
 def test_normalize_boltz_no_msa_quality_params_leaves_msa_runs_unchanged() -> None:
@@ -221,7 +221,6 @@ def test_write_sequence_batch_payloads_auto_inserts_binder_for_target_only_compl
                 {"name": "nb02", "sequence": "QVQLW"},
             ],
             "sequence_batch_prefix": "rbx1_scan",
-            "sequence_batch_component_id": "A",
         },
         complex_components=[
             {"type": "protein", "id": "A", "sequence": "TARGETSEQ", "name": "RCSB: 2LGV"},

@@ -191,7 +191,14 @@ async def test_file_archive_and_legacy_list(isolated_core, tmp_path, monkeypatch
                           params={'rfd4_request': rfd4()})
         before = copy.deepcopy(absent.params)
         await jobs._prepare_selected_structure(absent, session)
-        assert absent.params == before
+        assert absent.params['rfd4_request'] == {
+            **before['rfd4_request'], 'version': 'rfd4_request_v1', 'mode': 'generate'}
+        assert absent.params['native_sources'] == {}
+        assert json.loads(Path(absent.params['rfd4_bindings']).read_text()) == {}
+        assert Path(absent.params['rfd4_input_closure']).is_dir()
+        materialized = copy.deepcopy(absent.params)
+        await jobs._prepare_selected_structure(absent, session)
+        assert absent.params == materialized
 
 
 def test_discovery_slot_annotations():

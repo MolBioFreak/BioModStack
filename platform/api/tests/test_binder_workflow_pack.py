@@ -30,11 +30,12 @@ def binder_assets(assets, monkeypatch):
     monkeypatch.setattr(cache, 'current_source_identity', lambda *args, **kwargs: identity)
     from services.remote_execution import preloading
     monkeypatch.setattr(preloading, 'current_source_identity', lambda *args, **kwargs: identity)
-    # The central Frustra image owner points at a real 10 GiB SIF; isolate it
-    # only for this inert transport fixture, not in production resolution.
-    original = cache.resolve_image
-    monkeypatch.setattr(cache, 'resolve_image', lambda name, root:
-                        root / name if name == 'frustrampnn.sif' else original(name, root))
+    from services.remote_execution import images
+    original = images.image_reference
+    def image_reference(name, root, params=None):
+        return (root / name, None) if name == 'frustrampnn.sif' else original(name, root, params)
+    monkeypatch.setattr(cache, 'image_reference', image_reference)
+    monkeypatch.setattr(images, 'image_reference', image_reference)
     for ref in workflow_pack_dependencies('antibody_denovo'):
         path = (containers if ref.kind == 'image' else weights) / ref.relative_path
         if ref.relative_path in {'rfantibody', 'boltz', 'esmfold2'}:
@@ -93,7 +94,8 @@ async def test_catalog_and_mounted_preview_without_job_or_scientific_compile(sto
         async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
             catalog = await client.get('/execution-targets/provision/catalog')
             assert catalog.status_code == 200
-            assert SELECTION.model_dump() in catalog.json()
+            assert any(row.get('workflow_id') == SELECTION.workflow_id and row['kind'] == 'workflow_pack'
+                       for row in catalog.json())
             assert {'kind': 'model', 'model_id': 'bindcraft2'} in catalog.json()
             preview = await client.post('/execution-targets/vast:1/provision/preview', json=SELECTION.model_dump())
             assert preview.status_code == 200, preview.text
@@ -129,10 +131,13 @@ def test_shared_bytes_inventoried_once_and_native_weight_views(binder_assets, mo
 
 
 def test_missing_real_member_is_reported_without_substituting_subset(binder_assets):
+    assert cache.independent_preview(SELECTION, TARGET)[0].blockers == []
     (binder_assets[1] / 'protenix/checkpoint/protenix-v2.pt').unlink()
     preview, _ = cache.independent_preview(SELECTION, TARGET)
     assert not preview.estimates_complete
-    assert 'protenix/checkpoint/protenix-v2.pt' in ' '.join(preview.blockers)
+    assert preview.blockers[0].startswith('host_asset_unavailable:')
+    assert 'weights/protenix/checkpoint/protenix-v2.pt' in {d.name for d in preview.dependencies}
+    assert preview.artifacts == []
 
 def test_missing_optional_template_corpus_does_not_block_binder(binder_assets):
     assert not (binder_assets[1] / 'protenix/mmcif').exists()

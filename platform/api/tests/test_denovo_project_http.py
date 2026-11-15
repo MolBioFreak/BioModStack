@@ -34,22 +34,17 @@ def request_for(case, tmp_path):
     elif case == 'shape':
         model, mode = 'protein_modification_experimental', 'shape_blueprint'
         capability, params = f'protein.native.{model}.{mode}', {}
-    elif case in ('native_local', 'validated_local'):
+    elif case == 'validated_local':
         source = tmp_path / 'source.pdb'
         source.write_text(
             'ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 10.00           C\n'
             'ATOM      2  CA  ALA A   2       1.000   0.000   0.000  1.00 10.00           C\nEND\n')
-        if case == 'native_local':
-            model, mode, capability = 'protein_local_redesign', 'local_redesign', 'protein.de_novo.local_redesign'
-            params = {'input_structure': str(source), 'redesign_mode': 'partial_diffusion',
-                'design_chains': ['A'], 'redesign_ranges': 'A2', 'sequence_policy': 'preserve', 'seed': 0}
-        else:
-            model, mode = 'protein_modification_experimental', 'region_redesign'
-            capability = f'protein.native.{model}.{mode}'
-            params = {'input_pdb': str(source), 'design_chains': 'A', 'context_chains': None,
-                'region_mode': 'manual_ranges', 'redesign_ranges': 'A2', 'sequence_redesign_ranges': 'A2',
-                'seq_method': 'fampnn', 'structure_validators': ['esmfold2'], 'num_designs': 1,
-                'seqs_per_design': 1, 'interactive_gating': False}
+        model, mode = 'protein_modification_experimental', 'region_redesign'
+        capability = f'protein.native.{model}.{mode}'
+        params = {'input_pdb': str(source), 'design_chains': 'A', 'context_chains': None,
+            'region_mode': 'manual_ranges', 'redesign_ranges': 'A2', 'sequence_redesign_ranges': 'A2',
+            'seq_method': 'fampnn', 'structure_validators': ['esmfold2'], 'num_designs': 1,
+            'seqs_per_design': 1, 'interactive_gating': False}
     else:
         model, mode = case.split(':')
         capability = f'protein.native.{model}.{mode}'
@@ -70,7 +65,7 @@ def request_for(case, tmp_path):
         'pinned_gpu': 0}
 
 
-CASES = ['rfd3', 'laproteina', 'disco', 'native_local', 'validated_local', 'shape'] + [f'{model}:{mode}'
+CASES = ['rfd3', 'laproteina', 'disco', 'validated_local', 'shape'] + [f'{model}:{mode}'
     for model in ('rfd4_proteina', 'complexa') for mode in ('generate', 'evaluate')]
 
 
@@ -106,9 +101,7 @@ def envelope(request):
 @pytest.mark.parametrize('case', CASES)
 async def test_native_http_save_second_save_cold_prepare(tmp_path, case, monkeypatch):
     import paths
-    from services import rfd3_local_redesign
     monkeypatch.setattr(paths, 'get_data_root', lambda: tmp_path)
-    monkeypatch.setattr(rfd3_local_redesign, 'get_data_root', lambda: tmp_path)
     capability, request = request_for(case, tmp_path)
     draft = envelope(request)
     capture = os.environ.get('BMS_DENOVO_WIRE_CAPTURE')

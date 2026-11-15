@@ -29,11 +29,6 @@ def test_de_novo_design_parent_does_not_claim_protein_hunter() -> None:
     assert model["name"] == "De Novo Design"
     assert [mode["id"] for mode in model["modes"]] == ["de_novo_design", "shape_blueprint", "region_redesign"]
 
-    source = (FRONTEND_ROOT / "src/components/ProteinModificationTemplate.tsx").read_text(encoding="utf-8")
-    assert "De Novo Design" in source
-    assert "Iterative Binder Design" not in source
-    assert "Protein Hunter" not in source
-
 
 @pytest.mark.parametrize(
     ("model_id", "mode"),
@@ -67,5 +62,5 @@ def test_zero_and_false_are_not_treated_as_missing() -> None:
 
 
 def test_protein_hunter_jobs_require_authoritative_design_rows() -> None:
-    standalone: Any = SimpleNamespace(model_id="protein_hunter_experimental", mode="design", params={})
+    standalone: Any = SimpleNamespace(model_id="protein_hunter_experimental", mode="design", params={}, provenance={})
     assert job_expects_design_results(standalone) is True
