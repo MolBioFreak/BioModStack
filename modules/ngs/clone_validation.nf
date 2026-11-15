@@ -120,7 +120,7 @@ PY
 
     mkdir -p wf_clone_out
     set +e
-    "\${BMS_NEXTFLOW_EXECUTABLE:-${runtimeLock.nextflow.executable}}" -log wf_clone.log run "\$(${apiPython} ${validator} --lock ${lock} --resolve patched_source.path)" \
+    "\${BMS_NEXTFLOW_EXECUTABLE:-\$(${apiPython} ${validator} --lock ${lock} --resolve nextflow.executable)}" -log wf_clone.log run "\$(${apiPython} ${validator} --lock ${lock} --resolve patched_source.path)" \
         -offline \
         -executor.cpus ${task.cpus} ${nestedMemory} \
         --disable_ping \

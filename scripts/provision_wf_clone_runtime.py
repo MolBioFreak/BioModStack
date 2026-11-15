@@ -131,6 +131,44 @@ def provision_images(lock_path: Path, lock: dict[str, Any], apptainer: str, asse
             temporary.unlink(missing_ok=True)
 
 
+def _fetch(url: str, destination: Path, expected_sha256: str, *, executable: bool = False) -> None:
+    """Download one locked file next to its destination, check it, then move it into place."""
+    import urllib.request
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    file_descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(file_descriptor, "wb") as handle, urllib.request.urlopen(url, timeout=120) as response:
+            shutil.copyfileobj(response, handle)
+        found = sha256_file(temporary)
+        if found != expected_sha256:
+            raise RuntimeError(f"{url} has SHA-256 {found}, the lock expects {expected_sha256}")
+        temporary.chmod(0o755 if executable else 0o644)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def provision_nextflow(lock_path: Path, lock: dict[str, Any]) -> None:
+    """Install the locked launcher and its framework jar; the clone pipeline runs offline.
+
+    Files already in place are kept. A launcher named by BMS_NEXTFLOW_EXECUTABLE is the
+    operator's own and nothing is downloaded over it.
+    """
+    from validate_wf_clone_runtime import resolve_nextflow_home
+    runtime = lock["nextflow"]
+    launcher, framework = runtime.get("launcher"), runtime.get("framework")
+    if launcher and not os.environ.get("BMS_NEXTFLOW_EXECUTABLE", "").strip():
+        target = resolve(lock_path, runtime["executable"])
+        if not target.exists():
+            _fetch(launcher["url"], target, launcher["sha256"], executable=True)
+    if framework:
+        version = runtime["version"]
+        jar = resolve_nextflow_home() / "framework" / version / f"nextflow-{version}-one.jar"
+        if not jar.exists():
+            _fetch(framework["url"], jar, framework["sha256"])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lock", type=Path, default=Path("config/ngs/wf_clone_validation_v1.8.4.lock.json"))
@@ -142,6 +180,7 @@ def main() -> int:
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     provision_images(lock_path, lock, args.apptainer, args.assembly_tool, args.image_source_dir)
     provision_source(lock_path, lock)
+    provision_nextflow(lock_path, lock)
     model = lock["models"]["default"]
     validator = Path(__file__).with_name("validate_wf_clone_runtime.py")
     run("python3", str(validator), "--lock", str(lock_path), "--model", model, "--assembly-tool", args.assembly_tool, "--output", "-")

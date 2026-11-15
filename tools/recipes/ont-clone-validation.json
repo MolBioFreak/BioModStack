@@ -13,7 +13,7 @@
       "https://github.com/mmcguffi/pLannotate"
     ]
   },
-  "notes": "Runs scripts/provision_wf_clone_runtime.py, which pulls Oxford Nanopore's published images named in config/ngs/wf_clone_validation_v1.8.4.lock.json and builds medaka from apptainer/medaka.def. The script checks each file against the hash in the lock; an image converted on your machine can differ from that hash, and the script then stops. For Canu assembly run the script yourself with --assembly-tool canu. Not yet built from clean by us: expect to fix things.",
+  "notes": "Runs scripts/provision_wf_clone_runtime.py, which pulls Oxford Nanopore's published images named in config/ngs/wf_clone_validation_v1.8.4.lock.json and builds medaka from apptainer/medaka.def. The script checks each file against the hash in the lock; an image converted on your machine can differ from that hash, and the script then stops. For Canu assembly run the script yourself with --assembly-tool canu. Not yet built from clean by us: expect to fix things. It also installs the Nextflow 25.10.0 launcher and framework jar the pipeline runs under, checked against the lock; Java 17 or later must be on the machine.",
   "images": [
     {
       "filename": "ont-clone-v1.8.4",
@@ -28,7 +28,7 @@
         "check_argv": [
           "python3",
           "-c",
-          "import json,subprocess,sys,pathlib\nlock='config/ngs/wf_clone_validation_v1.8.4.lock.json'\nd=subprocess.run([sys.executable,'scripts/validate_wf_clone_runtime.py','--lock',lock,'--resolve','containers.cache_dir'],capture_output=True,text=True).stdout.strip()\nimgs=[i for i in json.load(open(lock))['containers']['images'] if i.get('assembly_tool')!='canu']\nsys.exit(0 if d and all((pathlib.Path(d)/i['cache_file']).is_file() for i in imgs) else 1)"
+          "import json,subprocess,sys,pathlib\nlock='config/ngs/wf_clone_validation_v1.8.4.lock.json'\nd=subprocess.run([sys.executable,'scripts/validate_wf_clone_runtime.py','--lock',lock,'--resolve','containers.cache_dir'],capture_output=True,text=True).stdout.strip()\nimgs=[i for i in json.load(open(lock))['containers']['images'] if i.get('assembly_tool')!='canu']\nsys.path.insert(0,'scripts')\nfrom validate_wf_clone_runtime import resolve_lock_path,resolve_nextflow_home\nimport os\nnf=json.load(open(lock))['nextflow']\nexe=pathlib.Path(os.environ.get('BMS_NEXTFLOW_EXECUTABLE') or resolve_lock_path(pathlib.Path(lock).resolve(),nf['executable']))\njar=resolve_nextflow_home()/'framework'/nf['version']/('nextflow-'+nf['version']+'-one.jar')\nsys.exit(0 if d and all((pathlib.Path(d)/i['cache_file']).is_file() for i in imgs) and exe.is_file() and jar.is_file() else 1)"
         ]
       },
       "sources": [
@@ -36,7 +36,9 @@
         "docker://ontresearch/medaka",
         "docker://ontresearch/wf-common",
         "docker://ontresearch/plannotate",
-        "apptainer/medaka.def"
+        "apptainer/medaka.def",
+        "https://github.com/nextflow-io/nextflow/releases/download/v25.10.0/nextflow",
+        "https://www.nextflow.io/releases/v25.10.0/nextflow-25.10.0-one.jar"
       ]
     }
   ],

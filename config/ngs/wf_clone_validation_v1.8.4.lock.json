@@ -90,7 +90,15 @@
   },
   "nextflow": {
     "build": "10289",
-    "executable": "/usr/local/bin/nextflow",
+    "executable": "${BMS_RUNTIME_HOME}/nextflow-25.10.0/nextflow",
+    "framework": {
+      "sha256": "2189a0147496fa2ce32230cfbe4972c2017c0e1795d4bc9fe8ffbceb2a0ee3f2",
+      "url": "https://www.nextflow.io/releases/v25.10.0/nextflow-25.10.0-one.jar"
+    },
+    "launcher": {
+      "sha256": "2a398d1dbf3a7258218ae8991429369ac4fdd86cb99b8c6c8f6c922202d9d524",
+      "url": "https://github.com/nextflow-io/nextflow/releases/download/v25.10.0/nextflow"
+    },
     "version": "25.10.0"
   },
   "patched_source": {
