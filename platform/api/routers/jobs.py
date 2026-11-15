@@ -4966,6 +4966,9 @@ def _planned_nanopore_stages(params: Optional[dict], *, mode: Optional[str] = No
             display_stages.append("dorado_demux")
         elif has_reference:
             display_stages.append("dorado_align")
+        if (mode == "basecall_rna" and has_reference and np_params.get("run_modkit") is True
+                and str(np_params.get("modified_bases") or "none") != "none"):
+            display_stages.append("modkit")
         return display_stages
     fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(np_params)
     bam_force_realign = _resolve_nanopore_bam_realign(np_params)

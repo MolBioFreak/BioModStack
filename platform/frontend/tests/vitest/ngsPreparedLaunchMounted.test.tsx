@@ -350,6 +350,15 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(capturedRequest().params).toMatchObject({ estimate_poly_a: true, poly_a_context: 'plasmid', poly_a_front_flank: 'GCTAGCAAGCTT', poly_a_rear_flank: 'GGATCCGAATTC' });
     });
+    it('offers modification tables on RNA basecalling under an RNA label', async () => {
+        await mount({ ...base, selectedWorkflow: 'rna', doradoMolecule: 'rna' });
+        const card = container.querySelector('[data-testid="ngs-methylation-card"]')!;
+        expect(card.textContent).toContain('RNA modifications');
+        expect(card.textContent).toContain('Generate modification tables');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].url).toBe('/api/ont/ngs/ont_basecall_rna/submit');
+        expect(capturedRequest().params).toMatchObject({ ont_molecule_type: 'rna', run_modkit: false });
+    });
     it('offers DNA calling options once and submits modification tags without adding methylation analysis', async () => {
         await mount();
         expect(container.querySelector('[data-ngs-workflow-key="duplex"]')).toBeNull();

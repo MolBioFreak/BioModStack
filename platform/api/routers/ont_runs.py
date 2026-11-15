@@ -525,6 +525,9 @@ def _validate_ont_input_contract(canonical_id: str, params: dict[str, Any]) -> t
     if canonical_id == "ont_basecall_dna" and (input_mode == "fastq" or params.get("run_fastq_qc") or params.get("run_modkit")) and not str(params.get("reference_fasta") or "").strip():
         raise ValueError("DNA reference analysis requires reference_fasta")
 
+    if (canonical_id == "ont_basecall_rna" and params.get("run_modkit")
+            and str(params.get("modified_bases") or "none") != "none" and not str(params.get("reference_fasta") or "").strip()):
+        raise ValueError("RNA modification tables require reference_fasta")
     if input_mode == "fastq" and bool(params.get("run_modkit")):
         raise ValueError("modkit requires a BAM with meaningful MM/ML tags or POD5 basecalled with modified bases")
 

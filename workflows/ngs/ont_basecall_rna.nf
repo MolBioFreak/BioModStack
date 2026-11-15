@@ -12,6 +12,7 @@ include { DoradoAlign } from '../../modules/ngs/dorado_align.nf'
 
 
 include { reportStage } from '../../modules/ngs/stage_reporting.nf'
+include { ModkitAnalysis } from '../../modules/ngs/modkit_analysis.nf'
 
 workflow ONT_BASECALL_RNA {
     main:
@@ -40,6 +41,11 @@ workflow ONT_BASECALL_RNA {
         }
     }
 
+    // Tables are made only from modifications this run calls; a plain RNA basecall is unchanged.
+    def modificationTables = params.run_modkit == true && (params.modified_bases ?: 'none').toString().trim() != 'none'
+    if (modificationTables && !has_reference) {
+        error("RNA modification tables require --reference_fasta")
+    }
     if (params.barcode_kit && params.barcode_kit.toString().trim()) {
         error("barcoded POD5 must be demultiplexed by ont_basecall_dna before downstream per-barcode submission")
     }
@@ -67,6 +73,11 @@ workflow ONT_BASECALL_RNA {
                 "${params.out_dir}/align/reference.fasta.fai",
                 "${params.out_dir}/align/align.log",
             ])
+        }
+        // Optional per-site tables from the modification calls made while basecalling,
+        // through the same stage the DNA workflows use.
+        if (modificationTables) {
+            ModkitAnalysis(DoradoAlign.out.aligned, Channel.value(reference_file))
         }
     }
 }

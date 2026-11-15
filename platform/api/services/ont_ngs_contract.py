@@ -244,9 +244,12 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
     "ont_basecall_rna": OntWorkflowSpec(
         workflow_id="ont_basecall_rna",
         display_name="ONT RNA Basecalling",
-        description="Dorado RNA basecalling from existing POD5 run outputs with RNA-specific model selection.",
+        description="Dorado RNA basecalling from existing POD5 run outputs with RNA-specific model selection and optional modkit tables.",
         input_modes=("pod5",),
+        artifact_conditions=(("run_modkit=true", ("modkit_summary", "methylation_bed")),),
         artifact_kinds=(
+            "modkit_summary",
+            "methylation_bed",
             "raw_reads",
             "basecall_reads",
             "alignment_bam",

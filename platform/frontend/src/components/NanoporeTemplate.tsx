@@ -1068,7 +1068,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         selectedReferenceIsExactStateMember,
         usesMolBioReceiptLane,
     ]);
-    const canRunModkit = ['modified', 'plasmidQc', 'dna', 'clone', 'constructScreening'].includes(selectedWorkflow);
+    const canRunModkit = ['modified', 'plasmidQc', 'dna', 'rna', 'clone', 'constructScreening'].includes(selectedWorkflow);
     // Dorado estimates the tail while basecalling one strand; a tail inside a plasmid is a DNA case.
     const polyAEnabled = estimatePolyA && inputSource === 'pod5' && doradoMode === 'simplex';
     const polyAInPlasmid = polyAEnabled && doradoMolecule === 'dna' && polyAContext === 'plasmid';
@@ -1099,7 +1099,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (inputSource === 'pod5' && doradoMode === 'duplex' && barcodeKit) blockers.push('Barcode classification and duplex cannot be combined in the locked runtime.');
         const modificationBlocker = inputSource === 'pod5' ? modifiedBasesBlocker(selectedModifications, doradoMolecule, doradoModel, doradoMode) : null;
         if (modificationBlocker) blockers.push(modificationBlocker);
-        if (inputSource === 'pod5' && canRunModkit && runModkit && modifiedBases === 'none') blockers.push('Choose a modification model before generating methylation tables.');
+        if (inputSource === 'pod5' && canRunModkit && runModkit && modifiedBases === 'none') blockers.push(doradoMolecule === 'rna' ? 'Choose a modification model before generating modification tables.' : 'Choose a modification model before generating methylation tables.');
         if (inputSource === 'fastq' && canRunModkit && runModkit) blockers.push('FASTQ has no MM/ML modification probabilities. Disable methylation tables or select tagged BAM/POD5.');
         if (inputSource === 'bam' && !bamPath.trim()) blockers.push('Please specify a BAM file path.');
         if (inputSource === 'fastq' && !fastqPath.trim()) blockers.push('Please specify a FASTQ file path.');
@@ -2044,7 +2044,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             )}
             {canRunModkit && !barcodeKit && (
                 <div className={`${TASK_FLOW_CARD} space-y-3`} data-testid="ngs-methylation-card">
-                    <div className="text-sm font-semibold text-[var(--text-primary)]">Methylation</div>
+                    <div className="text-sm font-semibold text-[var(--text-primary)]">{doradoMolecule === 'rna' ? 'RNA modifications' : 'Methylation'}</div>
                             <label className="flex items-center gap-3 cursor-pointer">
                                 <input
                                     type="checkbox"
@@ -2053,7 +2053,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                     className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                                 />
                                 <div>
-                                    <span className="text-sm text-[var(--text-primary)]">Generate methylation tables</span>
+                                    <span className="text-sm text-[var(--text-primary)]">{doradoMolecule === 'rna' ? 'Generate modification tables' : 'Generate methylation tables'}</span>
                                     <p className="text-xs text-[var(--text-secondary)]">
                                         {inputSource === 'fastq' ? 'FASTQ cannot supply modification probabilities; use tagged BAM or POD5, or disable this stage.' : inputSource === 'bam' ? 'Summarize the existing modification calls.' : 'Align and summarize the newly called modifications.'}
                                     </p>
