@@ -161,12 +161,18 @@ async def test_md_cm02_discovery_memo_io_and_replacement(tmp_path, monkeypatch):
                 await cm._managed_checkpoint_for_submission(session, row['source_id'])
             assert absent.value.status_code == 503
         capture('absent_checkpoint', before)
+        async with factory() as session:
+            registered = await session.get(ConformationalMappingSource, row['source_id'])
+            registered.content_sha256 = row['sha256']
+            await session.commit()
         target = checkpoint.with_suffix('.target')
         target.write_bytes(first)
         checkpoint.symlink_to(target)
         before = dict(counts)
         async with factory() as session:
-            assert await cm._ensure_managed_confornets_checkpoint(session) is None
+            selected = await cm._ensure_managed_confornets_checkpoint(session)
+            assert selected.source_id == row['source_id']
+            assert selected.content_sha256 == row['sha256']
         capture('symlink_checkpoint', before)
         # A different pathname must not hit even when every inode field matches.
         checkpoint.unlink()

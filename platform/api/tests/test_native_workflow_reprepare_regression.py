@@ -21,7 +21,7 @@ async def setup_native(factory, tmp_path):
     target.write_text('>target\n' + 'A' * 60 + '\n')
     request = JobCreate(name='Native BC2', model_id='bindcraft2', mode='campaign', params={
         'bc2_preview_digest': owners.sha256_text('inert fixture preview; not GPU acceptance'),
-        'bindcraft2_settings': {'max_trajectories': 1, 'modality': ['binder'],
+        'bindcraft2_settings': {'max_trajectories': 1, 'subbatch_size': None, 'modality': ['binder'],
             'targets': [{'name': 'target', 'target_path': str(target)}]},
     }).model_dump(mode='json')
     async with factory() as db:
@@ -88,7 +88,9 @@ async def test_repeat_native_prepare_reuses_revision_and_preserves_immutable_req
             launch_contexts._ensure_live(old_context)
         assert expired.value.code == 'launch_context_expired'
         launch_contexts._ensure_live(new_context)
-        bound_request = JobCreate.model_validate({**json.loads(new.scheduler_payload_json),
+        _, contract = await owners.load_workflow_plan_authority(db, workflow_id)
+        bound_request = JobCreate.model_validate({**contract['capability']['normalized_job_request'],
+            'params': json.loads(new.scheduler_payload_json)['params'],
             'launch_context_id': new_context.launch_context_id})
         assert await launch_contexts.validate_prepared_child_job_request(db, new_context, bound_request)
         head = await db.get(ExperimentAggregateHead, workflow_id)

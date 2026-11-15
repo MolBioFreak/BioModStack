@@ -63,7 +63,7 @@ def _spec(root, **kwargs):
 def native_files(tmp_path, monkeypatch):
     root = _files(tmp_path / "inputs")
     monkeypatch.setenv("BMS_FEATURE_MOLECULAR_DYNAMICS", "1")
-    monkeypatch.setattr(contract, "_bound_engine_runtime_identity", lambda engine: {"image_name": "gromacs.sif", "sif_sha256": "a" * 64})
+    monkeypatch.setattr(contract, "_bound_engine_runtime_identity", lambda: {"image_name": "gromacs.sif", "sif_sha256": "a" * 64})
     return root
 
 

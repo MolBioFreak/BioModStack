@@ -88,7 +88,7 @@ async def test_design_marker_projection_uses_job_not_design_claim(monkeypatch, v
         assert candidate is design
         assert kwargs['job'] is job
         assert candidate.job_id == job.id
-        return SimpleNamespace(core_protein_scientific_contract=1)
+        return SimpleNamespace(core_protein_scientific_contract=1, native_sample=None)
 
     monkeypatch.setattr(designs, '_design_to_response', project)
     response = await designs.get_design('candidate', viewer_store)

@@ -106,7 +106,7 @@ async def test_exact_design_document_snapshot_ignores_primary_retarget(tmp_path,
         intent, catalog, profile = _guided_intent()
         spec = compile_native_job_intent(MdNativeLaunchIntent.model_validate(intent), profile=profile,
                                         source_token=sources.resolved_runtime_path(resolved))
-        monkeypatch.setattr(contract, "_bound_engine_runtime_identity", lambda engine: {"image_name": "inert", "sif_sha256": "a" * 64})
+        monkeypatch.setattr(contract, "_bound_engine_runtime_identity", lambda: {"image_name": "inert", "sif_sha256": "a" * 64})
         provenance = {**resolved.source_provenance, "source_sha256": derivative.sha256,
                       "source_ref": ref.model_dump(mode="json"),
                       "native_input_identity": {"structure": derivative.sha256, "original_structure": digest}}

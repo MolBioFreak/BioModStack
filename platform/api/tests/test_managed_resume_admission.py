@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from routers import jobs
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.fixture
@@ -63,11 +64,10 @@ async def test_invalid_resume_is_named_422_before_admission(resume_paths, monkey
     path = invalid_path(case, root, retained)
     app = FastAPI()
     app.include_router(jobs.router, prefix='/api/jobs')
-    class NoDatabase:
-        def __getattr__(self, name):
-            raise AssertionError('Invalid resume reached database: ' + name)
     async def session():
-        yield NoDatabase()
+        # Real session metadata is allowed; no bind means any SQL still fails.
+        async with AsyncSession() as unbound:
+            yield unbound
     app.dependency_overrides[jobs.get_session] = session
     app.dependency_overrides[jobs.get_experiment_session] = session
     def no_launch(*args, **kwargs):

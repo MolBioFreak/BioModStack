@@ -1045,7 +1045,7 @@ def project_context_preview_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
         from services.md import launch_contract
         import paths
         monkeypatch.setattr(paths, "get_allowed_roots", lambda: {"results": results_root})
-        monkeypatch.setattr(launch_contract, "_bound_engine_runtime_identity", lambda engine: {"image_name": "gromacs.sif", "sif_sha256": "a" * 64})
+        monkeypatch.setattr(launch_contract, "_bound_engine_runtime_identity", lambda: {"image_name": "gromacs.sif", "sif_sha256": "a" * 64})
         if native_catalog is not None:
             monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: native_catalog)
             monkeypatch.setattr(launch_contract, "get_chemistry_catalog", lambda: native_catalog)

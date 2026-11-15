@@ -95,7 +95,8 @@ def test_force_run_auto_gpu_selection_respects_explicit_force_run_exclusions(mon
 
 @pytest.mark.asyncio
 async def test_force_run_is_pinned_and_requeued_for_orchestrator_ownership() -> None:
-    job = SimpleNamespace(
+    from database import Job
+    job = Job(
         id="queued-4",
         name="queued-4",
         model_id="boltz2",
