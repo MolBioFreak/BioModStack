@@ -353,17 +353,27 @@ async def test_ten_child_atomic_success_preserves_bindings_and_aliases(batch_con
 
 
 @pytest.mark.asyncio
-async def test_missing_mapping_is_rejected_before_writes(batch_context, canonical_job_spy) -> None:
+async def test_a_barcode_without_a_sequence_is_skipped_and_the_rest_run(batch_context, canonical_job_spy) -> None:
     context = batch_context
-    request = _request(context, mappings=_request(context).mappings[:-1])
-    with pytest.raises(batches.BarcodeBatchError, match="incomplete"):
-        await _create(context, request)
-    manifest_root = context.inputs_root / batches.REFERENCE_SET_ROOT_NAME
-    assert not manifest_root.exists()
-    assert (await context.session.execute(select(NgsReferenceSetManifest))).scalars().all() == []
-    assert (await context.session.execute(select(NgsReferenceSetMapping))).scalars().all() == []
-    receipts = (await context.session.execute(select(MolBioNgsReceipt))).scalars().all()
-    assert all(receipt.consumed_at is None for receipt in receipts)
+    calls, _ = canonical_job_spy
+    full = _request(context)
+    skipped = full.mappings[-1].unit_id
+    request = full.model_copy(update={"mappings": full.mappings[:-1]})
+    result = await _create(context, request)
+    assert result["skipped_unit_ids"] == [skipped] == result["manifest"]["skipped_unit_ids"]
+    assert len(result["child_job_ids"]) == 9 and len(calls) == 9
+    # The skipped barcode is still on record as a unit of the run; nothing about its reads changed.
+    assert skipped in result["manifest"]["source"]["unit_ids"]
+    children = (await context.session.execute(select(Job).where(Job.id.in_(result["child_job_ids"])))).scalars().all()
+    assert skipped not in {child.params["source_barcode_unit"] for child in children}
+    # A retry neither repeats nor drops a job.
+    assert await _create(context, request) == result and len(calls) == 9
+
+
+@pytest.mark.asyncio
+async def test_a_complete_batch_reports_nothing_skipped(batch_context, canonical_job_spy) -> None:
+    result = await _create(batch_context, _request(batch_context))
+    assert result["skipped_unit_ids"] == [] and "skipped_unit_ids" not in result["manifest"]
 
 
 @pytest.mark.asyncio
@@ -553,13 +563,12 @@ async def test_a_barcode_with_two_sequences_has_its_reads_assigned_and_the_rest_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("batch_context", [("barcode02",)], indirect=True)
-async def test_nothing_is_launched_when_another_barcode_has_no_sequence(batch_context, canonical_job_spy, monkeypatch) -> None:
+async def test_a_skipped_barcode_does_not_stop_one_holding_several_sequences(batch_context, canonical_job_spy, monkeypatch) -> None:
     context = batch_context
-    calls, _ = canonical_job_spy
     _pooled_roots(context, monkeypatch)
     request = _second_sequence_on(context, "barcode02", "two-on-one-missing")
     request = request.model_copy(update={"mappings": [item for item in request.mappings if item.unit_id != "barcode03"]})
     await context.session.commit()
-    with pytest.raises(batches.BarcodeBatchError, match="missing=barcode03"):
-        await _create(context, request)
-    assert calls == []
+    result = await _create(context, request)
+    assert set(result["assignment_job_ids"]) == {"barcode02"}
+    assert result["skipped_unit_ids"] == ["barcode03"] and len(result["child_job_ids"]) == 8

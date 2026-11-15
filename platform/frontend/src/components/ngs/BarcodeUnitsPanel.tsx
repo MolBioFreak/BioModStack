@@ -206,10 +206,12 @@ export function BarcodeUnitsPanel({ jobId, enabled, modifiedBases }: BarcodeUnit
                     sampleAlias: unit.sample_alias || '',
                 },
             }));
-            if (drafts.length === 0 || drafts.some(({ draft }) => !draft.sequenceId || !draft.revisionId)) {
-                throw new Error('Choose a saved sequence and revision for every barcode before submitting.');
-            }
-            const selected = drafts.flatMap(({ unit, draft }) => {
+            // A barcode left without a sequence is skipped; the others still run.
+            const half = drafts.filter(({ draft }) => Boolean(draft.sequenceId) !== Boolean(draft.revisionId));
+            if (half.length) throw new Error(`Choose a revision for ${half.map(({ unit }) => unit.unit_id).join(', ')}, or clear its sequence.`);
+            const chosen = drafts.filter(({ draft }) => draft.sequenceId && draft.revisionId);
+            if (chosen.length === 0) throw new Error('Choose a saved sequence for at least one barcode before submitting.');
+            const selected = chosen.flatMap(({ unit, draft }) => {
                 const all = [draft, ...(extraByUnit[unit.unit_id] || [])];
                 return all.map(item => ({ unit, draft: { ...item, sampleAlias: draft.sampleAlias }, several: all.length > 1 }));
             });
@@ -247,9 +249,11 @@ export function BarcodeUnitsPanel({ jobId, enabled, modifiedBases }: BarcodeUnit
         onSuccess: (response) => {
             if (!response) return;
             const assigning = Object.keys(response.data.assignment_job_ids || {});
-            setMessage(assigning.length
+            const skipped = response.data.skipped_unit_ids || [];
+            const skippedNote = skipped.length ? ` Skipped, no sequence chosen: ${skipped.join(', ')}. Their reads are kept.` : '';
+            setMessage((assigning.length
                 ? `Submitted ${response.data.child_job_ids.length} barcode analyses. ${assigning.join(', ')} hold several sequences: their reads are being assigned to a sequence first. Open that run when it finishes and release it to analyse each sequence.`
-                : `Submitted ${response.data.child_job_ids.length} barcode children in reference set ${response.data.reference_set_id}.`);
+                : `Submitted ${response.data.child_job_ids.length} barcode children in reference set ${response.data.reference_set_id}.`) + skippedNote);
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
         },
         onError: (error: unknown) => setMessage(error instanceof Error ? error.message : 'Barcode batch submission failed'),
@@ -264,7 +268,7 @@ export function BarcodeUnitsPanel({ jobId, enabled, modifiedBases }: BarcodeUnit
             <ExecutionPolicyControl onChange={setExecutionPolicy} />
             <div>
                 <h4 className="text-sm font-semibold text-[var(--text-primary)]">Demultiplexed barcode units</h4>
-                <p className="text-xs text-[var(--text-secondary)]">Choose one or more saved sequences for each barcode. All barcode jobs are submitted together, or none are created.</p>
+                <p className="text-xs text-[var(--text-secondary)]">Choose one or more saved sequences for each barcode. Barcodes with a sequence are submitted together. A barcode left without one is skipped and listed, and its reads are kept.</p>
             </div>
             <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
                 <select value={targetWorkflow} onChange={(event) => setTargetWorkflow(event.target.value as TargetWorkflow)} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-sm text-[var(--text-primary)]">

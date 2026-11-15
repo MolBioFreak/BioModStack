@@ -1793,6 +1793,8 @@ export interface OntBarcodeBatchSubmitResponse {
     reference_set_id: string;
     manifest_sha256: string;
     child_job_ids: string[];
+    /** Barcodes given no sequence: not analysed, reads kept. */
+    skipped_unit_ids?: string[];
 }
 
 export const submitOntBarcodeBatch = (

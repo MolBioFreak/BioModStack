@@ -464,18 +464,20 @@ def _validate_request_mapping(
                 "molbio_ngs_receipt_id": receipt_id,
             }
         )
-    mapped_units = seen_units | pooled_units
-    if mapped_units != canonical_source_ids:
-        missing = sorted(canonical_source_ids - mapped_units)
-        extra = sorted(mapped_units - canonical_source_ids)
-        detail = []
-        if missing:
-            detail.append(f"missing={','.join(missing)}")
-        if extra:
-            detail.append(f"extra={','.join(extra)}")
-        raise BarcodeBatchError("barcode mapping is incomplete or does not match the source demux" + (f" ({'; '.join(detail)})" if detail else ""))
+    # A barcode left without a sequence is skipped and listed; it does not stop the others.
+    extra = sorted((seen_units | pooled_units) - canonical_source_ids)
+    if extra:
+        raise BarcodeBatchError(f"barcode mapping does not match the source demux (extra={','.join(extra)})")
     normalized.sort(key=lambda item: item["unit_id"])
     return normalized
+
+
+def _skipped_units(units: list[dict[str, Any]], mapped: set[str]) -> list[str]:
+    """Barcodes the run produced that were given no sequence. Their reads stay where they are."""
+    return sorted(
+        unit_id for unit_id in (str(unit.get("unit_id") or "") for unit in units)
+        if CANONICAL_BARCODE_RE.fullmatch(unit_id) and unit_id not in mapped
+    )
 
 
 def _safe_child_name(prefix: str, unit_id: str) -> str:
@@ -538,6 +540,7 @@ def _manifest_result(
         "manifest_sha256": str(manifest_row.manifest_sha256),
         "manifest": payload,
         "child_job_ids": child_job_ids,
+        "skipped_unit_ids": list(payload.get("skipped_unit_ids") or []),
     }
 
 
@@ -862,6 +865,10 @@ async def _create_single_reference_children(
             "source_units": source_units,
             "entries": manifest_entries,
         }
+        skipped = _skipped_units(units, {item["unit_id"] for item in mappings} | set(pooled_units))
+        if skipped:
+            # Recorded with the batch, so a retry and a later reader see the same list.
+            manifest_payload["skipped_unit_ids"] = skipped
         if request.reference_set_id:
             staged_manifest_path = get_inputs_dir() / REFERENCE_SET_ROOT_NAME / reference_set_id / "reference_set.json"
             _, retained, raw = _read_json_file(staged_manifest_path, get_inputs_dir(), "retained reference set")
@@ -1103,6 +1110,7 @@ async def create_barcoded_reference_set(
         "schema": REFERENCE_SET_SCHEMA, "reference_set_id": None, "source_job_id": source_id,
         "target_workflow": request.target_workflow, "mode": REFERENCE_SET_MODE,
         "manifest_sha256": None, "manifest": None, "child_job_ids": [],
+        "skipped_unit_ids": _skipped_units(list(products["units"]), set(pooled)),
     }
     return {**result, "assignment_job_ids": assignment_job_ids}
 
