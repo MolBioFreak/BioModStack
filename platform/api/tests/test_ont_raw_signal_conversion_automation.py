@@ -1649,8 +1649,9 @@ async def test_waveform_claim_uses_checked_in_runtime_identity(
             "container_runtime": "docker",
             "container_image": "environment-image",
             "container_digest": "a" * 64,
-            "disk_free_bytes": 100,
-            "required_free_bytes": 1,
+            # 64 MB free against a 20 GB whole-run floor: one indexed read still runs.
+            "disk_free_bytes": 64 * 1024 * 1024,
+            "required_free_bytes": 20 * 1024 * 1024 * 1024,
             "worker_uid": os.getuid(),
             "worker_gid": os.getgid(),
         },

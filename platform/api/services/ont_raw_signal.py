@@ -3006,10 +3006,12 @@ async def request_waveform_lookup(
     if representation is None or representation.run_id != run_id or representation.observed_generation != observed_generation:
         raise ValueError("representation does not belong to the exact run generation")
     _validated_blow5_paths(representation, read_id)
-    existing = (await session.execute(select(OntRawSignalLookup).where(
+    from sqlalchemy.exc import IntegrityError
+    query = select(OntRawSignalLookup).where(
         OntRawSignalLookup.representation_id == representation_id,
         OntRawSignalLookup.read_id == read_id,
-    ))).scalar_one_or_none()
+    )
+    existing = (await session.execute(query)).scalar_one_or_none()
     if existing is None:
         existing = OntRawSignalLookup(
             id=_id("ont-waveform"), run_id=run_id, observed_generation=observed_generation,
@@ -3017,8 +3019,40 @@ async def request_waveform_lookup(
             state="requested", reason_code="requested", receipt={}, created_at=_now(), updated_at=_now(),
         )
         session.add(existing)
+        try:
+            await session.commit()
+        except IntegrityError:
+            # A request made at the same moment created the row; both share it.
+            await session.rollback()
+            existing = (await session.execute(query)).scalar_one()
+    elif existing.state == "failed":
+        # Asking again after a failure runs the same row again. A row that is
+        # waiting, running or ready is returned as it is, so there is one worker per read.
+        await session.execute(
+            update(OntRawSignalLookup)
+            .where(OntRawSignalLookup.id == existing.id, OntRawSignalLookup.state == "failed")
+            .values(state="requested", reason_code="retry_requested", claim_token=None, lease_expires_at=None,
+                    completed_at=None, sample_count=None, samples=None, updated_at=_now())
+        )
         await session.commit()
+        await session.refresh(existing)
     return _public_lookup(existing)
+
+
+# The lookup writes at most RAW_SIGNAL_MAX_WAVEFORM_SAMPLES values as JSON.
+_WAVEFORM_LOOKUP_OUTPUT_BYTES = 16 * 1024 * 1024
+
+
+def _waveform_lookup_required_bytes(
+    representation: OntRawSignalRepresentation,
+    blow5_identity: Mapping[str, Any],
+    index_identity: Mapping[str, Any],
+) -> int:
+    """Free space one indexed read lookup uses: its result, plus a private copy of the pair when it is not read in place."""
+    manifest = representation.artifact_manifest if isinstance(representation.artifact_manifest, dict) else {}
+    if manifest.get("retained_indexed_pair") is True:
+        return _WAVEFORM_LOOKUP_OUTPUT_BYTES
+    return _WAVEFORM_LOOKUP_OUTPUT_BYTES + int(blow5_identity.get("bytes") or 0) + int(index_identity.get("bytes") or 0)
 
 
 def _public_lookup(lookup: OntRawSignalLookup) -> dict[str, Any]:
@@ -3247,6 +3281,8 @@ async def claim_next_waveform_lookup(
         index_artifact, authority="waveform BLOW5 index"
     )
     snapshot = _resource_snapshot(0)
+    # One read through the index, not a conversion of the run.
+    snapshot["required_free_bytes"] = _waveform_lookup_required_bytes(representation, blow5_identity, index_identity)
     try:
         runtime_identity = raw_signal_runtime_identity()
     except RuntimeError as exc:
