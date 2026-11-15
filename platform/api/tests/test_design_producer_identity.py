@@ -159,7 +159,7 @@ def test_registered_structural_upgrade_does_not_infer_data(tmp_path):
     path = tmp_path / 'core.db'
     with sqlite3.connect(path) as connection:
         connection.execute('ALTER TABLE designs DROP COLUMN producer_model_id')
-        connection.execute('DELETE FROM schema_migrations WHERE version=47')
+        connection.execute('DELETE FROM schema_migrations WHERE version>=47')
         connection.execute("INSERT INTO designs(id,job_id,name,pdb_path,provenance) VALUES('unattributed','job','name','source.pdb','{\"model_id\":\"fampnn\"}')")
     result = run(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr

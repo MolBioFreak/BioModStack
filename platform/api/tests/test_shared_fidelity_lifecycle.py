@@ -59,6 +59,12 @@ def test_project_redesign_uses_native_request_not_superseded_count_descriptor(ca
     from services.protein_project_capabilities import protein_setup_parameter_schema
 
     schema = protein_setup_parameter_schema(capability)
+    if capability == 'protein.de_novo.local_redesign':
+        # Local redesign is a typed child, not a generic Project editor draft.
+        assert schema['x-bms-executable-authority'] == 'typed_core_job_outside_project_manager'
+        assert 'native_job_request' not in schema['properties']
+        assert schema['properties']['num_designs']['maximum'] == 512
+        return
     assert schema['x-bms-native-editor-draft'] is True
     assert 'num_designs' not in schema['properties']
     request = {'model_id': 'protein_local_redesign', 'mode': 'local_redesign', 'params': {'num_designs': 1001}}

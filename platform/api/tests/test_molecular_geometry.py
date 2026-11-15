@@ -202,7 +202,7 @@ def test_no_t_u_conversion_or_imported_geometry():
 
 def test_unconfigured_optional_adapter(monkeypatch):
     monkeypatch.delenv('BMS_MOLECULAR_GEOMETRY_BUNDLE',raising=False)
-    with pytest.raises(GeometryUnavailable,match='not configured'):
+    with pytest.raises(GeometryUnavailable,match='Selected RDKit graph provider is not installed'):
         construct_geometry(MolecularGeometryRequest.model_validate(payload()))
 
 

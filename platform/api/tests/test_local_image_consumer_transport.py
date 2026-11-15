@@ -230,6 +230,7 @@ workflow { ResourceSetupProbe(Channel.of('task-input')) }
     context = {
         'resources': {'required': {'cpus': 1, 'memory_bytes': 268435456}},
         'resource_lock_path': str(lock), 'working_directory': str(tmp_path),
+        'artifact_root': str(tmp_path), 'ledger_path': str(tmp_path / 'ledger.json'),
         'execution_plan': {'metadata': {'static_components': [{
             'authority': authority, 'selection_json': {'native_process': name},
             'resources_json': json.loads(__import__('native_components').native_resource_policy({})),

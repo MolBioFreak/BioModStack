@@ -466,6 +466,7 @@ async def test_cm_global_landscape_query_uses_only_referenced_invocations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from services.conformational_mapping import persistence as cm_persistence
+    from database import FrustraMPNNArtifact
 
     root = tmp_path / "global-query"
     root.mkdir()
@@ -477,7 +478,19 @@ async def test_cm_global_landscape_query_uses_only_referenced_invocations(
     session, engine = await _session(tmp_path)
     try:
         record = await _register(session, request, bundle)
+        result_values["summary_json"] = {
+            "schema_version": 1, "landscape_sha256": reference["landscape_sha256"],
+            "structure_map_sha256": reference["structure_map_sha256"],
+            "normalized_pdb_sha256": "a" * 64, "threshold_policy": {},
+            "threshold_policy_sha256": canonical_sha256({}),
+        }
         session.add(FrustraMPNNResult(**result_values))
+        session.add(FrustraMPNNArtifact(
+            artifact_id="raw-csv", parent_job_id=request["request_id"],
+            invocation_id=reference["invocation_id"], role="raw_csv",
+            relative_path="raw.csv", storage_path=str(root / "raw.csv"),
+            content_sha256="b" * 64, size_bytes=0, media_type="text/csv",
+        ))
         await session.flush()
         await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
         assert await session.scalar(select(ConformationalMappingLandscapeRow)) is None
