@@ -32,6 +32,7 @@ process PrepareBamForAnalysis {
     source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
     # Retained inputs keep their version; legacy mutable inputs get a snapshot.
     ngs_input_snapshot "${bam}" source.snapshot.bam ${retainedBam}
+    source_version_before="\$(stat -Lc '%s:%.9Y:%.9Z' source.snapshot.bam)"
     source_sha256_before="\$(sha256sum source.snapshot.bam | awk '{print \$1}')"
     if [[ -n "${declaredSourceSha256}" && "\${source_sha256_before}" != "${declaredSourceSha256}" ]]; then
         echo "ERROR: task-local source BAM snapshot does not match authorized bam_source_sha256." >&2
@@ -61,7 +62,8 @@ process PrepareBamForAnalysis {
         echo "ERROR: prepared BAM contains no mapped reads." >&2
         exit 1
     fi
-    source_sha256_after="\$(sha256sum source.snapshot.bam | awk '{print \$1}')"
+    # The snapshot is hashed again only if it is no longer the version hashed above.
+    source_sha256_after="\$(ngs_snapshot_sha256_after source.snapshot.bam "\${source_version_before}" "\${source_sha256_before}")"
     if [[ "\${source_sha256_before}" != "\${source_sha256_after}" ]]; then
         echo "ERROR: task-local source BAM snapshot changed during preparation." >&2
         exit 97

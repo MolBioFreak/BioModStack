@@ -69,6 +69,7 @@ process DoradoAlign {
     # Authenticate one task-local copy and consume only that copy so mutation
     # and restoration of the source cannot race the aligner.
     ngs_input_snapshot "${bam}" source.snapshot.bam ${retainedBam}
+    source_version_before="\$(stat -Lc '%s:%.9Y:%.9Z' source.snapshot.bam)"
     source_sha256_before="\$(sha256sum source.snapshot.bam | awk '{print \$1}')"
     if [[ -n "${declaredSourceSha256}" && "\${source_sha256_before}" != "${declaredSourceSha256}" ]]; then
         echo "ERROR: task-local source BAM snapshot does not match authorized bam_source_sha256." >&2
@@ -77,6 +78,7 @@ process DoradoAlign {
 
     # Snapshot, authenticate, align against, and publish the same reference bytes.
     ngs_input_snapshot "${reference}" reference.snapshot.fasta ${retainedReference}
+    reference_version_before="\$(stat -Lc '%s:%.9Y:%.9Z' reference.snapshot.fasta)"
     reference_raw_sha256_before="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
     normalized_reference="\$(awk '
       BEGIN { records=0; sequence="" }
@@ -125,12 +127,13 @@ process DoradoAlign {
 
     input_records=\$(samtools view -c source.snapshot.bam)
     output_records=\$(samtools view -c aligned.bam)
-    source_sha256_after="\$(sha256sum source.snapshot.bam | awk '{print \$1}')"
+    # The snapshot is hashed again only if it is no longer the version hashed above.
+    source_sha256_after="\$(ngs_snapshot_sha256_after source.snapshot.bam "\${source_version_before}" "\${source_sha256_before}")"
     if [[ "\${source_sha256_before}" != "\${source_sha256_after}" ]]; then
         echo "ERROR: task-local source BAM snapshot changed during alignment." >&2
         exit 97
     fi
-    reference_raw_sha256_after="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
+    reference_raw_sha256_after="\$(ngs_snapshot_sha256_after reference.snapshot.fasta "\${reference_version_before}" "\${reference_raw_sha256_before}")"
     if [[ "\${reference_raw_sha256_before}" != "\${reference_raw_sha256_after}" ]]; then
         echo "ERROR: task-local reference snapshot changed during alignment." >&2
         exit 94
