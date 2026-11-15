@@ -67,7 +67,7 @@ async def test_executor_and_real_cache_have_one_support_placement_owner(tmp_path
         assert retained[-1].read_bytes() == b'support payload'
         cache_counts.append(len(local_transport[1]) - len(executor_uploads))
     assert cache_counts == [1, 1], 'warm launch must not transfer unchanged support bodies'
-    assert retained[0].samefile(retained[1])
+    assert not retained[0].samefile(retained[1]), 'attempts own private runtime inodes'
     assert not retained[0].stat().st_mode & 0o222
     shutil.rmtree(cases[0].remote_attempt_dir)
     assert retained[1].read_bytes() == b'support payload'

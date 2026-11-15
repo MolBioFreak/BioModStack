@@ -958,7 +958,9 @@ class Cache:
 
     def _publish_immutable(self, source_fd, objects, parent, name, item, mode):
         """Caller holds the content lock; never change the donor inode's mode."""
-        if not verified(source_fd, item):
+        # Direct links consume the donor; permission projections verify their
+        # own bytes below, either on reuse or while copying them.
+        if mode == 0o444 and not verified(source_fd, item):
             raise ValueError('corrupt_cache_object')
         donor = item['sha256']
         with directory(self.root / 'objects/modes' / donor[:2], create=True) as modes:
