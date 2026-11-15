@@ -54,6 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--consensus", required=False, type=Path)
     parser.add_argument("--consensus-index", required=False, type=Path)
     parser.add_argument("--consensus-log", required=False, type=Path)
+    parser.add_argument("--pileup-chromatogram", required=False, type=Path)
     parser.add_argument("--consensus-status", required=False, default="not_run")
     parser.add_argument("--workflow-status", required=False, default=None)
     parser.add_argument("--verification-status", required=False, default=None)
@@ -332,6 +333,7 @@ def artifact_specs_from_args(args: argparse.Namespace) -> list[ArtifactSpec]:
         ("consensus", args.consensus, True),
         ("consensus_index", args.consensus_index, True),
         ("consensus_log", args.consensus_log, False),
+        ("pileup_chromatogram", getattr(args, "pileup_chromatogram", None), False),
         ("alignment_bam", args.alignment_bam, False),
         ("alignment_bai", args.alignment_bai, False),
         ("igv_coverage_depth", args.igv_coverage_depth, False),

@@ -470,7 +470,7 @@ def install_governed_ngs_openapi(app: Any) -> None:
 
 _CLOSED_ARTIFACT_EXTENSIONS = (
     "fastq.gz", "vcf.gz", "bedgraph", "fasta", "fastq", "json", "html", "csv", "tsv",
-    "bam", "bai", "fai", "vcf", "bed", "log", "txt", "gz", "bin",
+    "bam", "bai", "fai", "vcf", "bed", "log", "txt", "gz", "bin", "ab1",
 )
 _INLINE_ARTIFACT_EXTENSIONS = frozenset({"bam", "bai", "fasta", "fai"})
 

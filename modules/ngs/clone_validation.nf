@@ -181,6 +181,7 @@ process CloneValidationAdapter {
     env published_directory, emit: verification_input
     path "verification_input/**", type: 'file', hidden: true, optional: true, emit: publication_files
     path "per_base_support.tsv", emit: per_base_support
+    path "consensus_pileup.ab1", emit: pileup_chromatogram, optional: true
     path "alignment_stats.tsv", emit: alignment_stats
     path "dimer_breakpoint_call.tsv", emit: breakpoint_call
     path "dimer_secondary_summary.tsv", emit: secondary_summary
@@ -193,6 +194,7 @@ process CloneValidationAdapter {
     def adapter = shellQuote("${codeRoot}/scripts/adapt_wf_clone_validation.py")
     def inputBuilder = shellQuote("${codeRoot}/scripts/build_construct_verification_input.py")
     def supportBuilder = shellQuote("${codeRoot}/scripts/build_fastq_support_tables.py")
+    def pileupWriter = shellQuote("${codeRoot}/scripts/write_pileup_ab1.py")
     // Without an expected sequence the staged reference is the assembled consensus:
     // read support is counted against it and no expected-sequence bundle is built.
     def hasExpected = (params.reference_fasta && params.reference_fasta.toString().trim()) ? 'true' : 'false'
@@ -238,6 +240,15 @@ process CloneValidationAdapter {
         --out-per-base-support per_base_support.tsv \
         --samtools-cmd "\${SAMTOOLS_CMD[@]}"
 
+    # Read-pileup chromatogram of the assembled consensus; an extra download only.
+    python3 ${pileupWriter} \
+        --per-base-support per_base_support.tsv \
+        --consensus-fasta "${result_root}/${sampleName}.final.fasta" \
+        --out consensus_pileup.ab1 \
+        --sample "${sampleName}" \
+        --reads source_reads.fastq \
+        --threads ${task.cpus} \
+        --samtools-cmd "\${SAMTOOLS_CMD[@]}" || rm -f consensus_pileup.ab1
     total_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -F 2304 "${aligned_bam}")
     mapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -F 2308 "${aligned_bam}")
     unmapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -f 4 -F 2304 "${aligned_bam}")

@@ -242,7 +242,7 @@ const ARTIFACT_KINDS = new Set([
     'igv_gc_content', 'igv_gc_zscore', 'igv_junction_hotspots', 'igv_position_gradient', 'igv_report', 'igv_report_sites_bed',
     'igv_report_sites_tsv', 'igv_softclip_density', 'igv_split_read_density', 'igv_track_config', 'log',
     'modified_bases', 'normalized_variants', 'observed_consensus', 'per_base_metrics', 'per_base_support',
-    'read_lengths', 'reference', 'reference_index', 'sequence_qc_manifest', 'signal_data',
+    'pileup_chromatogram', 'read_lengths', 'reference', 'reference_index', 'sequence_qc_manifest', 'signal_data',
     'source_read_provenance', 'source_reads_fastq', 'summary', 'verification_summary',
 ]);
 const SCIENTIFIC_ROLES = new Set([
@@ -250,7 +250,7 @@ const SCIENTIFIC_ROLES = new Set([
     'report', 'source_input', 'verification', 'viewer_auxiliary',
 ]);
 const FILENAME_EXTENSIONS = new Set([
-    'bai', 'bam', 'bed', 'bedgraph', 'fai', 'fasta', 'fastq.gz', 'html', 'json', 'log', 'tsv', 'vcf',
+    'ab1', 'bai', 'bam', 'bed', 'bedgraph', 'fai', 'fasta', 'fastq.gz', 'html', 'json', 'log', 'tsv', 'vcf',
 ]);
 const CONTENT_DISPOSITIONS = new Set(['inline', 'attachment', 'none']);
 

@@ -1690,6 +1690,8 @@ _PACKAGE_ARTIFACT_METADATA = {
     "source_read_provenance": ("source_input", 34, "attachment", "json"),
     "source_reads_fastq": ("source_input", 35, "attachment", "fastq.gz"),
     "signal_data": ("optional_evidence", 36, "none", None),
+    # Read pileup of the consensus in the AB1 container; not a Sanger trace.
+    "pileup_chromatogram": ("consensus", 37, "attachment", "ab1"),
 }
 
 

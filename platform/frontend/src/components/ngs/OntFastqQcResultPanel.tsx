@@ -3,6 +3,7 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import { fetchOntFastqQcResult, type OntResultCollection } from '../../lib/ontFastqQcResult';
 
 import type { OntSiteReview, OntSiteReviewSite } from '../../lib/ontFastqQcResult';
+import { PileupChromatogram } from './PileupChromatogram';
 import type {
     OntFastqQcCheck,
     OntFastqQcJsonValue,
@@ -362,6 +363,9 @@ export function OntFastqQcResultPanel({
         return groups;
     }, []);
     const logArtifacts = orderedArtifacts.filter((artifact) => artifact.scientific_role === 'audit_log');
+    // The strip and the AB1 file come from the same per-base read counts.
+    const perBaseTable = orderedArtifacts.find((artifact) => artifact.kind === 'per_base_support' && artifact.state === 'present' && artifact.url);
+    const pileupAb1 = orderedArtifacts.find((artifact) => artifact.kind === 'pileup_chromatogram' && artifact.state === 'present' && artifact.url);
     const histogramX = result.read_length_histogram.bins.map((bin) => (bin.start_bp + bin.end_bp_exclusive) / 2);
     const histogramY = result.read_length_histogram.bins.map((bin) => bin.read_count);
     const coverageX = result.coverage.points.map((point) => point.position_1based);
@@ -422,6 +426,13 @@ export function OntFastqQcResultPanel({
                 />
             )}
 
+            {perBaseTable?.url && (
+                <PileupChromatogram
+                    tableUrl={perBaseTable.url}
+                    ab1Url={pileupAb1?.url ?? null}
+                    initialPosition={result.site_review?.sites[0]?.position_1based}
+                />
+            )}
             <section>
                 <h4 className="mb-2 text-xs uppercase tracking-wide text-[var(--text-secondary)]">Decision checks</h4>
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">

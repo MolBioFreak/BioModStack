@@ -49,6 +49,7 @@ process FastqPlasmidQC {
     path "fastq_consensus.fasta", emit: consensus
     path "fastq_consensus.fasta.fai", emit: consensus_index
     path "fastq_consensus.log", emit: consensus_log
+    path "consensus_pileup.ab1", emit: pileup_chromatogram, optional: true
     path "fastq_qc.log", emit: log
 
     script:
@@ -487,6 +488,22 @@ process FastqPlasmidQC {
     } > fastq_qc.log
 
     if [[ -f fastq_consensus.fasta ]]; then chmod 0444 fastq_consensus.fasta; fi
+    # Read-pileup chromatogram for sequence viewers. It is an extra download:
+    # when it cannot be written the QC result is unchanged.
+    pileup_args=()
+    if [[ -f fastq_consensus.fasta ]] && "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/write_pileup_ab1.py" \\
+        --per-base-support per_base_support.tsv \\
+        --consensus-fasta fastq_consensus.fasta \\
+        --out consensus_pileup.ab1 \\
+        --sample "${manifestJobId}" \\
+        --reads "${fastq}" \\
+        --minimap2-preset "${minimapPreset}" \\
+        --threads ${task.cpus} \\
+        --samtools-cmd "\${SAMTOOLS_CMD[@]}" >> fastq_qc.log 2>&1; then
+        pileup_args=(--pileup-chromatogram consensus_pileup.ab1)
+    else
+        rm -f consensus_pileup.ab1
+    fi
     "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_construct_verification_input.py" \\
         --reference-fasta reference_qc.fasta \\
         --expected-reference-sha256 ${referenceSequenceSha256} \\
@@ -531,6 +548,7 @@ process FastqPlasmidQC {
         --igv-track-config igv_track_config.json \\
         --igv-report igv_report.html \\
         --igv-report-log igv_report.log \\
+        "\${pileup_args[@]}" \\
         --log fastq_qc.log
     # Native writers are finished; metadata/logs remain private publications.
     for completed in aligned.bam aligned.bam.bai reference_qc.fasta reference_qc.fasta.fai fastq_consensus.fasta fastq_consensus.fasta.fai; do
