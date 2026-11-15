@@ -902,44 +902,6 @@ def test_container_command_fails_closed_when_approved_image_is_absent(
         OntSignalWorker(None, None)._container_command(output, broker, kind="mapping")
 
 
-@pytest.mark.parametrize("image_id,valid", [
-    ("sha256:" + "0" * 64, True),
-    ("sha256:" + "g" * 64, False),
-    ("mutable:tag", False),
-])
-def test_squigualiser_build_reports_measured_candidate_without_selecting_it(
-    tmp_path: Path, image_id: str, valid: bool,
-) -> None:
-    runtime = tmp_path / "docker"
-    runtime.write_text(
-        "#!/usr/bin/env python3\n"
-        "import os, sys\n"
-        "if sys.argv[1] == 'build': raise SystemExit(0)\n"
-        "if sys.argv[1:3] == ['image', 'inspect']:\n"
-        "    print(os.environ['FAKE_IMAGE_ID'])\n"
-        "    raise SystemExit(0)\n"
-        "raise SystemExit(64)\n",
-        encoding="utf-8",
-    )
-    runtime.chmod(0o755)
-    script = Path(__file__).parents[3] / "scripts" / "build_ont_squigualiser_runtime.sh"
-    environment = {
-        **os.environ,
-        "PATH": f"{tmp_path}:{os.environ['PATH']}",
-        "BMS_CONTAINER_RUNTIME": "docker",
-        "FAKE_IMAGE_ID": image_id,
-    }
-    result = subprocess.run(
-        ["bash", str(script)], env=environment, capture_output=True, text=True
-    )
-    if valid:
-        assert result.returncode == 0, result.stderr
-        assert f"BMS_ONT_SQUIGUALISER_IMAGE={image_id}" in result.stdout
-    else:
-        assert result.returncode != 0
-        assert "Invalid built image ID" in result.stderr
-
-
 @pytest.mark.asyncio
 async def test_retained_parent_keeps_exact_inode_bytes_and_command_never_reopens_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

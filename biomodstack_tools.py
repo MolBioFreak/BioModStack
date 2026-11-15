@@ -234,6 +234,17 @@ def _image_source(image: dict) -> str | None:
     return None
 
 
+def _docker_tag(image: dict) -> str:
+    """The tag a Dockerfile image is built under and looked up by.
+
+    <env>_TAG overrides the recipe's tag, the same variable the API reads when it
+    looks for the image, so a custom tag is built and found under one name.
+    """
+    spec = image["docker"]
+    override = os.environ.get((spec.get("env") or "") + "_TAG", "").strip() if spec.get("env") else ""
+    return override or spec["tag"]
+
+
 def _docker() -> str | None:
     # The installer's own setting, then the runtime the ONT tools are configured to run with,
     # so an image is built where it will be looked for.
@@ -302,7 +313,7 @@ def _image_present(image: dict, where: dict[str, Path], project_root: Path = PRO
         return bool(runtime) and any(subprocess.call(
             [runtime, "image", "inspect", reference],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL) == 0
-            for reference in (configured, image["docker"]["tag"]) if reference)
+            for reference in (configured, _docker_tag(image)) if reference)
     try:
         return subprocess.call([str(a) for a in image["script"]["check_argv"]], cwd=project_root,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -489,7 +500,7 @@ def _smoke(run: _Run, image: dict, path: Path | None) -> list[dict]:
         # A Docker image is checked where it lives, without network; a script owns its own checks.
         for check in image.get("smoke", []) if image["kind"] == "docker" else []:
             name = check.get("name") or " ".join(check["argv"][:2])
-            run.command([_docker(), "run", "--rm", "--network", "none", image["docker"]["tag"]] + check["argv"],
+            run.command([_docker(), "run", "--rm", "--network", "none", _docker_tag(image)] + check["argv"],
                         step=f"smoke:{image['filename']}:{name}", reason_code="smoke_test_failed")
             results.append({"check": name, "image": image["filename"], "result": "passed"})
         return results
@@ -637,20 +648,20 @@ def build_tool(recipe, where, project_root=PROJECT_ROOT, *, replace=False, weigh
                             env=env, cwd=project_root)
                 continue
             if image["kind"] == "docker":
-                docker, spec = _docker(), image["docker"]
-                run.command([docker, "build", "--file", project_root / spec["file"], "--tag", spec["tag"],
+                docker, spec, tag = _docker(), image["docker"], _docker_tag(image)
+                run.command([docker, "build", "--file", project_root / spec["file"], "--tag", tag,
                              project_root / spec.get("context", ".")],
                             step=step, reason_code="image_build_failed", cwd=project_root)
-                built = subprocess.run([docker, "image", "inspect", "--format", "{{.Id}}", spec["tag"]],
+                built = subprocess.run([docker, "image", "inspect", "--format", "{{.Id}}", tag],
                                        capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()
-                run.log(f"built {spec['tag']} image id {built}")
-                run.save(image_ids={**run.state.get("image_ids", {}), spec["tag"]: built})
+                run.log(f"built {tag} image id {built}")
+                run.save(image_ids={**run.state.get("image_ids", {}), tag: built})
                 if not image["sif"]:
                     smoke.extend(_smoke(run, image, None))
                     run.save(installed=sorted(set(run.state.get("installed", [])) | {image["filename"]}))
                     continue
                 archive = staging / (image["filename"] + ".docker.tar")
-                run.command([docker, "save", "--output", archive, spec["tag"]], step=step,
+                run.command([docker, "save", "--output", archive, tag], step=step,
                             reason_code="image_build_failed")
             candidate = staging / image["filename"]
             argv = [_apptainer(), "build", "--force", *extra]
@@ -744,7 +755,7 @@ def remove_tool(recipe, where, project_root=PROJECT_ROOT) -> dict:
         for image in recipe["images"]:
             if not image["sif"]:
                 if image["kind"] == "docker" and image["filename"] in run.state.get("installed", []) and _docker():
-                    subprocess.call([_docker(), "image", "rm", image["docker"]["tag"]], stdin=subprocess.DEVNULL,
+                    subprocess.call([_docker(), "image", "rm", _docker_tag(image)], stdin=subprocess.DEVNULL,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     removed.append(_image_where(image, where))
                 elif _image_present(image, where, project_root):

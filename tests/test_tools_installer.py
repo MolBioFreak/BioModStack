@@ -345,3 +345,33 @@ def test_dorado_recipe_installs_the_model_the_default_quality_uses():
     model = lock["models"]["dna"][default]["id"]
     required = {path for w in recipe["weights"] if w["required"] for path in w["present_if"]}
     assert f"dorado/2.1.2/{model}" in required
+
+
+def test_dockerfile_image_can_be_built_and_found_under_an_overriding_tag(install):
+    """<env>_TAG is the variable the API reads to find the image, so the installer builds under it too."""
+    project = _add_recipe(install, "signal", [{"docker": {"file": "docker/signal.Dockerfile", "tag": "example/signal:1",
+                                                          "env": "DEMO_SIGNAL_IMAGE"},
+                                               "smoke": [{"name": "version", "argv": ["signal", "--version"]}]}])
+    (project / "docker").mkdir()
+    (project / "docker" / "signal.Dockerfile").write_text("FROM example\n")
+    images = install.tmp / "docker-images"
+    images.mkdir()
+    docker = install.tmp / "bin" / "docker"
+    docker.write_text(FAKE_DOCKER)
+    docker.chmod(docker.stat().st_mode | stat.S_IEXEC)
+    extra = {"FAKE_DOCKER_DIR": str(images), "DEMO_SIGNAL_IMAGE_TAG": "mine/signal:custom"}
+    code, status = install("build", "signal", extra=extra)
+    assert code == 0 and status["status"] == "ready", status
+    calls = install.calls.read_text()
+    assert "--tag mine/signal:custom" in calls and "--tag example/signal:1" not in calls
+    assert "docker run --rm --network none mine/signal:custom signal --version" in calls
+    code, listing = install("list", extra=extra)
+    assert {t["tool"]: t["status"] for t in listing["tools"]}["signal"] == "ready"
+
+
+def test_signal_recipe_is_the_only_build_route_for_its_images():
+    recipe = json.loads((ROOT / "tools/recipes/ont-signal-tools.json").read_text())
+    assert len(recipe["images"]) == 4
+    for image in recipe["images"]:
+        assert (ROOT / image["docker"]["file"]).is_file() and image["docker"]["env"].startswith("BMS_ONT_")
+    assert not list((ROOT / "scripts").glob("build_ont_*_runtime.sh"))

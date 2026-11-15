@@ -57,7 +57,7 @@ builds. Tool source revisions, model hashes and scientific settings were retaine
 identities. A rebuilt SIF must never be labelled as the old SIF: build timestamps
 and packaging metadata can change its bytes.
 
-Build signal images using the four `scripts/build_ont_*_runtime.sh` scripts.
+Build the four signal images from the Tools screen, or with `./start_ui.sh tools build ont-signal-tools`. To build under a different tag, set the image's `<NAME>_IMAGE_TAG` variable (for example `BMS_ONT_SQUIGULATOR_IMAGE_TAG`); the API looks the image up under the same variable.
 They report measured candidates; they do not automatically select a new image.
 Squigualiser definitions use the signed Debian snapshot of 2026-08-10 to retain
 the released package pins after packages leave the live repository indexes.
