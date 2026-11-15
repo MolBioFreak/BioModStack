@@ -176,3 +176,60 @@ def test_twenty_kb_target_two_ten_kb_sources_in_seconds(client):
                             {"id": "b", "name": "b", "sequence": b}])
     assert time.time() - start < 30
     assert body["proposals"]
+
+
+def _fits(top, cap):
+    return all(len(f["sequence"]) <= cap for f in top["fragments"])
+
+
+def _unrelated_source():
+    return [{"id": "x", "sequence": dna(41, 400)}]
+
+
+def test_wanted_fragment_count_is_honoured_when_even_pieces_fit_the_length_limit(client):
+    target = dna(40, 10488)
+    body = suggest(client, target={"sequence": target, "circular": True}, sources=_unrelated_source(), fragment_count=4)
+    top = body["proposals"][0]
+    assert len(top["fragments"]) == 4
+    assert _fits(top, 3000)
+    assert not any("closest" in note for note in top.get("notes") or [])
+    assert same_circle(design(client, top)["selected_product"]["sequence"], target)
+
+
+def test_fewest_fragments_that_fit_the_limit_are_chosen_when_no_count_is_asked(client):
+    target = dna(42, 10488)
+    body = suggest(client, target={"sequence": target, "circular": True}, sources=_unrelated_source())
+    top = body["proposals"][0]
+    assert len(top["fragments"]) == 4
+    assert _fits(top, 3000)
+
+
+def test_a_larger_length_limit_allows_fewer_fragments(client):
+    target = dna(44, 10488)
+    body = suggest(client, target={"sequence": target, "circular": True}, sources=_unrelated_source(),
+                   fragment_count=3, max_synthesis_length=4000)
+    top = body["proposals"][0]
+    assert len(top["fragments"]) == 3
+    assert _fits(top, 4000)
+    assert same_circle(design(client, top)["selected_product"]["sequence"], target)
+
+
+def test_a_count_the_limit_forbids_is_raised_to_the_closest_one_with_a_note(client):
+    target = dna(45, 10488)
+    body = suggest(client, target={"sequence": target, "circular": True}, sources=_unrelated_source(), fragment_count=2)
+    top = body["proposals"][0]
+    assert len(top["fragments"]) == 4
+    assert _fits(top, 3000)
+    assert any("closest" in note for note in top["notes"])
+
+
+@pytest.mark.parametrize("size,cap,circular", [(3100, 3000, False), (4800, 3000, False), (7000, 3000, False),
+                                               (10488, 3000, True), (6000, 2000, True), (9000, 2500, False)])
+def test_no_synthetic_fragment_exceeds_the_length_limit(client, size, cap, circular):
+    target = dna(50 + size % 7, size)
+    body = suggest(client, target={"sequence": target, "circular": circular}, sources=_unrelated_source(),
+                   max_synthesis_length=cap)
+    top = body["proposals"][0]
+    assert _fits(top, cap)
+    produced = design(client, top)["selected_product"]["sequence"]
+    assert same_circle(produced, target) if circular else produced == target
