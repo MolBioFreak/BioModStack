@@ -50,9 +50,9 @@ async def active(store, tmp_path, monkeypatch):
         calls.append(argv)
         assert kwargs['timeout'] == 30
         assert connection.host == 'worker.invalid'
-        if argv[2] == 'status':
+        if argv[3] == 'status':
             return CommandResult(0, (attempt / 'status.json').read_text(), '')
-        assert argv[1] == '-c', 'log reads must not prepare/start/collect/cancel'
+        assert argv[1:3] == ['-B', '-c'], 'log reads must not prepare/start/collect/cancel'
         result = subprocess.run([sys.executable, *argv[1:]], capture_output=True, text=True, timeout=10)
         if result.returncode:
             raise RemoteTransportError(result.stderr)
@@ -129,7 +129,7 @@ async def test_controller_identity_drift_never_exposes_logs(store, active, monke
             await s.commit()
     async def racing(connection, argv, **kwargs):
         result = await rpc(connection, argv, **kwargs)
-        if argv[1] == '-c':
+        if argv[1:3] == ['-B', '-c']:
             await drift()
         return result
     if boundary == 'before':
@@ -217,7 +217,7 @@ async def test_live_log_bounds_and_missing_optional_log(store, active, tail, lin
 async def test_worker_generation_change_during_transport_rejected(store, active, monkeypatch):
     attempt, status, _, rpc = active
     async def racing(connection, argv, **kwargs):
-        if argv[1] == '-c':
+        if argv[1:3] == ['-B', '-c']:
             (attempt / 'status.json').write_text(status.model_copy(update={'generation': 2}).model_dump_json())
         return await rpc(connection, argv, **kwargs)
     monkeypatch.setattr(ex, 'run_remote', racing)
@@ -233,7 +233,7 @@ async def test_worker_generation_change_during_transport_rejected(store, active,
 async def test_malformed_log_payload_is_not_projected(store, active, monkeypatch, payload):
     _, _, _, rpc = active
     async def malformed(connection, argv, **kwargs):
-        if argv[1] == '-c':
+        if argv[1:3] == ['-B', '-c']:
             return CommandResult(0, payload, '')
         return await rpc(connection, argv, **kwargs)
     monkeypatch.setattr(ex, 'run_remote', malformed)

@@ -233,7 +233,12 @@ async def test_derived_child_forgery_rejected_at_canonical_admission(admission, 
             from component_runtime import SourceIdentity
             monkeypatch.setattr(SourceIdentity, 'from_checkout', lambda *_: SourceIdentity('c' * 40, 'd' * 40))
         elif forgery == 'fixed_positions':
-            Path(request.params['manual_mutation_fixed_positions_json']).write_text('{}')
+            import json
+            path = Path(request.params['manual_mutation_fixed_positions_json'])
+            original_positions = json.loads(path.read_text())
+            forged_positions = {} if original_positions else {'unreviewed': {'A': [1]}}
+            assert forged_positions != original_positions
+            path.write_text(json.dumps(forged_positions))
         else:
             selected = next(Path(request.params['iteration_selection_dir']).glob('*.pdb'))
             selected.unlink()  # do not edit the native source through its symlink

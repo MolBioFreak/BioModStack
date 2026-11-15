@@ -61,6 +61,14 @@ async def test_delete_retains_lease_until_nonterminal_controller_work_joins(stor
             assert response.status_code == 200, response.text
             async with store() as independent:
                 assert (await independent.get(Job, 'job')).status == 'cancelled'
+                assert (await independent.get(ExecutionTarget, 'target')).leased_job_id == 'job'
+            # DELETE joins controller work; the reconciler owns quiescent release.
+            async with store() as independent:
+                job = await independent.get(Job, 'job')
+                await ex.reconcile_remote_job(independent, job)
+                await independent.commit()
+            async with store() as independent:
+                assert (await independent.get(Job, 'job')).remote_state == 'cancelled'
                 assert (await independent.get(ExecutionTarget, 'target')).leased_job_id is None
         finally:
             if cancel is not None:

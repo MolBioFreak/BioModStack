@@ -230,8 +230,14 @@ async def test_custom_actions_prepare_once_before_review(admission, tmp_path, mo
         candidate.write_bytes(saved)
         candidate.unlink()
         candidate.symlink_to(pdb)
+        contained = await client.post('/jobs/execution-plan/preview', json=prepared)
+        assert contained.status_code == 200 and contained.json()['admissible'], contained.text
+        candidate.unlink()
+        outside = tmp_path / 'outside-selected-roots.pdb'
+        outside.write_bytes(saved)
+        candidate.symlink_to(outside)
         unsafe = await client.post('/jobs/execution-plan/preview', json=prepared)
-        assert unsafe.status_code == 422 and 'symlink' in unsafe.text, unsafe.text
+        assert unsafe.status_code == 422 and 'outside approved roots' in unsafe.text, unsafe.text
         candidate.unlink()
         candidate.write_bytes(saved)
         async with factory() as session:
@@ -269,7 +275,9 @@ def qualify_root_bundle(job, tmp_path, monkeypatch):
     monkeypatch.setattr(bundle, '_git', lambda *_: 'b' * 40)
     for directory in (paths.get_weights_root(), paths.get_container_dir()):
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / 'infrastructure-fixture.txt').write_text('Runtime inventory double; never executed.\n')
+        fixture = directory / 'infrastructure-fixture.txt'
+        fixture.write_text('Runtime inventory double; never executed.\n')
+        fixture.chmod(0o444)
     monkeypatch.setattr(bundle, '_runtime_assets', lambda *_, **__: [
         (paths.get_weights_root(), 'weights'), (paths.get_container_dir(), 'containers')])
     actual_run = subprocess.run
@@ -277,7 +285,8 @@ def qualify_root_bundle(job, tmp_path, monkeypatch):
     # bytes from HEAD rather than requesting that synthetic infrastructure SHA.
     def archive(command, **kwargs):
         if command[:2] == ['git', 'archive']:
-            command = [*command[:-1], 'HEAD']
+            command = list(command)
+            command[command.index('a' * 40)] = 'HEAD'
         return actual_run(command, **kwargs)
     monkeypatch.setattr(bundle.subprocess, 'run', archive)
     job.assigned_gpu = 0
@@ -295,7 +304,14 @@ def qualify_root_bundle(job, tmp_path, monkeypatch):
         if transfer.source.is_dir():
             shutil.copytree(transfer.source, destination)
         else:
-            shutil.copyfile(transfer.source, destination)
+            shutil.copy2(transfer.source, destination)
+    # Mirror source-cache materialization, not just archive transfer.
+    import tarfile
+    with tarfile.open(Path(prepared.remote_source_dir)/'.bms-source.tar.gz', 'r:*') as archive:
+        archive.extractall(prepared.remote_source_dir, filter='data')
+        for member in archive.getmembers():
+            if member.isfile():
+                (Path(prepared.remote_source_dir)/member.name).chmod(member.mode & 0o555)
     attempt = Path(prepared.remote_attempt_dir)
     shutil.copytree(prepared.local_attempt_dir, attempt, dirs_exist_ok=True)
     (attempt / 'bundle/source').symlink_to(prepared.remote_source_dir, target_is_directory=True)

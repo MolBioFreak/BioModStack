@@ -371,9 +371,9 @@ def test_real_nextflow_stages_handoff_with_science_stub(offline_bundle, tmp_path
     prepared = controller_bundle(job=job, target=target)
     msa = prepared.input_transfers[0].source
     sha = hashlib.sha256((msa/'msa-inputs.json').read_bytes()).hexdigest()
-    jar = Path.home()/'.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar'
+    jar = Path(os.environ['BMS_TEST_NEXTFLOW_JAR'])
     if not jar.is_file() or not shutil.which('java'):
-        pytest.skip('Installed offline Nextflow 25.10.1/Java required for DSL process proof')
+        pytest.fail('BMS_TEST_NEXTFLOW_JAR and Java are required for offline DSL staging proof')
     # Only replace the science execution with a declared Nextflow stub. The
     # production input declaration/staging and complete production DSL compile.
     stub = '''    stub:
@@ -439,6 +439,8 @@ workflow {
     result = subprocess.run(['java', '-jar', str(jar), 'run', str(tmp_path/'main.nf'),
                              '-stub-run', '-params-file', str(tmp_path/'params.json'), '-ansi-log', 'false'],
                             cwd=tmp_path, env={**os.environ, 'NXF_HOME':str(tmp_path/'nxf-home'),
+                                              'NXF_WORK':str(tmp_path/'work'),
+                                              'NXF_CACHE_DIR':str(tmp_path/'nxf-cache'),
                                               'NXF_OFFLINE':'true', 'NXF_DISABLE_CHECK_LATEST':'true'},
                             capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, result.stdout + result.stderr

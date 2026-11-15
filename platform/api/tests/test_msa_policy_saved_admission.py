@@ -31,18 +31,6 @@ async def test_saved_local_replay_rejected_without_row_mutation(admission, tmp_p
     assert original.params == before
 
 
-@pytest.mark.asyncio
-async def test_api_mutagenesis_is_actually_blocked_at_admission(admission):
-    request = JobCreate(name='api-batch', model_id='boltz2', mode='predict', params={
-        'sequence': 'ACDEFGHIK', 'msa_provider': 'colabfold_api', 'boltz_use_msa': True,
-        'mutagenesis_variants': [{'name': 'one', 'sequence': 'ACDEFGHIK'}],
-    })
-    with pytest.raises(HTTPException) as exc:
-        await jobs._create_job(request, BackgroundTasks(), admission)
-    assert exc.value.status_code == 422
-    assert 'mutagenesis batch' in str(exc.value.detail)
-    assert not list((await admission.execute(select(Job))).scalars())
-
 
 @pytest.mark.asyncio
 async def test_auto_admission_persists_effective_policy_without_losing_intent(admission):

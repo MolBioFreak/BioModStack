@@ -27,8 +27,11 @@ def settings(provider):
         'msa_neurosnap_identity_percent': 65.5, 'msa_neurosnap_max_sequences': 321}
 
 
-def test_actual_openapi_closed_inventory_discovery():
-    from main import app
+def test_router_openapi_closed_inventory_discovery():
+    from fastapi import FastAPI
+    from routers.conformational_mapping import router
+    app = FastAPI()
+    app.include_router(router)
     document = app.openapi()
     route = document['paths']['/api/conformational-mapping/requests']['post']
     ref = route['requestBody']['content']['application/json']['schema']['$ref']

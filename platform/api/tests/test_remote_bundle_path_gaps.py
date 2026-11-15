@@ -222,7 +222,7 @@ def test_portable_nested_boltz_identity_and_different_roots(tmp_path, monkeypatc
         portable.resolve_input_path(alignment)
 
 
-def test_portable_discovery_rejects_nested_escape_and_symlink(tmp_path, portable):
+def test_portable_discovery_rejects_nested_and_symlink_escape(tmp_path, portable):
     import json
     approved = tmp_path/'approved'; approved.mkdir()
     outside = tmp_path/'outside.a3m'; outside.write_text('outside')
@@ -233,7 +233,7 @@ def test_portable_discovery_rejects_nested_escape_and_symlink(tmp_path, portable
             {'complex_json_path': str(native)}, (), output_dir=approved, allowed_roots=[approved])
     link = approved/'alias.a3m'; link.symlink_to(outside)
     native.write_text(json.dumps({'components': [{'msa_path': str(link)}]}))
-    with pytest.raises(ValueError, match='symlink'):
+    with pytest.raises(ValueError, match='outside approved roots'):
         portable.discover_native_input_references('boltz2', 'complex',
             {'complex_json_path': str(native)}, (), output_dir=approved, allowed_roots=[approved])
 
@@ -398,8 +398,12 @@ def test_cm_real_compiler_preserves_request_siblings_and_trusted_owner(roots, tm
         str(roots['results']/'job'), job_id='job', materialize_inputs=False,
         native_invocations=invocations)
     assert len(invocations) == 1
+    runtime_checkpoint = tmp_path/'worker-attempt/materialized/runtime/model.pt'
+    runtime_checkpoint.parent.mkdir(parents=True)
+    runtime_checkpoint.write_bytes(checkpoint.read_bytes())
+    runtime_checkpoint.chmod(0o444)
     runtime = {str(checkpoint): {'sha256': bundle._sha256_file(checkpoint),
-        'size_bytes': checkpoint.stat().st_size, 'format': 'pt', 'path': '/unused-runtime/model.pt'}}
+        'size_bytes': checkpoint.stat().st_size, 'format': 'pt', 'path': str(runtime_checkpoint)}}
     remote, refs, transfer = _place_closure(roots, tmp_path, monkeypatch, invocations[0],
                                             runtime_references=runtime)
     mapped = portable.resolve_input_path(request)
@@ -407,17 +411,23 @@ def test_cm_real_compiler_preserves_request_siblings_and_trusted_owner(roots, tm
     assert (mapped.parent/registry.name).read_bytes() == registry.read_bytes()
     trusted = portable.trusted_results_root('/not-the-host-root')
     assert mapped.is_relative_to(trusted) and not mapped.is_relative_to(remote/'results')
-    bound = prep._resolve_authenticated(mapped.parent, 'registered/model.pt',
-                                        bundle._sha256_file(checkpoint), 'checkpoint')
+    bound = portable.resolve_input_path('registered/model.pt', owner=mapped)
+    assert bound == runtime_checkpoint
     assert bound.read_bytes() == checkpoint.read_bytes()
     assert any(r['role'] == 'runtime-config' and r['source_path'] == str(registry) for r in refs)
     assert all(path.read_bytes() == content for path, content in originals.items())
-    # No weakening of native unaliased request-owned files.
+    # Retained request aliases are permitted, but never bypass byte authentication.
     import os
-    os.link(bound, bound.parent/'alias.pt')
-    with pytest.raises(prep.CanonicalPrepError, match='unaliased'):
-        prep._resolve_authenticated(mapped.parent, 'registered/model.pt',
-                                    bundle._sha256_file(checkpoint), 'checkpoint')
+    monkeypatch.delenv(portable.ENV)
+    assert prep._resolve_authenticated(request_root, 'registered/model.pt',
+        bundle._sha256_file(checkpoint), 'checkpoint') == checkpoint
+    os.link(checkpoint, checkpoint.parent/'alias.pt')
+    digest = bundle._sha256_file(checkpoint)
+    assert prep._resolve_authenticated(request_root, 'registered/model.pt', digest, 'checkpoint') == checkpoint
+    (checkpoint.parent/'alias.pt').write_bytes(b'x' * checkpoint.stat().st_size)
+    with pytest.raises(prep.CanonicalPrepError, match='SHA-256 mismatch'):
+        prep._resolve_authenticated(request_root, 'registered/model.pt',
+                                    digest, 'checkpoint')
 
 
 def test_runtime_directory_discovery_reuses_selected_identity(tmp_path, monkeypatch, portable):
