@@ -381,13 +381,15 @@ process ExportProteinLocalBoltzPredictions {
     publishDir "${params.out_dir}/validation/boltz2", mode: 'copy', pattern: 'published/*.{json,npz,manifest}', saveAs: { fn -> fn.replace('published/', '') }
 
     input:
-    tuple val(batch_id), path(sample_dir)
+    tuple val(batch_id), path(sample_dir), path(completion_receipt)
 
     output:
     path('published/*.pdb'), emit: pdbs
     path('published/*.json'), emit: jsons
     path('published/*.npz'), emit: pae, optional: true
     path('published/*.manifest'), emit: manifests
+    // Inference counts become delivery evidence only after this export succeeds.
+    path(completion_receipt), emit: completion
 
     script:
     """
@@ -670,7 +672,7 @@ workflow PROTEIN_LOCAL_REDESIGN {
                 .set { boltzInput }
             RunBoltz(boltzInput)
             ExportProteinLocalBoltzPredictions(RunBoltz.out.sample_artifacts)
-            validatorSummaryChannels << RunBoltz.out.completion
+            validatorSummaryChannels << ExportProteinLocalBoltzPredictions.out.completion
                 .map { completionReceipt ->
                     def payload = new groovy.json.JsonSlurper().parse(completionReceipt.toFile())
                     (payload.completed_candidates instanceof Collection ? payload.completed_candidates.size() : 0) as Integer

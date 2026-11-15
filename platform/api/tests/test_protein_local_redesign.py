@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -531,9 +532,11 @@ def test_resolve_redesign_regions_accepts_plain_manual_ranges(tmp_path: Path) ->
 
 
 def test_plr_profile_does_not_override_scheduler_gpu_concurrency() -> None:
+    launcher = (["java", "-jar", os.environ["BMS_TEST_NEXTFLOW_JAR"]]
+                if os.environ.get("BMS_TEST_NEXTFLOW_JAR") else [resolve_nextflow_executable()])
     rendered = subprocess.run(
         [
-            resolve_nextflow_executable(),
+            *launcher,
             "config",
             "-profile",
             "protein_local_redesign,workstation_ryzen7960x",
@@ -549,3 +552,76 @@ def test_plr_profile_does_not_override_scheduler_gpu_concurrency() -> None:
     assert "process.'withName:ProtenixFromComplex'.maxForks" not in rendered
     assert "params.gpu_id" in rendered
     assert "params.num_parallel_jobs" in rendered
+
+
+@pytest.mark.parametrize(("case", "completed", "other_count", "state"), [
+    ("exported", 2, None, "complete"),
+    ("export_failed", 2, None, "failed"),
+    ("native_partial", 1, None, "failed"),
+    ("native_zero", 0, None, "failed"),
+    ("other_partial", 2, 1, "partial"),
+])
+def test_boltz_suite_counts_only_successful_exports(tmp_path, case, completed, other_count, state):
+    """Exact export and receipt DAG with inert producer files, no model calls."""
+    source = (REPO_ROOT / "workflows/protein_local_redesign.nf").read_text()
+    module = (REPO_ROOT / "modules/boltz.nf").read_text()
+
+    def process(name):
+        return source.split("process " + name + " {", 1)[1].split("\n}\n", 1)[0]
+
+    export = "process ExportProteinLocalBoltzPredictions {" + process("ExportProteinLocalBoltzPredictions") + "\n}\n"
+    # Publishing mode helper is irrelevant to this task-output dependency;
+    # use copy for the private inert fixture, preserving the export body.
+    export = export.replace('"${proteinlocalredesignPublishMode(workflow.workDir, params.out_dir)}"', "'copy'")
+    producer_outputs = module.split("process RunBoltz {", 1)[1].split("    output:\n", 1)[1].split("    script:", 1)[0]
+    payload = json.dumps({"schema_version": 1, "validator": "boltz2",
+                          "expected_candidates": ["a", "b"],
+                          "completed_candidates": ["a", "b"][:completed],
+                          "native_samples": []})
+    (tmp_path / "completion.json").write_text(payload)
+    producer = '''process RunBoltz {
+    input:
+    val batch_id
+    output:
+''' + producer_outputs + '''
+    script:
+    """
+    mkdir predictions
+    printf 'inert structure' > predictions/a.pdb
+    printf '{}' > predictions/a.json
+    printf 'inert log' > boltz_0.log
+    cp ${params.fixture} boltz_completion.json
+''' + ("" if case == "export_failed" else "    printf '{}' > predictions/boltz_samples.manifest\n") + '''    """
+}
+'''
+    summary = source.split("            validatorSummaryChannels << ", 1)[1].split("\n        }", 1)[0]
+    requested = ["boltz2"] + (["esmfold2"] if other_count is not None else [])
+    extra = "" if other_count is None else f".mix(Channel.of([validator: 'esmfold2', completed_candidates: {other_count}]))"
+    program = "nextflow.enable.dsl = 2\n" + producer + export
+    for name in ("FinalizeProteinLocalValidatorSuite", "EnforceProteinLocalValidatorSuite"):
+        program += "process " + name + " {" + process(name) + "\n}\n"
+    program += "workflow {\nRunBoltz(Channel.value(0))\nExportProteinLocalBoltzPredictions(RunBoltz.out.sample_artifacts)\ndef summary = " + summary
+    program += "\nFinalizeProteinLocalValidatorSuite(Channel.value(" + repr(requested) + "), Channel.value(2), summary" + extra + ".collect())\nEnforceProteinLocalValidatorSuite(FinalizeProteinLocalValidatorSuite.out.receipt)\n}\n"
+    (tmp_path / "main.nf").write_text(program)
+    launcher = (["java", "-jar", os.environ["BMS_TEST_NEXTFLOW_JAR"]]
+                if os.environ.get("BMS_TEST_NEXTFLOW_JAR") else [resolve_nextflow_executable()])
+    result = subprocess.run(
+        [*launcher, "run", "main.nf",
+         "-work-dir", str(tmp_path / "work"), "--fixture", str(tmp_path / "completion.json"),
+         "--out_dir", str(tmp_path / "out")],
+        cwd=tmp_path, capture_output=True, text=True, timeout=90,
+    )
+    receipt_path = tmp_path / "out/validation/validator_suite_receipt.json"
+    assert receipt_path.exists(), result.stdout + result.stderr
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["state"] == state
+    assert receipt["validator_summaries"][0]["completed_candidates"] == (0 if case == "export_failed" else completed)
+    assert (result.returncode == 0) == (state == "complete"), result.stdout + result.stderr
+    export_tasks = [p.parent for p in (tmp_path / "work").rglob(".command.sh")
+                    if "publish_closed_structure" in p.read_text()]
+    assert len(export_tasks) == 1
+    assert (export_tasks[0] / ".exitcode").read_text().strip() == ("1" if case == "export_failed" else "0")
+    if case != "export_failed":
+        assert (tmp_path / "out/validation/boltz2/a.pdb").read_text() == "inert structure"
+        assert (tmp_path / "out/validation/boltz2/a.json").read_text() == "{}"
+    assert bool(list((tmp_path / "work").rglob("validator_suite_complete"))) == (state == "complete")
