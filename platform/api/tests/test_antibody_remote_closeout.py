@@ -414,6 +414,15 @@ else:
 ''')
     python.chmod(0o755)
     (shim/'python').symlink_to(python)
+    if not shutil.which('pigz'):
+        # Offline transport needs genuine gzip bytes, not parallel compression.
+        compressor = shim/'pigz'
+        compressor.write_text('#!' + sys.executable + '\n' + '''import gzip, shutil, sys
+assert sys.argv[1:3] == ['-p', '1'] and len(sys.argv) == 3
+with gzip.GzipFile(fileobj=sys.stdout.buffer, mode='wb', mtime=0) as output:
+    shutil.copyfileobj(sys.stdin.buffer, output)
+''')
+        compressor.chmod(0o755)
     deny = tmp_path/'deny'
     deny.mkdir()
     (deny/'sitecustomize.py').write_text("import socket\ndef denied(*a,**k): raise RuntimeError('OUTBOUND_DENIED')\nsocket.socket.connect=denied\nsocket.socket.connect_ex=denied\nsocket.create_connection=denied\n")
@@ -434,8 +443,9 @@ else:
         parameter_file = directory/'params.json'
         parameter_file.write_text(json.dumps(params))
         command = ['java','-jar',str(jar),'-C',str(config),'run',str(entrypoint),
-                   '-params-file',str(parameter_file),'-ansi-log','false']
-        result = subprocess.run(command,cwd=directory,env=env,capture_output=True,text=True,timeout=100)
+                   '-params-file',str(parameter_file),'-work-dir',str(directory/'work'),'-ansi-log','false']
+        run_env = dict(env, NXF_WORK=str(directory/'work'), NXF_CACHE_DIR=str(directory/'.nextflow'))
+        result = subprocess.run(command,cwd=directory,env=run_env,capture_output=True,text=True,timeout=100)
         (directory/'stdout.log').write_text(result.stdout+result.stderr)
         assert result.returncode == 0, result.stdout+result.stderr
         return directory
@@ -524,6 +534,10 @@ else:
         assert len({row['candidate_id'] for row in published}) == 2
         assert (final/'success_metrics.json').is_file()
         assert (final/'best_designs.tar.gz').is_file()
+        import tarfile
+        with tarfile.open(final/'best_designs.tar.gz', 'r:gz') as archive:
+            assert sum(member.isfile() and member.name.endswith('.pdb')
+                       for member in archive.getmembers()) == len(published)
         # Exercise the actual native consumer's byte guard on copied test data.
         publication_work = next((collected/'work').rglob('best_designs.tar.gz')).parent
         tampered = tmp_path/'tampered-terminal'

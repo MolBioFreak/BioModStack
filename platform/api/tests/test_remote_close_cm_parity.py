@@ -27,6 +27,15 @@ def settings(provider):
         'msa_neurosnap_identity_percent': 65.5, 'msa_neurosnap_max_sequences': 321}
 
 
+def inert_checkpoint(controls, tmp_path):
+    # Inert transport member, not an installed or executable checkpoint.
+    import hashlib
+    checkpoint = Path(os.environ['BMS_INPUTS']) / (tmp_path.name + '-inert.pt')
+    checkpoint.write_bytes(b'inert CM compiler fixture; not model weights')
+    controls['confornets']['checkpoint'].update(path=str(checkpoint),
+        sha256=hashlib.sha256(checkpoint.read_bytes()).hexdigest())
+
+
 def test_router_openapi_closed_inventory_discovery():
     from fastapi import FastAPI
     from routers.conformational_mapping import router
@@ -95,6 +104,7 @@ def test_confor_materializer_to_actual_compiler(tmp_path, monkeypatch, provider)
     assert spec and spec.loader
     fixture = importlib.util.module_from_spec(spec); spec.loader.exec_module(fixture)
     controls = fixture._request_params('confornets')
+    inert_checkpoint(controls, tmp_path)
     controls['feature_policy']['msa_settings'] = settings(provider)
     root = Path(os.environ['BMS_INPUTS']) / tmp_path.name
     materialized = materialize_trusted_internal_request(controls, output_dir=root,
@@ -117,6 +127,8 @@ def test_inactive_consumer_preserves_saved_settings_but_selected_science_rejects
     fixture = importlib.util.module_from_spec(spec); spec.loader.exec_module(fixture)
     controls = fixture._request_params(backend)
     controls['feature_policy']['msa_settings'] = {**settings('neurosnap_api'), field: True}
+    if backend == 'confornets':
+        inert_checkpoint(controls, tmp_path)
     if backend == 'protenix_v2_ensemble':
         controls['feature_policy'].update(protein_msa_enabled=False, templates_enabled=False, rna_msa_enabled=False, mode='features_disabled_control_v1')
     else:

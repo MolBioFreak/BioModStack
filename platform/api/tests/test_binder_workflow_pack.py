@@ -23,13 +23,7 @@ def binder_assets(assets, monkeypatch):
     import paths
     monkeypatch.setattr(paths, 'get_container_dir', lambda *args, **kwargs: containers)
     monkeypatch.setattr(paths, 'get_weights_root', lambda *args, **kwargs: weights)
-    from subprocess import check_output
-    source = Path(__file__).resolve().parents[3]
-    identity = tuple(check_output(['git', '-C', str(source), 'rev-parse', ref], text=True).strip()
-                     for ref in ('HEAD', 'HEAD^{tree}'))
-    monkeypatch.setattr(cache, 'current_source_identity', lambda *args, **kwargs: identity)
-    from services.remote_execution import preloading
-    monkeypatch.setattr(preloading, 'current_source_identity', lambda *args, **kwargs: identity)
+    # Keep the imported assets fixture's inert archive and source identity paired.
     from services.remote_execution import images
     original = images.image_reference
     def image_reference(name, root, params=None):

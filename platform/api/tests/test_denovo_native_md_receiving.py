@@ -23,6 +23,9 @@ def test_optional_navigation_is_not_scientific_authority(current_project_store, 
     monkeypatch.setenv('BMS_FEATURE_MOLECULAR_DYNAMICS', '1')
     monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *_: None)
     monkeypatch.setattr(launch_contract, 'get_chemistry_catalog', lambda: typed._Catalog())
+    # Navigation authority is independent of installed engine bytes.
+    monkeypatch.setattr(launch_contract, '_bound_engine_runtime_identity',
+        lambda: {'image_name': 'gromacs.sif', 'sif_sha256': 'a' * 64})
     source_ref = {'kind': 'design', 'id': store['expected_design_id']}
     if exact_candidate:
         from services.md.starting_structures import StartingStructureSourceRef
