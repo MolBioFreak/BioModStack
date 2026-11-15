@@ -27,6 +27,9 @@ def rule_2_4(sequence: str) -> float:
 
 
 NEB_MIN_OVERLAP_TM = 48.0
+# Measured on NEBuilder with synthetic fragments: overlaps of 20-75 nt were read as continuous, while
+# 15-19 and 76-80 nt each drew a "discontinuity" message. BMS still designs them; it only says so.
+NEBUILDER_OVERLAP_RANGE = (20, 75)
 GC_RANGE = (40.0, 65.0)
 LOW_COMPLEXITY_WINDOW = 8
 
@@ -56,6 +59,11 @@ def overlap_observations(overlap: str, product: str, circular: bool) -> list[str
     gc = gc_percent(overlap)
     if not GC_RANGE[0] <= gc <= GC_RANGE[1]:
         notes.append(f"Overlap GC is {gc:.0f} %, outside {GC_RANGE[0]:.0f}-{GC_RANGE[1]:.0f} %")
+    low, high = NEBUILDER_OVERLAP_RANGE
+    if not low <= len(overlap) <= high:
+        notes.append(
+            f"NEBuilder reported overlaps outside {low}-{high} nt as a discontinuity; this one is {len(overlap)} nt"
+        )
     head = overlap.upper()[:LOW_COMPLEXITY_WINDOW]
     if len(head) == LOW_COMPLEXITY_WINDOW and len(set(head)) <= 2:
         notes.append(f"The 5' end of the overlap ({head}) is low complexity (two bases or fewer)")

@@ -351,3 +351,23 @@ def test_save_roundtrip_keeps_the_junction_choices(app) -> None:
     request = saved.json()["saved_sequence"]["operation_params"]["design_request"]
     assert request["junctions"] == junctions
     assert [row["overlap_length"] for row in saved.json()["selected_product"]["junctions"]] == [40, 24, 24]
+
+
+# --- overlap length against what NEBuilder accepts (observation only) ---------------------------
+
+@pytest.mark.parametrize("length", [15, 19, 76, 80])
+def test_overlap_outside_the_range_nebuilder_accepts_is_noted_and_still_designed(length: int) -> None:
+    result = design_gibson([frag(1, 400), frag(2, 400)], preparations=["pcr"] * 2, circular=True, overlap=30,
+                           junctions=[JunctionSpec("fragment-1", length, None)])
+    first = result.candidates[0].product.junctions[0]
+    assert first.overlap_length == length
+    assert any("NEBuilder" in note for note in first.notes)
+
+
+@pytest.mark.parametrize("length", [20, 25, 75])
+def test_overlap_inside_the_range_nebuilder_accepts_has_no_length_note(length: int) -> None:
+    result = design_gibson([frag(1, 400), frag(2, 400)], preparations=["pcr"] * 2, circular=True, overlap=30,
+                           junctions=[JunctionSpec("fragment-1", length, None)])
+    first = result.candidates[0].product.junctions[0]
+    assert first.overlap_length == length
+    assert not any("NEBuilder" in note for note in first.notes)
