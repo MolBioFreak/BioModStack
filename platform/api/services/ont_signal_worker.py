@@ -41,7 +41,7 @@ from database import (
 from molbio_ngs_models import MolBioNGSReferenceArtifact, MolBioNGSReferenceRevision
 from paths import get_allowed_roots, get_molbio_ngs_reference_root, get_results_dir
 from services import ngs_alignment_sessions, ont_raw_signal, ont_signal_workbench
-from services.ont_local_images import local_image_identity
+from services.ont_local_images import configured_container_runtime, local_image_identity
 from services.container_cli_environment import container_cli_environment as _container_cli_env, container_user_namespace_args
 from services.file_lease_signals import lease_break_generation
 
@@ -651,7 +651,7 @@ class OntSignalWorker:
         ):
             raise RuntimeError("approved runtime policy manifest is invalid")
         image, digest = local_image_identity(
-            "BMS_ONT_SQUIGUALISER_IMAGE", os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
+            "BMS_ONT_SQUIGUALISER_IMAGE", configured_container_runtime()
         )
         return {
             "image": image,
@@ -670,7 +670,7 @@ class OntSignalWorker:
         kind: str,
     ) -> list[str]:
         identity = self._runtime_identity()
-        runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
+        runtime = configured_container_runtime()
         if runtime not in {"podman", "docker"}:
             raise RuntimeError("unsupported container runtime")
         uid, gid = self._container_user_identity()
@@ -729,7 +729,7 @@ class OntSignalWorker:
         ):
             raise RuntimeError("approved comparison runtime policy is invalid")
         image, digest = local_image_identity(
-            image_env, os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
+            image_env, configured_container_runtime()
         )
         # The immutable image owns its wrapper, not an unused host-side copy.
         return {"stage": stage, "image": image, "image_digest": digest,
@@ -739,7 +739,7 @@ class OntSignalWorker:
         self, stage: str, output_dir: Path, broker_dir: Path
     ) -> list[str]:
         identity = self._comparison_runtime_identity(stage)
-        runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
+        runtime = configured_container_runtime()
         if runtime not in {"podman", "docker"}:
             raise RuntimeError("unsupported container runtime")
         uid, gid = self._container_user_identity()
@@ -999,7 +999,7 @@ class OntSignalWorker:
         self._active_container = None
 
     async def _recover_stale_containers(self) -> None:
-        runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
+        runtime = configured_container_runtime()
         if runtime not in {"podman", "docker"}:
             raise RuntimeError("unsupported container runtime")
         try:

@@ -41,7 +41,7 @@ from database import (
 )
 from services.container_cli_environment import container_cli_environment, container_user_namespace_args
 from services.file_lease_signals import register_lease_break_listener
-from services.ont_local_images import local_image_identity
+from services.ont_local_images import configured_container_runtime, local_image_identity
 from services.ont_read_metrics import publish_read_metrics_from_validation
 
 
@@ -158,7 +158,7 @@ def raw_signal_runtime_identity() -> dict[str, Any]:
     ):
         raise RuntimeError("raw-signal runtime policy manifest is invalid")
     image, digest = local_image_identity(
-        BLOW5_CONTAINER_ENV, os.getenv(BLOW5_CONTAINER_RUNTIME_ENV, "docker").strip() or "docker"
+        BLOW5_CONTAINER_ENV, configured_container_runtime()
     )
     return {
         "image": image,
@@ -1869,7 +1869,7 @@ def _resource_snapshot(source_bytes: int) -> dict[str, Any]:
     usage = shutil.disk_usage(probe)
     configured_floor = int(os.getenv(BLOW5_MIN_FREE_BYTES_ENV, str(BLOW5_DEFAULT_MIN_FREE_BYTES)))
     required_free = max(configured_floor, int(source_bytes * 2.5) + 10 * 1024 * 1024 * 1024)
-    container_runtime = os.getenv(BLOW5_CONTAINER_RUNTIME_ENV, "docker").strip()
+    container_runtime = configured_container_runtime()
     try:
         image, image_digest = local_image_identity(BLOW5_CONTAINER_ENV, container_runtime)
     except RuntimeError:

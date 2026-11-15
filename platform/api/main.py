@@ -203,10 +203,13 @@ async def lifespan(app: FastAPI):
         install_global_experiment_worker(None)
         logger.warning("[STARTUP] %s", workflow_launch_block_detail("start the GPU workflow scheduler"))
 
-    from services.ont_local_images import local_image_identity as _ont_local_image_identity
+    from services.ont_local_images import (
+        configured_container_runtime as _ont_container_runtime,
+        local_image_identity as _ont_local_image_identity,
+    )
     try:
         _ont_local_image_identity(
-            "BMS_ONT_SLOW5TOOLS_IMAGE", os.getenv("BMS_ONT_CONTAINER_RUNTIME", "docker").strip() or "docker"
+            "BMS_ONT_SLOW5TOOLS_IMAGE", _ont_container_runtime()
         )
     except RuntimeError:
         ont_raw_image_present = False

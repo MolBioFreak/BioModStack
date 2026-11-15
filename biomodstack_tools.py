@@ -235,9 +235,12 @@ def _image_source(image: dict) -> str | None:
 
 
 def _docker() -> str | None:
-    chosen = os.environ.get("BMS_TOOLS_CONTAINER_RUNTIME", "").strip()
-    if chosen:
-        return shutil.which(chosen) if chosen in ("docker", "podman") else None
+    # The installer's own setting, then the runtime the ONT tools are configured to run with,
+    # so an image is built where it will be looked for.
+    for name in ("BMS_TOOLS_CONTAINER_RUNTIME", "BMS_ONT_CONTAINER_RUNTIME", "BMS_CONTAINER_RUNTIME"):
+        chosen = os.environ.get(name, "").strip()
+        if chosen:
+            return shutil.which(chosen) if chosen in ("docker", "podman") else None
     return shutil.which("docker") or shutil.which("podman")
 
 

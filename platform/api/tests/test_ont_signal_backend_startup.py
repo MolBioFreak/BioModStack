@@ -54,6 +54,7 @@ async def snapshot(factory):
 @pytest.mark.parametrize("runtime", ["docker", "podman"])
 @pytest.mark.parametrize("persisted", [False, True], ids=["empty-db", "persisted-jobs"])
 async def test_absent_backend_leaves_recovery_and_dispatch_blocked(store, monkeypatch, caplog, runtime, persisted):
+    monkeypatch.delenv("BMS_ONT_CONTAINER_RUNTIME", raising=False)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", runtime)
     if persisted:
         await seed_jobs(store)
@@ -82,6 +83,7 @@ async def test_absent_backend_leaves_recovery_and_dispatch_blocked(store, monkey
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [PermissionError("denied"), OSError("I/O error"), RuntimeError("unexpected")])
 async def test_backend_spawn_errors_other_than_absence_propagate(monkeypatch, failure):
+    monkeypatch.delenv("BMS_ONT_CONTAINER_RUNTIME", raising=False)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "docker")
     monkeypatch.setattr(workers.asyncio, "create_subprocess_exec", AsyncMock(side_effect=failure))
     worker = workers.OntSignalWorker(None, None)
@@ -92,6 +94,7 @@ async def test_backend_spawn_errors_other_than_absence_propagate(monkeypatch, fa
 
 @pytest.mark.asyncio
 async def test_discovery_failure_is_not_backend_absence(monkeypatch):
+    monkeypatch.delenv("BMS_ONT_CONTAINER_RUNTIME", raising=False)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "docker")
     process = AsyncMock()
     process.communicate.return_value = (b"", b"daemon unavailable or access denied")
@@ -105,6 +108,7 @@ async def test_discovery_failure_is_not_backend_absence(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_restart_requires_container_recovery_before_lease_recovery_and_dispatch(monkeypatch):
+    monkeypatch.delenv("BMS_ONT_CONTAINER_RUNTIME", raising=False)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "docker")
     spawn = AsyncMock(side_effect=FileNotFoundError(2, "missing", "docker"))
     monkeypatch.setattr(workers.asyncio, "create_subprocess_exec", spawn)
@@ -169,6 +173,7 @@ async def test_api_lifespan_yields_with_absent_backend(store, monkeypatch, caplo
         await seed_jobs(store)
     before = await snapshot(store)
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
+    monkeypatch.delenv("BMS_ONT_CONTAINER_RUNTIME", raising=False)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "docker")
     from services import ont_local_images
     def absent(env_name: str, runtime: str) -> tuple[str, str]:
