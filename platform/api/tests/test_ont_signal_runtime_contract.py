@@ -341,6 +341,16 @@ def test_move_evidence_rejects_model_molecule_mismatch() -> None:
         )
 
 
+def test_calibration_uses_the_reads_that_are_available_up_to_the_requested_count() -> None:
+    reads = [f"read-{index}" for index in range(7)]
+    few = runtime.select_calibration_reads(reads, 100)
+    assert sorted(few) == sorted(reads) and len(few) == 7
+    assert runtime.select_calibration_reads(list(reversed(reads)), 100) == few  # same order whatever the input order
+    assert runtime.select_calibration_reads(reads, 3) == few[:3]
+    with pytest.raises(ValueError, match="nothing to calibrate on"):
+        runtime.select_calibration_reads([], 100)
+
+
 def test_rna_calibration_orientation_and_upstream_flag_are_bound() -> None:
     assert runtime.calibration_sequence("ACGT", "dna") == "ACGT"
     assert runtime.calibration_sequence("ACGT", "rna") == "TGCA"

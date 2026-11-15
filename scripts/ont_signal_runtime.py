@@ -784,6 +784,14 @@ def remove_calibration_fasta_index(sequence_fasta: Path) -> None:
     index.unlink()
 
 
+def select_calibration_reads(read_ids: list[str], requested_count: int) -> list[str]:
+    """The reads to calibrate on: up to the requested number, in a fixed order, from those that are available."""
+    ranked = sorted(read_ids, key=lambda read_id: (hashlib.sha256(read_id.encode()).hexdigest(), read_id))
+    if not ranked:
+        raise ValueError("no read has both raw signal and a move table, so there is nothing to calibrate on")
+    return ranked[:requested_count]
+
+
 def cmd_calibrate(args: argparse.Namespace) -> None:
     if not 1 <= args.sample_count <= 100:
         raise ValueError("calibration sample count is outside bounded policy")
@@ -812,10 +820,8 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
         or sha(args.original_bam) != args.move_artifact_sha256
     ):
         raise ValueError("exact signal/move intersection digest diverges from the governed inventory")
-    ranked = sorted(raw_ids, key=lambda read_id: (hashlib.sha256(read_id.encode()).hexdigest(), read_id))
-    if len(ranked) < args.sample_count:
-        raise ValueError("exact signal/move intersection is smaller than requested calibration sample")
-    selected = ranked[:args.sample_count]
+    # A small genuine set is calibrated on what it has; the report records both counts.
+    selected = select_calibration_reads(raw_ids, args.sample_count)
     selection_digest = hashlib.sha256(canonical(selected)).hexdigest()
     sample_bam = args.output_dir / "sample.bam"
     sequence_fasta = args.output_dir / "sample.fasta"
@@ -890,7 +896,7 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
             baseline,
             sequence_fasta,
             bounded_output,
-            args.sample_count,
+            len(selected),
             args.molecule_type,
         ))
     finally:

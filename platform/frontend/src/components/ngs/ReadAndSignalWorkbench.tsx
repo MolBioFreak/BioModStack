@@ -1195,6 +1195,14 @@ export function ReadAndSignalWorkbench({
                         <div>Calibration <span className={`rounded px-1 ${stateBadge(calibration?.state || (compatibleProfile ? 'ready' : 'unavailable'))}`}>{calibration?.state || (compatibleProfile ? 'approved profile ready' : 'not requested')}</span></div>
                         <div className="break-all text-[var(--text-secondary)]">{calibration?.reason_code || (compatibleProfile ? 'exact approved profile available' : 'fresh click will request deterministic calibration')}</div>
                         {calibration?.failure_message && <div className="text-[var(--error)]">{calibration.failure_code}: {calibration.failure_message}</div>}
+                        {calibration?.artifact && (
+                            <div data-testid="ont-signal-calibration-read-count">
+                                Calibrated on {calibration.artifact.sample_selection.selected_count.toLocaleString()} read{calibration.artifact.sample_selection.selected_count === 1 ? '' : 's'}
+                                {calibration.artifact.sample_selection.selected_count < calibration.artifact.sample_selection.requested_count
+                                    ? ` (${calibration.artifact.sample_selection.requested_count.toLocaleString()} requested; the run has ${calibration.artifact.sample_selection.intersection_count.toLocaleString()} with signal and moves)`
+                                    : ''}.
+                            </div>
+                        )}
                         {calibration?.artifact && <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-all rounded bg-[var(--bg-secondary)] p-1 text-[9px]">{JSON.stringify({
                             artifact_id: calibration.artifact.calibration_artifact_id,
                             artifact_sha256: calibration.artifact.artifact_sha256,

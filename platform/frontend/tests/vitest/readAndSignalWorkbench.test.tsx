@@ -2534,6 +2534,9 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(container.textContent).toContain('calibration_evidence_ready');
         expect(container.textContent).toContain(calibrationArtifact.calibration_artifact_id);
         expect(container.textContent).toContain(calibrationArtifact.artifact_sha256);
+        // Ten reads were available against 100 requested; the page says what was used.
+        expect(container.querySelector('[data-testid="ont-signal-calibration-read-count"]')!.textContent)
+            .toBe('Calibrated on 10 reads (100 requested; the run has 10 with signal and moves).');
         expect(container.textContent).toContain('digest_ordered_intersection');
         expect(container.textContent).toContain('squigualiser@sha256:fixture');
 

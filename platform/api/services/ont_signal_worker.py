@@ -1836,9 +1836,12 @@ class OntSignalWorker:
             or report.get("parent_sha256s", {}).get("move_inventory_actual_sha256") != snapshot_parents.get("move_read_inventory_sha256")
             or report.get("parent_sha256s", {}).get("blow5") != raw_identities["blow5"]
             or report.get("basecall_model_id") != snapshot_parents.get("basecall_model_id")
-            or selected.get("requested_count") != job.sample_count or selected.get("selected_count") != job.sample_count
-            or not isinstance(selected_ids, list) or len(selected_ids) != job.sample_count
-            or len(set(selected_ids)) != job.sample_count or any(not isinstance(read_id, str) or not read_id for read_id in selected_ids)
+            or selected.get("requested_count") != job.sample_count
+            or not isinstance(selected_ids, list) or not selected_ids
+            # Fewer reads than requested is a real result when that is all the run has.
+            or selected.get("selected_count") != len(selected_ids)
+            or len(selected_ids) != min(job.sample_count, selected.get("intersection_count") if isinstance(selected.get("intersection_count"), int) else -1)
+            or len(set(selected_ids)) != len(selected_ids) or any(not isinstance(read_id, str) or not read_id for read_id in selected_ids)
             or selected.get("selection_sha256") != selection_sha
             or tool.get("version") != "0.7.0" or tool.get("commit") != "5a2404f1f43bc3227a85475c59b2b77970078b2e"
             or recommendation.get("kmer_length") not in range(1, 10)
@@ -1846,7 +1849,7 @@ class OntSignalWorker:
             or recommendation.get("kmer_length") != recommendation.get("signal_move_offset") + 1
             or not isinstance(score_evidence, list) or len(score_evidence) != 9
             or [item.get("candidate_signal_move_offset") for item in score_evidence if isinstance(item, dict)] != list(range(9))
-            or any(not isinstance(item, dict) or item.get("read_count") != job.sample_count or not isinstance(item.get("score"), (int, float)) for item in score_evidence)
+            or any(not isinstance(item, dict) or item.get("read_count") != len(selected_ids) or not isinstance(item.get("score"), (int, float)) for item in score_evidence)
         ):
             raise RuntimeError("calibration report failed governed validation")
         async with self._session_factory() as session:
