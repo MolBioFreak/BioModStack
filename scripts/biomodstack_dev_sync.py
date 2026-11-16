@@ -884,6 +884,10 @@ def _sync_once_transaction(
                 _write_receipt(state_dir, receipt)
                 raise
             receipt.update(deployment)
+            # The receipt describes the finished deployment: `local_revision` is the
+            # checkout as it is now, and the pre-deploy value stays beside it.
+            receipt["local_revision_before"] = receipt.get("local_revision")
+            receipt["local_revision"] = _git(root, "rev-parse", "HEAD")
             receipt["status"] = "deployed"
             receipt["queue_state"] = "empty"
             receipt["queued_revision"] = None

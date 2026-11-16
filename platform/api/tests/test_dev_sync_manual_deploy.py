@@ -201,3 +201,13 @@ def test_failed_rollback_reuses_only_matching_late_healthy_owner(deployment, lat
     assert sync._read_sync_refresh_required(state) is None
     assert installed.read_bytes() == b"previous synchronizer\n"
     assert sync._read_deployment_paused(state)
+
+
+def test_successful_deploy_receipt_reports_the_revision_now_checked_out(deployment):
+    sync, root, state, _, _, current, _ = deployment
+    assert sync.sync_once(root, state, deploy_now=True, allow_active_work=True) == "fast-forward-deploy"
+    receipt = json.loads((state / "dev-sync.json").read_text())
+    assert receipt["local_revision"] == "b" * 40
+    assert receipt["local_revision_before"] == "a" * 40
+    assert receipt["deployed_revision_before"] == "a" * 40
+    assert receipt["deployed_revision_after"] == "b" * 40
