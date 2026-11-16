@@ -174,6 +174,8 @@ it('mounted full/compact inventory has identical filters, every bulk-map group a
         for (const [group, label] of [['unique', 'Map all 1x'], ['double', 'Map all 2x'], ['three_plus', 'Map all 3x+'], ['nicking', 'Map nicking'], ['type_iis', 'Map Golden Gate']] as const) {
             await click(label); expect(map).toHaveBeenLastCalledWith(quickMapIds[group]);
         }
+        // Mapping Golden Gate now also selects its matching browse filter.
+        await click('All Types');
         for (const [label, count] of [['1x',1],['2x',2],['3x+',3],['0x',0]] as const) {
             await click(label);
             const ids = expected.filter(r => r.summary.double_strand_break_count === count).map(r => r.record.enzyme_id);

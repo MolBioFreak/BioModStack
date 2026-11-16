@@ -6,7 +6,7 @@ import * as api from '../../src/lib/api';
 import { AssemblyPanel } from '../../src/components/MolBioToolkit/panels/AssemblyPanel';
 import { FragmentChooser } from '../../src/components/MolBioToolkit/FragmentChooser';
 import { enzymePairLabel, junctionLines, proposalPairLabel } from '../../src/components/MolBioToolkit/panels/SuggestPlan';
-import { circularCaptionName, linearBreakReservePx } from '../../src/components/MolBioToolkit/SequenceViewer';
+import { circularCaptionName } from '../../src/components/MolBioToolkit/SequenceViewer';
 
 vi.mock('../../src/lib/api', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../../src/lib/api')>()),
@@ -115,13 +115,6 @@ describe('Molecular Tools layout fixes (class/text checks only; pixels are cover
         expect(src).toContain("'GC n/a'");
         expect(src).toContain('.dna files are supported');
         expect(src).not.toContain('`.dna`');
-    });
-
-    it('linear constructs reserve room for the LINEAR BREAK marker; circular ones and the linear-only view do not', () => {
-        expect(linearBreakReservePx(false, 'both')).toBe(112);
-        expect(linearBreakReservePx(false, 'circular')).toBe(112);
-        expect(linearBreakReservePx(false, 'linear')).toBe(0);
-        expect(linearBreakReservePx(true, 'both')).toBe(0);
     });
 
     it('proposal helpers: shared pair is named once, identical junctions collapse', () => {

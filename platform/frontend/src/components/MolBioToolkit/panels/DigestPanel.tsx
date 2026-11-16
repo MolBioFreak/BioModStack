@@ -16,7 +16,7 @@ import type {
 } from '../../../lib/restrictionAnalysis';
 
 type CutFilter = 'all' | 'zero' | 'unique' | 'double' | 'three_plus' | 'selection';
-type GroupFilter = 'all' | 'digest' | 'nicking' | 'recognition_only' | 'special';
+type GroupFilter = 'all' | 'golden_gate' | 'digest' | 'nicking' | 'recognition_only' | 'special';
 export type QuickMapGroup = 'unique' | 'double' | 'three_plus' | 'nicking' | 'type_iis';
 
 interface DigestPanelProps {
@@ -121,6 +121,7 @@ function filterEnzymeRows(rows: EnzymeCutData[], searchQuery: string, groupFilte
         if (Boolean(restrictionSpecialCase(record.enzyme_id)) !== (groupFilter === 'special')) return false;
         if (query && ![record.enzyme_id, record.canonical_name, restrictionRecognitionSite(record), ...record.aliases].some(value => value.toLowerCase().includes(query))) return false;
         if (groupFilter === 'special') return true; // Motif counts are not ordinary cut-count filters.
+        if (groupFilter === 'golden_gate' && !record.golden_gate_compatible) return false;
         if (groupFilter === 'digest' && record.analysis_capability !== 'digest_simulation') return false;
         if (groupFilter === 'nicking' && (summary?.nick_count ?? 0) === 0) return false;
         if (groupFilter === 'recognition_only' && record.analysis_capability !== 'recognition_only') return false;
@@ -136,7 +137,7 @@ function filterEnzymeRows(rows: EnzymeCutData[], searchQuery: string, groupFilte
 }
 
 const CUT_FILTERS: Array<[CutFilter, string]> = [['all','All'],['unique','1x'],['double','2x'],['three_plus','3x+'],['zero','0x'],['selection','In Selection']];
-const GROUP_FILTERS: Array<[GroupFilter, string]> = [['all','All Types'],['digest','Digest-ready'],['nicking','Nicking'],['recognition_only','Recognition only']];
+const GROUP_FILTERS: Array<[GroupFilter, string]> = [['all','All Types'],['golden_gate','Golden Gate'],['digest','Digest-ready'],['nicking','Nicking'],['recognition_only','Recognition only']];
 const QUICK: Array<[QuickMapGroup, string]> = [['unique','Map all 1x'],['double','Map all 2x'],['three_plus','Map all 3x+'],['nicking','Map nicking'],['type_iis','Map Golden Gate']];
 
 export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, groupSameSiteLabels = true, onGroupSameSiteLabelsChange, catalog, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest, onAnalyzeAll, onReadEnzymeDetails, productEvidence, sequenceId, onUseInAssembly }: DigestPanelProps) {
@@ -248,7 +249,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
     const filtered = useMemo(() => filterEnzymeRows(enzymeData, searchQuery, groupFilter, cutFilter), [cutFilter, enzymeData, groupFilter, searchQuery]);
     const specialCasesVisible = groupFilter === 'special';
     const displayCounts = useMemo(() => {
-        const rows = (analysis?.analysis.enzyme_summaries ?? []).filter(row => Boolean(restrictionSpecialCase(row.enzyme_id)) === specialCasesVisible);
+        const rows = filtered.flatMap(row => row.summary ? [row.summary] : []);
         return rows.reduce((counts, row) => ({
             definite: counts.definite + row.recognition_site_count_definite,
             possible: counts.possible + row.recognition_site_count_possible,
@@ -256,7 +257,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
             nicks: counts.nicks + row.nick_count,
             enzymes: counts.enzymes + 1,
         }), { definite: 0, possible: 0, dsb: 0, nicks: 0, enzymes: 0 });
-    }, [analysis, specialCasesVisible]);
+    }, [filtered]);
     const filteredMapIds = useMemo(() => filtered.filter(({ summary }) => summary !== null && summary.recognition_site_count_definite + summary.recognition_site_count_possible > 0).map(({ record }) => record.enzyme_id), [filtered]);
 
     // Paging only bounds mounted rows; special cases remain available by explicit choice.
@@ -297,6 +298,12 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
         const request = Symbol(group);
         const activate = !activeGroupsRef.current.has(group);
         if (activate) {
+            if (group === 'type_iis') {
+                setGroupFilter('golden_gate');
+                setCutFilter('all');
+                setSearchQuery('');
+                setDisplayPage(0);
+            }
             pendingGroups.current.set(group, request);
             setPendingMappingCount(pendingGroups.current.size);
             setMappingError(null);
@@ -376,6 +383,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
             {analysis?.complete === false && <span className="text-amber-300">Partial scan: {analysis.analysis.enzyme_summaries.length}/{analysis.requested_enzyme_count} requested enzymes analyzed.</span>}
         </div>
         {analysis && <div data-restriction-counts="true" className="grid grid-cols-3 gap-2 px-3 text-xs text-slate-300">
+            <p className="col-span-3 text-slate-400">Totals for the current list filters</p>
             <div><strong>{displayCounts.definite}</strong> definite {specialCasesVisible ? 'sequence-motif' : 'enzyme-site'} match{displayCounts.definite === 1 ? '' : 'es'} <span className="text-slate-500">across {displayCounts.enzymes} analyzed enzymes</span><div className="text-slate-500"><strong>{displayCounts.possible}</strong> possible match{displayCounts.possible === 1 ? '' : 'es'}</div></div>
             {specialCasesVisible ? <div className="col-span-2 text-amber-200">Sequence motifs only; no cuts on unmodified DNA.</div> : <><div><strong>{displayCounts.dsb}</strong> predicted DSB{displayCounts.dsb === 1 ? '' : 's'}</div><div><strong>{displayCounts.nicks}</strong> nicks</div></>}
         </div>}
@@ -384,6 +392,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
         <div data-digest-mobile-sticky-search={mobile ? 'true' : undefined} className="space-y-2 px-3">
             <button type="button" aria-pressed={specialCasesVisible} onClick={() => { setGroupFilter(specialCasesVisible ? 'all' : 'special'); setCutFilter('all'); setDisplayPage(0); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-3 py-1 ${specialCasesVisible ? 'border-amber-400 bg-amber-900/40' : 'border-slate-600 bg-slate-800'}`}>Special cases</button>
             {specialCasesVisible && <p className="text-xs text-amber-200">These enzymes require modified cytosines. Sequence matches alone do not establish cleavage; substrate requirements differ by enzyme. Map them here to inspect sequence motifs.</p>}
+            {groupFilter === 'golden_gate' && <p className="text-xs text-slate-400">Type IIS candidates with compatible cut geometry. Map actions add to the existing selection.</p>}
             <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search enzyme or recognition site…" data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 ${mobile ? 'min-h-12 min-w-12' : ''}`} />
             {!compactLandscape && <>{!specialCasesVisible && <div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{CUT_FILTERS.map(([value,label]) => <button key={value} onClick={() => { setCutFilter(value); if (value !== 'all') requestCountAnalysis(); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${cutFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div>}{!specialCasesVisible && <div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{GROUP_FILTERS.map(([value,label]) => <button key={value} onClick={() => { setGroupFilter(value); if (value === 'nicking') requestCountAnalysis(); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${groupFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div>}<div data-digest-bulk-map="true" className="flex gap-1 overflow-x-auto"><button disabled={hasFullAnalysis && filteredMapIds.length === 0} onClick={() => void mapFiltered()} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border border-cyan-600 bg-cyan-950/50 px-2 disabled:opacity-40`}>Map filtered ({filteredMapIds.length})</button><button disabled={selectedEnzymes.length === 0 && pendingMappingCount === 0} onClick={clearMap} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 disabled:opacity-40`}>Clear map ({selectedEnzymes.length})</button></div>{!specialCasesVisible && <div data-digest-quick-map="true" className="flex gap-1 overflow-x-auto">{QUICK.map(([value,label]) => <button key={value} aria-pressed={activeQuickMapGroups.has(value)} aria-busy={pendingGroups.current.has(value)} onClick={() => void toggleQuick(value)} className={`${mobile ? 'min-h-12 min-w-12' : ''} ${activeQuickMapGroups.has(value) ? 'border-cyan-400 bg-cyan-700' : 'border-slate-600 bg-slate-800'} rounded border px-2`}>{label}</button>)}</div>}</>}
         </div>
