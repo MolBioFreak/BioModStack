@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import re
 import secrets
 import signal
@@ -1618,7 +1619,12 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             "",
         )
     )
-    ont_container_runtime = os.environ.get("BMS_ONT_CONTAINER_RUNTIME", "docker").strip() or "docker"
+    # Same order the API uses: the ONT setting, the general setting, then whichever is installed.
+    ont_container_runtime = (
+        os.environ.get("BMS_ONT_CONTAINER_RUNTIME", "").strip()
+        or os.environ.get("BMS_CONTAINER_RUNTIME", "").strip()
+        or ("podman" if shutil.which("docker") is None and shutil.which("podman") is not None else "docker")
+    )
     ont_runtime_image = _ont_reference_image(
         root, "raw_signal_runtime_policy_v1.json", "raw signal"
     )
@@ -1636,7 +1642,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     ont_runtime_environment = "\n        ".join(
         "Environment=" + systemd_value(f"{key}={value}")
         for key, value in {
-            "BMS_CONTAINER_RUNTIME": os.environ.get("BMS_CONTAINER_RUNTIME", ont_container_runtime),
+            "BMS_CONTAINER_RUNTIME": ont_container_runtime,
             "BMS_ONT_CONTAINER_RUNTIME": ont_container_runtime,
             "BMS_ONT_SLOW5TOOLS_IMAGE": ont_runtime_image,
             "BMS_ONT_SQUIGUALISER_IMAGE": ont_squigualiser_image,

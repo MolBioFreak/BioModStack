@@ -39,13 +39,7 @@ def test_plasmid_modkit_graph_and_nonblocking_fastq_default(tmp_path, workflow, 
         capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
     text = log.read_text()
-    # Nextflow preview leaves workflow.success unset in these two existing
-    # onComplete handlers. Keep that diagnostic visible without confusing an
-    # unexecuted completion callback with graph-construction failure.
     errors = [line.split(' ERROR ', 1)[1] for line in text.splitlines() if ' ERROR ' in line]
-    expected_errors = [] if workflow == 'ont_plasmid_qc' else [
-        'nextflow.script.WorkflowMetadata - Failed to invoke `workflow.onComplete` event handler'
-    ]
-    assert errors == expected_errors, text
+    assert errors == [], text
     for process in ['ModkitAnalysis:ModkitPileup', 'ModkitAnalysis:ModkitSummary']:
         assert (process in text) is (mode != 'fastq'), text

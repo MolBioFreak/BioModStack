@@ -11,12 +11,12 @@ nextflow.enable.dsl = 2
 
 include { DoradoPreflight; DoradoBasecall } from '../../modules/ngs/dorado_basecall.nf'
 include { DoradoAlign } from '../../modules/ngs/dorado_align.nf'
-include { PrepareBamForAnalysis; ValidateMappedBam; BamToFastqForQC } from '../../modules/ngs/bam_prepare.nf'
+include { PrepareBamForAnalysis; ValidateMappedBam; BamToFastqForQC; FastqToUnalignedBam } from '../../modules/ngs/bam_prepare.nf'
 include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
 include { ConstructVerify } from '../../modules/ngs/construct_verify.nf'
-include { RunCloneValidation; CloneValidationAdapter; ComparePlasmidConsensus } from '../../modules/ngs/clone_validation.nf'
+include { RunCloneValidation; CloneValidationAdapter; ComparePlasmidConsensus; HostComposition } from '../../modules/ngs/clone_validation.nf'
 include { ModkitAnalysis } from '../../modules/ngs/modkit_analysis.nf'
 
 include { reportStage } from '../../modules/ngs/stage_reporting.nf'
@@ -58,12 +58,9 @@ workflow WF_CLONE_VALIDATION {
         }
     }
 
-    if (has_fastq && !has_reference) {
-        error("FASTQ analysis requires --reference_fasta for alignment and QC")
-    }
-    if (!has_reference) {
-        error("wf_clone_validation requires --reference_fasta for construct verification")
-    }
+    // Without an expected sequence this workflow assembles and annotates only.
+    // Reads are then aligned to the assembled consensus; no expected-sequence check runs.
+    def assembly_reads = null
 
     // Validate minimap2 preset for FASTQ
     if (has_fastq) {
@@ -98,6 +95,9 @@ workflow WF_CLONE_VALIDATION {
             ])
         }
 
+        if (!has_reference) {
+            assembly_reads = DoradoBasecall.out.bam
+        } else {
         DoradoAlign(DoradoBasecall.out.bam, Channel.of(reference_file))
         DoradoAlign.out.aligned.subscribe { bam, bai ->
             reportStage(params, "dorado_align", [
@@ -109,6 +109,7 @@ workflow WF_CLONE_VALIDATION {
             ])
         }
         analysis_bam = DoradoAlign.out.aligned
+        }
     }
 
     // --- BAM input: prepare (sort/index) or realign ---
@@ -118,7 +119,9 @@ workflow WF_CLONE_VALIDATION {
             error("BAM file not found: ${params.bam_path}")
         }
 
-        if (forceBamRealign) {
+        if (!has_reference) {
+            assembly_reads = Channel.of(bam_input)
+        } else if (forceBamRealign) {
             DoradoAlign(Channel.of(bam_input), Channel.of(reference_file))
             DoradoAlign.out.aligned.subscribe { bam, bai ->
                 reportStage(params, "dorado_align", [
@@ -154,6 +157,10 @@ workflow WF_CLONE_VALIDATION {
             error("FASTQ file not found: ${params.fastq_path}")
         }
 
+        if (!has_reference) {
+            FastqToUnalignedBam(Channel.of(fastq_input))
+            assembly_reads = FastqToUnalignedBam.out.bam
+        } else {
         FastqAlign(Channel.of(fastq_input), Channel.of(reference_file))
         FastqAlign.out.aligned.subscribe { bam, bai ->
             reportStage(params, "fastq_align", [
@@ -165,8 +172,43 @@ workflow WF_CLONE_VALIDATION {
             ])
         }
         analysis_bam = FastqAlign.out.aligned
+        }
     }
 
+    if (!has_reference) {
+        println("No expected sequence: assembling and annotating only; expected-sequence checks are not run")
+        RunCloneValidation(assembly_reads.map { bam -> [bam, ''] })
+        def consensus = RunCloneValidation.out.out.map { dir ->
+            def found = files("${dir}/*.final.fasta")
+            if (found.size() != 1) {
+                error("clone assembly did not produce one consensus sequence")
+            }
+            found[0]
+        }.first()
+        DoradoAlign(assembly_reads, consensus)
+        DoradoAlign.out.aligned.subscribe { bam, bai ->
+            reportStage(params, "dorado_align", [
+                "${params.out_dir}/align/aligned.bam",
+                "${params.out_dir}/align/aligned.bam.bai",
+                "${params.out_dir}/align/reference.fasta",
+                "${params.out_dir}/align/reference.fasta.fai",
+                "${params.out_dir}/align/align.log",
+            ])
+        }
+        CloneValidationAdapter(
+            RunCloneValidation.out.out,
+            RunCloneValidation.out.runtime_provenance,
+            DoradoAlign.out.aligned,
+            consensus,
+        )
+        if (params.wf_clone_host_reference && params.wf_clone_host_reference.toString().trim()) {
+            HostComposition(DoradoAlign.out.aligned, Channel.of(file(params.wf_clone_host_reference.toString().trim())))
+        }
+        // FASTQ carries no MM/ML tags, so there is nothing for modkit to read.
+        if (params.run_modkit == true && !has_fastq) {
+            ModkitAnalysis(DoradoAlign.out.aligned, consensus)
+        }
+    } else {
     // --- wf-clone-validation assembly (required for this workflow) ---
     if (analysis_bam == null) {
         error("wf-clone-validation requires BAM-capable output from basecall/align stage")
@@ -181,6 +223,9 @@ workflow WF_CLONE_VALIDATION {
         analysis_bam,
         Channel.of(reference_file),
     )
+    if (params.wf_clone_host_reference && params.wf_clone_host_reference.toString().trim()) {
+        HostComposition(analysis_bam, Channel.of(file(params.wf_clone_host_reference.toString().trim())))
+    }
     def verificationInput = CloneValidationAdapter.out.verification_input
     def breakpointEvidence = CloneValidationAdapter.out.breakpoint_call
     def secondaryEvidence = CloneValidationAdapter.out.secondary_summary
@@ -222,7 +267,10 @@ workflow WF_CLONE_VALIDATION {
         CloneValidationAdapter.out.alignment_stats,
         breakpointEvidence,
         secondaryEvidence,
+        Channel.value((params.sequencing_kits ?: '').toString()),
     )
+    }
+
     // Named-workflow scope is gone at shutdown; retain its metadata and params.
     def completionWorkflow = workflow
     def completionParams = params
@@ -235,20 +283,22 @@ workflow WF_CLONE_VALIDATION {
                 "${completionParams.out_dir}/assembly/input_model_provenance.json",
                 "${completionParams.out_dir}/assembly/adapter/adapter_manifest.json",
             ])
-            reportStage(completionParams, "construct_verification", [
-                "${completionParams.out_dir}/verification/qc_manifest.json",
-                "${completionParams.out_dir}/verification/verification_summary.tsv",
-            ])
-            if (runFastqQc) {
-                reportStage(completionParams, "fastq_qc", ["${completionParams.out_dir}/fastq_qc/qc_manifest.json"])
-                reportStage(completionParams, "dimer_qc", [
-                    "${completionParams.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
-                    "${completionParams.out_dir}/multimer_qc/dimer_secondary_summary.tsv",
+            // Verification and read QC only run when an expected sequence was supplied.
+            if (completionParams.reference_fasta && completionParams.reference_fasta.toString().trim()) {
+                reportStage(completionParams, "construct_verification", [
+                    "${completionParams.out_dir}/verification/qc_manifest.json",
+                    "${completionParams.out_dir}/verification/verification_summary.tsv",
                 ])
+                if (runFastqQc) {
+                    reportStage(completionParams, "fastq_qc", ["${completionParams.out_dir}/fastq_qc/qc_manifest.json"])
+                    reportStage(completionParams, "dimer_qc", [
+                        "${completionParams.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
+                        "${completionParams.out_dir}/multimer_qc/dimer_secondary_summary.tsv",
+                    ])
+                }
             }
         }
     }
-
 }
 
 // Entry point for standalone Wf Clone Validation workflow

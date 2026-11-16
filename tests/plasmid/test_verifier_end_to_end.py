@@ -15,7 +15,7 @@ from build_construct_topology_evidence import derive_topology_evidence
 def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run_case(tmp_path,monkeypatch,*,gap=False,missing_screen=False,contradictory=False,tamper=False,comparison=None,qualified=True):
+def run_case(tmp_path,monkeypatch,*,gap=False,missing_screen=False,contradictory=False,tamper=False,comparison=None,qualified=True,linear=False,kits=(),tamper_ends=False):
     ref=''.join(random.Random(42).choices('ACGT',k=128))
     records=[];fastq=[]
     for i in range(30):
@@ -71,10 +71,12 @@ def run_case(tmp_path,monkeypatch,*,gap=False,missing_screen=False,contradictory
             writer=csv.DictWriter(handle,fieldnames=columns,delimiter='\t');writer.writeheader();writer.writerows(rows)
     samrows=['\t'.join([r['qname'],str(r['flag']),'p',str(r['position']),'60',r['cigar'],'*','0','0',r['sequence'],'I'*len(r['sequence'])]) for r in records]
     topology=derive_topology_evidence(reference_length=len(ref),sam_rows=samrows,
-        breakpoint_rows=callrows,secondary_rows=secondaryrows,edge_window_bp=10)
+        breakpoint_rows=callrows,secondary_rows=secondaryrows,edge_window_bp=10,
+        **({'expected_topology':'linear','sequencing_kits':kits} if linear else {}))
     topology['provenance']={'reference_sha256':sha(reference),'alignment_bam_sha256':sha(bam),
                             'breakpoint_call_sha256':sha(call),'secondary_summary_sha256':sha(secondary)}
     if tamper: topology['contradictory_breakpoint_evidence']=not topology['contradictory_breakpoint_evidence']
+    if tamper_ends: topology['linear_ends']['reads_spanning_both_ends']+=1
     topfile=tmp_path/'topology.json';topfile.write_text(json.dumps(topology))
     base=json.loads((Path(__file__).resolve().parents[2]/'config/ngs/construct_verify_profiles.json').read_text())
     profile=dict(base['profiles']['plasmid_strict_v1'])
@@ -86,7 +88,8 @@ def run_case(tmp_path,monkeypatch,*,gap=False,missing_screen=False,contradictory
         '--observed-state',str(observed_state),'--observed-fasta',str(observed),'--per-base-support',str(support),
         '--alignment-bam',str(bam),'--alignment-index',str(bai),'--alignment-stats',str(stats),
         '--topology-evidence',str(topfile),'--breakpoint-call',str(call),'--secondary-summary',str(secondary),
-        '--profile-config',str(profilefile),'--profile','test_only','--out-dir',str(tmp_path/'out')])
+        '--profile-config',str(profilefile),'--profile','test_only','--out-dir',str(tmp_path/'out'),
+        *(['--expected-topology','linear'] if linear else [])])
     valid={'status':'valid','validator':'mocked native IO; no scientific runtime claim','reason':None}
     monkeypatch.setattr(verify,'validate_alignment_artifacts',lambda *args:(valid,valid,'mock-samtools',[{'name':'mock','argv':['mock']}]))
     monkeypatch.setattr(verify,'read_alignment_records',lambda *args:(records,{'name':'mock','argv':['mock']}))
@@ -141,3 +144,31 @@ def test_same_read_consensus_agreement_is_not_independent_replication(tmp_path,m
     result=run_case(tmp_path,monkeypatch,comparison=True)
     assert result['verdict']=='PASS'
     assert result['checks']['sequence_identity']['metrics']['consensus_comparison']['independent_biological_replication'] is False
+def test_linear_construct_is_measured_without_an_origin(tmp_path,monkeypatch):
+    result=run_case(tmp_path,monkeypatch,qualified=False,linear=True,kits=('sqk-rbk114-96',))
+    topology=result['checks']['topology']
+    assert result['verdict']=='PASS' and topology['status']=='pass'
+    assert result['summary']['reference_topology']=='linear'
+    assert result['threshold_profile']['values']['expected_topology']=='linear'
+    ends=topology['metrics']['linear_ends']
+    assert ends['library_prep']=='rapid' and ends['aligned_reads']==30 and ends['reads_spanning_both_ends']==28
+    # The two reads that run off one end and back in at the other stay counted: a linear concatemer.
+    assert topology['metrics']['origin_spanning_reads']==2
+    assert 'topology=linear' in (tmp_path/'out/variants.vcf').read_text()
+def test_linear_construct_keeps_the_junction_screen(tmp_path,monkeypatch):
+    result=run_case(tmp_path,monkeypatch,linear=True,contradictory=True)
+    assert result['verdict']=='FAIL' and 'TOPOLOGY_CONTRADICTED' in result['reason_codes']
+def test_linear_read_end_numbers_must_match_the_reads(tmp_path,monkeypatch):
+    result=run_case(tmp_path,monkeypatch,linear=True,tamper_ends=True)
+    assert result['verdict']=='REVIEW' and 'TOPOLOGY_PROVENANCE_INVALID' in result['reason_codes']
+    assert result['checks']['topology']['metrics']['linear_ends']['reads_spanning_both_ends']==28 # recounted from the reads
+def test_linear_read_ends_are_reported_when_the_junction_screen_gave_no_answer(tmp_path,monkeypatch):
+    result=run_case(tmp_path,monkeypatch,linear=True,missing_screen=True,kits=('SQK-NBD114-24',))
+    topology=result['checks']['topology']
+    assert topology['status']=='review' and 'TOPOLOGY_EVIDENCE_UNAVAILABLE' in result['reason_codes']
+    ends=topology['metrics']['linear_ends']
+    assert topology['metrics']['expected_topology']=='linear'
+    assert ends['library_prep']=='ligation' and ends['aligned_reads']==30 and ends['reads_spanning_both_ends']==28
+def test_circular_result_has_no_read_end_block(tmp_path,monkeypatch):
+    result=run_case(tmp_path,monkeypatch,missing_screen=True)
+    assert 'linear_ends' not in result['checks']['topology']['metrics']

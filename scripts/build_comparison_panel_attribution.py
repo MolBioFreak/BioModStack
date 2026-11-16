@@ -382,7 +382,7 @@ def _summarize_sam(
     panel_ids = {entry["id"] for entry in panel_entries}
     reference_roles = {EXPECTED_REFERENCE_ID: "intended"} | {entry["id"]: entry["role"] for entry in panel_entries}
     known_occurrences = set(occurrence["by_occurrence"])
-    accepted: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    alignments: dict[str, list[tuple[str, int, int]]] = defaultdict(list)
     primary_counts: dict[str, int] = defaultdict(int)
     result = subprocess.run([samtools, "view", str(bam)], text=True, capture_output=True, check=True)
     for line_number, line in enumerate(result.stdout.splitlines(), start=1):
@@ -428,9 +428,13 @@ def _summarize_sam(
             alignment_score = int(scores[0])
         except ValueError as exc:
             raise ValueError("SAM alignment score is malformed") from exc
-        if mapq < threshold:
+        # A supplementary record is another piece of an alignment already counted,
+        # not a separate competing reference.
+        if flag & 0x800:
             continue
-        accepted[name].append((target_reference, alignment_score))
+        # Kept whatever its MAPQ: minimap2 gives secondary alignments MAPQ 0, so
+        # filtering here would drop every runner-up before the margin test.
+        alignments[name].append((target_reference, alignment_score, mapq))
 
     if set(primary_counts) != known_occurrences or any(primary_counts[name] != 1 for name in known_occurrences):
         raise ValueError("each normalized read must have exactly one primary occurrence")
@@ -441,25 +445,33 @@ def _summarize_sam(
     rows: list[dict[str, Any]] = []
     for raw in occurrence["occurrences"]:
         occurrence_id = raw["occurrence_id"]
-        candidates = accepted[occurrence_id]
-        best_by_ref: dict[str, int] = {}
-        for reference, score in candidates:
-            best_by_ref[reference] = max(score, best_by_ref.get(reference, score))
-        ranked = sorted(best_by_ref.items(), key=lambda item: (-item[1], item[0]))
-        accepted_references = [reference for reference, _score in ranked]
-        for reference in accepted_references:
-            reference_counts[reference] += 1
+        # Same order as pooled assignment: rank the references, compare the best
+        # with the runner-up, then ask whether the winning alignment is confident.
+        best_by_ref: dict[str, tuple[int, int]] = {}
+        for reference, score, mapq in alignments[occurrence_id]:
+            best_by_ref[reference] = max((score, mapq), best_by_ref.get(reference, (score, mapq)))
+        ranked = sorted(best_by_ref.items(), key=lambda item: (-item[1][0], -item[1][1], item[0]))
+        accepted_references: list[str] = []
         if not ranked:
             category = "unclassified"
             role = "unclassified"
         else:
-            best_reference, best_score = ranked[0]
+            best_reference, (best_score, best_mapq) = ranked[0]
             close_competitors = [
-                reference for reference, score in ranked[1:]
+                reference for reference, (score, _mapq) in ranked[1:]
                 if best_score - score < score_margin
             ]
-            category = "ambiguous_multimapping" if close_competitors else classify_primary_read([best_reference])
-            role = "ambiguous" if category == "ambiguous_multimapping" else reference_roles[best_reference]
+            if close_competitors:
+                category, role = "ambiguous_multimapping", "ambiguous"
+                accepted_references = [best_reference, *close_competitors]
+            elif best_mapq < threshold:
+                category, role = "unclassified", "unclassified"
+            else:
+                category = classify_primary_read([best_reference])
+                role = reference_roles[best_reference]
+                accepted_references = [best_reference]
+        for reference in accepted_references:
+            reference_counts[reference] += 1
         categories[category] += 1
         role_counts[role] += 1
         rows.append({

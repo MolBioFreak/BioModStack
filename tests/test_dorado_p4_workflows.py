@@ -69,7 +69,8 @@ def test_all_pod5_routes_publish_canonical_basecall_provenance_and_fail_closed_r
         text = (ROOT / "workflows/ngs" / name).read_text(encoding="utf-8")
         assert '"${params.out_dir}/basecall/dorado_preflight.json"' in text, name
         assert '"${params.out_dir}/basecall/dorado_runtime_provenance.json"' in text, name
-        assert "include { reportStage } from '../../modules/ngs/stage_reporting.nf'" in text, name
+        assert ("include { reportStage } from '../../modules/ngs/stage_reporting.nf'" in text
+                or "include { reportStage; igvReportIfCreated } from '../../modules/ngs/stage_reporting.nf'" in text), name
         assert "reportStage(params," in text, name
         assert "Warning: Failed to report stage" not in text, name
 
@@ -113,7 +114,10 @@ def test_only_basecall_dna_can_emit_barcode_units() -> None:
 def test_authorized_bam_alignment_consumes_only_a_verified_task_local_snapshot() -> None:
     text = (ROOT / "modules/ngs/dorado_align.nf").read_text(encoding="utf-8")
     assert 'ngs_input_snapshot "${bam}" source.snapshot.bam ${retainedBam}' in text
-    assert text.count("sha256sum source.snapshot.bam") == 2
+    # Hashed once; hashed again afterwards only if the snapshot is no longer that version.
+    assert text.count("sha256sum source.snapshot.bam") == 1
+    assert 'ngs_snapshot_sha256_after source.snapshot.bam "\\${source_version_before}" "\\${source_sha256_before}"' in text
+    assert "task-local source BAM snapshot changed during alignment" in text
     # Both native Dorado alignment branches consume the sealed name.
     assert text.count("            source.snapshot.bam ") == 2
     assert "task-local source BAM snapshot does not match authorized bam_source_sha256" in text
@@ -122,14 +126,18 @@ def test_authorized_bam_alignment_consumes_only_a_verified_task_local_snapshot()
 def test_bam_prepare_and_reference_alignment_consume_authenticated_task_local_snapshots() -> None:
     prepare = (ROOT / "modules/ngs/bam_prepare.nf").read_text(encoding="utf-8").split("process ValidateMappedBam", 1)[0]
     assert 'ngs_input_snapshot "${bam}" source.snapshot.bam ${retainedBam}' in prepare
-    assert prepare.count("sha256sum source.snapshot.bam") == 2
+    assert prepare.count("sha256sum source.snapshot.bam") == 1
+    assert 'ngs_snapshot_sha256_after source.snapshot.bam "\\${source_version_before}" "\\${source_sha256_before}"' in prepare
+    assert "task-local source BAM snapshot changed during preparation" in prepare
     assert 'samtools sort -@ ${task.cpus} -o aligned.bam "${bam}"' not in prepare
     assert 'samtools view -c "${bam}"' not in prepare
     assert "task-local source BAM snapshot does not match authorized bam_source_sha256" in prepare
 
     align = (ROOT / "modules/ngs/dorado_align.nf").read_text(encoding="utf-8")
     assert 'ngs_input_snapshot "${reference}" reference.snapshot.fasta ${retainedReference}' in align
-    assert align.count("sha256sum reference.snapshot.fasta") == 2
+    assert align.count("sha256sum reference.snapshot.fasta") == 1
+    assert 'ngs_snapshot_sha256_after reference.snapshot.fasta "\\${reference_version_before}" "\\${reference_raw_sha256_before}"' in align
+    assert "task-local reference snapshot changed during alignment" in align
     assert align.count("            reference.snapshot.fasta ") == 2
     assert "reference_sequence_sha256 must be exactly 64 hexadecimal characters" in align
     assert "task-local reference snapshot does not match authorized reference_sequence_sha256" in align

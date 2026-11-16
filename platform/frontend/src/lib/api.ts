@@ -1704,6 +1704,8 @@ export interface OntBarcodeBatchMapping {
     unit_id: string;
     sample_alias: string | null;
     molbio_ngs_receipt_id: string;
+    /** Sequence name, sent when a barcode holds several sequences. */
+    label?: string;
 }
 
 export interface OntBarcodeBatchSubmitRequest {
@@ -1711,17 +1713,24 @@ export interface OntBarcodeBatchSubmitRequest {
     target_workflow: 'ont_plasmid_qc' | 'ont_construct_screening';
     name_prefix?: string;
     pinned_gpu?: number | null;
+    run_modkit?: boolean;
+    modkit_filter_threshold?: number;
     mappings: OntBarcodeBatchMapping[];
     execution_target_id?: string | null;
     execution_policy?: ExecutionPolicy;
     reference_set_id?: string | null;
+    pooled_reference_set_ids?: Record<string, string>;
     execution_plan_approvals?: Record<string, string>;
 }
 
 export interface OntBarcodeBatchSubmitResponse {
+    /** Barcodes holding several sequences: the run that assigns their reads first. */
+    assignment_job_ids?: Record<string, string>;
     reference_set_id: string;
     manifest_sha256: string;
     child_job_ids: string[];
+    /** Barcodes given no sequence: not analysed, reads kept. */
+    skipped_unit_ids?: string[];
 }
 
 export const submitOntBarcodeBatch = (
@@ -5181,7 +5190,20 @@ export const createOntRunIntent = (position: string, payload: {
     option_receipt_id: string;
     sample_id?: string;
     experiment_group?: string;
+    barcode_samples?: Array<{ barcode: string; alias: string }>;
 }) => api.post<OntInstrumentRun>(`/api/ont/positions/${encodeURIComponent(position)}/run-intents`, payload);
+
+export interface OntBarcodeBasecallHandoff {
+    run_id: string;
+    pod5_dir: string;
+    barcode_kit: string | null;
+    barcode_samples: Array<{ barcode: string; alias: string }>;
+    sample_sheet: string | null;
+}
+
+/** A finished run's POD5 folder, barcoding kit and sample names, ready for the ONT form. */
+export const requestOntBarcodeBasecallHandoff = (runId: string) =>
+    api.post<OntBarcodeBasecallHandoff>(`/api/ont/runs/${encodeURIComponent(runId)}/handoff/barcode-basecall`, {});
 
 export const startOntRunIntent = (runId: string, payload: { confirm_start: boolean; intent_generation: number }) =>
     api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/start`, payload);

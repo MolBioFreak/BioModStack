@@ -345,6 +345,34 @@ def test_missing_assembly_does_not_invent_native_failure(tmp_path: Path, status_
     assert not (tmp_path / "adapter.json").exists()
 
 
+def test_adapter_accepts_an_assembly_made_without_an_expected_sequence(tmp_path: Path) -> None:
+    root = tmp_path / "results"
+    adapter_fixture(root, full_reference=False)
+    # The pipeline aligns its assembly only against a supplied reference.
+    (root / "sample02.bam").unlink()
+    (root / "sample02.bam.bai").unlink()
+    source = tmp_path / "reads"
+    source.mkdir()
+    (source / "aligned.bam").write_bytes(b"BAM fixture inventory only\n")
+    (source / "aligned.bam.bai").write_bytes(b"BAI fixture inventory only\n")
+    provenance = tmp_path / "runtime-provenance.json"
+    provenance.write_text(json.dumps({"schema": "biomodstack.wf_clone_validation_runtime_provenance.v1", "validation_status": "valid"}), encoding="utf-8")
+    result = run_json(ADAPTER, "--result-root", root, "--runtime-provenance", provenance, "--sample", "sample02",
+                      "--execution-exit-code", 0, "--source-bam", source / "aligned.bam",
+                      "--source-bai", source / "aligned.bam.bai", "--output", tmp_path / "adapter.json")
+    assert result.returncode == 0, result.stderr
+    manifest = json.loads((tmp_path / "adapter.json").read_text())
+    kinds = {artifact["kind"] for artifact in manifest["artifacts"]}
+    assert {"final_fasta", "final_fastq", "assembly_stats", "plannotate_json", "plannotate_genbank", "upstream_report"} <= kinds
+    assert not kinds & {"bam", "bai", "full_reference_bcf", "full_reference_csi", "full_reference_stats"}
+    # No expected sequence: the comparison is reported as not evaluated, never as a pass.
+    assert manifest["scientific_verdict"] == "REVIEW"
+    assert manifest["scientific_reason_codes"] == ["EXPECTED_SEQUENCE_NOT_PROVIDED"]
+    assert manifest["missing_evidence_reasons"] == ["EXPECTED_SEQUENCE_COMPARISON_NOT_EVALUATED"]
+    schema = json.loads((REPO_ROOT / "schemas/ngs/wf_clone_validation_adapter.schema.json").read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(manifest)
+
+
 def test_adapter_rejects_symlink_and_path_escape(tmp_path: Path) -> None:
     outside = tmp_path / "outside.fasta"
     outside.write_text(">sample02\nACGTACGT\n", encoding="utf-8")

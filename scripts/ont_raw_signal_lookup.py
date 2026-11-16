@@ -47,36 +47,26 @@ def _attest_received_descriptor(
     expected_root: dict[str, int],
     label: str,
 ) -> dict[str, int | str]:
+    """Check that a received descriptor is the file version the API selected.
+
+    The API hashed this version, holds a read lease on it and passed the open
+    descriptor in, so its bytes are not read through again here.
+    """
     root = os.fstat(root_fd)
-    before = os.fstat(source_fd)
+    source = os.fstat(source_fd)
     if not stat.S_ISDIR(root.st_mode):
         raise ValueError(f"{label} governed root must be a directory")
     if {"device": int(root.st_dev), "inode": int(root.st_ino)} != expected_root:
         raise ValueError(f"{label} governed root identity diverged")
-    if not stat.S_ISREG(before.st_mode):
+    if not stat.S_ISREG(source.st_mode):
         raise ValueError(f"{label} must be a regular file")
-    digest = hashlib.sha256()
-    os.lseek(source_fd, 0, os.SEEK_SET)
-    while chunk := os.read(source_fd, 1024 * 1024):
-        digest.update(chunk)
-    after = os.fstat(source_fd)
     actual = {
-        "sha256": digest.hexdigest(),
-        "bytes": int(after.st_size),
-        "device": int(after.st_dev),
-        "inode": int(after.st_ino),
-        "mtime_ns": int(after.st_mtime_ns),
-        "ctime_ns": int(after.st_ctime_ns),
+        "bytes": int(source.st_size),
+        "device": int(source.st_dev),
+        "inode": int(source.st_ino),
+        "mtime_ns": int(source.st_mtime_ns),
     }
-    stable_expected = {
-        key: expected[key] for key in ("sha256", "bytes", "device", "inode", "mtime_ns")
-    }
-    stable_actual = {
-        key: actual[key] for key in ("sha256", "bytes", "device", "inode", "mtime_ns")
-    }
-    before_identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-    after_identity = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-    if stable_actual != stable_expected or before_identity != after_identity:
+    if actual != {key: expected[key] for key in actual}:
         raise ValueError(f"{label} identity diverged")
     return dict(expected)
 
@@ -119,12 +109,15 @@ def _copy_attested(source_fd: int, expected: dict[str, int | str], destination: 
         stable_actual = {
             key: actual[key] for key in ("sha256", "bytes", "device", "inode", "mtime_ns")
         }
-        if stable_actual != stable_expected or (
+        if (
             before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns
         ) != (
             after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
         ):
             raise ValueError(f"{label} changed during snapshot")
+        # The private copy is the one pass over a pair that is not read in place; it carries the hash check.
+        if stable_actual != stable_expected:
+            raise ValueError(f"{label} identity diverged")
         os.fsync(destination_fd)
         if os.fstat(destination_fd).st_size != size:
             raise ValueError(f"{label} snapshot size mismatch")

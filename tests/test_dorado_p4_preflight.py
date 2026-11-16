@@ -240,13 +240,19 @@ def test_barcode_and_sample_sheet_are_fail_closed(tmp_path: Path) -> None:
         "BMS_P4_SAMPLE,SQK-RBK114-96,PAO25751,barcode01,clone_a\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="confined"):
-        _preflight(
-            module,
-            pod5_root,
-            barcode_kit="SQK-RBK114-96",
-            sample_sheet=outside,
-        )
+    kept_apart = _preflight(module, pod5_root, barcode_kit="SQK-RBK114-96", sample_sheet=outside)["barcoding"]["sample_sheet"]
+    assert kept_apart["relative_path"] is None and kept_apart["content"] == outside.read_text(encoding="utf-8")
+    outside.write_text("experiment_id,kit,flow_cell_id,barcode,alias\n,SQK-RBK114-96,,barcode01,clone_a\n", encoding="utf-8")
+    filled = _preflight(module, pod5_root, barcode_kit="SQK-RBK114-96", sample_sheet=outside)["barcoding"]["sample_sheet"]
+    assert filled["content"] == "experiment_id,kit,flow_cell_id,barcode,alias\nBMS_P4_SAMPLE,SQK-RBK114-96,PAO25751,barcode01,clone_a\n"
+    assert filled["assignments"] == [{"barcode": "barcode01", "alias": "clone_a"}]
+    # A 24-barcode kit holds barcodes 01 to 24.
+    inventory = {"experiment_ids": ["E"], "sample_sheet_indexes": [{"experiment_id": "E", "flow_cell_id": "F", "position_id": "P"}]}
+    outside.write_text("experiment_id,kit,flow_cell_id,barcode,alias\n,SQK-RBK114-24,,barcode24,clone_a\n", encoding="utf-8")
+    assert module._validate_sample_sheet(outside, pod5_root.resolve(), "SQK-RBK114-24", inventory)["barcodes"] == ["barcode24"]
+    outside.write_text("experiment_id,kit,flow_cell_id,barcode,alias\n,SQK-RBK114-24,,barcode30,clone_a\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="malformed|incompatible"):
+        module._validate_sample_sheet(outside, pod5_root.resolve(), "SQK-RBK114-24", inventory)
 
 
 def test_sample_sheet_rejects_pod5_without_dorado_experiment_metadata(tmp_path: Path) -> None:
@@ -353,3 +359,24 @@ def test_min_qscore_zero_is_preserved_and_out_of_range_fails() -> None:
     assert payload["execution_policy"]["min_qscore"] == 0
     with pytest.raises(ValueError, match="min_qscore"):
         _preflight(module, _fixtures() / "barcode", min_qscore=31)
+
+
+def test_multiple_runs_are_refused_by_default_and_accepted_when_allowed(tmp_path: Path) -> None:
+    import uuid
+    module = _load_module()
+    pod5 = importlib.import_module("pod5")
+    source = next((_fixtures() / "barcode").glob("*.pod5"))
+    two_runs = tmp_path / "two_runs"
+    two_runs.mkdir()
+    shutil.copy2(source, two_runs / "run_a.pod5")
+    with pod5.Reader(source) as reader, pod5.Writer(two_runs / "run_b.pod5", software_name="BioModStack test") as writer:
+        for record in reader.reads():
+            read = record.to_read()
+            writer.add_read(replace(read, read_id=uuid.uuid4(),
+                                    run_info=replace(read.run_info, acquisition_id="second-run")))
+    with pytest.raises(ValueError, match="holds 2 runs"):
+        _preflight(module, two_runs)
+    allowed = _preflight(module, two_runs, allow_multiple_runs=True)
+    assert len(allowed["inputs"]["run_ids"]) == 2 and allowed["inputs"]["read_count"] == 14
+    # One run is unaffected by the setting.
+    assert len(_preflight(module, _fixtures() / "barcode", allow_multiple_runs=True)["inputs"]["run_ids"]) == 1

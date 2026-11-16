@@ -52,6 +52,7 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         doradoMode: p.dorado_basecall_mode || 'simplex',
         duplexPairs: p.duplex_pairs || '',
         barcodeKit: p.barcode_kit || '',
+        barcodeBothEnds: p.barcode_both_ends === true,
         sampleSheet: p.sample_sheet || '',
         modifiedBases: p.modified_bases || 'none',
         trimAdapters: p.trim_adapters !== false,
@@ -97,6 +98,14 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         singleRefSplitMaxQueryGapBp: p.single_ref_split_max_query_gap_bp ?? 500,
         emitSummary: p.emit_summary !== false,
         emitMoves: p.emit_moves !== false,
+        allowMultiplePod5Runs: p.allow_multiple_pod5_runs === true,
+        estimatePolyA: p.estimate_poly_a === true,
+        polyAContext: p.poly_a_context === 'plasmid' ? 'plasmid' : 'molecule_end',
+        polyAFrontFlank: typeof p.poly_a_front_flank === 'string' ? p.poly_a_front_flank : '',
+        polyARearFlank: typeof p.poly_a_rear_flank === 'string' ? p.poly_a_rear_flank : '',
+        // An assembly report saved without an expected sequence reopens the same way.
+        assembleWithoutReference: workflowId === 'wf_clone_validation' && !p.reference_fasta
+            && typeof molecular.sequence_id !== 'string' && typeof p.ngs_reference_revision_id !== 'string',
         doradoDevice: typeof p.dorado_device === 'string' ? p.dorado_device : undefined,
         batchSize: p.dorado_batch_size ?? null,
         minQscore: p.min_qscore ?? 10,

@@ -403,6 +403,13 @@ def protocol_options(
                     if protocol_id and basecalling_enabled:
                         sample_rate = (device.get("flow_cell") or {}).get("sample_rate")
                         configs = manager.find_basecall_configurations(product, kit, sample_rate)
+                        if not configs:
+                            # An idle device reports the rate it last ran at; the protocol sets its own.
+                            # Use the rate the kit's basecall configuration names when there is exactly one.
+                            configs = manager.find_basecall_configurations(product, kit)
+                            rates = {_safe_get(config, "sampling_rate") for config in configs}
+                            if len(rates) == 1:
+                                sample_rate = rates.pop()
                         _config, simplex = tools.find_default_simplex_model(connection, kit, sample_rate, configs)
                         basecalling_options = {
                             "simplex_models": [simplex.name],
@@ -470,18 +477,25 @@ def start_protocol(position_name: str, payload: dict[str, Any], *,
         simplex_model = _string_or_none(payload.get("simplex_model"))
         if not simplex_model:
             return rejected(400, "Basecalling needs a simplex model")
+        # A barcoding kit is demultiplexed by MinKNOW as the run is basecalled.
+        kits = [str(kit) for kit in payload.get("barcoding_kits") or [] if str(kit).strip()]
+        barcoding = tools.BarcodingArgs(kits=kits, trim_barcodes=False,
+                                        barcodes_both_ends=payload.get("barcodes_both_ends") is True) if kits else None
         basecalling = tools.BasecallingArgs(
             simplex_model=simplex_model, modified_models=None, stereo_model=None,
-            barcoding=None, alignment=None, min_qscore=payload.get("min_qscore"),
+            barcoding=barcoding, alignment=None, min_qscore=payload.get("min_qscore"),
         )
     output = tools.OutputArgs(reads_per_file=None, batch_duration=None)
+    # Sample names per barcode, so MinKNOW labels its own output with them.
+    barcode_info = [tools.BarcodeUserData(barcode_name=str(item["barcode"]), alias=str(item["alias"]))
+                    for item in payload.get("barcode_samples") or []] or None
     try:
         run_id = tools.start_protocol(
             connection,
             identifier=protocol_id,
             sample_id=_string_or_none(payload.get("sample_id")) or "",
             experiment_group=_string_or_none(payload.get("experiment_group")) or "",
-            barcode_info=None,
+            barcode_info=barcode_info,
             basecalling=basecalling,
             pod5_arguments=output,
             fastq_arguments=output if basecalling else None,

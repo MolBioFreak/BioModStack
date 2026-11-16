@@ -36,7 +36,14 @@ process DoradoPreflight {
     if (params.dorado_batch_size != null && params.dorado_batch_size.toString().trim()) optional += "--batch-size ${doradoShellQuote(params.dorado_batch_size)}"
     if (params.duplex_pairs) optional += "--pairs ${doradoShellQuote(params.duplex_pairs)}"
     if (params.barcode_kit) optional += "--barcode-kit ${doradoShellQuote(params.barcode_kit)}"
+    if (params.barcode_kit && params.barcode_both_ends == true) optional += "--barcode-both-ends"
     if (params.sample_sheet) optional += "--sample-sheet ${doradoShellQuote(params.sample_sheet)}"
+    if (params.allow_multiple_pod5_runs == true) optional += "--allow-multiple-runs"
+    // Check only the tools this run uses: plain basecalling starts no modkit or IGV container.
+    def probedTools = ['samtools']
+    if (params.run_modkit != false) probedTools += 'modkit'
+    if (params.run_fastq_qc != false) probedTools += ['samtools_consensus', 'igv_reports', 'igv_create_report']
+    optional += "--scientific-tools ${probedTools.join(',')}"
     """
     set -euo pipefail
     lock_source=${lockPath}
@@ -81,10 +88,19 @@ process DoradoBasecall {
     path "dorado_preflight.json", emit: preflight
     path "dorado_runtime_provenance.json", emit: provenance
     path "sequencing_summary.tsv", emit: summary, optional: true
+    path "poly_a_config.toml", emit: poly_a_config, optional: true
 
     script:
     def summaryRequested = params.emit_summary != false
     def movesRequested = params.emit_moves == true
+    // Dorado's own poly(A) estimate. A tail inside a plasmid is found between two flanks.
+    def polyARequested = params.estimate_poly_a == true
+    def polyAPlasmid = polyARequested && (params.poly_a_context ?: '').toString().trim() == 'plasmid'
+    def polyAFront = (params.poly_a_front_flank ?: '').toString().trim().toUpperCase()
+    def polyARear = (params.poly_a_rear_flank ?: '').toString().trim().toUpperCase()
+    if (polyAPlasmid && !(polyAFront ==~ /[ACGT]{6,200}/ && polyARear ==~ /[ACGT]{6,200}/)) {
+        throw new IllegalArgumentException('a poly(A) tail inside a plasmid needs the sequence just before and just after it')
+    }
     def trimAdapters = params.trim_adapters != false
     def expectedLockSha256 = (params.dorado_lock_sha256 ?: '').toString().trim().toLowerCase()
     if (expectedLockSha256 && !(expectedLockSha256 ==~ /[0-9a-f]{64}/)) {
@@ -107,6 +123,7 @@ process DoradoBasecall {
     min_qscore="\$(jq -r '.execution_policy.min_qscore' dorado_preflight.json)"
     pair_relative="\$(jq -r '.pairs.relative_path // empty' dorado_preflight.json)"
     barcode_kit="\$(jq -r '.barcoding.kit // empty' dorado_preflight.json)"
+    barcode_both_ends="\$(jq -r '.barcoding.both_ends // false' dorado_preflight.json)"
     sample_relative="\$(jq -r '.barcoding.sample_sheet.relative_path // empty' dorado_preflight.json)"
     mapfile -t mod_model_ids < <(jq -r '.selection.modified_bases_model_ids[]?' dorado_preflight.json)
     for mod_model_id in "\${mod_model_ids[@]}"; do [[ "\${mod_model_id}" =~ ^[A-Za-z0-9_.@-]+\$ ]]; done
@@ -133,6 +150,14 @@ process DoradoBasecall {
         declared_alias="\$(jq -r "\${json_key}.members" dorado_preflight.json | jq -r --arg rel "\${rel}" '.[\$rel].alias // empty')"
         [[ -n "\${declared_alias}" && "\$(readlink -- "\${file}")" == "\${declared_alias}" && -f "\${file}" ]] || { echo "undeclared model alias: \${file}" >&2; exit 1; }
       done < <(find "\${model_dir}" -type l -print0)
+      # Preflight hashed these files and recorded each one's version (size, mtime, ctime).
+      # Files still at those versions have the same bytes and are not hashed again.
+      local expected_versions observed_versions
+      expected_versions="\$(jq -r "\${json_key}.file_versions // {} | to_entries | sort_by(.key)[] | .key, .value" dorado_preflight.json)"
+      if [[ -n "\${expected_versions}" ]]; then
+        observed_versions="\$(while IFS= read -r -d '' file; do printf '%s\\n%s\\n' "\${file#\${model_dir}/}" "\$(stat -Lc '%s:%.9Y:%.9Z' "\${file}")"; done < <(find -L "\${model_dir}" -type f -print0 | LC_ALL=C sort -z))"
+        if [[ "\${observed_versions}" == "\${expected_versions}" ]]; then return 0; fi
+      fi
       inventory="\$(mktemp)"
       while IFS= read -r -d '' file; do
         rel="\${file#\${model_dir}/}"; size="\$(stat -Lc %s "\${file}")"; file_sha="\$(sha256sum "\${file}" | cut -d' ' -f1)"
@@ -163,18 +188,27 @@ process DoradoBasecall {
     }
 
     runtime_expected="\$(jq -r '.runtime.assets.runtime_sif.sha256' dorado_preflight.json)"
-    runtime_observed="\$(sha256sum /runtime/dorado.sif | cut -d' ' -f1)"
+    # Preflight hashed this image and recorded its version; the same version is not hashed again.
+    runtime_version="\$(jq -r '.runtime.assets.runtime_sif.file_version // empty' dorado_preflight.json)"
+    if [[ -n "\${runtime_version}" && "\$(stat -Lc '%s:%.9Y:%.9Z' /runtime/dorado.sif)" == "\${runtime_version}" ]]; then
+      runtime_observed="\${runtime_expected}"
+    else
+      runtime_observed="\$(sha256sum /runtime/dorado.sif | cut -d' ' -f1)"
+    fi
     [[ "\${runtime_observed}" == "\${runtime_expected}" ]] || { echo 'Dorado runtime changed after preflight' >&2; exit 1; }
 
     source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
     pod5_source=${doradoShellQuote(pod5_dir)}
     retained_pod5="\$(jq -r '.inputs.retained // false' dorado_preflight.json)"
     mkdir -p sealed_pod5 sealed_models
-    while IFS=\$'\t' read -r relative expected_sha expected_bytes; do
+    while IFS=\$'\t' read -r relative expected_sha expected_bytes expected_version; do
       [[ "\${relative}" != /* && "\${relative}" != *'..'* ]]
       source_file="\${pod5_source}/\${relative}"; target_file="sealed_pod5/\${relative}"
       [[ -f "\${source_file}" && ! -L "\${source_file}" ]]
-      [[ "\$(sha256sum "\${source_file}" | cut -d' ' -f1)" == "\${expected_sha}" && "\$(stat -c %s "\${source_file}")" == "\${expected_bytes}" ]] || { echo "POD5 input changed after preflight: \${relative}" >&2; exit 1; }
+      # Preflight hashed this file and recorded its version; the same version is not hashed again.
+      same_version=false
+      if [[ -n "\${expected_version}" && "\$(stat -Lc '%s:%.9Y:%.9Z' "\${source_file}")" == "\${expected_version}" ]]; then same_version=true; fi
+      [[ "\${same_version}" == true ]] || [[ "\$(sha256sum "\${source_file}" | cut -d' ' -f1)" == "\${expected_sha}" && "\$(stat -c %s "\${source_file}")" == "\${expected_bytes}" ]] || { echo "POD5 input changed after preflight: \${relative}" >&2; exit 1; }
       mkdir -p "\$(dirname "\${target_file}")"
       if [[ "\${retained_pod5}" == true ]]; then
         # Keep the owned source's ctime-bound receipt intact (no hardlink/chmod).
@@ -182,8 +216,9 @@ process DoradoBasecall {
       else
         ngs_input_snapshot "\${source_file}" "\${target_file}" false
       fi
-      [[ "\$(sha256sum "\${target_file}" | cut -d' ' -f1)" == "\${expected_sha}" ]] || { echo "POD5 snapshot identity mismatch: \${relative}" >&2; exit 1; }
-    done < <(jq -r '.inputs.files[] | [.relative_path,.sha256,.bytes] | @tsv' dorado_preflight.json)
+      # A retained file is used in place, so there is no copy to check; a copy is hashed once.
+      [[ "\${retained_pod5}" == true && "\${same_version}" == true ]] || [[ "\$(sha256sum "\${target_file}" | cut -d' ' -f1)" == "\${expected_sha}" ]] || { echo "POD5 snapshot identity mismatch: \${relative}" >&2; exit 1; }
+    done < <(jq -r '.inputs.files[] | [.relative_path,.sha256,.bytes,(.file_version // "")] | @tsv' dorado_preflight.json)
 
     if [[ -n "\${pair_relative}" ]]; then
       pair_sha="\$(jq -r '.pairs.sha256' dorado_preflight.json)"; pair_source="\${pod5_source}/\${pair_relative}"; pair_target="sealed_pod5/\${pair_relative}"
@@ -226,7 +261,16 @@ process DoradoBasecall {
     if [[ "\${mode}" == simplex ]]; then command+=(--min-qscore "\${min_qscore}"); fi
     if [[ -n "\${pair_relative}" ]]; then command+=(--pairs "\${pod5_root}/\${pair_relative}"); fi
     if [[ -n "\${barcode_kit}" ]]; then command+=(--kit-name "\${barcode_kit}"); fi
-    if [[ -n "\${sample_relative}" ]]; then command+=(--sample-sheet "\${pod5_root}/\${sample_relative}"); fi
+    if [[ -n "\${barcode_kit}" && "\${barcode_both_ends}" == true ]]; then command+=(--barcode-both-ends); fi
+    sample_sheet_file=""
+    if [[ -n "\${sample_relative}" ]]; then sample_sheet_file="\${pod5_root}/\${sample_relative}"; fi
+    if jq -e '.barcoding.sample_sheet.content' dorado_preflight.json >/dev/null; then
+      # A sheet kept apart from the POD5 files, or completed from them, travels inside the preflight record.
+      jq -j '.barcoding.sample_sheet.content' dorado_preflight.json > sample_sheet.csv
+      [[ "\$(sha256sum sample_sheet.csv | cut -d' ' -f1)" == "\$(jq -r '.barcoding.sample_sheet.sha256' dorado_preflight.json)" ]] || { echo 'sample sheet differs from the preflight record' >&2; exit 1; }
+      sample_sheet_file="\$PWD/sample_sheet.csv"
+    fi
+    if [[ -n "\${sample_sheet_file}" ]]; then command+=(--sample-sheet "\${sample_sheet_file}"); fi
     if (( \${#mod_model_ids[@]} )); then
       mod_model_paths=()
       for mod_model_id in "\${mod_model_ids[@]}"; do mod_model_paths+=("\$PWD/sealed_models/\${mod_model_id}"); done
@@ -243,6 +287,15 @@ process DoradoBasecall {
       [[ "\${mode}" == simplex ]] || { echo 'move-tag emission is not qualified for duplex' >&2; exit 1; }
       dorado_supports_option dorado basecaller --emit-moves || { echo 'locked Dorado runtime lacks --emit-moves' >&2; exit 1; }
       command+=(--emit-moves)
+    fi
+    if [[ '${polyARequested}' == 'true' ]]; then
+      [[ "\${mode}" == simplex ]] || { echo 'poly(A) estimation is a simplex basecalling option' >&2; exit 1; }
+      dorado_supports_option dorado basecaller --estimate-poly-a || { echo 'locked Dorado runtime lacks --estimate-poly-a' >&2; exit 1; }
+      command+=(--estimate-poly-a)
+      if [[ '${polyAPlasmid}' == 'true' ]]; then
+        printf '[anchors]\\nplasmid_front_flank = "%s"\\nplasmid_rear_flank = "%s"\\n' '${polyAFront}' '${polyARear}' > poly_a_config.toml
+        command+=(--poly-a-config "\$PWD/poly_a_config.toml")
+      fi
     fi
 
     : > basecall.log

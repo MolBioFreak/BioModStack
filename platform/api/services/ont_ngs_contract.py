@@ -244,9 +244,12 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
     "ont_basecall_rna": OntWorkflowSpec(
         workflow_id="ont_basecall_rna",
         display_name="ONT RNA Basecalling",
-        description="Dorado RNA basecalling from existing POD5 run outputs with RNA-specific model selection.",
+        description="Dorado RNA basecalling from existing POD5 run outputs with RNA-specific model selection and optional modkit tables.",
         input_modes=("pod5",),
+        artifact_conditions=(("run_modkit=true", ("modkit_summary", "methylation_bed")),),
         artifact_kinds=(
+            "modkit_summary",
+            "methylation_bed",
             "raw_reads",
             "basecall_reads",
             "alignment_bam",
@@ -466,9 +469,12 @@ WORKFLOW_DEFAULTS: dict[str, dict[str, Any]] = {
     "ont_methylation_analysis": {
         "ont_molecule_type": "dna",
         "dorado_quality_mode": "hac",
-        "run_modkit": False,
+        # The named methylation workflow runs its methylation stage unless the
+        # caller switches it off, and calls the same modifications the form
+        # preselects. Both stay independently settable.
+        "run_modkit": True,
         "run_fastq_qc": True,
-        "modified_bases": "none",
+        "modified_bases": "5mC_5hmC 6mA",
     },
     "ont_fastq_qc": {
         "ont_molecule_type": "dna",
@@ -585,6 +591,11 @@ def samtools_consensus_setting() -> dict[str, Any]:
     )["properties"]["samtools_consensus_config"]
 
 
+def accepted_barcode_kits() -> frozenset[str]:
+    """The kits the Dorado lock lists; every other place follows this list."""
+    return frozenset(json.loads(DORADO_LOCK_PATH.read_bytes())["barcoding"]["accepted_kits"])
+
+
 def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | None) -> dict[str, Any]:
     """Apply canonical ONT product/quality defaults without mutating caller params."""
     canonical_id = resolve_ont_workflow_alias(workflow_id)
@@ -630,9 +641,11 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
             if (
                 key.startswith(("dorado_", "gpu_", "msa_", "anarcii_"))
                 or key in {
-                    "basecalling_mode", "barcode_kit", "sample_sheet", "duplex_pairs",
+                    "basecalling_mode", "barcode_kit", "barcode_both_ends", "sample_sheet", "duplex_pairs",
                     "modified_bases", "min_qscore", "pinned_gpu", "pinned_gpus",
                     "cuda_visible_devices", "cpus_per_gpu",
+                    # Tail length is estimated while basecalling, so only a POD5 run carries it.
+                    "estimate_poly_a", "poly_a_context", "poly_a_front_flank", "poly_a_rear_flank",
                 }
             ):
                 normalized.pop(key, None)
@@ -693,6 +706,12 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     sample_sheet = str(normalized.get("sample_sheet") or "").strip() or None
     if sample_sheet and not barcode_kit:
         raise ValueError("sample_sheet requires barcode_kit")
+    # Native kits carry a barcode on both ends; a rapid kit has one, so the option does not apply there.
+    both_ends = normalized.pop("barcode_both_ends", False)
+    if not isinstance(both_ends, bool):
+        raise ValueError("barcode_both_ends must be boolean")
+    if both_ends and barcode_kit in lock["barcoding"].get("both_ends_kits", ()):
+        normalized["barcode_both_ends"] = True
     duplex_pairs = str(normalized.get("duplex_pairs") or "").strip() or None
     if basecall_mode == "duplex" and not duplex_pairs:
         raise ValueError("duplex mode requires duplex_pairs")
@@ -703,9 +722,6 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
 
     modified_bases = canonical_modified_bases(resolve_modified_bases(
         lock, molecule_type, quality_mode, basecall_mode, normalized.get("modified_bases")))
-    if barcode_kit and modified_bases != "none":
-        # Barcoded completion seals unmodified demux units; per-barcode modkit is downstream.
-        raise ValueError("inline barcode classification and modified-base calling are mutually exclusive")
 
     raw_batch = normalized.get("dorado_batch_size")
     if raw_batch in (None, ""):
@@ -762,6 +778,32 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     if basecall_mode == "duplex" and raw_emit_moves:
         raise ValueError("emit_moves is unavailable for duplex until move-tag semantics are qualified")
     normalized["emit_moves"] = raw_emit_moves
+    raw_allow_runs = normalized.get("allow_multiple_pod5_runs", False)
+    if not isinstance(raw_allow_runs, bool):
+        raise ValueError("allow_multiple_pod5_runs must be boolean")
+    normalized["allow_multiple_pod5_runs"] = raw_allow_runs
+    # Dorado's own poly(A) estimate: one pt value per read. Off unless asked for.
+    estimate_poly_a = normalized.get("estimate_poly_a", False)
+    if not isinstance(estimate_poly_a, bool):
+        raise ValueError("estimate_poly_a must be boolean")
+    if estimate_poly_a and basecall_mode == "duplex":
+        raise ValueError("poly(A) estimation is a simplex basecalling option")
+    poly_a_context = str(normalized.get("poly_a_context") or "molecule_end").strip()
+    flanks = {key: re.sub(r"\s+", "", str(normalized.get(key) or "")).upper()
+              for key in ("poly_a_front_flank", "poly_a_rear_flank")}
+    for key in ("poly_a_context", *flanks):
+        normalized.pop(key, None)
+    normalized["estimate_poly_a"] = estimate_poly_a
+    if estimate_poly_a:
+        if poly_a_context not in {"molecule_end", "plasmid"}:
+            raise ValueError("poly_a_context must be molecule_end or plasmid")
+        normalized["poly_a_context"] = poly_a_context
+        if poly_a_context == "plasmid":
+            if molecule_type != "dna":
+                raise ValueError("a tail inside a plasmid is a DNA option")
+            if any(re.fullmatch(r"[ACGT]{6,200}", value) is None for value in flanks.values()):
+                raise ValueError("a tail inside a plasmid needs the sequence just before and just after it (6 to 200 bases, ACGT)")
+            normalized.update(flanks)
 
     # A missing declaration on newly basecalled POD5 can use its exact native
     # profile. Never replace an explicit/saved declaration, or infer read origin
@@ -783,9 +825,17 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
         normalized["run_assembly"] = True
         _normalize_wf_clone_controls(normalized)
 
+    reference_topology = normalized.get("reference_topology")
+    if reference_topology in (None, ""):
+        normalized.pop("reference_topology", None)
+    elif reference_topology not in {"linear", "circular"}:
+        raise ValueError("reference_topology must be linear or circular")
     dimer_workflows = {"ont_plasmid_qc", "ont_construct_screening", "ont_fastq_qc", "wf_clone_validation"}
     if canonical_id in dimer_workflows:
         normalized["enable_rotating_reference_frames"] = setting_bool("enable_rotating_reference_frames", True)
+        if normalized.get("reference_topology") == "linear":
+            # A linear construct has no origin to rotate through. Junction and concatemer screening stay on.
+            normalized["enable_rotating_reference_frames"] = False
         normalized["rotation_scan_step_bp"] = setting_int("rotation_scan_step_bp", 1, 1, 10_000)
         normalized["single_ref_split_min_mapq"] = setting_int("single_ref_split_min_mapq", 20, 0, 60)
         normalized["single_ref_split_min_segment_bp"] = setting_int("single_ref_split_min_segment_bp", 250, 1, 1_000_000)

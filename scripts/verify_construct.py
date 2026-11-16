@@ -26,8 +26,8 @@ _SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
 if _SCRIPT_DIRECTORY not in sys.path:
     sys.path.insert(0, _SCRIPT_DIRECTORY)
 
-from plasmid_evidence import read_summary, validate_structural_rows
-from plasmid_circular import CircularAlignmentUnresolved, align_circular
+from plasmid_evidence import library_prep_from_kits, linear_end_measurements, read_summary, validate_structural_rows
+from plasmid_circular import Budget, CircularAlignmentUnresolved, _banded, align_circular
 
 
 VERIFIER_NAME = "biomodstack-construct-verifier"
@@ -44,7 +44,20 @@ class SequenceEvidenceUnavailable(ValueError):
     """An incomplete observation must produce REVIEW, not a sequence failure."""
 
 
+_HASHED_VERSIONS: dict[tuple, str] = {}
+
+
 def sha256_file(path: Path) -> str:
+    """SHA-256 of a file. One run names the same file in several records; each version is read once."""
+    info = path.stat()
+    key = (str(path.resolve()), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+    known = _HASHED_VERSIONS.get(key)
+    if known is None:
+        known = _HASHED_VERSIONS[key] = _sha256_file_uncached(path)
+    return known
+
+
+def _sha256_file_uncached(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -333,6 +346,55 @@ def best_circular_alignment(reference: str, observed: str) -> dict[str, Any]:
     return align_circular(reference, observed)
 
 
+def _is_linear(profile: dict[str, Any] | None) -> bool:
+    return bool(profile) and profile.get("expected_topology") == "linear"
+
+
+def exact_equivalence(reference: str, observed: str, linear: bool = False) -> dict[str, Any] | None:
+    """A circular sequence may start anywhere; a linear one may not."""
+    if not linear:
+        return exact_circular_equivalence(reference, observed)
+    if observed == reference:
+        return {"orientation": "forward", "rotation_offset": 0}
+    if reverse_complement(observed) == reference:
+        return {"orientation": "reverse_complement", "rotation_offset": 0}
+    return None
+
+
+def best_alignment(reference: str, observed: str, profile: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Circular references keep the rotation search. Linear ones are aligned end to end."""
+    if not _is_linear(profile):
+        return best_circular_alignment(reference, observed)
+    candidates = (("forward", observed), ("reverse_complement", reverse_complement(observed)))
+    best: tuple[int, str, str, list[tuple[str, int, int, int, int]]] | None = None
+    if max(len(reference), len(observed)) <= 64:
+        for orientation, oriented in candidates:
+            opcodes, _matches, cost = _alignment_opcodes(reference, oriented)
+            if best is None or cost < best[0]:
+                best = (cost, orientation, oriented, opcodes)
+    else:
+        budget = Budget()
+        bound = max(1, abs(len(reference) - len(observed)))
+        while best is None:
+            for orientation, oriented in candidates:
+                cost, opcodes = _banded(reference, oriented, bound, budget, trace=True)
+                if opcodes is not None and (best is None or cost < best[0]):
+                    best = (cost, orientation, oriented, opcodes)
+            if best is None:
+                if bound >= budget.max_edits:
+                    raise CircularAlignmentUnresolved("LINEAR_ALIGNMENT_EDIT_BOUND_UNRESOLVED")
+                bound = min(budget.max_edits, max(bound + 1, 2 * bound))
+    assert best is not None
+    cost, orientation, oriented, opcodes = best
+    matches = sum(i2 - i1 for tag, i1, i2, _j1, _j2 in opcodes if tag == "equal")
+    return {
+        "orientation": orientation, "rotation_offset": 0, "normalized_observed": oriented,
+        "opcodes": opcodes, "matches": matches, "edit_cost": cost,
+        "identity_fraction": matches / max(len(reference), len(observed), 1),
+        "canonicalization": "linear_global_minimum_edit_v1",
+    }
+
+
 def read_support_rows(path: Path) -> dict[int, dict[str, Any]]:
     required = {
         "position_1based",
@@ -455,7 +517,7 @@ def validate_observed_consensus_binding(
             break
 
     if not contradictions:
-        alignment = best_circular_alignment(reference, observed)
+        alignment = best_alignment(reference, observed, profile)
         normalized_observed = str(alignment["normalized_observed"])
         observed_by_reference: dict[int, str | None] = {}
         observed_insertions: dict[int, str] = {}
@@ -568,7 +630,7 @@ def call_variants(
     support_rows: dict[int, dict[str, Any]],
     profile: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    alignment = best_circular_alignment(reference, observed)
+    alignment = best_alignment(reference, observed, profile)
     normalized_observed = str(alignment["normalized_observed"])
     variants: list[dict[str, Any]] = []
 
@@ -699,7 +761,7 @@ def call_variants(
         for variant in variants
         if variant["_reference_end0"] == len(reference) and variant["kind"] in {"DEL", "INS"}
     ]
-    if start_events and end_events:
+    if start_events and end_events and not _is_linear(profile):
         for variant in start_events + end_events:
             variant["circular_event_id"] = "circular_event_1"
 
@@ -1252,11 +1314,12 @@ def make_check(status: str, reason_codes: list[str], metrics: dict[str, Any]) ->
     return {"status": status, "reason_codes": sorted(set(reason_codes)), "metrics": metrics}
 
 
-def write_vcf(path: Path, reference_name: str, reference_length: int, variants: list[dict[str, Any]]) -> None:
+def write_vcf(path: Path, reference_name: str, reference_length: int, variants: list[dict[str, Any]],
+              topology: str = "circular") -> None:
     lines = [
         "##fileformat=VCFv4.2",
         "##source=biomodstack-construct-verifier-" + VERIFIER_VERSION,
-        f"##contig=<ID={reference_name},length={reference_length},topology=circular>",
+        f"##contig=<ID={reference_name},length={reference_length},topology={topology}>",
         '##INFO=<ID=SUPPORT,Number=1,Type=Float,Description="Observed allele support fraction">',
         '##INFO=<ID=SUPPORT_STATUS,Number=1,Type=String,Description="Verifier support classification">',
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
@@ -1441,7 +1504,7 @@ def artifact_record(
     }
 
 
-def check_consensus_comparison(state: dict[str, Any], bundle: Path, observed: str) -> dict[str, Any] | None:
+def check_consensus_comparison(state: dict[str, Any], bundle: Path, observed: str, linear: bool = False) -> dict[str, Any] | None:
     comparison = state.get("read_guided_comparison")
     if comparison is None:
         return None
@@ -1457,7 +1520,7 @@ def check_consensus_comparison(state: dict[str, Any], bundle: Path, observed: st
         raise ValueError("CONSENSUS_COMPARISON_DIGEST_MISMATCH")
     _, sequence = read_single_fasta(path)
     return {
-        "agreement": exact_circular_equivalence(observed, sequence) is not None,
+        "agreement": exact_equivalence(observed, sequence, linear) is not None,
         "read_guided_sha256": comparison["sha256"],
         "evidence_relationship": "same_read_population_different_consensus_method",
         "independent_biological_replication": False,
@@ -1491,6 +1554,9 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
     if not isinstance(profiles, dict) or not isinstance(profiles.get(args.profile), dict):
         raise ValueError(f"unknown threshold profile: {args.profile}")
     profile = dict(profiles[args.profile])
+    # The saved topology of the reference, when the run names one, replaces the profile default.
+    if getattr(args, "expected_topology", None):
+        profile["expected_topology"] = args.expected_topology
 
     checks: dict[str, dict[str, Any]] = {}
     aggregate_reasons: list[str] = []
@@ -1582,7 +1648,7 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
             observed_input_state = "present"
             observed_name, observed = read_single_fasta(observed_path)
             observed_trusted = True
-            circular_match = exact_circular_equivalence(reference, observed)
+            circular_match = exact_equivalence(reference, observed, _is_linear(profile))
             if circular_match is None:
                 variant_analysis_pending = True
                 checks["sequence_identity"] = make_check(
@@ -1813,6 +1879,11 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
             actual = strict_nonnegative_json_integer(topology.get(field), field)
             if actual != expected:
                 raise LookupError(f"topology {field} does not match BAM recomputation")
+        if _is_linear(profile):
+            measured = linear_end_measurements(alignment_semantics["segments_by_read"], len(reference), edge)
+            reported = topology.get("linear_ends")
+            if not isinstance(reported, dict) or any(reported.get(key) != value for key, value in measured.items()):
+                raise LookupError("topology read-end measurements do not match BAM recomputation")
         non_boundary_split = strict_nonnegative_json_integer(
             topology.get("non_boundary_split_reads"),
             "non_boundary_split_reads",
@@ -1841,7 +1912,8 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
         else:
             topology_reasons: list[str] = []
             topology_status = "pass"
-            if spanning < int(profile["min_origin_spanning_reads"]):
+            # Reads crossing the origin are closure evidence for a circle only.
+            if not _is_linear(profile) and spanning < int(profile["min_origin_spanning_reads"]):
                 topology_reasons.append("TOPOLOGY_EVIDENCE_INSUFFICIENT")
                 topology_status = "review"
             if topology.get("contradictory_breakpoint_evidence") is True or anomaly_fraction > float(
@@ -1877,9 +1949,28 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
         if sequence_check["status"] == "pass":
             sequence_check["status"] = "review"
 
+    if _is_linear(profile) and alignment_semantics is not None and "linear_ends" not in checks["topology"]["metrics"]:
+        # Where reads start and stop is counted from the reads alone, so it is reported
+        # even when the junction screen gave no answer.
+        try:
+            reported = read_json(topology_path).get("linear_ends")
+        except (OSError, TypeError, ValueError):
+            reported = None
+        reported = reported if isinstance(reported, dict) else {}
+        end_tolerance = reported.get("spanning_tolerance_bp")
+        if type(end_tolerance) is not int or not 0 < end_tolerance <= max(1, len(reference) // 2):
+            end_tolerance = max(1, min(100, max(10, len(reference) // 50), max(1, len(reference) // 2)))
+        kits = reported.get("sequencing_kits")
+        kits = [kit for kit in kits if isinstance(kit, str)] if isinstance(kits, list) else []
+        checks["topology"]["metrics"]["expected_topology"] = "linear"
+        checks["topology"]["metrics"]["linear_ends"] = {
+            "library_prep": library_prep_from_kits(kits),
+            "sequencing_kits": kits,
+            **linear_end_measurements(alignment_semantics["segments_by_read"], len(reference), end_tolerance),
+        }
     if observed is not None and state.get("read_guided_comparison") is not None:
         try:
-            comparison = check_consensus_comparison(state, observed_state_path.parent, observed)
+            comparison = check_consensus_comparison(state, observed_state_path.parent, observed, _is_linear(profile))
             checks["sequence_identity"]["metrics"]["consensus_comparison"] = comparison
             comparison_reason = "CONSENSUS_METHODS_DISAGREE" if comparison and not comparison["agreement"] else None
         except (OSError, ValueError) as exc:
@@ -1910,7 +2001,7 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
     per_base_output = out_dir / "per_base_metrics.tsv"
     shutil.copyfile(support_path, per_base_output)
     variants_path = out_dir / "variants.vcf"
-    write_vcf(variants_path, reference_name, len(reference), variants)
+    write_vcf(variants_path, reference_name, len(reference), variants, str(profile["expected_topology"]))
 
     reference_validation = semantic_validation("valid", "single-record normalized FASTA v1")
     observed_validation = (
@@ -2090,6 +2181,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--samtools-command", action="append", default=[])
     parser.add_argument("--alignment-stats", type=Path, required=True)
     parser.add_argument("--topology-evidence", type=Path, required=True)
+    parser.add_argument("--expected-topology", choices=("linear", "circular"))
     parser.add_argument("--breakpoint-call", type=Path)
     parser.add_argument("--secondary-summary", type=Path)
     parser.add_argument("--profile-config", type=Path, required=True)

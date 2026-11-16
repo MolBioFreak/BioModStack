@@ -65,3 +65,18 @@ test('reference metadata does not turn unsafe schemes or arbitrary note URLs int
  expect(host.textContent).toContain('Reference 0 · javascript:alert(1)');
  expect(host.textContent).toContain('[Plain remote note](https://example.org)');
 });
+
+test('NGS evidence in the inspector says the verdict and the Project assessment are separate', async () => {
+ const surface = (entity_kind: string) => ({ entity_kind, surface_kind: 'ngs', readiness: 'ready', route: null, available_actions: [], scientific_acceptance: { state: 'review', reason: 'rule=r; job_lifecycle_state=completed; manifest_integrity=valid' } });
+ const make = (entity_kind: string) => ({ tree: { nodes: [] }, source_receipt_ids: [], adapter_versions: [], selection: { node_key: 'evidence:e', node_type: 'result', title: 'Evidence', available_actions: [], canonical_identity: {}, reconciliation: { state: 'current' }, summary: {}, scientific_context: {}, canonical_surface: surface(entity_kind) } } as unknown as ProjectManagerReadModel);
+ const noop = vi.fn();
+ const props = { onOpenCanonical: noop, onAddExisting: noop, onCreateDomain: noop, onEdit: noop, onArchive: noop, onRestore: noop, onRecord: noop };
+ const host = await mount(<ProjectInspector summary={make('ngs_evidence_assessment')} {...props} />);
+ const note = host.querySelector('[data-testid="ngs-verdict-versus-release"]')!;
+ expect(host.textContent).toContain('Scientific: Review');
+ expect(note.textContent).toContain('not release approval');
+ expect(note.textContent).toContain('stored here as Review when its threshold profile is not calibrated');
+ await act(async () => root?.unmount()); document.body.replaceChildren();
+ const other = await mount(<ProjectInspector summary={make('ngs_job')} {...props} />);
+ expect(other.querySelector('[data-testid="ngs-verdict-versus-release"]')).toBeNull();
+});

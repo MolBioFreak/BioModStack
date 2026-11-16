@@ -256,7 +256,42 @@ def _open_or_create_private_directory(parent_fd: int, component: str) -> int:
     return os.open(component, flags | directory, dir_fd=parent_fd)
 
 
-def publish_immutable_launch_snapshot(
+# A file version (device, inode, size, mtime, ctime) hashed once in this process is
+# not hashed again: the same version has the same bytes. A changed file is a
+# different version and is read in full.
+_HASHED_VERSIONS: dict[tuple[int, int, int, int, int], tuple[str, int]] = {}
+_HASHED_VERSION_LIMIT = 512
+
+
+def _version_key(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _remember_version(info: os.stat_result, sha256: str, size_bytes: int) -> None:
+    if len(_HASHED_VERSIONS) >= _HASHED_VERSION_LIMIT:
+        _HASHED_VERSIONS.pop(next(iter(_HASHED_VERSIONS)))
+    _HASHED_VERSIONS[_version_key(info)] = (sha256, size_bytes)
+
+
+def _descriptor_digest(descriptor: int) -> tuple[str, int]:
+    """SHA-256 and size of an open file, read through once per file version."""
+    before = os.fstat(descriptor)
+    known = _HASHED_VERSIONS.get(_version_key(before))
+    if known is not None:
+        return known
+    digest = hashlib.sha256()
+    size = 0
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    while chunk := os.read(descriptor, 1024 * 1024):
+        digest.update(chunk)
+        size += len(chunk)
+    after = os.fstat(descriptor)
+    if _version_key(before) == _version_key(after):
+        _remember_version(after, digest.hexdigest(), size)
+    return digest.hexdigest(), size
+
+
+def _publish_launch_snapshot(
     source_path: Path,
     *,
     source_root: Path,
@@ -266,19 +301,26 @@ def publish_immutable_launch_snapshot(
     expected_size_bytes: int,
     suffix: str,
     source_retained: bool = False,
-) -> Path:
-    """Publish a private launch name, sharing only completion-retained bodies."""
+    measure: bool = False,
+) -> tuple[Path, str, int]:
+    """Publish a private launch name, sharing only completion-retained bodies.
+
+    With measure, the hash and size are taken during the one copy rather than
+    stated by the caller, so the source is read once.
+    """
     if (
         not family.isidentifier()
         or not authority_id
         or len(authority_id) > 128
         or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-" for character in authority_id)
-        or not isinstance(expected_sha256, str)
-        or len(expected_sha256) != 64
-        or any(character not in "0123456789abcdef" for character in expected_sha256)
-        or isinstance(expected_size_bytes, bool)
-        or not isinstance(expected_size_bytes, int)
-        or expected_size_bytes <= 0
+        or (not measure and (
+            not isinstance(expected_sha256, str)
+            or len(expected_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in expected_sha256)
+            or isinstance(expected_size_bytes, bool)
+            or not isinstance(expected_size_bytes, int)
+            or expected_size_bytes <= 0
+        ))
         or suffix not in {".bam", ".fasta", ".fastq", ".fastq.gz"}
     ):
         raise ValueError("launch snapshot authority is invalid")
@@ -302,8 +344,12 @@ def publish_immutable_launch_snapshot(
     final_name: str | None = None
     linked = False
     digest_component = hashlib.sha256(authority_id.encode("utf-8")).hexdigest()
-    components = (*inputs_root.parts[1:], family, digest_component, expected_sha256)
-    destination_directory = inputs_root / family / digest_component / expected_sha256
+    # When measuring, the hash names the last directory, so that one is made after the copy.
+    components = (*inputs_root.parts[1:], family, digest_component) + (() if measure else (expected_sha256,))
+    destination_directory = inputs_root / family / digest_component
+    if not measure:
+        destination_directory = destination_directory / expected_sha256
+    final_fd = -1
     try:
         for component in components:
             child_fd = _open_or_create_private_directory(destination_fd, component)
@@ -313,7 +359,7 @@ def publish_immutable_launch_snapshot(
         unique = uuid4().hex
         temp_name = f".launch-{unique}.partial"
         final_name = f"launch-{unique}{suffix}"
-        if source_retained and not os.fstat(source_fd).st_mode & 0o222:
+        if source_retained and not measure and not os.fstat(source_fd).st_mode & 0o222:
             digest = hashlib.sha256()
             size = 0
             while chunk := os.read(source_fd, 1024 * 1024):
@@ -339,7 +385,8 @@ def publish_immutable_launch_snapshot(
                         raise ValueError("launch snapshot source identity changed")
                     os.fsync(destination_fd)
                     temp_name = None
-                    return destination_directory / final_name
+                    _remember_version(current, expected_sha256, expected_size_bytes)
+                    return destination_directory / final_name, expected_sha256, expected_size_bytes
             finally:
                 os.close(source_parent_fd)
         snapshot_fd = os.open(
@@ -361,22 +408,33 @@ def publish_immutable_launch_snapshot(
                 digest.update(chunk)
                 copied += len(chunk)
             os.fsync(snapshot_fd)
-            if copied != expected_size_bytes or digest.hexdigest() != expected_sha256:
+            if measure:
+                if copied <= 0:
+                    raise ValueError("launch snapshot authority is invalid")
+                expected_sha256, expected_size_bytes = digest.hexdigest(), copied
+            elif copied != expected_size_bytes or digest.hexdigest() != expected_sha256:
                 raise ValueError("launch snapshot source bytes diverged from authority")
             os.fchmod(snapshot_fd, 0o400)
             os.fsync(snapshot_fd)
         finally:
             os.close(snapshot_fd)
+        if measure:
+            final_fd = _open_or_create_private_directory(destination_fd, expected_sha256)
+            destination_directory = destination_directory / expected_sha256
+        named_fd = final_fd if measure else destination_fd
         os.link(
             temp_name, final_name,
-            src_dir_fd=destination_fd, dst_dir_fd=destination_fd,
+            src_dir_fd=destination_fd, dst_dir_fd=named_fd,
             follow_symlinks=False,
         )
         linked = True
         os.unlink(temp_name, dir_fd=destination_fd)
         temp_name = None
-        os.fsync(destination_fd)
-        return destination_directory / final_name
+        os.fsync(named_fd)
+        # These bytes were just hashed; later checks of this same file version need not read it again.
+        _remember_version(os.stat(final_name, dir_fd=named_fd, follow_symlinks=False),
+                          expected_sha256, expected_size_bytes)
+        return destination_directory / final_name, expected_sha256, expected_size_bytes
     except (AttributeError, NotImplementedError, OSError, ValueError) as exc:
         if destination_fd >= 0:
             if temp_name is not None:
@@ -386,7 +444,7 @@ def publish_immutable_launch_snapshot(
                     pass
             if linked and final_name is not None:
                 try:
-                    os.unlink(final_name, dir_fd=destination_fd)
+                    os.unlink(final_name, dir_fd=final_fd if final_fd >= 0 else destination_fd)
                 except FileNotFoundError:
                     pass
         if isinstance(exc, ValueError):
@@ -394,9 +452,30 @@ def publish_immutable_launch_snapshot(
         raise ValueError("launch snapshot could not be published") from exc
     finally:
         os.close(source_fd)
+        if final_fd >= 0:
+            os.close(final_fd)
         if destination_fd >= 0 and destination_fd != base_fd:
             os.close(destination_fd)
         os.close(base_fd)
+
+
+def publish_immutable_launch_snapshot(
+    source_path: Path,
+    *,
+    source_root: Path,
+    family: str,
+    authority_id: str,
+    expected_sha256: str,
+    expected_size_bytes: int,
+    suffix: str,
+    source_retained: bool = False,
+) -> Path:
+    """Publish a private launch name for bytes whose hash and size the caller states."""
+    return _publish_launch_snapshot(
+        source_path, source_root=source_root, family=family, authority_id=authority_id,
+        expected_sha256=expected_sha256, expected_size_bytes=expected_size_bytes,
+        suffix=suffix, source_retained=source_retained,
+    )[0]
 
 
 def discard_unclaimed_launch_snapshot(
@@ -516,17 +595,13 @@ def verify_instrument_artifact_snapshot(
     if root is None or path is None:
         raise ValueError("ONT instrument artifact snapshot path is invalid")
     file_fd = _open_runtime_snapshot(path, root)
-    digest = hashlib.sha256()
-    byte_count = 0
     try:
-        while chunk := os.read(file_fd, 1024 * 1024):
-            digest.update(chunk)
-            byte_count += len(chunk)
+        observed_sha256, byte_count = _descriptor_digest(file_fd)
     finally:
         os.close(file_fd)
     if byte_count != expected_bytes:
         raise ValueError("ONT instrument artifact snapshot size mismatch before consumption")
-    if digest.hexdigest() != expected_sha256:
+    if observed_sha256 != expected_sha256:
         raise ValueError("ONT instrument artifact snapshot digest mismatch before consumption")
 
 
@@ -595,17 +670,13 @@ def verify_managed_reference_snapshot(
 def verify_managed_reference_bytes(path: Path, root: Path, snapshot_sha256: str, expected_bytes: int) -> None:
     """Shared no-follow byte check for resolved revisions and final launch authority."""
     file_fd = _open_runtime_snapshot(path, root, label="managed reference")
-    digest = hashlib.sha256()
-    byte_count = 0
     try:
-        while chunk := os.read(file_fd, 1024 * 1024):
-            digest.update(chunk)
-            byte_count += len(chunk)
+        observed_sha256, byte_count = _descriptor_digest(file_fd)
     finally:
         os.close(file_fd)
     if byte_count != expected_bytes:
         raise ValueError("managed reference snapshot size mismatch before consumption")
-    if digest.hexdigest() != snapshot_sha256:
+    if observed_sha256 != snapshot_sha256:
         raise ValueError("managed reference snapshot digest mismatch before consumption")
 
 
@@ -668,24 +739,17 @@ def materialize_fastq_launch_custody(params: Mapping[str, Any]) -> dict[str, Any
     root = _canonical_absolute_path(get_inputs_dir())
     if source is None or root is None:
         raise ValueError("ordinary FASTQ source path is invalid")
-    descriptor = _open_runtime_snapshot(source, root, label="ordinary FASTQ")
-    digest = hashlib.sha256()
-    size = 0
-    try:
-        while chunk := os.read(descriptor, 1024 * 1024):
-            digest.update(chunk)
-            size += len(chunk)
-    finally:
-        os.close(descriptor)
-    snapshot = publish_immutable_launch_snapshot(
+    os.close(_open_runtime_snapshot(source, root, label="ordinary FASTQ"))
+    # One pass over the reads: the snapshot is hashed as it is written.
+    snapshot, sha256, size = _publish_launch_snapshot(
         source, source_root=root, family="ont_fastq_launch_snapshots",
-        authority_id=uuid4().hex, expected_sha256=digest.hexdigest(),
-        expected_size_bytes=size, suffix=".fastq.gz" if source.name.endswith(".gz") else ".fastq",
+        authority_id=uuid4().hex, expected_sha256=None, expected_size_bytes=None,
+        suffix=".fastq.gz" if source.name.endswith(".gz") else ".fastq", measure=True,
     )
     result["fastq_path"] = str(snapshot)
     result["ont_input_provenance"] = {
         **dict(provenance), "path": str(snapshot), "source": "managed_fastq_launch_snapshot",
-        "submitted_path": str(source), "sha256": digest.hexdigest(), "size_bytes": size,
+        "submitted_path": str(source), "sha256": sha256, "size_bytes": size,
     }
     return result
 
@@ -705,15 +769,11 @@ def verify_fastq_launch_custody(params: Mapping[str, Any]) -> None:
             or type(expected_size) is not int or expected_size < 1):
         raise ValueError("managed FASTQ launch custody is invalid")
     descriptor = _open_runtime_snapshot(path, root, label="managed FASTQ")
-    digest = hashlib.sha256()
-    size = 0
     try:
-        while chunk := os.read(descriptor, 1024 * 1024):
-            digest.update(chunk)
-            size += len(chunk)
+        observed_sha256, size = _descriptor_digest(descriptor)
     finally:
         os.close(descriptor)
-    if digest.hexdigest() != expected_sha256 or size != expected_size:
+    if observed_sha256 != expected_sha256 or size != expected_size:
         raise ValueError("managed FASTQ launch custody bytes changed")
 
 

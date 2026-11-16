@@ -13,7 +13,7 @@ if [[ ! "$job_id" =~ ^[A-Za-z0-9][A-Za-z0-9._\ -]{0,255}$ || "$job_id" == *..* ]
 fi
 [[ "$expected_source_reference_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo "authorized source reference SHA-256 is invalid" >&2; exit 1; }
 case "$workflow_id" in
-    ont_fastq_qc|ont_plasmid_qc|ont_construct_screening|wf_clone_validation) ;;
+    ont_fastq_qc|ont_plasmid_qc|ont_construct_screening|wf_clone_validation|ont_basecall_dna) ;;
     *) echo "canonical workflow_id is invalid" >&2; exit 1 ;;
 esac
 case "$input_mode" in

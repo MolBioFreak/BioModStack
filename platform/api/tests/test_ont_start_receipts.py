@@ -112,3 +112,46 @@ def test_host_receipt_route_is_read_only_and_does_not_discover_devices(monkeypat
     _, response = host.start_protocol("X1", payload)
     monkeypatch.setattr(bms_host_agent, "discover_ont_status", lambda: pytest.fail("receipt read must not use instrument"))
     assert bms_host_agent.ont_route_payload(f"/ont/positions/X1/start-requests/{REQUEST_ID}") == response
+
+
+def test_a_barcoding_kit_is_passed_to_minknow_for_demultiplexing(fake_instrument):
+    calls, tools, payload = fake_instrument
+    tools.BasecallingArgs = lambda **kw: kw
+    tools.BarcodingArgs = lambda **kw: kw
+    request = {**payload, "basecalling_enabled": True, "simplex_model": "model"}
+    code, _ = host.start_protocol("X1", {**request, "barcoding_kits": ["SQK-RBK114-24"]})
+    assert code == 201
+    assert calls[0]["basecalling"]["barcoding"] == {"kits": ["SQK-RBK114-24"], "trim_barcodes": False, "barcodes_both_ends": False}
+
+
+def test_a_kit_without_barcodes_starts_as_before(fake_instrument):
+    calls, tools, payload = fake_instrument
+    tools.BasecallingArgs = lambda **kw: kw
+    code, _ = host.start_protocol("X1", {**payload, "basecalling_enabled": True, "simplex_model": "model"})
+    assert code == 201 and calls[0]["basecalling"]["barcoding"] is None
+
+
+def test_sample_names_per_barcode_are_passed_to_minknow(fake_instrument):
+    calls, tools, payload = fake_instrument
+    tools.BarcodeUserData = lambda **kw: kw
+    code, _ = host.start_protocol("X1", {**payload, "barcode_samples": [{"barcode": "barcode01", "alias": "plasmid_A"}]})
+    assert code == 201 and calls[0]["barcode_info"] == [{"barcode_name": "barcode01", "alias": "plasmid_A"}]
+
+
+def test_an_idle_device_reporting_another_rate_still_finds_the_kit_model(monkeypatch, fake_instrument):
+    _calls, tools, _payload = fake_instrument
+    connection = NS(device=NS(get_flow_cell_info=lambda: NS(product_code="FLO-MIN114")),
+                    protocol=NS(list_protocols=lambda: NS(protocols=[])))
+    configs = [NS(name="configuration", sampling_rate=5000)]
+    manager = NS(find_basecall_configurations=lambda product, kit, rate=None: [] if rate == 10000 else configs)
+    monkeypatch.setattr(host, "_connect_position", lambda *a, **kw: (manager, connection))
+    tools.find_protocol = lambda _connection, **kwargs: NS(identifier="protocol")
+    def find_model(_connection, _kit, rate, available):
+        assert rate == 5000 and available == configs
+        return configs[0], NS(name="hac", default_q_score_cutoff=9)
+    tools.find_default_simplex_model = find_model
+    status = {"live_devices": [{"position": "X1", "device_type": "mk1d", "running": False,
+                               "flow_cell": {"present": True, "sample_rate": 10000},
+                               "output_directories": {"reads": "/data"}}]}
+    result = host.protocol_options("X1", kit="SQK-RBK114-24", status=status)
+    assert result["can_start"] is True and result["basecalling_options"]["simplex_models"] == ["hac"]

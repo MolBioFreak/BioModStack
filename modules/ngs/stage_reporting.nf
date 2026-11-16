@@ -1,3 +1,14 @@
+// The standalone IGV page is an optional export. It is named among a stage's files only
+// when the QC summary says it was made; any other summary keeps the name, as before.
+def igvReportIfCreated(summary, reportPath) {
+    try {
+        def text = summary.text
+        if (text.contains("igv_report_status\t") && !text.contains("igv_report_status\tcreated")) return null
+    } catch (Exception ignored) {
+    }
+    return reportPath
+}
+
 def reportStage(params, stageName, files) {
     def jobId = params.containsKey('job_id') ? params.job_id : null
     if (!jobId) return

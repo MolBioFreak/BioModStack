@@ -44,11 +44,13 @@ process FastqPlasmidQC {
     path "igv_report_sites.bed", emit: igv_report_sites_bed
     path "igv_report_sites.tsv", emit: igv_report_sites_tsv
     path "igv_track_config.json", emit: igv_track_config
-    path "igv_report.html", emit: igv_report
+    path "igv_report.html", emit: igv_report, optional: true
     path "igv_report.log", emit: igv_report_log
     path "fastq_consensus.fasta", emit: consensus
     path "fastq_consensus.fasta.fai", emit: consensus_index
     path "fastq_consensus.log", emit: consensus_log
+    path "consensus_pileup.ab1", emit: pileup_chromatogram, optional: true
+    path "plasmid_summary/*", emit: plasmid_summary, optional: true
     path "fastq_qc.log", emit: log
 
     script:
@@ -74,7 +76,7 @@ process FastqPlasmidQC {
     }
     def referenceSequenceSha256 = shellQuote(declaredReferenceSha256)
     def workflowId = ((params.workflow_id ?: params.ont_workflow_id ?: 'ont_fastq_qc') as String).trim()
-    if (!(workflowId in ['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'])) {
+    if (!(workflowId in ['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation', 'ont_basecall_dna'])) {
         error('FASTQ plasmid QC requires a canonical workflow_id')
     }
     def workflowIdArg = shellQuote(workflowId)
@@ -368,12 +370,20 @@ process FastqPlasmidQC {
 
     : > igv_report.log
 
-    if ! command -v create_report >/dev/null 2>&1; then
-        echo "CRITICAL_FAILURE: IGV_REPORT_CREATE_REPORT_UNAVAILABLE" | tee -a igv_report.log >&2
-        exit 86
-    fi
+    # The standalone page is an extra download. When it cannot be made the reason is
+    # recorded and the QC result goes on; the integrated IGV view reads the BAM directly.
+    igv_report_cli_available=1
+    igv_report_status="created"
+    igv_export_unavailable() {
+        echo "IGV_REPORT_UNAVAILABLE: \$1" | tee -a igv_report.log >&2
+        rm -f igv_report.html
+        igv_report_status="unavailable_\${1%% *}"
+    }
     rm -f igv_report.html
-    if ! create_report igv_report_sites.bed \
+    if ! command -v create_report >/dev/null 2>&1; then
+        igv_report_cli_available=0
+        igv_export_unavailable CREATE_REPORT_UNAVAILABLE
+    elif ! create_report igv_report_sites.bed \
         --fasta reference_qc.fasta \
         --track-config igv_standalone_track_config.json \
         --flanking ${igvReportFlankingBp} \
@@ -382,31 +392,18 @@ process FastqPlasmidQC {
         --template /opt/bms/igv-reports/igv_variant_standalone.html \
         --standalone \
         --output igv_report.html >> igv_report.log 2>&1; then
-        echo "CRITICAL_FAILURE: IGV_REPORT_CREATE_REPORT_FAILED" | tee -a igv_report.log >&2
-        rm -f igv_report.html
-        exit 86
-    fi
-    if [[ ! -s igv_report.html ]]; then
-        echo "CRITICAL_FAILURE: IGV_REPORT_ARTIFACT_EMPTY" | tee -a igv_report.log >&2
-        exit 86
-    fi
-    if ! "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/validate_standalone_igv_report.py" \
+        igv_export_unavailable CREATE_REPORT_FAILED
+    elif [[ ! -s igv_report.html ]]; then
+        igv_export_unavailable ARTIFACT_EMPTY
+    elif ! "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/validate_standalone_igv_report.py" \
         --report igv_report.html \
         --template /opt/bms/igv-reports/igv_variant_standalone.html \
         --igv-js /opt/bms/igv-reports/igv.min.js \
         --max-bytes 100663296 >> igv_report.log 2>&1; then
-        echo "CRITICAL_FAILURE: IGV_REPORT_VALIDATE_FAILED" | tee -a igv_report.log >&2
-        rm -f igv_report.html
-        exit 86
+        igv_export_unavailable VALIDATE_FAILED
+    elif [[ "\$(wc -c < igv_report.html)" -gt 100663296 ]]; then
+        igv_export_unavailable "ARTIFACT_OVERSIZED max_bytes=100663296"
     fi
-    igv_report_size=\$(wc -c < igv_report.html)
-    if [[ "\${igv_report_size}" -gt 100663296 ]]; then
-        echo "CRITICAL_FAILURE: IGV_REPORT_ARTIFACT_OVERSIZED bytes=\${igv_report_size} max_bytes=100663296" | tee -a igv_report.log >&2
-        rm -f igv_report.html
-        exit 86
-    fi
-    igv_report_cli_available=1
-    igv_report_status="created"
 
     {
         echo "igv_report_cli_available=\${igv_report_cli_available}"
@@ -487,6 +484,24 @@ process FastqPlasmidQC {
     } > fastq_qc.log
 
     if [[ -f fastq_consensus.fasta ]]; then chmod 0444 fastq_consensus.fasta; fi
+    # Read-pileup chromatogram for sequence viewers. It is an extra download:
+    # when it cannot be written the QC result is unchanged.
+    igv_report_args=(--igv-report-unavailable "\${igv_report_status}")
+    if [[ -f igv_report.html ]]; then igv_report_args=(--igv-report igv_report.html); fi
+    pileup_args=()
+    if [[ -f fastq_consensus.fasta ]] && "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/write_pileup_ab1.py" \\
+        --per-base-support per_base_support.tsv \\
+        --consensus-fasta fastq_consensus.fasta \\
+        --out consensus_pileup.ab1 \\
+        --sample "${manifestJobId}" \\
+        --reads "${fastq}" \\
+        --minimap2-preset "${minimapPreset}" \\
+        --threads ${task.cpus} \\
+        --samtools-cmd "\${SAMTOOLS_CMD[@]}" >> fastq_qc.log 2>&1; then
+        pileup_args=(--pileup-chromatogram consensus_pileup.ab1)
+    else
+        rm -f consensus_pileup.ab1
+    fi
     "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_construct_verification_input.py" \\
         --reference-fasta reference_qc.fasta \\
         --expected-reference-sha256 ${referenceSequenceSha256} \\
@@ -529,9 +544,21 @@ process FastqPlasmidQC {
         --igv-report-sites-bed igv_report_sites.bed \\
         --igv-report-sites-tsv igv_report_sites.tsv \\
         --igv-track-config igv_track_config.json \\
-        --igv-report igv_report.html \\
+        "\${igv_report_args[@]}" \\
         --igv-report-log igv_report.log \\
+        "\${pileup_args[@]}" \\
         --log fastq_qc.log
+    # Summary page files, restated from the outputs above; an extra, never a completion condition.
+    if [[ -f fastq_consensus.fasta ]]; then
+        "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_plasmid_summary.py" \\
+            --sample "${manifestJobId}" \\
+            --consensus-fasta fastq_consensus.fasta \\
+            --per-base-support per_base_support.tsv \\
+            --alignment-stats fastq_alignment_stats.tsv \\
+            --read-lengths read_lengths.tsv \\
+            --coordinates reference --expected-sequence-provided \\
+            --out-dir plasmid_summary >> fastq_qc.log 2>&1 || rm -rf plasmid_summary
+    fi
     # Native writers are finished; metadata/logs remain private publications.
     for completed in aligned.bam aligned.bam.bai reference_qc.fasta reference_qc.fasta.fai fastq_consensus.fasta fastq_consensus.fasta.fai; do
         if [[ -f "\${completed}" && ! -L "\${completed}" ]] && (( (8#\$(stat -c %a "\${completed}") & 8#222) != 0 )); then chmod 0444 "\${completed}"; fi

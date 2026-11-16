@@ -133,7 +133,7 @@ include {{ ConstructVerify }} from '{ROOT}/modules/ngs/construct_verify.nf'
 workflow {{
  def aligned = Channel.value(tuple(file(params.bam), file(params.bai)))
  CloneValidationAdapter(file(params.result),file(params.provenance),aligned,file(params.reference))
- ConstructVerify(file(params.reference),CloneValidationAdapter.out.verification_input,CloneValidationAdapter.out.per_base_support,aligned,CloneValidationAdapter.out.alignment_stats,CloneValidationAdapter.out.breakpoint_call,CloneValidationAdapter.out.secondary_summary)
+ ConstructVerify(file(params.reference),CloneValidationAdapter.out.verification_input,CloneValidationAdapter.out.per_base_support,aligned,CloneValidationAdapter.out.alignment_stats,CloneValidationAdapter.out.breakpoint_call,CloneValidationAdapter.out.secondary_summary,'')
 }}
 """)
     output = run(harness, dict(bam=str(bam),bai=str(bam)+'.bai',result=str(output_root),provenance=str(provenance),reference=str(reference),

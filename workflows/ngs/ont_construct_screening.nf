@@ -16,7 +16,7 @@ include { PrepareBamForAnalysis; ValidateMappedBam; BamToFastqForQC } from '../.
 include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
-include { ConstructVerify } from '../../modules/ngs/construct_verify.nf'
+include { ConstructVerify; sequencingKits } from '../../modules/ngs/construct_verify.nf'
 include { RunCloneValidation; CloneValidationAdapter; ComparePlasmidConsensus } from '../../modules/ngs/clone_validation.nf'
 include { ComparisonPanelAttribution } from '../../modules/ngs/comparison_panel_attribution.nf'
 include { ModkitAnalysis } from '../../modules/ngs/modkit_analysis.nf'
@@ -75,6 +75,7 @@ workflow ONT_CONSTRUCT_SCREENING {
     }
 
     def analysis_bam = null
+    def sequencingKitsValue = Channel.value((params.sequencing_kits ?: '').toString())
 
     // --- POD5 input: Dorado basecalling + alignment ---
     if (has_pod5) {
@@ -89,6 +90,7 @@ workflow ONT_CONSTRUCT_SCREENING {
         def pod5_channel = Channel.value(pod5_input)
         DoradoPreflight(pod5_channel)
         DoradoBasecall(pod5_channel, DoradoPreflight.out.manifest)
+        sequencingKitsValue = DoradoPreflight.out.manifest.map { sequencingKits(it) }
         DoradoBasecall.out.bam.subscribe { _ignored ->
             reportStage(params, "dorado_basecall", [
                 "${params.out_dir}/basecall/calls.bam",
@@ -234,6 +236,7 @@ workflow ONT_CONSTRUCT_SCREENING {
         ConstructVerify(
             Channel.value(reference_file), verificationInput, supportEvidence,
             analysis_bam, statsEvidence, breakpointEvidence, secondaryEvidence,
+            sequencingKitsValue,
         )
     }
     // Named-workflow scope is gone at shutdown; retain its metadata and params.

@@ -50,6 +50,18 @@ def build_molbio_revision_binding(receipt: MolBioNgsReceipt) -> dict[str, str]:
     }
 
 
+TOPOLOGY_FILE = "expected_reference.topology"
+
+
+def receipt_reference_topology(receipt: Any) -> str | None:
+    """The saved topology of the sequence this receipt was made from, if it recorded one."""
+    try:
+        value = Path(str(receipt.reference_snapshot_path)).with_name(TOPOLOGY_FILE).read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        return None
+    return value if value in {"linear", "circular"} else None
+
+
 def _snapshot_sequence(revision: Any) -> str:
     snapshot = getattr(revision, "snapshot", None)
     sequence_type = str((snapshot or {}).get("sequence_type") or "dna").lower()
@@ -80,10 +92,16 @@ def _atomic_write(path: Path, data: bytes) -> None:
 async def issue_molbio_ngs_receipt(session: AsyncSession, *, sequence_id: str, revision: Any) -> MolBioNgsReceipt:
     sequence = _snapshot_sequence(revision)
     receipt_id = str(uuid.uuid4())
-    fasta = f">molbio_revision_{revision.id}\n{sequence}\n".encode("ascii")
+    # The aligner and every downstream reference check read DNA letters. An RNA
+    # revision keeps its U in the library; only this job's reference file uses T.
+    fasta = f">molbio_revision_{revision.id}\n{sequence.replace('U', 'T')}\n".encode("ascii")
     digest = hashlib.sha256(fasta).hexdigest()
     path = get_inputs_dir() / "molbio_ngs_receipts" / receipt_id / "expected_reference.fasta"
     _atomic_write(path, fasta)
+    circular = (getattr(revision, "snapshot", None) or {}).get("is_circular")
+    if isinstance(circular, bool):
+        # Beside the FASTA, so the analysis treats the reference the way the library saved it.
+        _atomic_write(path.with_name(TOPOLOGY_FILE), b"circular\n" if circular else b"linear\n")
     now = datetime.utcnow()
     receipt = MolBioNgsReceipt(
         id=receipt_id, sequence_id=sequence_id, revision_id=revision.id,

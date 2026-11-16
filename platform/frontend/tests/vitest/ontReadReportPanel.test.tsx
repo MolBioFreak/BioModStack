@@ -25,6 +25,7 @@ const REPORT = {
     read_length_histogram: { bin_width_bp: 100, bins: [{ start_bp: 5400, end_bp_exclusive: 5500, read_count: 12, base_count: 65630 }] },
     alignment: { aligned: false, mapped_reads: 0, unmapped_reads: 12, secondary_records: 0, supplementary_records: 0, references: [], reads_per_reference: {} },
     move_tagged_reads: 12,
+    quick_squiggle: { available: true, reason: null },
     modifications: { probability_threshold: 0.5, by_code: [
         { code: 'A+6mA', called_sites: 4291, modified_sites: 334, reads: 12, modified_fraction: 0.077837 },
         { code: 'C+5mC', called_sites: 5258, modified_sites: 9, reads: 12, modified_fraction: 0.001712 },
@@ -83,12 +84,68 @@ describe('OntReadReportPanel', () => {
         expect(dam).toMatch(/methylated$/);
         expect(dam).not.toContain('not methylated');
         expect(container.querySelector('[data-motif-code="C+5mC@CCWGG"]')?.textContent).toContain('too few sites');
+        const method = container.querySelector('[data-testid="modification-method"]')!.textContent!;
+        expect(method).toContain('P(modified) ≥ 0.5');
+        expect(method).toContain('not modkit');
         expect(container.querySelector('[data-mod-code="A+6mA"]')?.textContent).not.toContain('methylated');
         const open = Array.from(container.querySelectorAll('button')).find(node => node.textContent === 'Open squiggles')!;
         await act(async () => open.click());
         expect(onOpenSignal).toHaveBeenCalled();
     });
 
+    it('does not open the quick squiggle when the run has no POD5 of its own, and points to the workbench', async () => {
+        const external = { ...REPORT, quick_squiggle: { available: false, reason: 'This run did not start from POD5, so it has no raw signal.' } };
+        get.mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('ngs-read-report') ? external : READS }));
+        const onOpenSignal = vi.fn();
+        await mount(onOpenSignal);
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+        expect(get.mock.calls.some(call => String(call[0]).includes('ngs-squiggle'))).toBe(false);
+        expect(container.querySelector('[aria-label="Squiggle viewer"]')).toBeNull();
+        expect(container.querySelector('[role="alert"]')).toBeNull();
+        const note = container.querySelector('[data-testid="quick-squiggle-unavailable"]')!;
+        expect(note.textContent).toContain('This run did not start from POD5, so it has no raw signal.');
+        expect(container.querySelector('[aria-label="Read summary"]')!.textContent).toContain('open in the signal workbench');
+        await act(async () => Array.from(note.querySelectorAll('button')).find(node => node.textContent === 'Open the signal workbench')!.click());
+        expect(onOpenSignal).toHaveBeenCalledTimes(1);
+        // The read report itself is still shown.
+        expect(container.querySelector('[data-motif-code="A+6mA@GATC"]')).not.toBeNull();
+    });
+    it('labels every figure as capped past the read cap and says when the reference list is cut', async () => {
+        const capped = { ...REPORT, truncated_at_reads: 200000, alignment: {
+            ...REPORT.alignment, aligned: true, mapped_reads: 12, unmapped_reads: 0,
+            references: [{ name: 'a', length: 10 }], reference_count: 80,
+            reads_per_reference: { a: 7, b: 5 }, references_with_reads: 61, reference_list_limit: 50,
+        } };
+        get.mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('ngs-read-report') ? capped : url.endsWith('/reads') ? READS : SQUIGGLE }));
+        await mount();
+        const summary = container.querySelector('[aria-label="Read summary"]')!;
+        for (const label of ['Reads', 'Yield', 'Read N50', 'Mean Q', 'Mapped']) expect(summary.textContent).toContain(`${label} (capped)`);
+        expect(summary.textContent).toContain('first 200,000 primary reads in file order');
+        expect(summary.textContent).toContain('80 reference contig(s)');
+        expect(container.textContent).toContain('Reads per reference (capped: top 2 of 61)');
+    });
+    it('shows no capped label on a complete report', async () => {
+        get.mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('ngs-read-report') ? REPORT : url.endsWith('/reads') ? READS : SQUIGGLE }));
+        await mount();
+        expect(container.textContent).not.toContain('capped');
+    });
+    it('shows poly(A) tail length with no-estimate reads counted apart from zero, and a per-read download', async () => {
+        get.mockResolvedValue({ data: { ...REPORT, poly_a: { source: 'Dorado pt tag, one value per read', reads: 12, estimated_reads: 9, no_estimate_reads: 3,
+            zero_length_reads: 1, reads_without_tag: 0, median_tail_nt: 96, mean_tail_nt: 91.4, longest_tail_nt: 141,
+            histogram: { bin_width_nt: 10, bins: [{ start_nt: 90, end_nt_exclusive: 100, read_count: 9 }] } } } });
+        await mount();
+        const block = container.querySelector('[data-testid="poly-a-result"]')!;
+        expect(block.textContent).toContain('One value per read, from Dorado.');
+        expect(block.textContent).toContain('Reads with an estimate9of 12 reads');
+        expect(block.textContent).toContain('No estimate3counted apart from zero');
+        expect(block.textContent).toContain('Median tail96');
+        expect(block.querySelector('a')!.getAttribute('href')).toBe('/api/jobs/j/ngs-read-report?poly_a_tsv=true');
+    });
+    it('shows no poly(A) block when the run did not estimate tails', async () => {
+        get.mockResolvedValue({ data: { ...REPORT, poly_a: null } });
+        await mount();
+        expect(container.querySelector('[data-testid="poly-a-result"]')).toBeNull();
+    });
     it('reports a missing BAM instead of rendering an empty report', async () => {
         get.mockRejectedValue(new Error('This job published no reads BAM.'));
         await mount();

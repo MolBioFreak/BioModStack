@@ -470,7 +470,7 @@ def install_governed_ngs_openapi(app: Any) -> None:
 
 _CLOSED_ARTIFACT_EXTENSIONS = (
     "fastq.gz", "vcf.gz", "bedgraph", "fasta", "fastq", "json", "html", "csv", "tsv",
-    "bam", "bai", "fai", "vcf", "bed", "log", "txt", "gz", "bin",
+    "bam", "bai", "fai", "vcf", "bed", "log", "txt", "gz", "bin", "ab1", "svg", "gbk",
 )
 _INLINE_ARTIFACT_EXTENSIONS = frozenset({"bam", "bai", "fasta", "fai"})
 
@@ -1318,13 +1318,110 @@ async def list_ngs_package_artifacts(
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 
 
+async def _plasmid_summary_catalog(job_id: str, authorized_job: Job, pinned_root: Path) -> list[dict[str, Any]]:
+    return await run_in_threadpool(
+        service.build_ngs_package_artifacts, job_id, **_job_package_authority(authorized_job),
+        job_output_dir=pinned_root, pinned_root_descriptor=True,
+    )
+
+
+async def _plasmid_summary_path(job_id: str, authorized_job: Job, pinned_root: Path, artifact_id: str) -> Path:
+    path, _metadata = await run_in_threadpool(
+        service.resolve_ngs_package_artifact, job_id, artifact_id,
+        **_job_package_authority(authorized_job), job_output_dir=pinned_root, pinned_root_descriptor=True,
+    )
+    return Path(path)
+
+
+@router.get("/jobs/{job_id}/ngs-plasmid-summary", responses=_STANDARD_GOVERNED_ERRORS)
+async def get_ngs_plasmid_summary(
+    job_id: str,
+    authorized_job: Job = Depends(require_alignment_job),
+):
+    """The workflow's own plasmid summary and the published files that make up the result."""
+    import json
+    from services import ont_plasmid_summary as plasmid_summary
+    try:
+        async with _validated_pinned_result_root(authorized_job) as pinned_root:
+            artifacts = await _plasmid_summary_catalog(job_id, authorized_job, pinned_root)
+            chosen = plasmid_summary.select_summary_artifact(artifacts)
+            if chosen is None:
+                raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+                                       message="This job published no plasmid summary.", job_id=job_id, resource="artifact")
+            path = await _plasmid_summary_path(job_id, authorized_job, pinned_root, chosen["artifact_id"])
+            document = await run_in_threadpool(lambda: json.loads(path.read_text(encoding="utf-8")))
+            files = plasmid_summary.select_summary_files(artifacts)
+            host_item = plasmid_summary.select_host_composition_artifact(artifacts)
+            host_composition = None
+            if host_item is not None:
+                host_path = await _plasmid_summary_path(job_id, authorized_job, pinned_root, host_item["artifact_id"])
+                host_composition = await run_in_threadpool(lambda: json.loads(host_path.read_text(encoding="utf-8")))
+        inside, left_out = plasmid_summary.plan_zip(files)
+        public = lambda item: {key: item[key] for key in ("key", "label", "format", "url", "size_bytes", "filename")}
+        return {
+            "schema": "bms.ngs.plasmid-summary-response.v1", "job_id": job_id, "summary": document,
+            "host_composition": host_composition,
+            "files": [public(item) for item in files],
+            "download_all": {"url": f"/api/jobs/{job_id}/ngs-plasmid-summary/download-all",
+                             "included": [item["key"] for item in inside],
+                             "left_out": [item["key"] for item in left_out]},
+        }
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+    except (OSError, ValueError) as exc:
+        raise OntNgsRouteError(status_code=409, code="NGS_AUTHORITY_CONFLICT", message="The plasmid summary could not be read.",
+                               job_id=job_id, resource="artifact") from exc
+
+
+@router.get("/jobs/{job_id}/ngs-plasmid-summary/download-all", responses=_BINARY_RESPONSES)
+async def download_ngs_plasmid_result(
+    job_id: str,
+    authorized_job: Job = Depends(require_alignment_job),
+):
+    """Every file of the plasmid result as one zip."""
+    import tempfile
+    from starlette.background import BackgroundTask
+    from services import ont_plasmid_summary as plasmid_summary
+    handle = tempfile.NamedTemporaryFile(prefix="bms-plasmid-result-", suffix=".zip", delete=False)
+    handle.close()
+    archive = Path(handle.name)
+    try:
+        async with _validated_pinned_result_root(authorized_job) as pinned_root:
+            artifacts = await _plasmid_summary_catalog(job_id, authorized_job, pinned_root)
+            files = plasmid_summary.select_summary_files(artifacts)
+            if not files:
+                raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+                                       message="This job published no plasmid result files.", job_id=job_id, resource="artifact")
+            inside, left_out = plasmid_summary.plan_zip(files)
+            members = [(item["filename"], await _plasmid_summary_path(job_id, authorized_job, pinned_root, item["artifact_id"]))
+                       for item in inside]
+            sample = re.sub(r"[^A-Za-z0-9._-]", "_", str(getattr(authorized_job, "name", "") or job_id))[:80] or "plasmid_result"
+            await run_in_threadpool(plasmid_summary.write_zip, archive, members, left_out, sample)
+    except BaseException as exc:
+        archive.unlink(missing_ok=True)
+        if isinstance(exc, service.AlignmentSessionError):
+            raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+        raise
+
+    def chunks() -> Iterator[bytes]:
+        with archive.open("rb") as stream:
+            while block := stream.read(1024 * 1024):
+                yield block
+    return StreamingResponse(
+        chunks(), media_type="application/zip", background=BackgroundTask(archive.unlink, missing_ok=True),
+        headers={"Content-Disposition": f'attachment; filename="{sample}_plasmid_result.zip"',
+                 "Content-Length": str(archive.stat().st_size), "Cache-Control": "private, no-store"},
+    )
+
+
 @router.get("/jobs/{job_id}/ngs-read-report", responses=_STANDARD_GOVERNED_ERRORS)
 async def get_ngs_read_report(
     job_id: str,
     authorized_job: Job = Depends(require_alignment_job),
+    poly_a_tsv: bool = Query(False),
 ):
     """Yield, length, quality, mapping and modification summary from the job's reads BAM."""
-    from services.ont_read_report import OntReadReportError, build_read_report, select_reads_bam
+    from services.ont_read_report import OntReadReportError, build_read_report, poly_a_tsv_text, select_reads_bam
 
     try:
         async with _validated_pinned_result_root(authorized_job) as pinned_root:
@@ -1349,7 +1446,18 @@ async def get_ngs_read_report(
             )
             public = {**metadata, "filename": chosen.get("filename") or Path(str(chosen.get("relative_path") or "")).name,
                       "url": chosen.get("url")}
-            return await run_in_threadpool(build_read_report, Path(path), artifact=public)
+            if poly_a_tsv:
+                text = await run_in_threadpool(poly_a_tsv_text, Path(path))
+                return Response(content=text, media_type="text/tab-separated-values",
+                                headers={"Content-Disposition": 'attachment; filename="poly_a_tail_lengths.tsv"'})
+            molecule = (authorized_job.params or {}).get("ont_molecule_type") if isinstance(authorized_job.params, dict) else None
+            report = await run_in_threadpool(
+                build_read_report, Path(path), artifact=public,
+                molecule_type=str(molecule) if molecule else None,
+            )
+            # The quick squiggle reads this run's own POD5; say whether it can before the page offers it.
+            report["quick_squiggle"] = quick_squiggle_availability(authorized_job, artifacts)
+            return report
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
     except OntReadReportError as exc:
@@ -1357,21 +1465,34 @@ async def get_ngs_read_report(
                                job_id=job_id, resource="artifact") from exc
 
 
-async def _job_basecall_bam_and_pod5(job_id: str, authorized_job: Job, pinned_root: Path) -> tuple[Path, Path]:
-    """Move-tagged basecall BAM and the job's own POD5 input, both job-owned."""
+def _job_pod5_input(authorized_job: Job) -> tuple[Path | None, str | None]:
+    """This run's own POD5 input, or why it cannot be read."""
     from paths import get_allowed_roots
-
     params = authorized_job.params if isinstance(authorized_job.params, dict) else {}
     raw_pod5 = params.get("pod5_dir")
     if not isinstance(raw_pod5, str) or not raw_pod5.strip():
-        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
-                               message="This run did not start from POD5, so it has no raw signal.",
-                               job_id=job_id, resource="artifact")
+        return None, "This run did not start from POD5, so it has no raw signal."
     pod5_dir = Path(raw_pod5).resolve()
     roots = [Path(root).resolve() for root in get_allowed_roots().values()]
     if not pod5_dir.exists() or not any(pod5_dir == root or root in pod5_dir.parents for root in roots):
-        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
-                               message="This run's POD5 input is no longer available.",
+        return None, "This run's POD5 input is no longer available."
+    return pod5_dir, None
+
+
+def quick_squiggle_availability(authorized_job: Job, artifacts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Whether the quick squiggle has both things it reads: the run's POD5 and its basecall BAM."""
+    _pod5_dir, reason = _job_pod5_input(authorized_job)
+    if reason is None and not any(item.get("state") == "present" and str(item.get("relative_path") or "") == "basecall/calls.bam"
+                                  for item in artifacts):
+        reason = "This run published no basecall BAM."
+    return {"available": reason is None, "reason": reason}
+
+
+async def _job_basecall_bam_and_pod5(job_id: str, authorized_job: Job, pinned_root: Path) -> tuple[Path, Path]:
+    """Move-tagged basecall BAM and the job's own POD5 input, both job-owned."""
+    pod5_dir, reason = _job_pod5_input(authorized_job)
+    if pod5_dir is None:
+        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND", message=str(reason),
                                job_id=job_id, resource="artifact")
     artifacts = await run_in_threadpool(
         service.build_ngs_package_artifacts, job_id, **_job_package_authority(authorized_job),
@@ -1425,7 +1546,9 @@ async def get_ngs_read_squiggle(
     try:
         async with _validated_pinned_result_root(authorized_job) as pinned_root:
             bam, pod5_dir = await _job_basecall_bam_and_pod5(job_id, authorized_job, pinned_root)
-            return await run_in_threadpool(read_squiggle, bam, pod5_dir, read_id, start_base=start_base, bases=bases)
+            molecule = (authorized_job.params or {}).get("ont_molecule_type") if isinstance(authorized_job.params, dict) else None
+            return await run_in_threadpool(read_squiggle, bam, pod5_dir, read_id, start_base=start_base, bases=bases,
+                                           molecule_type=str(molecule) if molecule else None)
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="read") from exc
     except OntReadReportError as exc:

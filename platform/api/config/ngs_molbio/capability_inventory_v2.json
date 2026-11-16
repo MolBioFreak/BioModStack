@@ -1704,7 +1704,7 @@
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "df9991f9496645775dc79e77a98ce6992f46666ea47e808a7c93026a7c9a83fa",
+      "inventory_sha256": "5a6036de95cd63feb7336750e39ae6fd396a722793bace10949a49692465a2d9",
       "label": "ONT DNA Analysis",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -1748,7 +1748,7 @@
         "trim_adapters"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.basecall_dna.v1",
-      "parameter_schema_sha256": "fef7ef448f8c17f6d9c5b85f24969b86246a6038baf353088c0a79c3e8563699",
+      "parameter_schema_sha256": "dd6524dcf28389b5943c59504bbe3934c2ec15d61d476e1c6fba98a254a7c7e2",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -3069,7 +3069,7 @@
   ],
   "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-  "content_sha256": "e08c8bba0db1b527259c10647be3b20a69c93dc7135e5052b0ab88c8f9aaaeb5",
+  "content_sha256": "1412d97cd45061d43410c2d83d14d2c17cfcb24eb4c0b93f4cd203db00653922",
   "contract_ids": {
     "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
     "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",
@@ -3095,7 +3095,7 @@
   ],
   "payload_ownership_manifest_sha256": "a0a8e0ae952565e5f8dacbd84567e65853c8fbd1ab6b1bb7454ceefcab4aa6cb",
   "schema": "bms.ngs-molbio.capability-inventory.v2",
-  "schema_registry_sha256": "d79d3fcf95cd06b11800e8c60500a5a93fd0d7498da835932c8fce74e57595ba",
+  "schema_registry_sha256": "1859f23182ab5fad9fd8ca9714f4e24e76210e38cfad236732e603febde548d8",
   "schema_version": 2,
   "source_pin_sha256": "c24afa91cc42054da3899c0f9a024769be96b444a444e8ab714443836856f1a4"
 }

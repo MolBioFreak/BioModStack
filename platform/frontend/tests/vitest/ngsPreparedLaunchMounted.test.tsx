@@ -13,8 +13,13 @@ import { NanoporeTemplate } from '../../src/components/NanoporeTemplate';
 // The mounted form, shared plan dialog, placement/policy controls and API
 // helpers/interceptors are real. Only transport and surrounding workspace/GPU
 // discovery are doubled: no service or scientific execution is contacted.
+const projectState = vi.hoisted(() => ({ open: true }));
 vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
-    useGlobalExperimentContext: () => ({
+    useGlobalExperimentContext: () => !projectState.open ? {
+        workspaceId: null, globalExperimentId: null, stateRevisionId: null, selectedDomainExperiment: null,
+        availability: { canMutateDomain: false, reason: 'Select a Project (workspace), Global Experiment, and NGS/MolBio Domain Experiment.' },
+        contextHref: (path: string) => path, setStateRevisionId: () => {},
+    } : ({
         workspaceId: 'workspace-1', globalExperimentId: 'experiment-1', stateRevisionId: 'state-1',
         selectedDomainExperiment: { domain_experiment_id: 'domain-1' },
         availability: { canMutateDomain: true, reason: '' }, contextHref: (path: string) => path,
@@ -94,6 +99,7 @@ beforeEach(() => {
     container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
 });
 afterEach(() => {
+    projectState.open = true;
     act(() => root.unmount()); container.remove(); client.clear(); api.defaults.adapter = originalAdapter; vi.unstubAllGlobals();
     expect(unexpected).toEqual([]);
 });
@@ -331,6 +337,69 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-RBK114-96', sample_sheet: '/data/samples.csv' });
     });
+    it('keeps modification calling when a barcoding kit is chosen and points methylation to the barcode units', async () => {
+        await mount({ ...base, modifiedBases: '6mA', barcodeKit: 'SQK-RBK114-96' });
+        expect(container.querySelector<HTMLInputElement>('input[type="checkbox"][aria-label="6mA"]')!.checked).toBe(true);
+        expect(container.querySelector('[data-testid="ngs-methylation-barcoded-note"]')?.textContent).toContain('Demultiplexed barcode units');
+        expect(container.querySelector('[data-testid="ngs-methylation-card"]')).toBeNull();
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-RBK114-96', modified_bases: '6mA', run_modkit: false });
+    });
+    it('sends the poly(A) option only when ticked, with the plasmid flanks when the tail is inside a plasmid', async () => {
+        await mount();
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).not.toHaveProperty('estimate_poly_a');
+    });
+    it('carries a tail inside a plasmid with the sequence on each side', async () => {
+        await mount({ ...base, estimatePolyA: true, polyAContext: 'plasmid', polyAFrontFlank: 'gctagc aagctt', polyARearFlank: 'GGATCCGAATTC' });
+        expect(container.querySelector<HTMLSelectElement>('select[aria-label="Where the tail is"]')!.value).toBe('plasmid');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ estimate_poly_a: true, poly_a_context: 'plasmid', poly_a_front_flank: 'GCTAGCAAGCTT', poly_a_rear_flank: 'GGATCCGAATTC' });
+    });
+    it('offers modification tables on RNA basecalling under an RNA label', async () => {
+        await mount({ ...base, selectedWorkflow: 'rna', doradoMolecule: 'rna' });
+        const card = container.querySelector('[data-testid="ngs-methylation-card"]')!;
+        expect(card.textContent).toContain('RNA modifications');
+        expect(card.textContent).toContain('Generate modification tables');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].url).toBe('/api/ont/ngs/ont_basecall_rna/submit');
+        expect(capturedRequest().params).toMatchObject({ ont_molecule_type: 'rna', run_modkit: false });
+    });
+    it('submits a plain POD5 basecall with no Project open', async () => {
+        projectState.open = false;
+        await mount({ ...base, runModkit: false });
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.managed_reference).toBeUndefined();
+        expect(submits()[0].body.params.molbio_ngs_receipt_id).toBeUndefined();
+    });
+    it('submits an analysis against a saved sequence with no Project open', async () => {
+        projectState.open = false;
+        await mount({ ...base, runFastqQc: true, molbioSequenceId: 'sequence-1', molbioRevisionId: 'revision-1' });
+        expect(container.querySelector('[data-testid="ngs-no-project-note"]')?.textContent).toContain('Open a Project');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params.molbio_ngs_receipt_id).toBe('new-receipt');
+    });
+    it('asks for a reference, not a Project, when an analysis needs one and no Project is open', async () => {
+        projectState.open = false;
+        await act(async () => root.render(React.createElement(QueryClientProvider, { client }, <MemoryRouter><NanoporeTemplate onBack={() => {}} initialValues={{ ...base, runFastqQc: true }} /></MemoryRouter>)));
+        await until(() => expect(button('Review and submit').title).toContain('Choose a reference sequence'));
+        expect(button('Review and submit').disabled).toBe(true);
+    });
+    it('offers four barcode kits and the both-ends box for native kits only', async () => {
+        await mount({ ...base, barcodeKit: 'SQK-NBD114-24', barcodeBothEnds: true });
+        const kits = Array.from(container.querySelectorAll<HTMLOptionElement>('select[aria-label="Barcoding"] option')).map(option => option.value);
+        expect(kits).toEqual(['', 'SQK-RBK114-24', 'SQK-RBK114-96', 'SQK-NBD114-24', 'SQK-NBD114-96']);
+        expect(container.querySelector('input[aria-label="Require a barcode on both ends"]')).not.toBeNull();
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-NBD114-24', barcode_both_ends: true });
+    });
+    it('shows no both-ends box for a rapid kit and sends no both-ends setting', async () => {
+        await mount({ ...base, barcodeKit: 'SQK-RBK114-24', barcodeBothEnds: true });
+        expect(container.querySelector('input[aria-label="Require a barcode on both ends"]')).toBeNull();
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-RBK114-24' });
+        expect(capturedRequest().params).not.toHaveProperty('barcode_both_ends');
+    });
     it('offers DNA calling options once and submits modification tags without adding methylation analysis', async () => {
         await mount();
         expect(container.querySelector('[data-ngs-workflow-key="duplex"]')).toBeNull();
@@ -347,7 +416,8 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         // Dorado allows one model per canonical base: choosing 4mC_5mC replaces the CpG model.
         await act(async () => mod('4mC_5mC')!.click()); await settle();
         expect(mod('5mCG_5hmCG')!.checked).toBe(false);
-        expect(container.querySelector<HTMLSelectElement>('select[aria-label="Barcoding"]')?.disabled).toBe(true);
+        // Modification calling no longer locks the barcoding choice.
+        expect(container.querySelector<HTMLSelectElement>('select[aria-label="Barcoding"]')?.disabled).toBe(false);
         expect(container.textContent).toContain(doradoLock.models.modified_bases['dna_r10.4.1_e8.2_400bps_sup@v5.2.0_6mA@v1'].id);
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(submits()[0].url).toBe('/api/ont/ngs/ont_basecall_dna/submit');
@@ -382,6 +452,44 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         expect(imported).toMatchObject({ format: 'blow5', experiment_group: 'domain-1' });
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(capturedRequest().params).toMatchObject({ pod5_dir: '/data/restored/pod5' });
+    });
+    it('submits an assembly report without an expected sequence and reopens it the same way', async () => {
+        // Without a reference choice the form is not ready, so mount() would wait forever.
+        const values = { ...base, selectedWorkflow: 'clone', runAssembly: true, runFastqQc: true, inputSource: 'fastq', fastqPath: '/data/reads.fastq' };
+        await act(async () => root.render(React.createElement(QueryClientProvider, { client }, <MemoryRouter><NanoporeTemplate onBack={() => {}} initialValues={values} /></MemoryRouter>)));
+        const toggle = () => container.querySelector<HTMLButtonElement>('[data-testid="ngs-assemble-without-reference"]')!;
+        await until(() => expect(toggle()).not.toBeNull());
+        expect(toggle().getAttribute('aria-pressed')).toBe('false');
+        // The sequence selectors stay on screen, as in the sketch.
+        expect(container.querySelector('[data-testid="molbio-sequence-selector"]')).not.toBeNull();
+        expect(container.querySelector('[data-testid="ngs-review-reference"]')!.textContent).toBe('REFERENCE REQUIRED');
+        await click('No reference — assemble and annotate only');
+        expect(toggle().getAttribute('aria-pressed')).toBe('true');
+        expect(container.textContent).toContain('The assembled consensus is annotated and reported. Expected-sequence checks are not run.');
+        expect(container.querySelector('[data-testid="ngs-review-reference"]')!.textContent).toBe('REFERENCE OPTIONAL');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].url).toBe('/api/ont/ngs/wf_clone_validation/submit');
+        expect(submits()[0].body.params).toMatchObject({ run_assembly: true, fastq_path: '/data/reads.fastq' });
+        expect(submits()[0].body.params).not.toHaveProperty('molbio_ngs_receipt_id');
+        expect(submits()[0].body.params.run_fastq_qc).toBe(false);
+        expect(submits()[0].body).not.toHaveProperty('managed_reference');
+        expect(calls.some(call => call.url.endsWith('/ngs-receipts'))).toBe(false);
+        const reopened = normalizeNanoporeCloneState({ id: 'job', name: 'job', model_id: 'nanopore', mode: 'clone_validation',
+            params: { ont_workflow_id: 'wf_clone_validation', fastq_path: '/data/reads.fastq', run_assembly: true } } as unknown as Job)!;
+        expect(reopened.assembleWithoutReference).toBe(true);
+        const withReference = normalizeNanoporeCloneState({ id: 'job', name: 'job', model_id: 'nanopore', mode: 'clone_validation',
+            params: { ont_workflow_id: 'wf_clone_validation', fastq_path: '/data/reads.fastq', reference_fasta: '/managed/reference.fasta' } } as unknown as Job)!;
+        expect(withReference.assembleWithoutReference).toBe(false);
+    });
+    it('picking a sequence after choosing no reference sends that sequence', async () => {
+        await mount({ ...base, selectedWorkflow: 'clone', runAssembly: true, assembleWithoutReference: true });
+        expect(container.querySelector('[data-testid="ngs-assemble-without-reference"]')!.getAttribute('aria-pressed')).toBe('true');
+        await input('[data-testid="molbio-sequence-selector"]', 'sequence-1');
+        await until(() => expect(container.querySelector<HTMLSelectElement>('[data-testid="molbio-revision-selector"]')!.options.length).toBeGreaterThan(1));
+        await input('[data-testid="molbio-revision-selector"]', 'revision-1');
+        expect(container.querySelector('[data-testid="ngs-assemble-without-reference"]')!.getAttribute('aria-pressed')).toBe('false');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params).toMatchObject({ molbio_ngs_receipt_id: 'new-receipt' });
     });
     it('opens optional reference controls on demand and returns to reference-free calling', async () => {
         await mount();
@@ -543,6 +651,18 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         expect(submits()[0].body).not.toHaveProperty('model_id');
     });
 
+    it('sends the reopened comparison panel on a workflow that shows the panel selector', async () => {
+        const source = { name: 'panel-qc', execution_target_id: null, params: {
+            ont_workflow_id: 'ont_plasmid_qc', fastq_path: '/data/reads.fastq',
+            molbio_revision_binding: { sequence_id: 'sequence-1', revision_id: 'revision-1', receipt_id: 'consumed' },
+            comparison_panel_binding: { panel_id: 'panel-1' },
+        } } as unknown as Job;
+        await mount(JSON.parse(JSON.stringify(normalizeNanoporeCloneState(source))));
+        await remoteReview();
+        await click('Approve and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params).toMatchObject({ molbio_ngs_receipt_id: 'new-receipt', ngs_comparison_panel_receipt_id: 'new-panel-receipt' });
+        expect(submits()[0].body.comparison_launch_id).toBe(launchId);
+    });
     it('reopens serialized cloned optional files and exact molecular/panel selections without old approval/runtime identity', async () => {
         const fileParams = { wf_clone_primers: '/data/primers.fasta', wf_clone_insert_reference: '/data/insert.fasta', wf_clone_host_reference: '/data/host.fasta', wf_clone_regions_bedfile: '/data/regions.bed' };
         const source = { name: 'clone-files', execution_target_id: null, execution_plan_approval: 'old-approval', params: {
@@ -566,8 +686,11 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         expect(calls.filter(call => call.url.endsWith('/ngs-receipts'))).toHaveLength(1);
         expect(prepares()).toHaveLength(1);
         await click('Approve and submit'); await until(() => expect(submits()).toHaveLength(1));
-        expect(submits()[0].body.params).toMatchObject({ ...fileParams, wf_clone_min_quality: 0, wf_clone_expected_coverage: 0, wf_clone_canu_fast: false, molbio_ngs_receipt_id: 'new-receipt', ngs_comparison_panel_receipt_id: 'new-panel-receipt' });
-        expect(submits()[0].body.comparison_launch_id).toBe(launchId);
+        expect(submits()[0].body.params).toMatchObject({ ...fileParams, wf_clone_min_quality: 0, wf_clone_expected_coverage: 0, wf_clone_canu_fast: false, molbio_ngs_receipt_id: 'new-receipt' });
+        // The API refuses a comparison panel on the clone route, and the form shows no panel selector there,
+        // so a panel carried over from an earlier selection is not sent.
+        expect(submits()[0].body.params).not.toHaveProperty('ngs_comparison_panel_receipt_id');
+        expect(submits()[0].body.comparison_launch_id).toBeUndefined();
         expect(submits()[0].body.params).not.toHaveProperty('dorado_model');
         expect(submits()[0].body.params).not.toHaveProperty('molbio_revision_binding');
     });

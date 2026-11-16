@@ -21,6 +21,22 @@ DEFAULT_TAGS = {
 }
 
 
+def configured_container_runtime() -> str:
+    """The one container runtime every ONT signal tool uses.
+
+    BMS_ONT_CONTAINER_RUNTIME wins, then BMS_CONTAINER_RUNTIME. With neither set,
+    Docker is used when installed and Podman otherwise, so a Podman-only machine
+    needs no setting.
+    """
+    for name in ("BMS_ONT_CONTAINER_RUNTIME", "BMS_CONTAINER_RUNTIME"):
+        chosen = os.environ.get(name, "").strip()
+        if chosen:
+            return chosen
+    if shutil.which("docker") is None and shutil.which("podman") is not None:
+        return "podman"
+    return "docker"
+
+
 def inspect_image_id(runtime: str, reference: str) -> str | None:
     """Return the immutable id of a local image, or None when it is absent."""
     try:

@@ -341,6 +341,16 @@ def test_move_evidence_rejects_model_molecule_mismatch() -> None:
         )
 
 
+def test_calibration_uses_the_reads_that_are_available_up_to_the_requested_count() -> None:
+    reads = [f"read-{index}" for index in range(7)]
+    few = runtime.select_calibration_reads(reads, 100)
+    assert sorted(few) == sorted(reads) and len(few) == 7
+    assert runtime.select_calibration_reads(list(reversed(reads)), 100) == few  # same order whatever the input order
+    assert runtime.select_calibration_reads(reads, 3) == few[:3]
+    with pytest.raises(ValueError, match="nothing to calibrate on"):
+        runtime.select_calibration_reads([], 100)
+
+
 def test_rna_calibration_orientation_and_upstream_flag_are_bound() -> None:
     assert runtime.calibration_sequence("ACGT", "dna") == "ACGT"
     assert runtime.calibration_sequence("ACGT", "rna") == "TGCA"
@@ -1470,14 +1480,17 @@ def test_worker_uses_short_private_broker_socket_path_for_deep_output_roots(
     worker = OntSignalWorker(None, None)
     seen: dict[str, Path] = {}
 
-    def fake_container_command(output: Path, broker: Path, *, kind: str) -> list[str]:
+    def fake_container_command(output: Path, broker: Path, *, kind: str, identity: dict[str, str] | None = None) -> list[str]:
         seen["broker"] = broker
+        # The image is resolved once at dispatch and handed to the command.
+        assert identity == {"image": "sha256:" + "a" * 64, "image_digest": "a" * 64}
         assert len(str(broker / "parents.sock").encode()) < 108
         return ["runtime", "run"]
 
     async def fake_execute(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {"ok": True}
 
+    monkeypatch.setattr(worker, "_runtime_identity", lambda: {"image": "sha256:" + "a" * 64, "image_digest": "a" * 64})
     monkeypatch.setattr(worker, "_container_command", fake_container_command)
     monkeypatch.setattr(worker, "_execute", fake_execute)
     result = asyncio.run(
@@ -1494,3 +1507,80 @@ def test_worker_uses_short_private_broker_socket_path_for_deep_output_roots(
     assert result == {"ok": True}
     assert seen["broker"].parent == Path("/tmp")
     assert not seen["broker"].exists()
+
+
+def test_reform_coordinates_read_from_the_parent_paf_equal_the_move_table_derivation(tmp_path: Path) -> None:
+    paf = tmp_path / "reform.paf"
+    paf.write_text(_valid_reform_line(), encoding="utf-8")
+    assert runtime.reform_authority_from_paf(paf) == _reform_authority()
+    paf.write_text("read-1\t9\t3\t9\t+\tread-1\t2\t0\t2\t2\t2\t255\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="structure or required tags"):
+        runtime.reform_authority_from_paf(paf)
+
+
+def test_realign_takes_signal_coordinates_from_its_checked_parent_without_rereading_raw_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in ("original.bam", "filtered.bam", "alignment.bam", "alignment.bam.bai"):
+        (tmp_path / name).write_bytes(name.encode())
+    (tmp_path / "inventory.txt").write_text("read-1\n", encoding="utf-8")
+    (tmp_path / "reference.fasta").write_text(">chr1\n" + "ACGT" * 25 + "\n", encoding="utf-8")
+    reform = tmp_path / "reform.paf"
+    reform.write_text("read-1\t12\t0\t12\t+\tread-1\t2\t0\t2\t2\t2\t255\tss:Z:6,6,\n", encoding="utf-8")
+    output = tmp_path / "realign.paf"
+
+    record = SimpleNamespace(
+        is_unmapped=False, is_secondary=False, is_supplementary=False, has_tag=lambda _tag: False,
+        query_name="read-1", reference_name="chr1", reference_start=10, reference_end=12,
+        cigartuples=[(0, 2)], is_reverse=True,
+    )
+
+    class Alignment:
+        header = SimpleNamespace(to_dict=lambda: {"SQ": [{"SN": "chr1", "LN": 100}]})
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def fetch(self, until_eof=True):
+            return iter([record])
+
+    def fake_run(command):
+        if command[:2] == ["squigualiser", "realign"]:
+            output.write_text("read-1\t12\t0\t12\t-\tchr1\t2\t10\t12\t2\t2\t255\tss:Z:6,6,\n", encoding="utf-8")
+        elif command[0] == "bgzip":
+            output.rename(f"{output}.gz")
+        elif command[0] == "tabix":
+            Path(f"{output}.gz.tbi").write_bytes(b"index")
+        return {"argv": command, "stdout_tail": ""}
+
+    def raw_signal_must_not_be_read(*_args, **_kwargs):
+        raise AssertionError("realign re-derived reform coordinates from the move BAM and raw signal")
+
+    monkeypatch.setattr(runtime, "pysam", SimpleNamespace(AlignmentFile=lambda *_a, **_k: Alignment()))
+    monkeypatch.setattr(runtime, "run", fake_run)
+    monkeypatch.setattr(runtime, "raw_parent_hashes", lambda _paths: [])
+    monkeypatch.setattr(runtime, "reform_parent_authority", raw_signal_must_not_be_read)
+    report = tmp_path / "validation.json"
+    args = SimpleNamespace(
+        inventory=tmp_path / "inventory.txt", filtered_bam=tmp_path / "filtered.bam", original_bam=tmp_path / "original.bam",
+        blow5=[], kmer_length=1, signal_move_offset=0, reform_paf=reform, molecule_type="dna",
+        reference_fasta=tmp_path / "reference.fasta", alignment_bam=tmp_path / "alignment.bam",
+        alignment_index=tmp_path / "alignment.bam.bai", output=output, report=report,
+    )
+    runtime.cmd_realign(args)
+    written = json.loads(report.read_text(encoding="utf-8"))
+    assert written["schema"] == "bms.ont-signal-realign.v1" and written["record_count"] == 1
+    assert written["realigned_intersection_read_count"] == 1
+    assert written["parent_sha256s"]["parent_reform_sha256"] == hashlib.sha256(reform.read_bytes()).hexdigest()
+    # A realigned record that does not follow from the parent's coordinates is still refused.
+    reform.write_text("read-1\t12\t0\t12\t+\tread-1\t2\t0\t2\t2\t2\t255\tss:Z:5,7,\n", encoding="utf-8")
+    Path(f"{output}.gz").unlink()
+    with pytest.raises(ValueError, match="parent reform"):
+        runtime.cmd_realign(args)
+    # A parent whose own coordinates are incoherent is refused before realigning.
+    reform.write_text("read-1\t12\t0\t12\t+\tread-1\t2\t0\t2\t2\t2\t255\tss:Z:6,5,\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="ss signal span is incoherent"):
+        runtime.cmd_realign(args)

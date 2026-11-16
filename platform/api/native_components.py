@@ -89,21 +89,23 @@ PROCESS_CONTRACTS = {
     'modules/merge_uncropped_target.nf:MergeUncroppedTarget': (('pyrosetta_tools',), ('path pdb_files', 'path uncropped_target_pdb'), ('path ("merged_pdbs/*.pdb"), emit: pdbs',), (), ()),
     'modules/ngs/bam_prepare.nf:PrepareBamForAnalysis': (('dorado_cpu',), ("path bam, stageAs: 'source.bam'",), ('tuple path("aligned.bam"), path("aligned.bam.bai"), emit: aligned', 'path "bam_prepare.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
     'modules/ngs/bam_prepare.nf:ValidateMappedBam': (('dorado_cpu',), ("tuple path(bam, stageAs: 'validated-source.bam'), path(bai, stageAs: 'validated-source.bam.bai')", "path reference, stageAs: 'expected-reference.fasta'"), ('tuple path("aligned.bam"), path("aligned.bam.bai"), emit: aligned', 'path "bam_mapped_check.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
+    'modules/ngs/bam_prepare.nf:FastqToUnalignedBam': (('dorado_cpu',), ('path fastq',), ('path "reads.unaligned.bam", emit: bam',), (), ()),
     'modules/ngs/bam_prepare.nf:BamToFastqForQC': (('dorado_cpu',), ('tuple path(bam), path(bai)',), ('path "reads_for_qc.fastq", emit: fastq', 'path "bam_to_fastq_for_qc.log", emit: log'), ('modules/ngs/publication.nf',), ()),
     'modules/ngs/bam_prepare.nf:PrepareReferenceForIGV': (('dorado_cpu',), ("path reference, stageAs: 'expected-reference-source.fasta'",), ('path "reference.fasta", emit: reference_copy', 'path "reference.fasta.fai", emit: reference_index', 'path "reference_prepare.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
     'modules/ngs/clone_validation.nf:RunCloneValidation': (('wf_clone',), ('tuple path(bam), val(reference_fasta)',), ('env published_directory, emit: out', 'path "wf_clone_out/**", type: \'file\', hidden: true, emit: publication_files', 'path "wf_clone.log", emit: log', 'path "runtime_provenance.json", emit: runtime_provenance', 'path "input_model_provenance.json", emit: input_model_provenance', 'path "wf_clone_out/wf-clone-validation-report.html", emit: report', 'path "wf_clone_out/sample_status.txt", emit: sample_status'), ('scripts/validate_clone_input_model.py', 'scripts/validate_wf_clone_runtime.py', 'modules/ngs/publication.nf'), ()),
-    'modules/ngs/clone_validation.nf:CloneValidationAdapter': (('fastq_qc_cpu',), ('path result_root', 'path runtime_provenance', 'tuple path(aligned_bam), path(aligned_bai)', "path reference, stageAs: 'authoritative_reference.fasta'"), ('path "adapter_manifest.json", emit: manifest', 'env published_directory, emit: verification_input', 'path "verification_input/**", type: \'file\', hidden: true, emit: publication_files', 'path "per_base_support.tsv", emit: per_base_support', 'path "alignment_stats.tsv", emit: alignment_stats', 'path "dimer_breakpoint_call.tsv", emit: breakpoint_call', 'path "dimer_secondary_summary.tsv", emit: secondary_summary'), ('scripts/adapt_wf_clone_validation.py', 'scripts/build_construct_verification_input.py', 'scripts/build_fastq_support_tables.py', 'modules/ngs/publication.nf'), ()),
+    'modules/ngs/clone_validation.nf:HostComposition': (('fastq_qc_cpu',), ('tuple path(aligned_bam), path(aligned_bai)', "path host_reference, stageAs: 'host_reference.fasta'"), ('path "host_composition.json", emit: composition, optional: true',), ('scripts/build_host_composition.py',), ()),
+    'modules/ngs/clone_validation.nf:CloneValidationAdapter': (('fastq_qc_cpu',), ('path result_root', 'path runtime_provenance', 'tuple path(aligned_bam), path(aligned_bai)', "path reference, stageAs: 'authoritative_reference.fasta'"), ('path "adapter_manifest.json", emit: manifest', 'env published_directory, emit: verification_input', 'path "verification_input/**", type: \'file\', hidden: true, optional: true, emit: publication_files', 'path "per_base_support.tsv", emit: per_base_support', 'path "consensus_pileup.ab1", emit: pileup_chromatogram, optional: true', 'path "plasmid_summary/*", emit: plasmid_summary, optional: true', 'path "alignment_stats.tsv", emit: alignment_stats', 'path "dimer_breakpoint_call.tsv", emit: breakpoint_call', 'path "dimer_secondary_summary.tsv", emit: secondary_summary'), ('scripts/adapt_wf_clone_validation.py', 'scripts/build_construct_verification_input.py', 'scripts/build_fastq_support_tables.py', 'scripts/write_pileup_ab1.py', 'scripts/build_plasmid_summary.py', 'modules/ngs/publication.nf'), ()),
     'modules/ngs/clone_validation.nf:ComparePlasmidConsensus': (('fastq_qc_cpu',), ('path verification_input', 'path read_consensus'), ('env published_directory, emit: verification_input', 'path "compared_verification_input/**", type: \'file\', hidden: true, emit: publication_files', "path 'compared_verification_input/consensus_comparison.json', emit: comparison"), ('scripts/compare_plasmid_consensus.py', 'scripts/verify_construct.py', 'scripts/plasmid_evidence.py', 'scripts/plasmid_circular.py', 'modules/ngs/publication.nf'), ()),
     'modules/ngs/comparison_panel_attribution.nf:ComparisonPanelAttribution': (('dorado_cpu',), ('path fastq', 'path expected_reference', 'path snapshot'), ("path 'comparison_panel.fasta', emit: reference", "path 'comparison_panel_expected_reference.fasta', emit: expected_reference", "path 'comparison_panel_source.fastq', emit: source_fastq", "path 'comparison_panel_normalized.fastq', emit: normalized_fastq", "path 'comparison_panel_occurrence_map.json', emit: occurrence_map", "path 'comparison_panel.bam', emit: bam", "path 'comparison_panel.bam.bai', emit: bai", "path 'comparison_panel_summary.json', emit: summary"), (), ()),
-    'modules/ngs/construct_verify.nf:ConstructVerify': (('fastq_qc_cpu',), ('path reference', 'path verification_input', 'path per_base_support', 'tuple path(aligned_bam), path(aligned_bai)', 'path alignment_stats', 'path dimer_breakpoint_call', 'path dimer_secondary_summary'), ('path "verification", emit: verification_dir', 'path "verification/qc_manifest.json", emit: manifest', 'path "verification/verification_summary.tsv", emit: summary', 'path "verification/variants.vcf", emit: variants', 'path "verification/per_base_metrics.tsv", emit: per_base_metrics', 'path "verification/evidence.html", emit: evidence_html'), ('scripts/build_construct_topology_evidence.py', 'scripts/verify_construct.py', 'scripts/plasmid_evidence.py', 'scripts/plasmid_circular.py'), ()),
+    'modules/ngs/construct_verify.nf:ConstructVerify': (('fastq_qc_cpu',), ('path reference', 'path verification_input', 'path per_base_support', 'tuple path(aligned_bam), path(aligned_bai)', 'path alignment_stats', 'path dimer_breakpoint_call', 'path dimer_secondary_summary', 'val sequencing_kits'), ('path "verification", emit: verification_dir', 'path "verification/qc_manifest.json", emit: manifest', 'path "verification/verification_summary.tsv", emit: summary', 'path "verification/variants.vcf", emit: variants', 'path "verification/per_base_metrics.tsv", emit: per_base_metrics', 'path "verification/evidence.html", emit: evidence_html'), ('scripts/build_construct_topology_evidence.py', 'scripts/verify_construct.py', 'scripts/plasmid_evidence.py', 'scripts/plasmid_circular.py'), ()),
     'modules/ngs/dorado_align.nf:DoradoAlign': (('dorado_cpu',), ('path bam', 'path reference'), ('tuple path("aligned.bam"), path("aligned.bam.bai"), emit: aligned', 'path "reference.fasta", emit: reference_copy', 'path "reference.fasta.fai", emit: reference_index', 'path "align.log", emit: log', 'path "qc_manifest.json", emit: primary_manifest, optional: true'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
     'modules/ngs/dorado_basecall.nf:DoradoPreflight': (('local_cpu',), ('path pod5_dir',), ('path "dorado_preflight.json", emit: manifest',), ('scripts/dorado_p4_preflight.py', 'modules/ngs/publication.nf', 'scripts/lib/container_runtime.py', 'scripts/lib/shared_runtime_images.py'), ()),
-    'modules/ngs/dorado_basecall.nf:DoradoBasecall': (('dorado_gpu', 'gpu'), ('path pod5_dir', 'path preflight_json'), ('path "calls.bam", emit: bam', 'path "basecall.log", emit: log', 'path "dorado_preflight.json", emit: preflight', 'path "dorado_runtime_provenance.json", emit: provenance', 'path "sequencing_summary.tsv", emit: summary, optional: true'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh', 'scripts/dorado_supports_option.sh'), ()),
+    'modules/ngs/dorado_basecall.nf:DoradoBasecall': (('dorado_gpu', 'gpu'), ('path pod5_dir', 'path preflight_json'), ('path "calls.bam", emit: bam', 'path "basecall.log", emit: log', 'path "dorado_preflight.json", emit: preflight', 'path "dorado_runtime_provenance.json", emit: provenance', 'path "sequencing_summary.tsv", emit: summary, optional: true', 'path "poly_a_config.toml", emit: poly_a_config, optional: true'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh', 'scripts/dorado_supports_option.sh'), ()),
     'modules/ngs/dorado_basecall.nf:DoradoDemux': (('dorado_cpu',), ('path bam', 'path preflight_json'), ('env published_directory, emit: directory', 'path "demux/**", type: \'file\', hidden: true, emit: publication_files', 'path "demux_manifest.json", emit: manifest', 'path "per_barcode_units.json", emit: units', 'path "demux.log", emit: log'), ('modules/ngs/publication.nf',), ()),
     'modules/ngs/fastq_align.nf:FastqAlign': (('dorado_cpu',), ('path fastq', 'path reference'), ('tuple path("aligned.bam"), path("aligned.bam.bai"), emit: aligned', 'path "reference.fasta", emit: reference_copy', 'path "reference.fasta.fai", emit: reference_index', 'path "fastq_align.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
     'modules/ngs/fastq_dimer_qc.nf:FastqDimerAnalysis': (('dorado_cpu',), ('path fastq', 'path reference'), ('path "dimer_candidates.fastq", emit: dimer_fastq', 'path "dimer_candidates.fasta", emit: dimer_fasta', 'path "dimer_read_lengths.tsv", emit: dimer_lengths', 'path "dimer_reference.fasta", emit: dimer_reference', 'path "dimer_reference.fasta.fai", emit: dimer_reference_index', 'path "dimer_analysis_summary.tsv", emit: summary', 'path "dimer_analysis.log", emit: log', 'path "qc_manifest.json", emit: qc_manifest', 'path "dimer_candidates.aligned.bam", emit: dimer_bam, optional: true', 'path "dimer_candidates.aligned.bam.bai", emit: dimer_bai, optional: true', 'path "dimer_consensus.fasta", emit: consensus, optional: true', 'path "dimer_consensus.log", emit: consensus_log, optional: true', 'path "dominant_dimer_consensus.fasta", emit: dominant_consensus, optional: true', 'path "dominant_dimer_consensus.log", emit: dominant_consensus_log, optional: true', 'path "dominant_dimer_consensus_metadata.tsv", emit: dominant_consensus_metadata, optional: true', 'path "dominant_dimer_consensus.read_ids.txt", emit: dominant_consensus_reads, optional: true', 'path "dimer_junction_profile.tsv", emit: junction_profile, optional: true', 'path "dimer_read_junctions.tsv", emit: junction_reads, optional: true', 'path "dimer_junction_events.tsv", emit: junction_events, optional: true', 'path "dimer_junction_clusters.tsv", emit: junction_clusters, optional: true', 'path "dimer_junction_hotspots.tsv", emit: junction_hotspots, optional: true', 'path "dimer_junction_rotated_profile.tsv", emit: junction_rotated_profile, optional: true', 'path "dimer_junction_rotation_summary.tsv", emit: junction_rotation_summary, optional: true', 'path "dimer_breakpoint_screen.tsv", emit: breakpoint_screen, optional: true', 'path "dimer_breakpoint_start_counts.tsv", emit: breakpoint_start_counts, optional: true', 'path "dimer_read_ledger.tsv", emit: read_ledger, optional: true', 'path "dimer_breakpoint_reads.tsv", emit: breakpoint_reads, optional: true', 'path "dimer_rotated_remap_summary.tsv", emit: rotated_remap_summary, optional: true', 'path "dimer_rotated_remap_breakpoints.tsv", emit: rotated_remap_breakpoints, optional: true', 'path "dimer_single_ref_split_events.tsv", emit: single_ref_split_events, optional: true', 'path "dimer_single_ref_split_profile.tsv", emit: single_ref_split_profile, optional: true', 'path "dimer_candidates.single_ref.aligned.bam", emit: single_ref_bam, optional: true', 'path "dimer_candidates.single_ref.aligned.bam.bai", emit: single_ref_bai, optional: true', 'path "dimer_single_ref_alignment.log", emit: single_ref_align_log, optional: true', 'path "dimer_alignment.log", emit: align_log, optional: true'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
     'modules/ngs/fastq_dimer_qc.nf:BuildDimerCanonicalOutputs': (('local_cpu',), ('path summary', 'path events', 'path single_ref_events', 'path single_ref_profile', 'path breakpoint_screen', 'path reference_fasta'), ('path "dimer_breakpoint_call.tsv", emit: breakpoint_call', 'path "dimer_evidence_by_position.tsv", emit: evidence_by_position', 'path "dimer_read_events.tsv", emit: read_events', 'path "dimer_breakpoint_sequences.tsv", emit: breakpoint_sequences', 'path "dimer_secondary_anomalies.tsv", emit: secondary_anomalies', 'path "dimer_secondary_summary.tsv", emit: secondary_summary', 'path "dimer_diagnostics.tar.gz", emit: diagnostics, optional: true'), ('modules/ngs/publication.nf',), ()),
-    'modules/ngs/fastq_plasmid_qc.nf:FastqPlasmidQC': (('fastq_qc_cpu',), ("tuple path(bam, stageAs: 'source-aligned.bam'), path(bai, stageAs: 'source-aligned.bam.bai')", "path reference, stageAs: 'expected-reference-source.fasta'", 'path fastq'), ('path "aligned.bam", emit: alignment_bam', 'path "aligned.bam.bai", emit: alignment_bai', 'path "read_lengths.tsv", emit: lengths', 'path "fastq_qc_summary.tsv", emit: summary', 'path "fastq_alignment_stats.tsv", emit: alignment_stats', 'path "fastq_coverage.tsv", emit: coverage', 'path "per_base_support.tsv", emit: per_base_support', 'path "qc_manifest.json", emit: qc_manifest', 'env published_directory, emit: verification_input', 'path "construct_verification_input/**", type: \'file\', hidden: true, emit: publication_files', 'path "reference_qc.fasta", emit: reference', 'path "reference_qc.fasta.fai", emit: reference_index', 'path "igv_coverage_depth.bedgraph", emit: igv_coverage_depth', 'path "igv_position_gradient.bedgraph", emit: igv_position_gradient', 'path "igv_gc_content.bedgraph", emit: igv_gc_content', 'path "igv_gc_zscore.bedgraph", emit: igv_gc_zscore', 'path "igv_split_read_density.bedgraph", emit: igv_split_density', 'path "igv_softclip_density.bedgraph", emit: igv_softclip_density', 'path "igv_junction_hotspots.bed", emit: igv_hotspots', 'path "igv_report_sites.bed", emit: igv_report_sites_bed', 'path "igv_report_sites.tsv", emit: igv_report_sites_tsv', 'path "igv_track_config.json", emit: igv_track_config', 'path "igv_report.html", emit: igv_report', 'path "igv_report.log", emit: igv_report_log', 'path "fastq_consensus.fasta", emit: consensus', 'path "fastq_consensus.fasta.fai", emit: consensus_index', 'path "fastq_consensus.log", emit: consensus_log', 'path "fastq_qc.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
+    'modules/ngs/fastq_plasmid_qc.nf:FastqPlasmidQC': (('fastq_qc_cpu',), ("tuple path(bam, stageAs: 'source-aligned.bam'), path(bai, stageAs: 'source-aligned.bam.bai')", "path reference, stageAs: 'expected-reference-source.fasta'", 'path fastq'), ('path "aligned.bam", emit: alignment_bam', 'path "aligned.bam.bai", emit: alignment_bai', 'path "read_lengths.tsv", emit: lengths', 'path "fastq_qc_summary.tsv", emit: summary', 'path "fastq_alignment_stats.tsv", emit: alignment_stats', 'path "fastq_coverage.tsv", emit: coverage', 'path "per_base_support.tsv", emit: per_base_support', 'path "qc_manifest.json", emit: qc_manifest', 'env published_directory, emit: verification_input', 'path "construct_verification_input/**", type: \'file\', hidden: true, emit: publication_files', 'path "reference_qc.fasta", emit: reference', 'path "reference_qc.fasta.fai", emit: reference_index', 'path "igv_coverage_depth.bedgraph", emit: igv_coverage_depth', 'path "igv_position_gradient.bedgraph", emit: igv_position_gradient', 'path "igv_gc_content.bedgraph", emit: igv_gc_content', 'path "igv_gc_zscore.bedgraph", emit: igv_gc_zscore', 'path "igv_split_read_density.bedgraph", emit: igv_split_density', 'path "igv_softclip_density.bedgraph", emit: igv_softclip_density', 'path "igv_junction_hotspots.bed", emit: igv_hotspots', 'path "igv_report_sites.bed", emit: igv_report_sites_bed', 'path "igv_report_sites.tsv", emit: igv_report_sites_tsv', 'path "igv_track_config.json", emit: igv_track_config', 'path "igv_report.html", emit: igv_report, optional: true', 'path "igv_report.log", emit: igv_report_log', 'path "fastq_consensus.fasta", emit: consensus', 'path "fastq_consensus.fasta.fai", emit: consensus_index', 'path "fastq_consensus.log", emit: consensus_log', 'path "consensus_pileup.ab1", emit: pileup_chromatogram, optional: true', 'path "plasmid_summary/*", emit: plasmid_summary, optional: true', 'path "fastq_qc.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh', 'scripts/write_pileup_ab1.py', 'scripts/build_plasmid_summary.py'), ()),
     'modules/ngs/modkit_pileup.nf:ValidateModifiedBaseBam': (('dorado_cpu',), ("tuple path(bam, stageAs: 'modified-base-source.bam'), path(bai, stageAs: 'modified-base-source.bam.bai')",), ('tuple path("modified_base_input.bam"), path("modified_base_input.bam.bai"), emit: bam', 'path "modified_base_tag_check.log", emit: log'), ('scripts/ngs_input_snapshot.sh',), ()),
     'modules/ngs/modkit_pileup.nf:ModkitPileup': (('dorado_cpu',), ("tuple path(bam, stageAs: 'modkit-input.bam'), path(bai, stageAs: 'modkit-input.bam.bai')", "path reference, stageAs: 'modkit-reference.fasta'"), ('path "methylation.bed", emit: bed', 'path "pileup.log", emit: log'), (), ()),
     'modules/ngs/modkit_summary.nf:ModkitSummary': (('dorado_cpu',), ('tuple path(bam), path(bai)',), ('path "modkit_summary.tsv", emit: summary', 'path "summary.log", emit: log'), (), ()),
@@ -1292,9 +1294,40 @@ def ngs_clone_runtime_dependencies(params):
     add('runtime_data', prefix + '/nxf-home/' + jar, home / jar)
     cache = resolve_lock_path(lock_path, lock['containers']['cache_dir'])
     for image in selected_images(lock, params.get('wf_clone_assembly_tool') or 'flye'):
-        add('image', prefix + '/images/' + image['cache_file'],
-            cache / image['cache_file'], image['sha256'])
+        installed = cache / image['cache_file']
+        # A pulled or locally built image never reproduces the reference file hash,
+        # so the identity carried to launch and remote transport is the installed
+        # file's own. A missing image keeps the reference hash and is reported as
+        # missing by the existing check.
+        add('image', prefix + '/images/' + image['cache_file'], installed,
+            _installed_file_sha256(installed) or image['sha256'])
     return tuple(dependencies), paths
+
+
+_INSTALLED_SHA256 = {}
+
+
+def _installed_file_sha256(path):
+    """SHA-256 of an installed regular file, hashed once per file version."""
+    import hashlib
+    import os
+    try:
+        info = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return None
+    import stat as stat_module
+    if not stat_module.S_ISREG(info.st_mode):
+        return None
+    key = (str(path), info.st_size, info.st_mtime_ns, info.st_ino)
+    cached = _INSTALLED_SHA256.get(str(path))
+    if cached and cached[0] == key:
+        return cached[1]
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    _INSTALLED_SHA256[str(path)] = (key, digest.hexdigest())
+    return digest.hexdigest()
 
 
 def ngs_dorado_model_dependencies(params, workflow):
@@ -1333,6 +1366,9 @@ def _append_ngs(a, workflow, yes):
     reference = bool(p.get('reference_fasta'))
     run_qc = p.get('run_fastq_qc', p.get('run_multimer_qc', True)) is not False
     methylation = workflow == 'ont_methylation_analysis'
+    # Reference-free assembly: reads go to the assembler unaligned and are
+    # aligned to the assembled consensus afterwards.
+    assembly_only = workflow == 'wf_clone_validation' and not reference
     after = ()
     if pod5:
         dependencies = ngs_dorado_model_dependencies(p, workflow)
@@ -1347,8 +1383,10 @@ def _append_ngs(a, workflow, yes):
             return True
         if reference and (not methylation or p.get('run_modkit') is not False):
             after = a.chain(['DoradoAlign'], after)
-        elif not basecall and not methylation:
+        elif not basecall and not methylation and not assembly_only:
             after = a.chain(['PrepareBamForAnalysis'], after)
+    elif bam and assembly_only:
+        pass
     elif bam:
         realign = reference and yes('bam_force_realign') and not methylation
         after = a.chain(['DoradoAlign' if realign else 'PrepareBamForAnalysis'])
@@ -1356,7 +1394,7 @@ def _append_ngs(a, workflow, yes):
                 (workflow in {'ont_construct_screening', 'wf_clone_validation'} and not yes('bam_force_realign'))):
             after = a.chain(['ValidateMappedBam'], after)
     elif fastq:
-        after = a.chain(['FastqAlign'])
+        after = a.chain(['FastqToUnalignedBam' if assembly_only else 'FastqAlign'])
     else:
         a.unresolved(workflow, 'dependency_closure', a.entrypoint,
                      'Native compiler must identify exactly one POD5/BAM/FASTQ input branch')
@@ -1369,6 +1407,17 @@ def _append_ngs(a, workflow, yes):
             after = a.chain(['ValidateModifiedBaseBam'], after)
             a.stage('ModkitPileup', after)
             a.stage('ModkitSummary', after)
+        return True
+    if assembly_only:
+        dependencies, _ = ngs_clone_runtime_dependencies(p)
+        for dependency in dependencies:
+            a.dependencies[dependency.logical_id] = dependency
+        clone = (a.stage('RunCloneValidation', after,
+            extra=tuple(row.logical_id for row in dependencies)),)
+        aligned = a.chain(['DoradoAlign'], tuple(dict.fromkeys((*clone, *after))))
+        a.chain(['CloneValidationAdapter'], tuple(dict.fromkeys((*clone, *aligned))))
+        if p.get('wf_clone_host_reference'):
+            a.stage('HostComposition', aligned)
         return True
     if workflow in {'wf_clone_validation', 'ont_construct_screening'}:
         # These entrypoints share the assembled/read-guided evidence graph.
@@ -1383,6 +1432,8 @@ def _append_ngs(a, workflow, yes):
             clone = (a.stage('RunCloneValidation', after,
                 extra=tuple(row.logical_id for row in dependencies)),)
             adapter = a.chain(['CloneValidationAdapter'], tuple(dict.fromkeys((*clone, *after))))
+            if workflow == 'wf_clone_validation' and p.get('wf_clone_host_reference'):
+                a.stage('HostComposition', after)
         qc, dimer_after = (), ()
         if run_qc:
             reads = a.chain(['BamToFastqForQC'], after) if not fastq else ()

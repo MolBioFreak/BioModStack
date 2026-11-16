@@ -101,20 +101,6 @@ def _hierarchy_record() -> dict:
     }
 
 
-def _build_plan(service, job=None, *, applied_at=None):
-    return service.build_ont_fastq_qc_reconciliation_plan(
-        job or _job(),
-        _evidence(service),
-        hierarchy_record=_hierarchy_record(),
-        database_identity_sha256="8" * 64,
-        source_revision="f" * 40,
-        source_tree="e" * 40,
-        applied_at=applied_at or datetime(2026, 8, 20, 15, 0, tzinfo=timezone.utc),
-        principal="uid:1000:tester",
-        authorization_class="development_service_owner",
-    )
-
-
 def _service():
     return importlib.import_module("services.ont_ngs_reconciliation")
 
@@ -152,115 +138,6 @@ def _job(**overrides):
     return SimpleNamespace(**values)
 
 
-def _evidence(service):
-    return service.OntFastqQcReconciliationEvidence(
-        completed_stages=tuple(STAGES),
-        stage_outputs={key: tuple(value) for key, value in STAGE_OUTPUTS.items()},
-        workflow_id="ont_fastq_qc",
-        input_mode="fastq",
-        reference_sequence_sha256=REFERENCE_SHA256,
-        source_fastq_sha256=SOURCE_FASTQ_SHA256,
-        resource_evidence_status="historical_unavailable",
-        sequence_qc_manifest_sha256=SEQUENCE_QC_MANIFEST_SHA256,
-        verification_manifest_sha256=VERIFICATION_MANIFEST_SHA256,
-        artifact_set_sha256=ARTIFACT_SET_SHA256,
-        declared_artifact_count=36,
-        present_artifact_count=34,
-        unavailable_artifact_count=2,
-        result_root_identity_sha256="e" * 64,
-    )
-
-
-def test_reconciliation_plan_is_idempotent_after_exact_replay() -> None:
-    service = _service()
-    first = _build_plan(service)
-    first = _bind_backup(service, first)
-    replay_job = _job(
-        completed_stages=list(first.completed_stages),
-        stage_outputs={key: list(value) for key, value in first.stage_outputs.items()},
-        provenance=first.provenance,
-    )
-
-    replay = _build_plan(
-        service,
-        replay_job,
-        applied_at=datetime(2026, 8, 21, 15, 0, tzinfo=timezone.utc),
-    )
-
-    assert replay.requires_write is False
-    assert replay.provenance == first.provenance
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"status": "running"},
-        {"queue_status": "running"},
-        {"awaiting_input": True},
-        {"model_id": "another_workflow"},
-        {"params": {"input_mode": "pod5"}},
-    ],
-)
-def test_reconciliation_plan_rejects_noncanonical_or_nonterminal_jobs(changes: dict) -> None:
-    service = _service()
-    with pytest.raises(service.OntFastqQcReconciliationError):
-        _build_plan(service, _job(**changes))
-
-
-@pytest.mark.asyncio
-async def test_evidence_collection_uses_a_detached_job_copy(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    service = _service()
-    collect = getattr(service, "collect_ont_fastq_qc_reconciliation_evidence", None)
-    assert callable(collect)
-    result_root = tmp_path / "retry3"
-    result_root.mkdir()
-    original = _job()
-    original_completed = list(original.completed_stages)
-    original_provenance = original.provenance
-
-    async def fake_validate(
-        detached_job,
-        *,
-        historical_reconciliation=False,
-        pinned_result_root=None,
-    ):
-        assert detached_job is not original
-        assert historical_reconciliation is True
-        assert pinned_result_root is not None
-        assert pinned_result_root.readlink() == result_root
-        detached_job.completed_stages = list(STAGES)
-        detached_job.stage_outputs = {key: list(value) for key, value in STAGE_OUTPUTS.items()}
-        detached_job.provenance = {**detached_job.provenance, "completion-only-on-copy": True}
-        return {
-            "workflow_id": "ont_fastq_qc",
-            "input_mode": "fastq",
-            "reference_sequence_sha256": REFERENCE_SHA256,
-            "source_fastq_sha256": SOURCE_FASTQ_SHA256,
-            "resource_evidence_status": "historical_unavailable",
-            "sequence_qc_manifest_sha256": SEQUENCE_QC_MANIFEST_SHA256,
-            "construct_verification_manifest_sha256": VERIFICATION_MANIFEST_SHA256,
-            "artifact_set_sha256": ARTIFACT_SET_SHA256,
-            "declared_artifact_count": 36,
-            "present_artifact_count": 34,
-            "unavailable_artifact_count": 2,
-        }
-
-    monkeypatch.setattr(service, "resolve_persisted_job_result_root", lambda job: result_root)
-    monkeypatch.setattr(service, "validate_and_prepare_ont_fastq_qc_completion", fake_validate)
-    evidence = await collect(original)
-
-    assert evidence.completed_stages == tuple(STAGES)
-    assert evidence.stage_outputs == {key: tuple(value) for key, value in STAGE_OUTPUTS.items()}
-    assert evidence.result_root_identity_sha256 != str(result_root)
-    assert len(evidence.result_root_identity_sha256) == 64
-    assert original.completed_stages == original_completed
-    assert original.provenance is original_provenance
-    assert "completion-only-on-copy" not in original.provenance
-
-
 def test_protected_row_digest_uses_only_explicit_reconciliation_fields() -> None:
     from services import ont_ngs_reconciliation as service
 
@@ -292,248 +169,56 @@ def test_protected_row_digest_uses_only_explicit_reconciliation_fields() -> None
     ) != before
 
 
-@pytest.mark.asyncio
-async def test_evidence_collection_reads_through_pinned_root_across_aba_replacement(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from services import ont_ngs_reconciliation as service
-
-    result_root = tmp_path / "retry3"
-    result_root.mkdir()
-    (result_root / "identity.txt").write_text("original", encoding="utf-8")
-    replacement_source = tmp_path / "replacement"
-    replacement_source.mkdir()
-    (replacement_source / "identity.txt").write_text("replacement", encoding="utf-8")
-    job = _job()
-    monkeypatch.setattr(service, "resolve_persisted_job_result_root", lambda _job: result_root)
-
-    async def aba_validate(
-        detached_job,
-        *,
-        historical_reconciliation=False,
-        pinned_result_root=None,
-    ):
-        assert historical_reconciliation is True
-        assert pinned_result_root is not None
-        original_path = tmp_path / "original"
-        result_root.rename(original_path)
-        replacement_source.rename(result_root)
-        assert (pinned_result_root / "identity.txt").read_text(encoding="utf-8") == "original"
-        result_root.rename(replacement_source)
-        original_path.rename(result_root)
-        detached_job.completed_stages = list(STAGES)
-        detached_job.stage_outputs = {key: list(value) for key, value in STAGE_OUTPUTS.items()}
-        return {
-            "workflow_id": "ont_fastq_qc",
-            "input_mode": "fastq",
-            "reference_sequence_sha256": REFERENCE_SHA256,
-            "source_fastq_sha256": SOURCE_FASTQ_SHA256,
-            "resource_evidence_status": "historical_unavailable",
-            "sequence_qc_manifest_sha256": SEQUENCE_QC_MANIFEST_SHA256,
-            "construct_verification_manifest_sha256": VERIFICATION_MANIFEST_SHA256,
-            "artifact_set_sha256": ARTIFACT_SET_SHA256,
-            "declared_artifact_count": 36,
-            "present_artifact_count": 34,
-            "unavailable_artifact_count": 2,
-        }
-
-    monkeypatch.setattr(service, "validate_and_prepare_ont_fastq_qc_completion", aba_validate)
-
-    evidence = await service.collect_ont_fastq_qc_reconciliation_evidence(job)
-    assert evidence.artifact_set_sha256 == ARTIFACT_SET_SHA256
-    assert (result_root / "identity.txt").read_text(encoding="utf-8") == "original"
+FIXTURE = Path(__file__).parent / "fixtures" / "ont_fastq_qc_reconciliation_receipt_v1.json"
+PACKAGE_KEYS = {
+    "workflow_id", "input_mode", "reference_sequence_sha256", "source_fastq_sha256",
+    "resource_evidence_status", "sequence_qc_manifest_sha256", "verification_manifest_sha256",
+    "artifact_set_sha256", "declared_artifact_count", "present_artifact_count",
+    "unavailable_artifact_count", "result_root_identity_sha256",
+}
 
 
-async def _sqlite_job_sessions(tmp_path: Path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}")
-    async with engine.begin() as connection:
-        await connection.run_sync(Job.__table__.create)
-    sessions = async_sessionmaker(engine, expire_on_commit=False)
-    job_values = vars(_job()).copy()
-    job_values.update({"name": "retry3", "paused": False})
-    async with sessions() as session:
-        session.add(Job(**job_values))
-        await session.commit()
-    return engine, sessions
+def _saved():
+    saved = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    job = SimpleNamespace(**saved["job"])
+    receipt = job.provenance["ont_fastq_qc_reconciliation_v1"]
+    return job, receipt, saved["provenance_preimage"]
 
 
-def _bind_backup(service, plan):
-    return service.bind_ont_fastq_qc_reconciliation_backup(
-        plan,
-        service.OntFastqQcReconciliationBackup(
-            backup_id="retry3-pre-reconciliation.sqlite",
-            sha256="9" * 64,
-            size_bytes=8192,
-            integrity_check="ok",
-            foreign_key_violations=0,
-            source_snapshot=SOURCE_SNAPSHOT,
-        ),
-    )
-
-
-def test_reconciliation_backup_binding_is_path_opaque_and_required() -> None:
+def test_a_saved_receipt_still_reads_against_its_result() -> None:
     service = _service()
-    plan = _build_plan(service)
-
-    bound = _bind_backup(service, plan)
-
-    assert bound.provenance["ont_fastq_qc_reconciliation_v1"]["backup"] == {
-        "backup_id": "retry3-pre-reconciliation.sqlite",
-        "sha256": "9" * 64,
-        "size_bytes": 8192,
-        "integrity_check": "ok",
-        "foreign_key_violations": 0,
-    }
-    assert bound.provenance["ont_fastq_qc_reconciliation_v1"]["source_snapshot"] == SOURCE_SNAPSHOT
-    receipt = bound.provenance["ont_fastq_qc_reconciliation_v1"]
-    assert "/" not in receipt["backup"]["backup_id"]
-    assert receipt["backup_source_preimage_sha256"] == service.reconciliation_authority_digest(
-        "backup-source-preimage", SOURCE_SNAPSHOT
-    )
-    payload = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
-    expected_digest = hashlib.sha256(
-        b"bms.ont-fastq-qc-reconciliation.v1\0receipt\0" + rfc8785.dumps(payload)
-    ).hexdigest()
-    assert receipt["receipt_sha256"] == expected_digest
-    schema_path = Path(__file__).resolve().parents[3] / "schemas/ngs/ont_fastq_qc_reconciliation_receipt_v1.schema.json"
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    Draft202012Validator(schema, format_checker=FormatChecker()).validate(receipt)
+    job, receipt, preimage = _saved()
+    package = {key: receipt[key] for key in PACKAGE_KEYS}
+    service.validate_persisted_reconciliation_receipt(receipt, job=job, expected_package=package, provenance_preimage=preimage)
+    # Access-token rotation after the receipt was written does not unbind it.
+    job.provenance = {
+        key: value for key, value in job.provenance.items()
+        if key not in {"ont_fastq_qc_hierarchy_v1", "alignment_access_token_sha256"}
+    } | {"alignment_access_scheme": "opaque_job_capability_v1", "alignment_access_rotation_count": 20, "alignment_access_revoked": True}
+    service.validate_persisted_reconciliation_receipt(receipt, job=job, expected_package=package, provenance_preimage=preimage)
 
 
-@pytest.mark.asyncio
-async def test_reconciliation_apply_loses_cas_without_erasing_concurrent_provenance(tmp_path: Path) -> None:
+@pytest.mark.parametrize("change", ["outputs", "package", "status", "receipt"])
+def test_a_saved_receipt_that_no_longer_matches_its_result_is_refused(change: str) -> None:
     service = _service()
-    apply_plan = getattr(service, "apply_ont_fastq_qc_reconciliation_plan", None)
-    assert callable(apply_plan)
-    engine, sessions = await _sqlite_job_sessions(tmp_path)
-    try:
-        async with sessions() as first, sessions() as second:
-            loaded = await first.get(Job, JOB_ID)
-            assert loaded is not None
-            plan = _build_plan(service, loaded)
-            plan = _bind_backup(service, plan)
-            winner = await second.get(Job, JOB_ID)
-            assert winner is not None
-            winner.provenance = {**winner.provenance, "concurrent_operator_edit": True}
-            await second.commit()
-
-            with pytest.raises(service.OntFastqQcReconciliationError, match="CAS"):
-                await apply_plan(
-                    first,
-                    loaded,
-                    plan,
-                    current_source_snapshot=SOURCE_SNAPSHOT,
-                    current_database_identity_sha256="8" * 64,
-                )
-            await first.rollback()
-
-        async with sessions() as verification:
-            persisted = await verification.get(Job, JOB_ID)
-            assert persisted is not None
-            assert persisted.provenance["concurrent_operator_edit"] is True
-            assert persisted.completed_stages == ["dimer_qc"]
-    finally:
-        await engine.dispose()
+    job, receipt, preimage = _saved()
+    package = {key: receipt[key] for key in PACKAGE_KEYS}
+    if change == "outputs":
+        job.stage_outputs = {**job.stage_outputs, "fastq_align": ["foreign/output"]}
+    elif change == "package":
+        package["artifact_set_sha256"] = "0" * 64
+    elif change == "status":
+        job.status = "failed"
+    else:
+        receipt = {**receipt, "job_id": "another-job"}
+    with pytest.raises(service.OntFastqQcReconciliationError):
+        service.validate_persisted_reconciliation_receipt(receipt, job=job, expected_package=package, provenance_preimage=preimage)
 
 
-@pytest.mark.asyncio
-async def test_reconciliation_apply_updates_only_mirrors_and_receipt(tmp_path: Path) -> None:
+def test_nothing_writes_reconciliation_receipts_any_more() -> None:
     service = _service()
-    engine, sessions = await _sqlite_job_sessions(tmp_path)
-    try:
-        async with sessions() as session:
-            loaded = await session.get(Job, JOB_ID)
-            assert loaded is not None
-            loaded.provenance = {
-                **loaded.provenance,
-                "ont_fastq_qc_hierarchy_v1": _hierarchy_record(),
-            }
-            original_params = loaded.params
-            original_provenance = json.loads(json.dumps(loaded.provenance))
-            original_current_stage = loaded.current_stage
-            original_status = (loaded.status, loaded.queue_status, loaded.completed_at)
-            plan = _build_plan(service, loaded)
-            plan = _bind_backup(service, plan)
-            changed = await service.apply_ont_fastq_qc_reconciliation_plan(
-                session,
-                loaded,
-                plan,
-                current_source_snapshot=SOURCE_SNAPSHOT,
-                current_database_identity_sha256="8" * 64,
-            )
-            await session.commit()
-            assert changed is True
+    for name in ("build_ont_fastq_qc_reconciliation_plan", "bind_ont_fastq_qc_reconciliation_backup",
+                 "apply_ont_fastq_qc_reconciliation_plan", "collect_ont_fastq_qc_reconciliation_evidence"):
+        assert not hasattr(service, name), name
+    assert not (Path(__file__).resolve().parents[1] / "scripts" / "reconcile_ont_fastq_qc_job.py").exists()
 
-        async with sessions() as verification:
-            persisted = await verification.get(Job, JOB_ID)
-            assert persisted is not None
-            assert persisted.completed_stages == STAGES
-            assert persisted.stage_outputs == STAGE_OUTPUTS
-            assert persisted.provenance["existing_history"] == {"immutable": True}
-            assert persisted.provenance["alignment_hierarchy_authority_v1"] == _hierarchy_record()
-            assert "ont_fastq_qc_reconciliation_v1" in persisted.provenance
-            assert persisted.params == original_params
-            assert persisted.current_stage == original_current_stage
-            assert (persisted.status, persisted.queue_status, persisted.completed_at) == original_status
-            receipt = persisted.provenance["ont_fastq_qc_reconciliation_v1"]
-            package_keys = {
-                "workflow_id", "input_mode", "reference_sequence_sha256", "source_fastq_sha256",
-                "resource_evidence_status", "sequence_qc_manifest_sha256", "verification_manifest_sha256",
-                "artifact_set_sha256", "declared_artifact_count", "present_artifact_count",
-                "unavailable_artifact_count", "result_root_identity_sha256",
-            }
-            service.validate_persisted_reconciliation_receipt(
-                receipt,
-                job=persisted,
-                expected_package={key: receipt[key] for key in package_keys},
-                provenance_preimage=original_provenance,
-            )
-            persisted.provenance = {
-                key: value
-                for key, value in persisted.provenance.items()
-                if key not in {"ont_fastq_qc_hierarchy_v1", "alignment_access_token_sha256"}
-            } | {
-                "alignment_access_scheme": "opaque_job_capability_v1",
-                "alignment_access_rotation_count": 20,
-                "alignment_access_revoked": True,
-            }
-            service.validate_persisted_reconciliation_receipt(
-                receipt,
-                job=persisted,
-                expected_package={key: receipt[key] for key in package_keys},
-                provenance_preimage=original_provenance,
-            )
-            persisted.stage_outputs = {**persisted.stage_outputs, "fastq_align": ["foreign/output"]}
-            with pytest.raises(service.OntFastqQcReconciliationError, match="current authority"):
-                service.validate_persisted_reconciliation_receipt(
-                    receipt,
-                    job=persisted,
-                    expected_package={key: receipt[key] for key in package_keys},
-                    provenance_preimage=original_provenance,
-                )
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_reconciliation_apply_rejects_source_snapshot_drift_before_cas(tmp_path: Path) -> None:
-    service = _service()
-    engine, sessions = await _sqlite_job_sessions(tmp_path)
-    try:
-        async with sessions() as session:
-            loaded = await session.get(Job, JOB_ID)
-            assert loaded is not None
-            plan = _bind_backup(service, _build_plan(service, loaded))
-            changed_snapshot = {**SOURCE_SNAPSHOT, "page_count": SOURCE_SNAPSHOT["page_count"] + 1}
-            with pytest.raises(service.OntFastqQcReconciliationConflict, match="source preimage"):
-                await service.apply_ont_fastq_qc_reconciliation_plan(
-                    session,
-                    loaded,
-                    plan,
-                    current_source_snapshot=changed_snapshot,
-                    current_database_identity_sha256="8" * 64,
-                )
-            await session.rollback()
-    finally:
-        await engine.dispose()

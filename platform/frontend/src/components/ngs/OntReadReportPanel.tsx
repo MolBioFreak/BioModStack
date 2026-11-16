@@ -21,10 +21,21 @@ export interface OntReadReport {
     alignment: {
         aligned: boolean; mapped_reads: number; unmapped_reads: number; secondary_records: number; supplementary_records: number;
         references: Array<{ name: string; length: number }>; reads_per_reference: Record<string, number>;
+        reference_count?: number; references_with_reads?: number; reference_list_limit?: number;
     };
     move_tagged_reads: number;
+    /** Dorado's per-read poly(A) estimate; absent when the run did not ask for it. */
+    poly_a?: {
+        source: string; reads: number; estimated_reads: number; no_estimate_reads: number; zero_length_reads: number; reads_without_tag: number;
+        median_tail_nt: number | null; mean_tail_nt: number | null; longest_tail_nt: number | null;
+        histogram: { bin_width_nt: number; bins: Array<{ start_nt: number; end_nt_exclusive: number; read_count: number }> };
+    } | null;
+    /** Whether the quick squiggle can read this run's own POD5 and basecall BAM. */
+    quick_squiggle?: { available: boolean; reason: string | null };
+    molecule_type?: 'dna' | 'rna';
     modifications: {
         probability_threshold: number;
+        method?: { source: string; population: string; denominator: string; filter: string };
         by_code: Array<{ code: string; called_sites: number; modified_sites: number; reads: number; modified_fraction: number }>;
         by_motif?: Array<{ code: string; motif: string; called_sites: number; modified_sites: number; modified_fraction: number }>;
     };
@@ -61,14 +72,21 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
     const report = query.data!;
     const align = report.alignment;
     const bins = report.read_length_histogram.bins;
+    // Past the read cap every figure covers only the first reads in file order.
+    const capped = Boolean(report.truncated_at_reads);
+    // The quick viewer is offered only when it can read its own POD5; otherwise the workbench is the way in.
+    const quickSquiggle = report.move_tagged_reads > 0 && report.quick_squiggle?.available === true;
+    const listedReferences = Object.keys(align.reads_per_reference).length;
+    const referencesWithReads = align.references_with_reads ?? listedReferences;
     const cards: Array<[string, string, string]> = [
-        ['Reads', n(report.reads), report.truncated_at_reads ? `first ${n(report.truncated_at_reads)} primary reads` : 'primary records'],
+        ['Reads', n(report.reads), report.truncated_at_reads ? `first ${n(report.truncated_at_reads)} primary reads in file order` : 'primary records'],
         ['Yield', n(report.total_bases, ' bp'), 'sum of read lengths'],
         ['Read N50', n(report.n50_read_length_bp, ' bp'), `mean ${n(Math.round(report.mean_read_length_bp))} · max ${n(report.longest_read_bp)}`],
         ['Mean Q', report.mean_qscore == null ? '—' : report.mean_qscore.toFixed(1), `median ${report.median_qscore?.toFixed(1) ?? '—'}`],
         ['≥Q10 / ≥Q20', report.reads ? `${pct(report.reads_q10_or_better / report.reads, 0)} / ${pct(report.reads_q20_or_better / report.reads, 0)}` : '—', 'share of reads'],
-        ['Mapped', align.aligned ? `${n(align.mapped_reads)} / ${n(report.reads)}` : 'not aligned', align.aligned ? `${align.references.length} reference contig(s)` : 'no reference supplied'],
-        ['Move tables', n(report.move_tagged_reads), report.move_tagged_reads ? 'squiggles below' : 'enable "emit moves" for squiggles'],
+        ['Mapped', align.aligned ? `${n(align.mapped_reads)} / ${n(report.reads)}` : 'not aligned', align.aligned ? `${align.reference_count ?? align.references.length} reference contig(s)` : 'no reference supplied'],
+        ['Move tables', n(report.move_tagged_reads), !report.move_tagged_reads ? 'enable "emit moves" for squiggles'
+            : quickSquiggle ? 'squiggles below' : onOpenSignal ? 'open in the signal workbench' : 'no raw signal on this run'],
     ];
     return (
         <div className="space-y-3" data-testid="ont-read-report">
@@ -86,7 +104,7 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
                 <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7" aria-label="Read summary">
                     {cards.map(([label, value, detail]) => (
                         <div key={label} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
-                            <div className="text-[11px] text-[var(--text-secondary)]">{label}</div>
+                            <div className="text-[11px] text-[var(--text-secondary)]">{label}{capped ? ' (capped)' : ''}</div>
                             <div className="font-mono text-sm text-[var(--text-primary)]">{value}</div>
                             <div className="mt-1 text-[9px] leading-tight text-[var(--text-secondary)]">{detail}</div>
                         </div>
@@ -97,6 +115,11 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
             {report.modifications.by_code.length > 0 && (
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" aria-label="Modification calls">
                     <h4 className="text-sm font-semibold text-[var(--text-primary)]">Modification calls</h4>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]" data-testid="modification-method">
+                        Counted per read from the {report.modifications.method?.source ?? 'read MM/ML tags'}: a base counts as modified at P(modified) ≥ {report.modifications.probability_threshold}.
+                        {' '}Population: {report.modifications.method?.population ?? 'primary reads'}. Denominator: {report.modifications.method?.denominator ?? 'called bases'}. Filter: {report.modifications.method?.filter ?? 'none'}.
+                        {' '}These are read-site tallies, not modkit's per-reference-position estimates.
+                    </p>
                     {(report.modifications.by_motif ?? []).length > 0 && (
                         <>
                             <p className="mt-1 text-xs text-[var(--text-secondary)]">Host methylation, scored at its motif (P(modified) ≥ {report.modifications.probability_threshold}). Below {pct(METHYLATED_FRACTION_CUTOFF, 0)} the template is read as unmethylated.</p>
@@ -141,6 +164,43 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
                 </section>
             )}
 
+            {report.poly_a && (
+                <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" aria-label="Poly(A) tail length" data-testid="poly-a-result">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                            <h4 className="text-sm font-semibold text-[var(--text-primary)]">Poly(A) tail length{capped ? ' (capped)' : ''}</h4>
+                            <p className="text-xs text-[var(--text-secondary)]">One value per read, from Dorado.</p>
+                        </div>
+                        <a href={`/api/jobs/${encodeURIComponent(jobId)}/ngs-read-report?poly_a_tsv=true`} download="poly_a_tail_lengths.tsv" className="rounded border border-[var(--border-primary)] px-2 py-1 text-xs">Per-read values (TSV)</a>
+                    </div>
+                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                        {([
+                            ['Reads with an estimate', n(report.poly_a.estimated_reads), `of ${n(report.poly_a.reads)} reads`],
+                            ['No estimate', n(report.poly_a.no_estimate_reads), report.poly_a.reads_without_tag ? `counted apart from zero · ${n(report.poly_a.reads_without_tag)} reads carry no value` : 'counted apart from zero'],
+                            ['Median tail', report.poly_a.median_tail_nt == null ? '—' : n(report.poly_a.median_tail_nt), report.poly_a.mean_tail_nt == null ? 'nt' : `nt · mean ${report.poly_a.mean_tail_nt} · longest ${n(report.poly_a.longest_tail_nt)}`],
+                        ] as Array<[string, string, string]>).map(([label, value, detail]) => (
+                            <div key={label} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
+                                <div className="text-[11px] text-[var(--text-secondary)]">{label}</div>
+                                <div className="font-mono text-sm text-[var(--text-primary)]">{value}</div>
+                                <div className="mt-1 text-[9px] leading-tight text-[var(--text-secondary)]">{detail}</div>
+                            </div>
+                        ))}
+                    </div>
+                    {report.poly_a.histogram.bins.length > 0 && (
+                        <Plot
+                            data={[{ type: 'bar', name: 'Reads', x: report.poly_a.histogram.bins.map(bin => (bin.start_nt + bin.end_nt_exclusive) / 2), y: report.poly_a.histogram.bins.map(bin => bin.read_count), width: report.poly_a.histogram.bin_width_nt, marker: { color: '#55a7ff' } }]}
+                            layout={{
+                                xaxis: { title: { text: 'Tail length (nt)' } }, yaxis: { title: { text: 'Reads' } },
+                                margin: { l: 62, r: 20, t: 16, b: 56 }, height: 260, showlegend: false,
+                                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#b8c4d8' },
+                            }}
+                            config={{ responsive: true, displaylogo: false }}
+                            useResizeHandler
+                            style={{ width: '100%', height: '260px' }}
+                        />
+                    )}
+                </section>
+            )}
             <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
                 <h4 className="text-sm font-semibold text-[var(--text-primary)]">Read-length distribution</h4>
                 <Plot
@@ -164,14 +224,24 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
 
             {align.aligned && Object.keys(align.reads_per_reference).length > 0 && (
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs">
-                    <h4 className="text-sm font-semibold text-[var(--text-primary)]">Reads per reference</h4>
+                    <h4 className="text-sm font-semibold text-[var(--text-primary)]">Reads per reference{referencesWithReads > listedReferences ? ` (capped: top ${listedReferences} of ${referencesWithReads})` : ''}</h4>
                     <ul className="mt-1 space-y-0.5 font-mono">
                         {Object.entries(align.reads_per_reference).map(([name, count]) => <li key={name}>{name}: {count.toLocaleString()}</li>)}
                     </ul>
                 </section>
             )}
 
-            {report.move_tagged_reads > 0 && <OntReadSquigglePanel jobId={jobId} />}
+            {quickSquiggle && <OntReadSquigglePanel jobId={jobId} />}
+            {report.move_tagged_reads > 0 && !quickSquiggle && (
+                <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs" data-testid="quick-squiggle-unavailable">
+                    <h4 className="text-sm font-semibold text-[var(--text-primary)]">Squiggle</h4>
+                    <p className="mt-1 text-[var(--text-secondary)]">
+                        These reads carry move tables. {report.quick_squiggle?.reason ?? 'The quick squiggle needs this run\'s own POD5.'}
+                        {onOpenSignal ? ' The signal workbench has the raw signal bound to this result.' : ''}
+                    </p>
+                    {onOpenSignal && <button type="button" onClick={onOpenSignal} className="mt-2 rounded border border-[var(--border-primary)] px-2 py-1 text-xs">Open the signal workbench</button>}
+                </section>
+            )}
 
             <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs">
                 <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Programs and read groups</summary>

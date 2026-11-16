@@ -252,7 +252,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model")
     parser.add_argument("--assembly-tool", choices=("flye", "canu"), default="flye")
     parser.add_argument("--output")
-    parser.add_argument("--resolve", choices=("patched_source.path", "containers.cache_dir"),
+    parser.add_argument("--resolve", choices=("patched_source.path", "containers.cache_dir", "nextflow.executable"),
                         help="print this lock location resolved for this installation and exit")
     args = parser.parse_args()
     if not args.resolve and not (args.model and args.output):

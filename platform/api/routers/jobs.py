@@ -4969,6 +4969,9 @@ def _planned_nanopore_stages(params: Optional[dict], *, mode: Optional[str] = No
             display_stages.append("dorado_demux")
         elif has_reference:
             display_stages.append("dorado_align")
+        if (mode == "basecall_rna" and has_reference and np_params.get("run_modkit") is True
+                and str(np_params.get("modified_bases") or "none") != "none"):
+            display_stages.append("modkit")
         return display_stages
     fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(np_params)
     bam_force_realign = _resolve_nanopore_bam_realign(np_params)
@@ -4979,7 +4982,9 @@ def _planned_nanopore_stages(params: Optional[dict], *, mode: Optional[str] = No
         display_stages.append("dorado_align")
     if has_bam and has_reference:
         display_stages.append("dorado_align" if bam_force_realign else "bam_prepare")
-    if (has_bam and not has_reference) or (has_pod5 and not has_reference):
+    # Reference-free assembly aligns the reads to the assembled consensus afterwards.
+    assembly_only = np_params.get("run_assembly") is True and not has_reference
+    if not assembly_only and ((has_bam and not has_reference) or (has_pod5 and not has_reference)):
         display_stages.append("bam_prepare")
     if has_fastq and has_reference:
         display_stages.append("fastq_align")
@@ -4993,6 +4998,8 @@ def _planned_nanopore_stages(params: Optional[dict], *, mode: Optional[str] = No
         display_stages.append("dimer_analysis")
     if np_params.get("run_assembly") is True and (has_pod5 or has_bam or has_fastq):
         display_stages.append("wf_clone_validation")
+        if assembly_only:
+            display_stages.append("dorado_align")
 
     return _dedupe_preserve_order(display_stages)
 
@@ -5149,6 +5156,8 @@ def _infer_nanopore_stage_outputs(
                 allowed_stages.add("dimer_analysis")
             if params.get("run_assembly") is True and (has_pod5 or has_bam or has_fastq):
                 allowed_stages.add("wf_clone_validation")
+                if not has_reference:
+                    allowed_stages.add("dorado_align")
 
     inferred: Dict[str, List[str]] = {}
     for stage, rel_paths in expected.items():

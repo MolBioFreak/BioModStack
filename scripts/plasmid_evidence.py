@@ -99,3 +99,63 @@ def validate_structural_rows(
         "secondary_anomaly_fraction": numerator / denominator,
         "contradictory_breakpoint_evidence": breakpoint_contradiction(breakpoint_rows[0], reference_length),
     }
+
+
+_RAPID_KIT = re.compile(r"SQK-(RAD|RBK|RPB|ULK)")
+_LIGATION_KIT = re.compile(r"SQK-(LSK|NBD|MLK)")
+
+
+def library_prep_from_kits(kits) -> str:
+    """Rapid kits cut every molecule; ligation kits attach to the ends and keep it whole."""
+    names = {str(kit).strip().upper() for kit in (kits or ()) if str(kit).strip()}
+    found = {
+        prep for prep, pattern in (("rapid", _RAPID_KIT), ("ligation", _LIGATION_KIT))
+        if any(pattern.search(name) for name in names)
+    }
+    return found.pop() if len(found) == 1 else "unknown"
+
+
+def linear_end_measurements(segments_by_read, reference_length: int, edge: int) -> dict[str, Any]:
+    """Where reads start and stop along a linear construct. Measurements only, no threshold."""
+    window = max(1, min(50, reference_length // 2))
+    width = max(1, -(-reference_length // 100))
+    starts: dict[int, int] = {}
+    ends: dict[int, int] = {}
+    change = [0] * (reference_length + 2)
+    aligned = spanning = 0
+    for segments in segments_by_read.values():
+        for segment in segments:
+            first = max(1, int(segment["reference_start"]))
+            last = min(reference_length, int(segment["reference_end"]))
+            if last < first:
+                continue
+            change[first] += 1
+            change[last + 1] -= 1
+            if segment.get("supplementary"):
+                continue
+            aligned += 1
+            starts[(first - 1) // width] = starts.get((first - 1) // width, 0) + 1
+            ends[(last - 1) // width] = ends.get((last - 1) // width, 0) + 1
+            if first <= edge + 1 and last >= reference_length - edge:
+                spanning += 1
+    depth: list[int] = []
+    running = 0
+    for position in range(1, reference_length + 1):
+        running += change[position]
+        depth.append(running)
+    return {
+        "aligned_reads": aligned,
+        "reads_spanning_both_ends": spanning,
+        "spanning_fraction": round(spanning / aligned, 6) if aligned else None,
+        "spanning_tolerance_bp": edge,
+        "end_window_bp": window,
+        "mean_depth_first_window": round(sum(depth[:window]) / window, 3),
+        "mean_depth_last_window": round(sum(depth[-window:]) / window, 3),
+        "read_end_histogram": {
+            "bin_width_bp": width,
+            "bins": [
+                {"start_bp": index * width + 1, "read_starts": starts.get(index, 0), "read_ends": ends.get(index, 0)}
+                for index in range(-(-reference_length // width))
+            ],
+        },
+    }

@@ -1,4 +1,4 @@
-import { ngsArtifactUrl, useNgsArtifacts, type NgsPackageArtifact } from '../lib/ngsArtifacts';
+import { hasPublishedReadsBam, ngsArtifactUrl, useNgsArtifacts, type NgsPackageArtifact } from '../lib/ngsArtifacts';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { JobStageProgress } from './JobStageProgress';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -71,6 +71,8 @@ import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
 import { OntReadReportPanel } from './ngs/OntReadReportPanel';
 import { OntFastqQcResultPanel } from './ngs/OntFastqQcResultPanel';
+import { PlasmidSummaryPanel } from './ngs/PlasmidSummaryPanel';
+import { NativeResultProjectAttach } from './ngs/NativeResultProjectAttach';
 import { AlignmentPresentationStatus } from './ngs/AlignmentPresentationStatus';
 import { useOntFastqQcResult } from './ngs/useOntFastqQcResult';
 import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
@@ -1459,26 +1461,6 @@ function lookupCodePercent(
     return { percent, coverage };
 }
 
-function pickDominantCytosineCall(
-    mCall: { percent: number | null; coverage: number | null },
-    hCall: { percent: number | null; coverage: number | null }
-): { percent: number | null; coverage: number | null } {
-    const mPercent = mCall.percent;
-    const hPercent = hCall.percent;
-    const hasM = mPercent != null;
-    const hasH = hPercent != null;
-
-    if (!hasM && !hasH) {
-        return { percent: null, coverage: null };
-    }
-
-    const coverage = Math.max(mCall.coverage || 0, hCall.coverage || 0) || null;
-    if (!hasH || (hasM && (mPercent as number) >= (hPercent as number))) {
-        return { percent: mPercent, coverage };
-    }
-    return { percent: hPercent, coverage };
-}
-
 function buildDamDcmCalls(
     records: ParsedBedRecord[],
     fastaText: string
@@ -1543,13 +1525,9 @@ function buildDamDcmCalls(
         const minusPos = hit.start + 4;
         const pairKey = `${chrom}:Dcm:${hit.start + 1}`;
 
-        const plusM = lookupCodePercent(lookup, chrom, plusPos, 'm');
-        const plusH = lookupCodePercent(lookup, chrom, plusPos, 'h');
-        const plus = pickDominantCytosineCall(plusM, plusH);
-
-        const minusM = lookupCodePercent(lookup, chrom, minusPos, 'm');
-        const minusH = lookupCodePercent(lookup, chrom, minusPos, 'h');
-        const minus = pickDominantCytosineCall(minusM, minusH);
+        // Dcm writes 5mC. 5hmC is a different modification and is never folded into the Dcm figure.
+        const plus = lookupCodePercent(lookup, chrom, plusPos, 'm');
+        const minus = lookupCodePercent(lookup, chrom, minusPos, 'm');
 
         dcmSites.push({
             chrom,
@@ -2543,13 +2521,16 @@ export function NGSToolkit() {
             : typeof selectedJobParams.workflow_id === 'string'
                 ? selectedJobParams.workflow_id
                 : null;
-    const isCanonicalFastqQcRun = isFastqOnlyRun && selectedOntWorkflowId === 'ont_fastq_qc';
-    const showOntReadReport = !isCanonicalFastqQcRun && selectedJob?.status === 'completed' && !!selectedOntWorkflowId && /^ont_/.test(selectedOntWorkflowId) && (hasPod5Input || hasBamInput);
+    // QC off runs alignment and multimer analysis only and publishes no QC result package.
+    const fastqQcStageSelected = selectedJobParams.run_fastq_qc != null
+        ? selectedJobParams.run_fastq_qc !== false
+        : selectedJobParams.run_multimer_qc !== false;
+    const isCanonicalFastqQcRun = isFastqOnlyRun && selectedOntWorkflowId === 'ont_fastq_qc' && fastqQcStageSelected;
     const sequenceQcManifestState = useSequenceQcManifest(selectedJob?.id, selectedJob?.status);
     const ontFastqQcResultState = useOntFastqQcResult(
         selectedJob?.id,
         selectedJob?.status,
-        selectedOntWorkflowId,
+        isCanonicalFastqQcRun ? selectedOntWorkflowId : null,
     );
     const alignmentAuthorityBinding = useMemo(() => {
         const result = ontFastqQcResultState.result;
@@ -2579,9 +2560,12 @@ export function NGSToolkit() {
     const alignmentSessions = alignmentAuthorityBinding.sessions;
     const alignmentSessionsError = alignmentSessionsQueryError ?? alignmentAuthorityBinding.error;
     const shouldShowMethylationInspector = !isFastqOnlyRun;
-    const shouldShowMultimerInspector = hasFastqInput;
     const artifactQuery = useNgsArtifacts(selectedJob?.id || null);
     const packageArtifacts = artifactQuery.data?.artifacts;
+    // What the run published decides what opens. Only when the catalog cannot be read do the run's inputs stand in for it.
+    const showOntReadReport = !isCanonicalFastqQcRun && selectedJob?.status === 'completed'
+        && (packageArtifacts ? hasPublishedReadsBam(packageArtifacts)
+            : artifactQuery.isError && !!selectedOntWorkflowId && /^ont_/.test(selectedOntWorkflowId) && (hasPod5Input || hasBamInput));
     const toStreamHref = useCallback((path: string, jobId?: string) => ngsArtifactUrl(path, jobId, packageArtifacts), [packageArtifacts]);
     const toDownloadHref = toStreamHref;
     const igvArtifacts = useMemo(
@@ -2595,6 +2579,10 @@ export function NGSToolkit() {
     const methylationArtifacts = useMemo(
         () => resolveMethylationArtifacts(selectedJob, stageOutputs, packageArtifacts || []),
         [selectedJob, stageOutputs, packageArtifacts]
+    );
+    // BAM and POD5 runs publish the same read QC tables as FASTQ runs.
+    const shouldShowMultimerInspector = hasFastqInput || Boolean(
+        multimerArtifacts.summaryUrl || multimerArtifacts.lengthsUrl || multimerArtifacts.candidatesUrl || multimerArtifacts.dimerSummaryUrl
     );
     const igvSourcePaths = useMemo(() => {
         const allPaths = dedupePaths(collectStageOutputPaths(stageOutputs));
@@ -4500,7 +4488,7 @@ export function NGSToolkit() {
                     initialValues={initialValues}
                 />
             ) : view === 'instrument' || view === 'raw-signal' ? (
-                <OntInstrumentPanel rawSignalOnly={view === 'raw-signal'} onAnalyzeExistingData={() => selectView('launch')} />
+                <OntInstrumentPanel rawSignalOnly={view === 'raw-signal'} onAnalyzeExistingData={(values) => { if (values) setInitialValues(values); selectView('launch'); }} />
             ) : (
                 <section className="space-y-4">
                     <div className="flex items-center gap-3" aria-label="Jobs pagination">
@@ -4738,6 +4726,14 @@ export function NGSToolkit() {
                                         />
                                     </div>
                                 )}
+                                {/* Shown for any completed run that published a plasmid summary; hidden otherwise. */}
+                                {!isCanonicalFastqQcRun && selectedJob.status === 'completed' && (
+                                    <PlasmidSummaryPanel
+                                        jobId={selectedJob.id}
+                                        onOpenIgv={igvMissingReason ? undefined : () => void openIgvModal()}
+                                        onOpenSignal={signalDatasetId && rawSignalRunId && rawSignalObservedGeneration ? () => openSignalWorkbench() : undefined}
+                                    />
+                                )}
                                 {showOntReadReport && (
                                     <div className="space-y-2">
                                         <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Run result</h4>
@@ -4838,6 +4834,7 @@ export function NGSToolkit() {
                                 <BarcodeUnitsPanel
                                     key={`barcode-units-${selectedJob.id}`}
                                     jobId={selectedJob.id}
+                                    modifiedBases={typeof selectedJob.params?.modified_bases === 'string' ? selectedJob.params.modified_bases : null}
                                     enabled={selectedJob.status === 'completed' && selectedJob.model_id === 'nanopore' && selectedJob.mode === 'basecall_dna' && Boolean(selectedJob.params?.barcode_kit)}
                                 />
 
@@ -5128,7 +5125,11 @@ export function NGSToolkit() {
                                             )}
 
                                             <div className="text-xs text-[var(--text-secondary)]">
-                                                Dam/Dcm motif view; Dcm uses <span className="font-mono">max(m, h)</span>.
+                                                modkit pileup, per reference position and strand. Percent modified is modified calls over valid calls (modified, other modification and canonical) at that position.
+                                                {' '}Low-confidence calls are dropped first: {selectedJob?.params?.modkit_filter_threshold != null && String(selectedJob.params.modkit_filter_threshold) !== ''
+                                                    ? `pass threshold ${String(selectedJob.params.modkit_filter_threshold)} was set for this run`
+                                                    : 'the pass threshold was estimated by modkit from sampled reads (see pileup.log)'}.
+                                                {' '}Dam is 6mA at GATC and Dcm is 5mC at the second C of CCWGG; 5hmC is not combined into Dcm.
                                             </div>
                                             <div className="flex flex-wrap items-center gap-2 text-xs">
                                                 <span className="text-[var(--text-secondary)]">Strand view:</span>
@@ -5401,7 +5402,7 @@ export function NGSToolkit() {
 
                                             {methylationReport.summary ? (
                                                 <div className="bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded p-3">
-                                                    <div className="text-xs text-[var(--text-secondary)] mb-2">modkit summary (first 20 rows)</div>
+                                                    <div className="text-xs text-[var(--text-secondary)] mb-2">modkit summary (first 20 rows). Read-level call counts by modification code over the reads modkit sampled, with pass thresholds it estimates itself. The pileup pass threshold does not apply here, and these are not per-site estimates.</div>
                                                     <div className="overflow-x-auto">
                                                         <table className="w-full text-xs">
                                                             <thead>
@@ -5506,6 +5507,11 @@ export function NGSToolkit() {
                                 <div className="space-y-2">
                                     <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Stage Artifacts</h4>
                                     {selectedJob.status === 'completed' && <NgsArtifactDownloads jobId={selectedJob.id} />}
+                                    {/* A run with a construct-QC manifest is added from that panel; the others are added here. */}
+                                    {selectedJob.status === 'completed' && sequenceQcManifestState.status !== 'available' && sequenceQcManifestState.status !== 'loading'
+                                        && packageArtifacts?.some(artifact => artifact.state === 'present') && (
+                                        <NativeResultProjectAttach jobId={selectedJob.id} label={selectedJob.name || selectedJob.id} />
+                                    )}
                                     {Object.keys(stageOutputs).length === 0 ? (
                                         <p className="text-sm text-[var(--text-secondary)]">No stage outputs recorded yet.</p>
                                     ) : (

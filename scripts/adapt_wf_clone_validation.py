@@ -75,6 +75,23 @@ def optional_one(root: Path, pattern: str, kind: str) -> Path | None:
     return found[0] if found else None
 
 
+def upstream_failure_reason(root: Path, sample: str) -> str | None:
+    """Return the pipeline's own failure text for one sample, if it recorded one."""
+    found = candidates(root, "sample_status.txt")
+    if len(found) != 1:
+        return None
+    try:
+        rows = read_rows(found[0], delimiter=",")
+    except (OSError, UnicodeError, ValueError, IndexError):
+        return None
+    key = "Assembly completed / failed reason"
+    for row in rows:
+        text = str(row.get(key) or "").strip()
+        if row.get("Sample") == sample and text and text != "Completed successfully":
+            return text[:300]
+    return None
+
+
 def read_single_fasta(path: Path) -> tuple[str, str]:
     records: list[tuple[str, str]] = []
     name: str | None = None
@@ -197,8 +214,10 @@ def normalize(args: argparse.Namespace) -> dict[str, Any]:
     if stats_row["read_id"] != sample or stats_row["sample_name"] != sample or stats_length != len(sequence):
         fail("STATS_EVIDENCE_CONTRADICTION", "assembly stats sample or length contradicts final FASTA")
 
-    bam = exactly_one(root, f"{sample}.bam", "assembly-aligned BAM")
-    bai = exactly_one(root, f"{sample}.bam.bai", "assembly-aligned BAM index")
+    # The pipeline aligns its assembly only when a full reference was supplied.
+    one = exactly_one if args.full_reference_provided else optional_one
+    bam = one(root, f"{sample}.bam", "assembly-aligned BAM")
+    bai = one(root, f"{sample}.bam.bai", "assembly-aligned BAM index")
     status_path = exactly_one(root, "sample_status.txt", "sample status")
     status_row = read_rows(status_path, delimiter=",")[0]
     status_key = "Assembly completed / failed reason"
@@ -223,12 +242,11 @@ def normalize(args: argparse.Namespace) -> dict[str, Any]:
         artifact(root, final_fasta, "final_fasta"),
         artifact(root, final_fastq, "final_fastq"),
         artifact(root, stats, "assembly_stats"),
-        artifact(root, bam, "bam"),
-        artifact(root, bai, "bai"),
         artifact(root, status_path, "sample_status"),
         artifact(root, report, "upstream_report"),
         artifact(root, plannotate_json, "plannotate_json"),
     ]
+    artifacts.extend(artifact(root, path, kind) for path, kind in ((bam, "bam"), (bai, "bai")) if path is not None)
     if args.full_reference_provided:
         bcf = exactly_one(root, f"{sample}.full_construct.calls.bcf", "full-reference BCF")
         csi = exactly_one(root, f"{sample}.full_construct.calls.bcf.csi", "full-reference BCF index")
@@ -301,12 +319,14 @@ def normalize(args: argparse.Namespace) -> dict[str, Any]:
         },
         "upstream_sample_status": {"status": "completed" if completed else "failed", "message": status_text, "length_bp": status_length},
         "scientific_verdict": "REVIEW",
-        "scientific_reason_codes": ["CANONICAL_PHASE2_VERIFICATION_REQUIRED"],
+        "scientific_reason_codes": ["CANONICAL_PHASE2_VERIFICATION_REQUIRED"] if args.full_reference_provided
+        else ["EXPECTED_SEQUENCE_NOT_PROVIDED"],
         "sample": {"id": sample, "final_fasta_length_bp": len(sequence)},
         "runtime_provenance": provenance,
         "authoritative_inputs": authoritative_inputs,
         "artifacts": artifacts,
-        "missing_evidence_reasons": [],
+        "missing_evidence_reasons": [] if args.full_reference_provided
+        else ["EXPECTED_SEQUENCE_COMPARISON_NOT_EVALUATED"],
         "contradictory_evidence_reasons": [],
     }
 

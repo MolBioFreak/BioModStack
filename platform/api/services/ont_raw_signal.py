@@ -41,7 +41,7 @@ from database import (
 )
 from services.container_cli_environment import container_cli_environment, container_user_namespace_args
 from services.file_lease_signals import register_lease_break_listener
-from services.ont_local_images import local_image_identity
+from services.ont_local_images import configured_container_runtime, local_image_identity
 from services.ont_read_metrics import publish_read_metrics_from_validation
 
 
@@ -158,7 +158,7 @@ def raw_signal_runtime_identity() -> dict[str, Any]:
     ):
         raise RuntimeError("raw-signal runtime policy manifest is invalid")
     image, digest = local_image_identity(
-        BLOW5_CONTAINER_ENV, os.getenv(BLOW5_CONTAINER_RUNTIME_ENV, "docker").strip() or "docker"
+        BLOW5_CONTAINER_ENV, configured_container_runtime()
     )
     return {
         "image": image,
@@ -765,7 +765,9 @@ async def retained_pod5_launch_binding(session: AsyncSession, root: Path) -> dic
         try:
             for item in artifacts:
                 path = _revalidate_descriptor_artifact(item, authority='retained POD5 generation')
-                files[path.relative_to(root).as_posix()] = {'sha256': item['sha256'], 'bytes': item['bytes']}
+                # The version lets preflight see this is the file hashed at acquisition, without hashing it again.
+                files[path.relative_to(root).as_posix()] = {'sha256': item['sha256'], 'bytes': item['bytes'],
+                                                            'mtime_ns': item.get('mtime_ns'), 'ctime_ns': item.get('ctime_ns')}
         except (OSError, ValueError):
             continue
         return {'representation_id': record.id, 'manifest_sha256': record.manifest_sha256, 'files': files}
@@ -1869,7 +1871,7 @@ def _resource_snapshot(source_bytes: int) -> dict[str, Any]:
     usage = shutil.disk_usage(probe)
     configured_floor = int(os.getenv(BLOW5_MIN_FREE_BYTES_ENV, str(BLOW5_DEFAULT_MIN_FREE_BYTES)))
     required_free = max(configured_floor, int(source_bytes * 2.5) + 10 * 1024 * 1024 * 1024)
-    container_runtime = os.getenv(BLOW5_CONTAINER_RUNTIME_ENV, "docker").strip()
+    container_runtime = configured_container_runtime()
     try:
         image, image_digest = local_image_identity(BLOW5_CONTAINER_ENV, container_runtime)
     except RuntimeError:
@@ -2403,14 +2405,49 @@ def _external_blow5_artifact_records(source: OntRawSignalRepresentation) -> tupl
     return blow5, index
 
 
+# A file version (device, inode, size, mtime, ctime) whose bytes were hashed once in
+# this process is not hashed again: the same version has the same bytes. A changed
+# file is a different version and is read in full.
+_VERIFIED_FILE_VERSIONS: dict[tuple[int, int, int, int, int], str] = {}
+_VERIFIED_FILE_VERSION_LIMIT = 512
+
+
+def _descriptor_sha256(descriptor: int) -> str:
+    """SHA-256 of an open regular file, read through once per file version."""
+    before = os.fstat(descriptor)
+    key = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    known = _VERIFIED_FILE_VERSIONS.get(key)
+    if known is not None:
+        return known
+    digest = hashlib.sha256()
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    while chunk := os.read(descriptor, 1024 * 1024):
+        digest.update(chunk)
+    after = os.fstat(descriptor)
+    value = digest.hexdigest()
+    if key == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        if len(_VERIFIED_FILE_VERSIONS) >= _VERIFIED_FILE_VERSION_LIMIT:
+            _VERIFIED_FILE_VERSIONS.pop(next(iter(_VERIFIED_FILE_VERSIONS)))
+        _VERIFIED_FILE_VERSIONS[key] = value
+    return value
+
+
+def _representation_files_view(representation: Any) -> Any:
+    """The fields the file checks read, so those checks can run off the event loop."""
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        format=representation.format, state=representation.state,
+        validation_receipts=representation.validation_receipts,
+        artifact_manifest=representation.artifact_manifest, manifest_sha256=representation.manifest_sha256,
+    )
+
+
 def _assert_external_blow5_artifact_identity(artifact: Mapping[str, Any], *, authority: str) -> dict[str, Any]:
     path, descriptor = _open_descriptor_confined_artifact(artifact, authority=authority)
     try:
         info = os.fstat(descriptor)
-        digest = hashlib.sha256()
-        while chunk := os.read(descriptor, 1024 * 1024):
-            digest.update(chunk)
-        if digest.hexdigest() != artifact.get("sha256") or info.st_size != artifact.get("bytes"):
+        observed_sha256 = _descriptor_sha256(descriptor)
+        if observed_sha256 != artifact.get("sha256") or info.st_size != artifact.get("bytes"):
             raise ValueError(f"{authority} bytes diverged from registration manifest")
         return {
             "device": info.st_dev,
@@ -2420,7 +2457,7 @@ def _assert_external_blow5_artifact_identity(artifact: Mapping[str, Any], *, aut
             "ctime_ns": info.st_ctime_ns,
             "root_device": artifact.get("governed_root_device"),
             "root_inode": artifact.get("governed_root_inode"),
-            "sha256": digest.hexdigest(),
+            "sha256": observed_sha256,
         }
     finally:
         os.close(descriptor)
@@ -2449,13 +2486,10 @@ def _verified_external_descriptor_identity(
         )
     ):
         raise ValueError(f"{authority} descriptor identity diverged")
-    os.lseek(file_descriptor, 0, os.SEEK_SET)
-    digest = hashlib.sha256()
-    while chunk := os.read(file_descriptor, 1024 * 1024):
-        digest.update(chunk)
+    observed_sha256 = _descriptor_sha256(file_descriptor)
     after = os.fstat(file_descriptor)
     identity = {
-        "sha256": digest.hexdigest(),
+        "sha256": observed_sha256,
         "bytes": after.st_size,
         "device": after.st_dev,
         "inode": after.st_ino,
@@ -2869,11 +2903,7 @@ def _open_descriptor_confined_artifact(
 def _revalidate_descriptor_artifact(artifact: Mapping[str, Any], *, authority: str) -> Path:
     path, descriptor = _open_descriptor_confined_artifact(artifact, authority=authority)
     try:
-        digest = hashlib.sha256()
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        while chunk := os.read(descriptor, 1024 * 1024):
-            digest.update(chunk)
-        if digest.hexdigest() != artifact.get("sha256"):
+        if _descriptor_sha256(descriptor) != artifact.get("sha256"):
             raise ValueError(f"{authority} digest diverged")
         return path
     finally:
@@ -3005,11 +3035,14 @@ async def request_waveform_lookup(
     representation = await session.get(OntRawSignalRepresentation, representation_id)
     if representation is None or representation.run_id != run_id or representation.observed_generation != observed_generation:
         raise ValueError("representation does not belong to the exact run generation")
-    _validated_blow5_paths(representation, read_id)
-    existing = (await session.execute(select(OntRawSignalLookup).where(
+    # File checks read from disk, so they run off the event loop.
+    await asyncio.to_thread(_validated_blow5_paths, _representation_files_view(representation), read_id)
+    from sqlalchemy.exc import IntegrityError
+    query = select(OntRawSignalLookup).where(
         OntRawSignalLookup.representation_id == representation_id,
         OntRawSignalLookup.read_id == read_id,
-    ))).scalar_one_or_none()
+    )
+    existing = (await session.execute(query)).scalar_one_or_none()
     if existing is None:
         existing = OntRawSignalLookup(
             id=_id("ont-waveform"), run_id=run_id, observed_generation=observed_generation,
@@ -3017,8 +3050,40 @@ async def request_waveform_lookup(
             state="requested", reason_code="requested", receipt={}, created_at=_now(), updated_at=_now(),
         )
         session.add(existing)
+        try:
+            await session.commit()
+        except IntegrityError:
+            # A request made at the same moment created the row; both share it.
+            await session.rollback()
+            existing = (await session.execute(query)).scalar_one()
+    elif existing.state == "failed":
+        # Asking again after a failure runs the same row again. A row that is
+        # waiting, running or ready is returned as it is, so there is one worker per read.
+        await session.execute(
+            update(OntRawSignalLookup)
+            .where(OntRawSignalLookup.id == existing.id, OntRawSignalLookup.state == "failed")
+            .values(state="requested", reason_code="retry_requested", claim_token=None, lease_expires_at=None,
+                    completed_at=None, sample_count=None, samples=None, updated_at=_now())
+        )
         await session.commit()
+        await session.refresh(existing)
     return _public_lookup(existing)
+
+
+# The lookup writes at most RAW_SIGNAL_MAX_WAVEFORM_SAMPLES values as JSON.
+_WAVEFORM_LOOKUP_OUTPUT_BYTES = 16 * 1024 * 1024
+
+
+def _waveform_lookup_required_bytes(
+    representation: OntRawSignalRepresentation,
+    blow5_identity: Mapping[str, Any],
+    index_identity: Mapping[str, Any],
+) -> int:
+    """Free space one indexed read lookup uses: its result, plus a private copy of the pair when it is not read in place."""
+    manifest = representation.artifact_manifest if isinstance(representation.artifact_manifest, dict) else {}
+    if manifest.get("retained_indexed_pair") is True:
+        return _WAVEFORM_LOOKUP_OUTPUT_BYTES
+    return _WAVEFORM_LOOKUP_OUTPUT_BYTES + int(blow5_identity.get("bytes") or 0) + int(index_identity.get("bytes") or 0)
 
 
 def _public_lookup(lookup: OntRawSignalLookup) -> dict[str, Any]:
@@ -3237,7 +3302,8 @@ async def claim_next_waveform_lookup(
         lookup.completed_at = _now()
         await session.commit()
         return None
-    blow5, index = _validated_blow5_paths(representation, lookup.read_id)
+    blow5, index = await asyncio.to_thread(
+        _validated_blow5_paths, _representation_files_view(representation), lookup.read_id)
     blow5_artifact = _artifact_for_resolved_path(representation, blow5, "blow5")
     index_artifact = _artifact_for_resolved_path(representation, index, "blow5_index")
     blow5_identity = _assert_external_blow5_artifact_identity(
@@ -3247,6 +3313,8 @@ async def claim_next_waveform_lookup(
         index_artifact, authority="waveform BLOW5 index"
     )
     snapshot = _resource_snapshot(0)
+    # One read through the index, not a conversion of the run.
+    snapshot["required_free_bytes"] = _waveform_lookup_required_bytes(representation, blow5_identity, index_identity)
     try:
         runtime_identity = raw_signal_runtime_identity()
     except RuntimeError as exc:
@@ -3434,7 +3502,8 @@ async def finish_waveform_lookup(session: AsyncSession, lookup_id: str, claim_to
     representation = await session.get(OntRawSignalRepresentation, lookup.representation_id)
     if representation is None:
         raise ValueError("waveform representation authority disappeared")
-    blow5, index = _validated_blow5_paths(representation, lookup.read_id)
+    blow5, index = await asyncio.to_thread(
+        _validated_blow5_paths, _representation_files_view(representation), lookup.read_id)
     expected_source_identity = {
         "blow5": {
             key: _artifact_for_resolved_path(representation, blow5, "blow5")[key]

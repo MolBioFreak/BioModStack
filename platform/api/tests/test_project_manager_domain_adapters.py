@@ -1194,3 +1194,51 @@ async def test_unknown_adapter_receipt_returns_schema_valid_unsupported_descript
     assert surface["scientific_acceptance"]["state"] == "not_applicable"
     assert 0 < len(surface["scientific_acceptance"]["reason"]) <= 256
     assert surface["available_actions"] == []
+
+
+@pytest.mark.asyncio
+async def test_analysis_adapter_attaches_a_native_result_without_a_construct_qc_manifest(adapter_stores):
+    """Assembly, methylation and pooled runs publish files, not a QC manifest; they still attach and reopen."""
+    tmp_path, core_factory, _molbio_factory = adapter_stores
+    root = tmp_path / "results" / "clone-job-1"
+    (root / "assembly" / "wf_clone_out").mkdir(parents=True)
+    (root / "methylation").mkdir()
+    (root / "assembly" / "wf_clone_out" / "s.final.fasta").write_text(">s\nACGT\n")
+    (root / "methylation" / "modkit_summary.tsv").write_text("base\tcount\nC\t4\n")
+    (tmp_path / "results" / "empty-job-1").mkdir()
+    async with core_factory() as session:
+        session.add_all([
+            Job(id="clone-job-1", name="Clone", status="completed", model_id="nanopore", mode="clone_validation",
+                params={"ont_workflow_id": "ont_clone_validation", "ont_input_mode": "fastq"}, output_dir=str(root)),
+            Job(id="empty-job-1", name="Empty", status="completed", model_id="nanopore", mode="clone_validation",
+                params={"ont_workflow_id": "ont_clone_validation", "ont_input_mode": "fastq"},
+                output_dir=str(tmp_path / "results" / "empty-job-1")),
+        ])
+        await session.commit()
+        adapter = _class("NgsAnalysisReferenceAdapter")()
+        receipt = await adapter.verify(session, "clone-job-1")
+        again = await adapter.verify(session, "clone-job-1")
+        (root / "methylation" / "modkit_summary.tsv").write_text("base\tcount\nC\t5\n")
+        changed = await adapter.verify(session, "clone-job-1")
+        with pytest.raises(adapter_module.AdapterError) as empty:
+            await adapter.verify(session, "empty-job-1")
+        # The construct-QC adapter keeps requiring its manifest.
+        with pytest.raises(adapter_module.AdapterError) as qc:
+            await _class("SequenceQcReferenceAdapter")().verify(session, "clone-job-1")
+    assert receipt["entity_kind"] == "ngs_analysis_job" and receipt["entity_id"] == "clone-job-1"
+    assert receipt["reopen_uri"] == "/ngs?job_id=clone-job-1"
+    metadata = receipt["metadata"]
+    assert metadata["result_contract_id"] == "ngs_native_publication_v1"
+    assert (metadata["workflow_id"], metadata["input_mode"], metadata["job_status"]) == ("ont_clone_validation", "fastq", "completed")
+    assert metadata["artifact_count"] == 2 and metadata["published_sources"] == ["assembly", "methylation"]
+    assert receipt["content_digest"] == again["content_digest"] == metadata["artifact_set_sha256"]
+    assert changed["content_digest"] != receipt["content_digest"]
+    assert empty.value.code == "source_contract_unavailable"
+    assert qc.value.code == "source_contract_unavailable"
+    surface = adapter_module_surface(receipt)
+    assert surface["surface_kind"] == "ngs" and surface["readiness"] == "ready"
+
+
+def adapter_module_surface(receipt):
+    from services.global_experiments import result_surfaces
+    return result_surfaces._SURFACE_BUILDERS[receipt["entity_kind"]](receipt)

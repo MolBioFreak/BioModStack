@@ -34,6 +34,7 @@ from services.molbio_ngs_evidence import attach_instrument_run_evidence
 from services.molbio_ngs_receipts import (
     build_molbio_revision_binding,
     consume_molbio_ngs_receipt,
+    receipt_reference_topology,
     validate_molbio_ngs_receipt,
 )
 from services.molbio_ngs_references import resolve_managed_reference_for_launch
@@ -153,6 +154,9 @@ ONT_REFERENCE_REQUIRED_WORKFLOWS = frozenset(
         "wf_clone_validation",
     }
 )
+# A reference here is still server-controlled, but the workflow also runs without
+# one: it assembles and annotates, and the expected-sequence checks are not run.
+ONT_REFERENCE_OPTIONAL_WORKFLOWS = frozenset({"wf_clone_validation"})
 
 ONT_COMPARISON_PANEL_WORKFLOWS = frozenset({"ont_plasmid_qc", "ont_construct_screening", "ont_fastq_qc"})
 
@@ -307,6 +311,7 @@ class OntRunIntentRequest(BaseModel):
     option_receipt_id: str = Field(min_length=1, max_length=80)
     sample_id: str | None = Field(default=None, max_length=255)
     experiment_group: str | None = Field(default=None, max_length=255)
+    barcode_samples: list[dict[str, str]] | None = Field(default=None, max_length=96)
 
 
 class OntIntentStartRequest(BaseModel):
@@ -437,7 +442,8 @@ async def _authorized_barcode_source(job_id: str, request: Request, session: Asy
         raise HTTPException(status_code=404, detail="Nanopore source job not found")
     if job.mode != "basecall_dna":
         raise HTTPException(status_code=422, detail="Source job is not a DNA barcode-basecalling job")
-    if str((job.params or {}).get("barcode_kit") or "").strip() != "SQK-RBK114-96":
+    from services.ont_ngs_contract import accepted_barcode_kits  # noqa: PLC0415
+    if str((job.params or {}).get("barcode_kit") or "").strip() not in accepted_barcode_kits():
         raise HTTPException(status_code=422, detail="Source job is not bound to the locked barcode kit")
     if job.status != "completed":
         raise HTTPException(status_code=409, detail="Source barcode job is not complete")
@@ -515,12 +521,16 @@ def _validate_ont_input_contract(canonical_id: str, params: dict[str, Any]) -> t
             f"accepted modes: {', '.join(spec.input_modes)}"
         )
 
-    if canonical_id in ONT_REFERENCE_REQUIRED_WORKFLOWS and not str(params.get("reference_fasta") or "").strip():
+    if (canonical_id in ONT_REFERENCE_REQUIRED_WORKFLOWS and canonical_id not in ONT_REFERENCE_OPTIONAL_WORKFLOWS
+            and not str(params.get("reference_fasta") or "").strip()):
         raise ValueError(f"workflow {canonical_id!r} requires reference_fasta for construct verification")
 
     if canonical_id == "ont_basecall_dna" and (input_mode == "fastq" or params.get("run_fastq_qc") or params.get("run_modkit")) and not str(params.get("reference_fasta") or "").strip():
         raise ValueError("DNA reference analysis requires reference_fasta")
 
+    if (canonical_id == "ont_basecall_rna" and params.get("run_modkit")
+            and str(params.get("modified_bases") or "none") != "none" and not str(params.get("reference_fasta") or "").strip()):
+        raise ValueError("RNA modification tables require reference_fasta")
     if input_mode == "fastq" and bool(params.get("run_modkit")):
         raise ValueError("modkit requires a BAM with meaningful MM/ML tags or POD5 basecalled with modified bases")
 
@@ -551,7 +561,7 @@ def _confine_submitted_path(value: Any, label: str, *, directory: bool, allow_re
             except ValueError:
                 continue
             raise ValueError(f"{label} points into protected job results and requires source authorization")
-    root_keys = ("inputs", "uploads", "downloads", "data") + (result_keys if allow_results else ())
+    root_keys = ("inputs", "uploads", "downloads", "data", "sequencer_runs") + (result_keys if allow_results else ())
     for root in (roots[key] for key in root_keys if key in roots):
         root_resolved = root.resolve()
         try:
@@ -860,6 +870,17 @@ async def ont_get_instrument_run(run_id: str) -> dict[str, Any]:
     if record is None:
         raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}")
     return record
+
+
+@router.post("/runs/{run_id}/handoff/barcode-basecall")
+async def ont_barcode_basecall_handoff(run_id: str) -> dict[str, Any]:
+    """Open a finished run in the ONT form: its POD5 folder, barcoding kit and sample names."""
+    try:
+        return await ont_run_control.build_barcode_basecall_handoff(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class OntRawSignalRetentionRequest(BaseModel):
@@ -1191,7 +1212,8 @@ async def _prepare_ont_ngs_workflow(
                 raise ValueError(
                     "reference_fasta is server-controlled for reference-required NGS workflows; submit an immutable MolBio receipt"
                 )
-            if not receipt_id and request.managed_reference is None:
+            if (not receipt_id and request.managed_reference is None
+                    and canonical_id not in ONT_REFERENCE_OPTIONAL_WORKFLOWS):
                 raise ValueError(
                     f"workflow {canonical_id!r} requires a server-issued molbio_ngs_receipt_id or exact managed-reference authority"
                 )
@@ -1227,6 +1249,8 @@ async def _prepare_ont_ngs_workflow(
                     "expected_result_manifest_schema": expected_result_manifest_schema,
                 }
             )
+        if managed_launch is not None and managed_launch.topology in {"linear", "circular"}:
+            submitted["reference_topology"] = managed_launch.topology
         receipt_authority = None
         panel_receipt_authority = None
         if receipt_id:
@@ -1234,6 +1258,9 @@ async def _prepare_ont_ngs_workflow(
                 session, receipt_id=receipt_id
             )
             submitted["reference_fasta"] = receipt_authority.reference_snapshot_path
+            saved_topology = receipt_reference_topology(receipt_authority)
+            if saved_topology:
+                submitted["reference_topology"] = saved_topology
         if panel_receipt_id:
             if receipt_authority is None:
                 raise ValueError("comparison panel launch has no expected receipt authority")
