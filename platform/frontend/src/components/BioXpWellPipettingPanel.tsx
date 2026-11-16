@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BioXpPipetteResults } from './BioXpPipetteResults';
 import { BioXpCalibrationRun } from './BioXpCalibrationRun';
 import { pipetteResults } from '../lib/bioxpPipetteResults';
-import { bioXpErrorText, useBioXpWorkflowJob, useSubmitBioXpProtocol,
+import { bioXpErrorText, useBioXpWorkflowFeedback, useSubmitBioXpProtocol,
     type BioXpDeckDestinationV1, type BioXpWorkflowJob } from '../lib/bioxpClient';
 import { BioXpSourcePipettingEditor, sourceDefaults, sourceLabels } from './BioXpSourcePipettingEditor';
 import { type BioXpSourceStep, manualPipettingDocument, type BioXpManualStep } from '../lib/bioxpManualPipetting';
@@ -61,14 +61,14 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     const [settledJob, setSettledJob] = useState<string | null>(null);
     const observationId = attempt?.id ?? null;
     const observeJob = documentVisible && (visible || (observationId !== null && settledJob !== observationId));
-    const query = useBioXpWorkflowJob(observationId, attempt?.generation ?? generation, connected && sameConnection && observeJob);
+    const query = useBioXpWorkflowFeedback(observationId, attempt?.generation ?? generation, connected && sameConnection && observeJob);
     useEffect(() => {
         if (query.data?.command?.terminal && query.data.job_id === observationId) {
             setSettledJob(observationId);
             if (query.data.execution?.runtime_state.action_results?.some(result => pipetteResults(result).some(value => value.saved_revision_id !== undefined))) void invalidateSettings();
         }
     }, [query.data, observationId]);
-    const mismatch = !!query.data && !!attempt && (query.data.job_id !== attempt.id || query.data.command?.idempotency_key !== attempt.key);
+    const mismatch = !!query.data && !!attempt && (query.data.job_id !== attempt.id || query.data.command?.idempotency_key != null && query.data.command.idempotency_key !== attempt.key);
     const job = mismatch ? null : query.data ?? accepted;
     // Historical jobs, receipts, unavailable observations and unrelated pending
     // controls are evidence, never a new admission lock. Only our HTTP is reserved.

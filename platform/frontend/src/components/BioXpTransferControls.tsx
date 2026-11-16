@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { methodsGet, type MethodCatalog } from '../lib/bioxpMethods';
 import {
-    bioXpErrorText, useBioXpWorkflowJobs, useBioXpWorkflowJob, useSubmitBioXpProtocol,
+    bioXpErrorText, isActiveBioXpWorkflow, useBioXpWorkflowJobs, useBioXpWorkflowFeedback, useSubmitBioXpProtocol,
     useBioXpOperatorReceiptV2, type BioXpWorkflowJob,
 } from '../lib/bioxpClient';
 
@@ -66,7 +66,7 @@ export function BioXpTransferControls({ generation, connected, visible = true }:
     connection.current = { generation, connected };
     useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
     const jobs = useBioXpWorkflowJobs(generation, connected && visible);
-    const activeJob = jobs.data?.find(job => job.command?.terminal === false);
+    const activeJob = jobs.data?.find(isActiveBioXpWorkflow);
     const id = attempt?.id ?? activeJob?.job_id ?? null;
     const retainedGeneration = attempt?.generation ?? generation;
     const sameConnection = retainedGeneration === generation;
@@ -74,11 +74,11 @@ export function BioXpTransferControls({ generation, connected, visible = true }:
     const [settledJob, setSettledJob] = useState<string | null>(null);
     const observationId = id;
     const observeJob = documentVisible && (visible || (observationId !== null && settledJob !== observationId));
-    const query = useBioXpWorkflowJob(observationId, retainedGeneration, connected && sameConnection && observeJob);
+    const query = useBioXpWorkflowFeedback(observationId, retainedGeneration, connected && sameConnection && observeJob);
     useEffect(() => {
         if (query.data?.command?.terminal && query.data.job_id === observationId) setSettledJob(observationId);
     }, [query.data, observationId]);
-    const identityMismatch = !!query.data && !!attempt && (query.data.job_id !== attempt.id || query.data.command?.idempotency_key !== attempt.key);
+    const identityMismatch = !!query.data && !!attempt && (query.data.job_id !== attempt.id || query.data.command?.idempotency_key != null && query.data.command.idempotency_key !== attempt.key);
     const job = !identityMismatch && query.data?.job_id === id ? query.data : accepted?.job_id === id ? accepted : null;
     const command = job?.command;
     const currentLive = command?.command_id === id && job?.execution?.dry_run === false;

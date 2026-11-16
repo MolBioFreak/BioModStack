@@ -348,12 +348,12 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [cameraOpen, setCameraOpen] = useState(true);
     const [controlTab, setControlTab] = useState<ControlTab>(initialTab);
-    const operationalVisible = documentVisible && controlTab !== 'workflows';
+    const operationalVisible = documentVisible;
     const robotVisible = documentVisible && controlTab === 'robot';
     const liveDeckVisible = documentVisible && controlTab === 'live-deck';
     // Same query as the deck record panel; shades recorded tips on the live map.
     const liveTipTrays = useBioXpTipTrays(generation, linkConnected && liveDeckVisible);
-    const controlsVisible = operationalVisible && controlTab !== 'live-deck';
+    const controlsVisible = operationalVisible && controlTab !== 'live-deck' && controlTab !== 'workflows';
     const [pipettesOpened, setPipettesOpened] = useState(initialTab === 'pipettes');
     const [workflowsOpened, setWorkflowsOpened] = useState(initialTab === 'workflows');
     const [liveDeckOpened, setLiveDeckOpened] = useState(initialTab === 'live-deck');

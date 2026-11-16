@@ -1065,7 +1065,7 @@ export interface BioXpWorkflowCommand {
     idempotency_key: string;
     ownership_generation: number;
     state_version: number;
-    status: 'queued' | 'dispatched' | 'interrupting' | 'completed' | 'failed' | 'interrupted' | 'cleared' | 'ambiguous' | 'rejected';
+    status: 'queued' | 'dispatched' | 'interrupting' | 'completed' | 'failed' | 'interrupted' | 'cleared' | 'ambiguous' | 'rejected' | 'outcome_unknown' | 'reconciliation_required' | 'issued_pending' | 'stop_requested' | 'abort_requested' | 'stopped' | 'aborted' | 'cancelled';
     terminal: boolean;
     status_path: string;
 }
@@ -2851,15 +2851,8 @@ export const useBioXpWorkflowJob = (jobId: string | null, generation: number, en
     })).data,
     enabled: enabled && generation > 0 && jobId !== null,
     retry: false,
-    refetchInterval: (query) => {
-        if (!enabled) return false;
-        const job = query.state.data;
-        const command = job?.command;
-        const workflow = job?.execution?.runtime_state.workflow;
-        const settled = command?.command_id === jobId && command.terminal
-            && workflow?.command_id === jobId && workflow.phase === 'terminal';
-        return settled ? false : 2_000;
-    },
+    staleTime: Infinity,
+    refetchInterval: false,
     refetchIntervalInBackground: false,
 });
 // The monitor consumes control/review truth, never source trays or retained
@@ -2884,6 +2877,29 @@ export const useBioXpWorkflowJobObservation = (jobId: string | null, generation:
     },
     refetchIntervalInBackground: false,
 });
+// Native nonterminal states only: retained unknown outcomes are not active work.
+export function isActiveBioXpWorkflow(job: BioXpWorkflowJob | BioXpWorkflowJobSummary): boolean {
+    const dryRun = 'dry_run' in job ? job.dry_run : job.execution?.dry_run;
+    return dryRun === false && job.command?.command_id === job.job_id && job.command.terminal === false
+        && ['queued', 'dispatched', 'interrupting', 'issued_pending', 'stop_requested', 'abort_requested'].includes(job.command.status);
+}
+
+// Compact progress while running; fetch retained action results once on settlement.
+export function useBioXpWorkflowFeedback(jobId: string | null, generation: number, enabled: boolean) {
+    const observation = useBioXpWorkflowJobObservation(jobId, generation, enabled);
+    const detail = useBioXpWorkflowJob(jobId, generation, enabled && observation.data?.command?.terminal === true);
+    const full = detail.data;
+    const current = observation.data;
+    const data = current ? { ...full, ...current,
+        command: current.command ? { ...full?.command, ...current.command } : full?.command,
+        execution: { ...current.execution, dry_run: current.execution?.dry_run ?? full?.execution?.dry_run ?? true, runtime_state: {
+            ...full?.execution?.runtime_state, ...current.execution?.runtime_state,
+            action_results: (current.execution && 'action_results' in current.execution.runtime_state
+                ? current.execution.runtime_state.action_results : full?.execution?.runtime_state.action_results) ?? [],
+        } },
+    } : full;
+    return { ...observation, data, isError: observation.isError || detail.isError, error: observation.error ?? detail.error };
+}
 export const useSubmitBioXpProtocol = () => useMutation({
     mutationFn: async (request: BioXpWorkflowSubmission) => (
         await api.post<BioXpWorkflowJob>('/api/bioxp/protocols/submit', request)

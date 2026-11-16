@@ -6,7 +6,7 @@ import { api } from '../lib/api';
 import './BioXpMethodsWorkspace.css';
 import { liquidClassEditorSchema, methodParameterSchema, methodTipPolicySchema } from '../lib/bioxpMethodEditorSchema';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
-import { bioXpErrorText } from '../lib/bioxpClient';
+import { bioXpErrorText, useBioXpOperatorUpdates, isActiveBioXpWorkflow, type BioXpWorkflowJob, type BioXpWorkflowJobSummary } from '../lib/bioxpClient';
 import { methodsGet, methodsPost, methodsSave, methodRows, newMethod, definiteMethodRefusal, type MethodValue, type MethodRecord, type MethodCollection, type MethodCatalog, type MethodCompile, type MethodRun } from '../lib/bioxpMethods';
 import { canonicalWorkflowJobId } from '../lib/bioxpSavedWorkflowRun';
 import { BioXpCopyId } from './BioXpCopyId';
@@ -56,6 +56,7 @@ function writeRuns(runs: RunEntry[]): string | null {
 const when = (iso: unknown) => { const d = typeof iso === 'string' && iso ? new Date(iso) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleString() : 'start time not recorded'; };
 const plainContext = (context: unknown) => Object.entries(object(context)).filter(([, v]) => v !== null && v !== undefined && typeof v !== 'object').map(([k, v]) => `${k.replaceAll('_', ' ')} ${String(v)}`).join(', ');
 export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, visible = true, holderTargets = [] }: { generation: number; connected: boolean; controlsEnabled: boolean; visible?: boolean; holderTargets?: HolderTarget[] }) {
+    useBioXpOperatorUpdates(generation, connected && visible);
     const [tab, updateTab] = useState('Methods');
     const tabRef = useRef(tab); tabRef.current = tab;
     const setTab = (next: string) => { if (next !== tabRef.current) editVersion.current++; tabRef.current = next; updateTab(next); };
@@ -91,6 +92,8 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
     const [ack, setAck] = useState(false);
     const [history, setHistory] = useState<RunEntry[]>(readRuns);
     const [run, setRun] = useState<RunEntry | null>(() => history[0] ?? null);
+    const explicitRunSelection = useRef(false);
+    useEffect(() => { explicitRunSelection.current = false; }, [generation]);
     const historyRef = useRef(history); historyRef.current = history;
     // Synchronous: the original identity is in browser storage before the POST starts.
     const remember = (entry: RunEntry) => { const next = [entry, ...historyRef.current.filter(r => r.jobId !== entry.jobId)].slice(0, MAX_RUNS); historyRef.current = next; const warning = writeRuns(next); setRunMessage(warning); setHistory(next); };
@@ -119,6 +122,26 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
     const library = useQuery({ queryKey: ['bioxp', 'methods', collection, search, offset], queryFn: () => methodsGet<unknown>(collection, { search, offset, limit: 25 }), retry: false, enabled: visible && tab !== 'Runs' });
     const revisions = useQuery({ queryKey: ['bioxp', 'methods', collection, selected, 'revisions'], queryFn: () => methodsGet<unknown>(`${collection}/${enc(selected)}/revisions`), retry: false, enabled: !!selected });
     const runs = useQuery({ queryKey: ['bioxp', 'methods', 'runs', generation, search, offset], queryFn: () => methodsGet<unknown>('runs', { expected_connection_generation: generation, search, offset, limit: 25 }), retry: false, enabled: visible && tab === 'Runs' && connected });
+    const discovery = useQuery({ queryKey: ['bioxp', 'methods', 'active-runs', generation],
+        queryFn: () => methodsGet<{ rows: BioXpWorkflowJobSummary[] }>('runs', { expected_connection_generation: generation, limit: 100 }),
+        enabled: visible && connected && generation > 0, retry: false,
+        refetchInterval: visible && connected ? 10_000 : false, refetchIntervalInBackground: false });
+    useEffect(() => {
+        if (explicitRunSelection.current || busy) return;
+        const observed = object(liveObservation).job_id === run?.jobId ? liveObservation : accepted;
+        if (run?.generation === generation && observed && isActiveBioXpWorkflow(observed as BioXpWorkflowJob)) return;
+        const active = discovery.data?.rows.filter(isActiveBioXpWorkflow) ?? [];
+        if (run?.generation === generation && active.some(job => job.job_id === run.jobId)) return;
+        const job = active[0];
+        if (!job) return;
+        setRun({ jobId: job.job_id, key: job.command?.idempotency_key ?? '', generation,
+            snapshot: {}, name: job.protocol_id || 'Robot job', startedAt: job.created_at });
+        setAccepted(null); setLiveObservation(null); setReport(null);
+    }, [discovery.data, generation, busy, run, liveObservation, accepted]);
+    const runContext = useQuery({ queryKey: ['bioxp', 'methods', 'run-context', generation, run?.jobId],
+        queryFn: () => methodsGet<MethodValue>(`runs/${enc(run!.jobId)}/context`, { expected_connection_generation: generation }),
+        enabled: visible && connected && !!run && !run.refused, retry: false, staleTime: Infinity,
+        refetchOnWindowFocus: false, refetchOnReconnect: false });
     const starters = useQuery({ queryKey: ['bioxp', 'methods', 'liquid-starters'], queryFn: () => methodsGet<unknown>('liquid-classes/starters'), enabled: visible && tab !== 'Runs', retry: false, staleTime: Infinity });
     const presets = useQuery({ queryKey: ['bioxp', 'methods', 'presets'], queryFn: () => methodsGet<unknown>('presets', { limit: 100 }), retry: false });
     const rootSchema = schemas(schema.data ?? {}) as Schema;
@@ -173,7 +196,7 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
         staleTime: Infinity, retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
     });
     // Holder rows/wells for the map come from the robot catalog's deck destinations (robot-owned XY).
-    // One cached read per connection; the cockpit's own poll pauses while Workflows is open.
+    // One cached read per connection; live dashboard updates are shared by the cockpit.
     const holderCatalog = useQuery({
         queryKey: ['bioxp', 'method-holder-targets', generation],
         queryFn: async () => {
@@ -211,7 +234,7 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
             const key = crypto.randomUUID(), jobId = await canonicalWorkflowJobId(key);
             if (authority.current.generation !== currentGeneration || !authority.current.connected) throw new Error('Connection changed before submission; nothing submitted.');
             attempt = { jobId, key, generation: currentGeneration, snapshot: frozen, name: String(object(frozen.method).name || 'Untitled method'), startedAt: new Date().toISOString(), saved: pinned ? { id: pinned.id, revision: pinned.revision } : null };
-            setRun(attempt); remember(attempt); setAccepted(null); setReport(null);
+            explicitRunSelection.current = false; setRun(attempt); remember(attempt); setAccepted(null); setReport(null);
             const request = buildMethodRunRequest(frozen, pinned, basis, key, currentGeneration);
             const result = await methodsPost<MethodRun>(request.path, request.body);
             if (result.job_id !== jobId) throw new Error('Returned identity differs; reconcile original canonical identity, no retry.');
@@ -309,12 +332,13 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
             </>}
         </div>
         <div role="tabpanel" id="method-runs-panel" aria-labelledby="method-tab-2" hidden={tab !== 'Runs'}><h3>Runs</h3>
-            <section aria-label="Run history"><h4>Started from this browser</h4>{history.length === 0 && <p>No runs started here yet.</p>}<ul>{history.map(entry => <li key={entry.jobId}><button type="button" aria-pressed={run?.jobId === entry.jobId} onClick={() => { setRun(entry); setAccepted(null); reportGeneration.current = generation; setReport(reportCache.current[`${generation}:${entry.jobId}`] ?? null); }}>{entry.name} · {when(entry.startedAt)}{entry.refused ? ' · not started' : ''}</button></li>)}</ul></section>
+            <section aria-label="Run history"><h4>Started from this browser</h4>{history.length === 0 && <p>No runs started here yet.</p>}<ul>{history.map(entry => <li key={entry.jobId}><button type="button" aria-pressed={run?.jobId === entry.jobId} onClick={() => { explicitRunSelection.current = true; setRun(entry); setAccepted(null); reportGeneration.current = generation; setReport(reportCache.current[`${generation}:${entry.jobId}`] ?? null); }}>{entry.name} · {when(entry.startedAt)}{entry.refused ? ' · not started' : ''}</button></li>)}</ul></section>
             <details><summary>Recent robot jobs</summary><label>Search recent jobs<input aria-label="Run search" value={search} onChange={e => { setSearch(e.target.value); setOffset(0); }} /></label><button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 25))}>Previous run page</button><button type="button" disabled={offset >= 75 || methodRows(runs.data).length < 25} onClick={() => setOffset(Math.min(75, offset + 25))}>Next run page</button><button type="button" onClick={() => void runs.refetch()}>Refresh runs</button>
-            <ul>{methodRows<MethodRun & { created_at?: string }>(runs.data).map(job => <li key={job.job_id}><button type="button" onClick={() => { const known = history.find(h => h.jobId === job.job_id); setRun(known ?? { jobId: job.job_id, key: '', generation, snapshot: object(job.method_snapshot), name: String(object(object(job.method_snapshot).method).name || 'Robot job'), startedAt: String(job.created_at ?? '') }); setAccepted(job); reportGeneration.current = generation; setReport(reportCache.current[`${generation}:${job.job_id}`] ?? null); }}>{history.find(h => h.jobId === job.job_id)?.name ?? String(object(object(job.method_snapshot).method).name || 'Robot job')} · {when(job.created_at)} · {job.status}</button></li>)}</ul><small>Latest jobs window from the robot, not complete history.</small></details></div>
-        {run && <section aria-label="Immutable method run"><h3>{run.name}</h3><p>Started {when(run.startedAt)}{run.saved ? ` · saved revision ${run.saved.revision}` : ' · unsaved draft'} <BioXpCopyId label="job ID" value={run.jobId} /> <BioXpCopyId label="request key" value={run.key} /></p>{runMessage && <p role="status">{runMessage}</p>}<p>An exact copy of this method is kept with the run; later edits never change it.</p>
+            <ul>{methodRows<MethodRun & { created_at?: string }>(runs.data).map(job => <li key={job.job_id}><button type="button" onClick={() => { explicitRunSelection.current = true; const known = history.find(h => h.jobId === job.job_id); setRun(known ?? { jobId: job.job_id, key: '', generation, snapshot: object(job.method_snapshot), name: String(object(object(job.method_snapshot).method).name || 'Robot job'), startedAt: String(job.created_at ?? '') }); setAccepted(job); reportGeneration.current = generation; setReport(reportCache.current[`${generation}:${job.job_id}`] ?? null); }}>{history.find(h => h.jobId === job.job_id)?.name ?? String(object(object(job.method_snapshot).method).name || 'Robot job')} · {when(job.created_at)} · {job.status}</button></li>)}</ul><small>Latest jobs window from the robot, not complete history.</small></details></div>
+        {discovery.isError && <p role="status">Robot run discovery unavailable: {bioXpErrorText(discovery.error)}</p>}
+        {run && <section aria-label="Immutable method run"><h3>{String(object(runContext.data?.method).name || run.name)}</h3><p>Started {when(run.startedAt)}{run.saved ? ` · saved revision ${run.saved.revision}` : Object.keys(run.snapshot).length ? ' · unsaved draft' : ' · robot run'} <BioXpCopyId label="job ID" value={run.jobId} /> <BioXpCopyId label="request key" value={run.key} /></p>{runMessage && <p role="status">{runMessage}</p>}<p>{runContext.data?.method === null ? 'No authored method snapshot was recorded for this robot job.' : 'An exact copy of this method is kept with the run; later edits never change it.'}</p>{runContext.isError && <p role="status">Original method context unavailable; native progress remains visible.</p>}
             {run.refused ? <p>Definite pre-admission refusal; nothing started for this submission. No nonexistent-job polling.</p> : <BioXpWorkflowJobMonitor onObserved={setLiveObservation} methodsFacade visible={visible && (tab === 'Runs' || tab === 'Methods')} jobId={run.jobId} generation={generation} connected={connected} controlsEnabled={controlsEnabled} busyRef={busyRef} onBusyChange={setBusy} submitting={busy} pending acceptedJob={accepted} />}
-            {object(liveObservation).job_id === run.jobId && <BioXpMethodProgress report={object(object(object(liveObservation).execution).runtime_state)} />}
+            {object(liveObservation).job_id === run.jobId && <BioXpMethodProgress report={object(object(object(liveObservation).execution).runtime_state)} context={runContext.data?.job_id === run.jobId ? runContext.data : undefined} />}
             <button type="button" disabled={storageBusy} onClick={() => void storage(async () => { const original = await methodsPost<MethodValue>(`runs/${enc(run.jobId)}/clone`, {}, { expected_connection_generation: generation }); delete saveTargets.current.library; setDraft(clone(object(original.method))); setMethodValues({ bindings: clone(object(original.bindings)), dependencies: clone(object(original.dependencies)), initialState: clone(original.initial_state) }); setSavedMethod(null); setTab('Methods'); editVersion.current++; setNotice('Original immutable method cloned as an unsaved draft. No execution submitted.', 'Methods'); })}>Clone original method</button>
             <button type="button" disabled={storageBusy} onClick={() => { const jobId = run.jobId, requestedGeneration = generation; void storage(async () => { const result = await methodsGet<MethodValue>(`runs/${enc(jobId)}/report`, { expected_connection_generation: requestedGeneration }); if (result.job_id !== undefined && result.job_id !== jobId) throw new Error('Report identity differs from the requested job; previous report retained.'); const addressed = { ...result, job_id: jobId }; reportCache.current[`${requestedGeneration}:${jobId}`] = addressed; if (reportIdentity.current.jobId !== jobId || reportIdentity.current.generation !== requestedGeneration) return; reportGeneration.current = requestedGeneration; setReport(addressed); }); }}>Load method report</button>
             {visibleReport && <><h4>Report</h4><BioXpMethodProgress report={visibleReport} /><BioXpMethodApplicationFields value={report} /><button type="button" onClick={() => download(report, `${String(report!.job_id)}-report.json`)}>Export report</button>

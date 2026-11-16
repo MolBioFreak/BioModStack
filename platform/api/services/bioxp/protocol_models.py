@@ -14,7 +14,7 @@ Identity = Annotated[str, Field(min_length=1)]
 Generation = Annotated[StrictInt, Field(ge=0)]
 WorkflowPhase = Literal["queued", "preparing", "starting", "executing", "waiting", "waking", "epilogue", "cleanup", "reconciling", "terminal"]
 WorkflowGate = Literal["ordinary_pause", "deferred_pause", "delaypoint", "review", "error_hold"]
-CommandStatus = Literal["queued", "dispatched", "interrupting", "completed", "failed", "interrupted", "cleared", "ambiguous", "rejected"]
+CommandStatus = Literal["queued", "dispatched", "interrupting", "completed", "failed", "interrupted", "cleared", "ambiguous", "rejected", "outcome_unknown", "reconciliation_required", "issued_pending", "stop_requested", "abort_requested", "stopped", "aborted", "cancelled"]
 
 
 class ProtocolSubmission(ProtocolWireModel):

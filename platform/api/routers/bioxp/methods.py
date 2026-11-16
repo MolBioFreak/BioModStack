@@ -323,6 +323,16 @@ def _evidence(job, snapshot):
     return snapshot_evidence(job.protocol.document, snapshot)
 
 
+@router.get("/runs/{job_id}/context")
+async def run_context(job_id: str, expected_connection_generation: int | None = Query(None, ge=0),
+                      runtime=Depends(get_bioxp_runtime)):
+    job = await protocols.get_protocol_job(job_id, expected_connection_generation, False, runtime)
+    snapshot = _snapshot(job)
+    # Only immutable authoring/provenance; no result history, trays or simulation.
+    return {"job_id": job.job_id, "method": snapshot.get("method") if snapshot else None,
+            "provenance": snapshot.get("compilation", {}).get("provenance", []) if snapshot else []}
+
+
 @router.get("/runs/{job_id}/report")
 async def report(job_id: str, expected_connection_generation: int | None = Query(None, ge=0),
                  runtime=Depends(get_bioxp_runtime)):

@@ -391,3 +391,15 @@ it('manual plate handling preserves native live interlock denials but ignores hi
     await click(button('Place held plate', platePanel()));
     expect(plateWrites()).toHaveLength(1);
 });
+
+
+it('keeps dashboard observation running on the Workflows tab without mutations', async () => {
+    await mount('robot');
+    await tab('workflows'); await advance(100);
+    const dashboardReads = () => requests.filter(r => r.url.endsWith('/operator-controls/catalog') && r.params?.canonical_assessment_base !== undefined);
+    const before = dashboardReads().length;
+    await advance(5200);
+    expect(dashboardReads().length).toBeGreaterThan(before);
+    expect(requests.some(r => r.url.endsWith('/operator-controls/updates'))).toBe(true);
+    expect(mutations()).toHaveLength(0);
+});

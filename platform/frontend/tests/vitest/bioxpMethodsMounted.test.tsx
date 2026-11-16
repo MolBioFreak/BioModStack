@@ -53,7 +53,7 @@ const seedRun = (entry: Record<string, unknown>) => localStorage.setItem('bms.bi
 // Preview checks automatically ~600 ms after the last edit.
 async function checked() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 700)); }); await settle(); }
 const checks = () => requests.filter(r => r.method === 'post' && r.url.endsWith('/check'));
-const reads = () => requests.filter(r => r.method === 'get' && /\/runs\/protocol-live-/.test(r.url) && !r.url.endsWith('/report'));
+const reads = () => requests.filter(r => r.method === 'get' && /\/runs\/protocol-live-/.test(r.url) && !r.url.endsWith('/report') && !r.url.endsWith('/context'));
 beforeEach(() => {
     vi.stubGlobal('crypto', webcrypto); localStorage.clear(); oldAdapter = api.defaults.adapter;
     // jsdom has no scrolling implementation; keep the real browser editor focus path.
@@ -63,12 +63,14 @@ beforeEach(() => {
     const adapter: AxiosAdapter = async config => {
         const url = config.url!, method = config.method!, body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
         requests.push({ url, method, body, params: config.params }); let data: any;
+        if (url === '/api/bioxp/operator-controls/updates') return new Promise(() => {});
         if (url === '/api/bioxp/operator-controls/catalog') data = { canonical: { dashboard: { deck: { head_alignment: { tip_location: -1 } } } } };
         else if (url.endsWith('/starters')) data = [];
         else if (url.endsWith('/catalog')) data = catalog;
         else if (url.endsWith('/schema')) data = { method: schema, requests: {}, results: {}, openapi: '/openapi.json' };
         else if (url.endsWith('/examples')) data = [{ name: 'PCR', method: sourceMethod }];
         else if (/\/(check|compile)$/.test(url)) data = compiled;
+        else if (url.endsWith('/context')) data = { job_id: url.split('/').at(-2), method: sourceMethod, provenance };
         else if (url.endsWith('/report')) data = { method_snapshot: { method: sourceMethod, compilation: compiled }, occurrences: [{ ...provenance[0], status: 'failed', effects: [{ action_id: 'a1', status: 'completed' }] }], water_substitutions: compiled.water_substitutions };
         else if (url.endsWith('/clone')) data = { method: sourceMethod, bindings: {}, dependencies: {}, submitted: false };
         else if (url.endsWith('/recovery-draft')) data = { method: sourceMethod, bindings: {}, dependencies: {}, initial_state: body.initial_state, recovery: { original_job_id: url.split('/').at(-2), occurrence: body.occurrence, automatic_setup: [], excluded_actions: [], submitted: false, strategy: 'whole_original_draft_for_explicit_editing' } };
@@ -229,12 +231,12 @@ it('opens raw exact revision, edits typed scientific value, preserves unknown/nu
     expect(sent.body.method.steps[0].inputs).toEqual({ location_id: 2, well: 'a1', height_steps: '002.3400', future: null });
     expect(sent.body.method.unknown).toEqual(sourceMethod.unknown); expect(sent.body.expected_base_revision).toBe(1);
     expect(host.textContent).toContain('Saved exact revision 2'); expect(submits()).toHaveLength(0);
-    expect(requests.every(r => r.url.startsWith('/api/bioxp/methods/') || r.method === 'get' && r.url === '/api/bioxp/operator-controls/catalog' && JSON.stringify(r.params) === JSON.stringify({ view: 'assessment' }))).toBe(true);
+    expect(requests.every(r => r.url.startsWith('/api/bioxp/methods/') || r.method === 'get' && (r.url === '/api/bioxp/operator-controls/updates' || r.url === '/api/bioxp/operator-controls/catalog' && (r.params === undefined || JSON.stringify(r.params) === JSON.stringify({ view: 'assessment' }))))).toBe(true);
 });
 it('reads the recorded preview reference once and does not mutate or recompile the method while paging or changing the preview reference', async () => {
     await mount(); await openOriginal(); await checked();
     const count = checks().length;
-    const referenceReads = () => requests.filter(r => r.url === '/api/bioxp/operator-controls/catalog');
+    const referenceReads = () => requests.filter(r => r.url === '/api/bioxp/operator-controls/catalog' && r.params?.view === 'assessment');
     expect(referenceReads()).toHaveLength(1);
     await click('Next stage'); await input('Preview head reference', '2'); await click('Previous stage'); await checked();
     expect(checks()).toHaveLength(count);
@@ -556,7 +558,7 @@ it.each(['manual', 'class'])('composes map-driven Move and %s Transfer, selected
     await click('Save'); expect(db.m2.method).toEqual(saved);
     await click('Liquid classes'); await click('Methods'); await click('Save'); expect(db.m2.method).toEqual(saved);
     expect(submits()).toHaveLength(0);
-    expect(requests.every(r => r.url.startsWith('/api/bioxp/methods/') || r.method === 'get' && r.url === '/api/bioxp/operator-controls/catalog' && JSON.stringify(r.params) === JSON.stringify({ view: 'assessment' }))).toBe(true);
+    expect(requests.every(r => r.url.startsWith('/api/bioxp/methods/') || r.method === 'get' && (r.url === '/api/bioxp/operator-controls/updates' || r.url === '/api/bioxp/operator-controls/catalog' && (r.params === undefined || JSON.stringify(r.params) === JSON.stringify({ view: 'assessment' }))))).toBe(true);
     expect(requests.filter(r => r.method !== 'get').every(r => /\/(library|check)(\/[^/]+)?$/.test(r.url))).toBe(true);
 });
 
@@ -634,4 +636,53 @@ it('authors chiller, cycler and door steps from stations without wells or scient
     expect((host.querySelector('[aria-label="Method deck"]') as HTMLElement).hidden).toBe(false);
     await click('Save'); expect(db.m2.method).toEqual(saved);
     expect(submits()).toHaveLength(0);
+});
+
+
+it('discovers an API-started run on Methods without browser storage and maps compact occurrence progress', async () => {
+    const id = `protocol-live-${'b'.repeat(64)}`;
+    records[id] = { ...job(id), dry_run: false, protocol_id: 'api-method', created_at: '2026-01-01T00:00:00Z' };
+    await mount(); await settle(); await settle();
+    expect(host.querySelector('[aria-label="Immutable method run"]')?.textContent).toContain(sourceMethod.name);
+    expect(host.querySelector('[aria-label="Occurrence outcomes"]')?.textContent).toContain('Current occurrence: move');
+    expect(host.querySelector('[aria-label="Occurrence outcomes"]')?.textContent).toContain('loop/0/move-original');
+    expect(reads().length).toBeGreaterThan(0);
+    expect(reads().every(r => r.params.observation === true)).toBe(true);
+    expect(requests.filter(r => r.url.endsWith('/context'))).toHaveLength(1);
+    expect(submits()).toHaveLength(0);
+    expect(localStorage.getItem('bms.bioxp.method-runs.v2')).toBeNull();
+});
+
+it.each(['outcome_unknown', 'reconciliation_required', 'completed'])('does not adopt retained %s as active even when a legacy row says nonterminal', async status => {
+    const id = `protocol-live-${'c'.repeat(64)}`;
+    const row = job(id); row.command.status = status;
+    records[id] = { ...row, status, dry_run: false, protocol_id: 'old', created_at: '' };
+    await mount(); await settle();
+    expect(host.querySelector('[aria-label="Immutable method run"]')).toBeNull();
+    expect(reads()).toHaveLength(0); expect(submits()).toHaveLength(0);
+});
+
+it('discovers a later API run while idle and shows discovery failures rather than a silent empty workspace', async () => {
+    await mount();
+    const id = `protocol-live-${'d'.repeat(64)}`;
+    records[id] = { ...job(id), dry_run: false, protocol_id: 'later', created_at: '' };
+    await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'methods', 'active-runs'] }); });
+    await settle(); await settle();
+    expect(reads().some(r => r.url.endsWith(id))).toBe(true);
+    const transport = api.defaults.adapter as AxiosAdapter;
+    api.defaults.adapter = config => config.url?.endsWith('/runs') ? Promise.reject(new Error('discovery offline')) : transport(config);
+    await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'methods', 'active-runs'] }); });
+    await settle();
+    expect(host.textContent).toContain('Robot run discovery unavailable');
+    expect(host.querySelector('[aria-label="Immutable method run"]')).not.toBeNull();
+});
+
+
+it('keeps the newly submitted original identity when discovery still lists an older active run', async () => {
+    const id = `protocol-live-${'e'.repeat(64)}`;
+    records[id] = { ...job(id), dry_run: false, protocol_id: 'previous', created_at: '' };
+    await mount(); await settle(); await openOriginal(); await acknowledge(); await click('Run');
+    expect(lastRun().jobId).not.toBe(id);
+    expect(reads().at(-1)?.url).toContain(lastRun().jobId);
+    expect(submits()).toHaveLength(1);
 });
