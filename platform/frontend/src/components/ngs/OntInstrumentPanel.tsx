@@ -575,7 +575,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
 
     return (
         <section className="space-y-5 rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 shadow-lg shadow-black/10">
-            {rawSignalOnly ? <div className="space-y-2 text-[var(--text-primary)]"><h2 className="text-xl font-semibold">Raw signal tools</h2><p className="text-sm text-[var(--text-secondary)]">POD5 and indexed BLOW5: source registration, SLOW5tools conversion, read lookup and waveform inspection. Open an alignment result’s Read &amp; Signal Workbench for Squigualiser views, mapping, calibration and Squigulator ideal trace comparison.</p><button type="button" onClick={onAnalyzeExistingData} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--accent-primary)]">Open data analysis</button></div> : null}
+            {rawSignalOnly ? <div className="space-y-2 text-[var(--text-primary)]"><h2 className="text-xl font-semibold">Raw signal tools</h2><p className="text-sm text-[var(--text-secondary)]">POD5 and indexed BLOW5: source registration, SLOW5tools conversion, read lookup and waveform inspection. Open an alignment result’s Read &amp; Signal Workbench for Squigualiser views, mapping, calibration and Squigulator ideal trace comparison.</p><button type="button" onClick={() => onAnalyzeExistingData()} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--accent-primary)]">Open data analysis</button></div> : null}
             {!rawSignalOnly ? <>
             <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="space-y-2">
@@ -586,7 +586,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                     <p className="max-w-2xl text-sm text-[var(--text-secondary)]">Pick a Mk1D position, choose the kit and run length, and start sequencing. BNS tracks the run and picks up its reads when it finishes. Reconnect only works on this computer, not over Tailnet.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                    <button type="button" onClick={onAnalyzeExistingData} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]">Data Analysis</button>
+                    <button type="button" onClick={() => onAnalyzeExistingData()} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]">Data Analysis</button>
                     <button
                         type="button"
                         disabled={reconnectMk1d.isPending}

@@ -210,6 +210,30 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
         expect(request).not.toHaveProperty('source_fidelity');
     });
 
+    it('sends a sample name per barcode when the run uses a barcoding kit', async () => {
+        ont.fetchOptions.mockResolvedValue({ data: { ...optionsResponse.data, available_kits: ['SQK-LSK114', 'SQK-RBK114-24'] } });
+        ont.createIntent.mockResolvedValue({ data: intent });
+        ont.startIntent.mockResolvedValue({ data: intent });
+        await act(async () => { root.render(panel()); });
+        await flush();
+        expect(container.querySelector('[aria-label="Barcode sample names"]')).toBeNull();
+        const kit = container.querySelector<HTMLSelectElement>('[aria-label="Sequencing kit"]')!;
+        await waitUntil(() => expect(Array.from(kit.options).map(option => option.value)).toContain('SQK-RBK114-24'));
+        await act(async () => { kit.value = 'SQK-RBK114-24'; kit.dispatchEvent(new Event('change', { bubbles: true })); });
+        await flush();
+        const names = container.querySelector<HTMLTextAreaElement>('[aria-label="Barcode sample names"]')!;
+        await act(async () => {
+            Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(names, 'barcode01\tplasmid_A\nbarcode02,plasmid_B');
+            names.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        const start = Array.from(container.querySelectorAll('button')).find((element) => element.textContent === 'Start sequencing') as HTMLButtonElement;
+        await waitUntil(() => expect(start.disabled).toBe(false));
+        await act(async () => start.click());
+        await flush();
+        expect(ont.createIntent).toHaveBeenCalledWith('MD-105428', expect.objectContaining({
+            barcode_samples: [{ barcode: 'barcode01', alias: 'plasmid_A' }, { barcode: 'barcode02', alias: 'plasmid_B' }],
+        }));
+    });
     it('retains the durable run and reports an uncertain physical start without resubmitting it', async () => {
         let rejectStart: (reason: unknown) => void = () => undefined;
         ont.createIntent.mockResolvedValue({ data: intent });
