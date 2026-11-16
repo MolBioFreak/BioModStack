@@ -403,6 +403,13 @@ def protocol_options(
                     if protocol_id and basecalling_enabled:
                         sample_rate = (device.get("flow_cell") or {}).get("sample_rate")
                         configs = manager.find_basecall_configurations(product, kit, sample_rate)
+                        if not configs:
+                            # An idle device reports the rate it last ran at; the protocol sets its own.
+                            # Use the rate the kit's basecall configuration names when there is exactly one.
+                            configs = manager.find_basecall_configurations(product, kit)
+                            rates = {_safe_get(config, "sampling_rate") for config in configs}
+                            if len(rates) == 1:
+                                sample_rate = rates.pop()
                         _config, simplex = tools.find_default_simplex_model(connection, kit, sample_rate, configs)
                         basecalling_options = {
                             "simplex_models": [simplex.name],
