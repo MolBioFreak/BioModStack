@@ -129,3 +129,10 @@ def test_a_kit_without_barcodes_starts_as_before(fake_instrument):
     tools.BasecallingArgs = lambda **kw: kw
     code, _ = host.start_protocol("X1", {**payload, "basecalling_enabled": True, "simplex_model": "model"})
     assert code == 201 and calls[0]["basecalling"]["barcoding"] is None
+
+
+def test_sample_names_per_barcode_are_passed_to_minknow(fake_instrument):
+    calls, tools, payload = fake_instrument
+    tools.BarcodeUserData = lambda **kw: kw
+    code, _ = host.start_protocol("X1", {**payload, "barcode_samples": [{"barcode": "barcode01", "alias": "plasmid_A"}]})
+    assert code == 201 and calls[0]["barcode_info"] == [{"barcode_name": "barcode01", "alias": "plasmid_A"}]

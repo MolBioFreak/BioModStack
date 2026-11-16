@@ -5288,7 +5288,20 @@ export const createOntRunIntent = (position: string, payload: {
     option_receipt_id: string;
     sample_id?: string;
     experiment_group?: string;
+    barcode_samples?: Array<{ barcode: string; alias: string }>;
 }) => api.post<OntInstrumentRun>(`/api/ont/positions/${encodeURIComponent(position)}/run-intents`, payload);
+
+export interface OntBarcodeBasecallHandoff {
+    run_id: string;
+    pod5_dir: string;
+    barcode_kit: string | null;
+    barcode_samples: Array<{ barcode: string; alias: string }>;
+    sample_sheet: string | null;
+}
+
+/** A finished run's POD5 folder, barcoding kit and sample names, ready for the ONT form. */
+export const requestOntBarcodeBasecallHandoff = (runId: string) =>
+    api.post<OntBarcodeBasecallHandoff>(`/api/ont/runs/${encodeURIComponent(runId)}/handoff/barcode-basecall`, {});
 
 export const startOntRunIntent = (runId: string, payload: { confirm_start: boolean; intent_generation: number }) =>
     api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/start`, payload);

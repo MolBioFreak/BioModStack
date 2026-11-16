@@ -842,9 +842,76 @@ def _barcoding_kits() -> frozenset[str]:
     return accepted_barcode_kits()
 
 
+def _barcode_samples(value: Any, kit: Any) -> list[dict[str, str]]:
+    """Barcode and sample-name pairs for a run on a barcoding kit."""
+    if not value:
+        return []
+    if kit not in _barcoding_kits():
+        raise ValueError("barcode sample names need a barcoding kit")
+    limit = 24 if str(kit).endswith("-24") else 96
+    samples: list[dict[str, str]] = []
+    for item in value:
+        barcode = str((item or {}).get("barcode") or "").strip()
+        alias = str((item or {}).get("alias") or "").strip()
+        if (not re.fullmatch(r"barcode(?:0[1-9]|[1-8][0-9]|9[0-6])", barcode) or int(barcode[7:]) > limit
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", alias) or re.fullmatch(r"barcode[0-9]+", alias)
+                or alias == "unclassified"
+                or any(barcode == seen["barcode"] or alias == seen["alias"] for seen in samples)):
+            raise ValueError(
+                f"barcode sample names must pair barcode01 to barcode{limit} with unique names of letters, numbers, _ or -")
+        samples.append({"barcode": barcode, "alias": alias})
+    return sorted(samples, key=lambda item: item["barcode"])
+
+
+def _run_barcode_samples(events: list[OntInstrumentRunEvent]) -> list[dict[str, str]]:
+    for event in events:
+        payload = event.minknow_payload if isinstance(event.minknow_payload, dict) else {}
+        if event.event_type == "preflight_armed" and payload.get("barcode_samples"):
+            return list(payload["barcode_samples"])
+    return []
+
+
+def _allowed_relative(path: Path) -> str:
+    """The path as the ONT form submits it: below a named data root when it lies in one."""
+    from paths import get_allowed_roots  # noqa: PLC0415
+    roots = get_allowed_roots()
+    for key in ("sequencer_runs", "inputs"):
+        if key in roots:
+            try:
+                return f"{key}/{path.relative_to(roots[key].resolve()).as_posix()}"
+            except ValueError:
+                continue
+    return str(path)
+
+
+async def build_barcode_basecall_handoff(run_id: str) -> dict[str, Any]:
+    """What the ONT form needs to basecall and demultiplex a finished run: its POD5 folder, kit and sample names."""
+    async with async_session() as session:
+        record = await _load_run(session, run_id)
+        if record.state not in {"completed", "stopped"}:
+            raise ValueError("the run must finish (completed or stopped) before it is basecalled here")
+        pod5 = [str(path) for path in (record.output_files or {}).get("pod5") or []]
+        if not pod5:
+            raise ValueError("this run has no POD5 files on record")
+        folder = Path(os.path.commonpath([str(Path(path).parent) for path in pod5]))
+        kit = record.kit if record.kit in _barcoding_kits() else None
+        samples = _run_barcode_samples(await _events_for_run(session, run_id)) if kit else []
+    sheet = None
+    if samples:
+        # Run identifiers are left blank; the basecall reads them from the POD5 files.
+        directory = get_inputs_dir() / "ont-sample-sheets" / uuid4().hex
+        directory.mkdir(parents=True)
+        sheet = directory / "samples.csv"
+        sheet.write_text("experiment_id,kit,flow_cell_id,position_id,barcode,alias\n" + "".join(
+            f",{kit},,,{item['barcode']},{item['alias']}\n" for item in samples), encoding="utf-8")
+    return {"run_id": run_id, "pod5_dir": _allowed_relative(folder), "barcode_kit": kit,
+            "barcode_samples": samples, "sample_sheet": _allowed_relative(sheet.resolve()) if sheet else None,
+            "fake_or_demo_devices": False}
+
+
 async def create_run_intent(position: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Consume one opaque option receipt into an ARMED durable ledger row."""
-    allowed = {"option_id", "option_receipt_id", "sample_id", "experiment_group"}
+    allowed = {"option_id", "option_receipt_id", "sample_id", "experiment_group", "barcode_samples"}
     if not isinstance(payload, dict) or set(payload) - allowed:
         raise ValueError("run intent accepts only opaque option receipt IDs and bounded sample metadata")
     option_id = str(payload.get("option_id") or "").strip()
@@ -869,6 +936,9 @@ async def create_run_intent(position: str, payload: dict[str, Any]) -> dict[str,
         ).scalar_one_or_none()
         if receipt is None or receipt.consumed_at is not None or receipt.expires_at <= now:
             raise ValueError("opaque option receipt is unknown, expired, or already consumed")
+        barcode_samples = _barcode_samples(
+            payload.get("barcode_samples"),
+            receipt.source_snapshot.get("kit") if isinstance(receipt.source_snapshot, dict) else None)
         run_id = _new_run_id()
         record = OntInstrumentRun(
             id=run_id,
@@ -908,7 +978,8 @@ async def create_run_intent(position: str, payload: dict[str, Any]) -> dict[str,
             state="armed",
             observed_at=now,
             observed_generation=1,
-            minknow_payload={"preflight_id": preflight.id, "source_digest": receipt.source_digest},
+            minknow_payload={"preflight_id": preflight.id, "source_digest": receipt.source_digest,
+                             **({"barcode_samples": barcode_samples} if barcode_samples else {})},
             output_files={"fastq": [], "pod5": [], "bam": []},
         )
         receipt.consumed_at = now
@@ -1004,6 +1075,7 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
             "min_qscore": basecalling.get("min_qscore"),
             "run_hours": float(snapshot.get("run_hours") or DEFAULT_RUN_HOURS),
             **({"barcoding_kits": [snapshot["kit"]]} if snapshot.get("kit") in _barcoding_kits() else {}),
+            **({"barcode_samples": samples} if (samples := _run_barcode_samples(await _events_for_run(session, run_id))) else {}),
             "sample_id": record.sample_id,
             "experiment_group": record.experiment_group,
         }

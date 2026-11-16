@@ -311,6 +311,7 @@ class OntRunIntentRequest(BaseModel):
     option_receipt_id: str = Field(min_length=1, max_length=80)
     sample_id: str | None = Field(default=None, max_length=255)
     experiment_group: str | None = Field(default=None, max_length=255)
+    barcode_samples: list[dict[str, str]] | None = Field(default=None, max_length=96)
 
 
 class OntIntentStartRequest(BaseModel):
@@ -869,6 +870,17 @@ async def ont_get_instrument_run(run_id: str) -> dict[str, Any]:
     if record is None:
         raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}")
     return record
+
+
+@router.post("/runs/{run_id}/handoff/barcode-basecall")
+async def ont_barcode_basecall_handoff(run_id: str) -> dict[str, Any]:
+    """Open a finished run in the ONT form: its POD5 folder, barcoding kit and sample names."""
+    try:
+        return await ont_run_control.build_barcode_basecall_handoff(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class OntRawSignalRetentionRequest(BaseModel):

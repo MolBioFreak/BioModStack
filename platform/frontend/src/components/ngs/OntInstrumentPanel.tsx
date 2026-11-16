@@ -3,6 +3,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { Link, useLocation } from 'react-router-dom';
 import {
     createOntRunIntent,
+    requestOntBarcodeBasecallHandoff,
     fetchMolBioNgsReferenceRevision,
     fetchMolBioNgsSampleRevision,
     fetchMolBioNgsSummaries,
@@ -41,7 +42,7 @@ const RAW_WAVEFORM_POLL_ATTEMPTS = 130;
 const RUN_HISTORY_PAGE_SIZE = 100;
 
 interface OntInstrumentPanelProps {
-    onAnalyzeExistingData: () => void;
+    onAnalyzeExistingData: (values?: Record<string, unknown>) => void;
     rawSignalOnly?: boolean;
 }
 
@@ -158,6 +159,15 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
     const [selectedPosition, setSelectedPosition] = useState('');
     const [selectedKit, setSelectedKit] = useState('');
     const [runHours, setRunHours] = useState(24);
+    const [barcodeSampleText, setBarcodeSampleText] = useState('');
+    // The barcoding kits BMS demultiplexes; a run on one can carry a sample name per barcode.
+    const barcodingKit = /^SQK-(RBK|NBD)114-(24|96)$/.test(selectedKit);
+    const barcodeSamples = barcodingKit ? barcodeSampleText.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
+        const [barcode = '', alias = ''] = line.split(/[\t,]/).map(value => value.trim());
+        return { barcode, alias };
+    }) : [];
+    const barcodeSampleError = barcodeSamples.some(item => !/^barcode\d{2}$/.test(item.barcode) || !/^[A-Za-z0-9_-]{1,40}$/.test(item.alias))
+        ? 'Use one line per barcode: barcode01, then a comma or tab, then a name of letters, numbers, _ or -.' : '';
     const [sampleSelection, setSampleSelection] = useState<{ domainId: string; sampleId: string } | null>(null);
     const [selectedRunGeneration, setSelectedRunGeneration] = useState<SelectedRunGeneration | null>(null);
     const [selectedExternalPod5CandidateId, setSelectedExternalPod5CandidateId] = useState('');
@@ -495,6 +505,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
         mutationFn: async () => {
             if (!exactDomainExperimentId) throw new Error('Choose a Project to start sequencing.');
             if (!selectedDevice?.position || !selectedOption) throw new Error('No server-issued protocol option is available');
+            if (barcodeSampleError) throw new Error(barcodeSampleError);
             const intent = await createOntRunIntent(selectedDevice.position, {
                 option_id: selectedOption.option_id,
                 option_receipt_id: selectedOption.option_receipt_id,
@@ -502,6 +513,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                 // The existing physical-intent contract calls this field experiment_group.
                 // It is always the exact selected Domain Experiment ID, never the Global Experiment ID.
                 experiment_group: exactDomainExperimentId,
+                ...(barcodeSamples.length ? { barcode_samples: barcodeSamples } : {}),
             });
             // Select and refresh the durable BMS ledger immediately. The subsequent
             // physical-start revalidation never becomes the sole run-history authority.
@@ -524,6 +536,15 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
         },
     });
 
+    // A finished run opens in the ONT form with its POD5 folder, barcoding kit and sample names filled in.
+    const openBarcodeBasecall = useMutation({
+        mutationFn: async (runId: string) => (await requestOntBarcodeBasecallHandoff(runId)).data,
+        onSuccess: (handoff) => onAnalyzeExistingData({
+            selectedWorkflow: 'dna', inputSource: 'pod5', pod5Dir: handoff.pod5_dir, runModkit: false, runFastqQc: false, runAssembly: false,
+            barcodeKit: handoff.barcode_kit ?? '', sampleSheet: handoff.sample_sheet ?? '',
+        }),
+        onError: (error) => setMessage(errorMessage(error, 'The run could not be opened for basecalling')),
+    });
     const stopRun = useMutation({
         mutationFn: async (runId: string) => (await stopOntInstrumentRun(runId)).data,
         onSuccess: (run) => {
@@ -709,6 +730,15 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                             {availableKits.map((kit) => <option key={kit} value={kit}>{kit}</option>)}
                         </select>
                     </label>
+                    {barcodingKit ? (
+                        <label className="block text-xs font-semibold text-[var(--text-secondary)]">Barcode sample names (optional)
+                            <textarea aria-label="Barcode sample names" rows={4} value={barcodeSampleText} onChange={(event) => setBarcodeSampleText(event.target.value)}
+                                placeholder={'barcode01\tplasmid_A\nbarcode02\tplasmid_B'}
+                                className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)]" />
+                            <span className="mt-1 block font-normal">MinKNOW demultiplexes this kit as it basecalls. Names entered here label its output and are filled in when you basecall the run in BMS.</span>
+                            {barcodeSampleError ? <span role="alert" className="mt-1 block font-normal text-[var(--warning)]">{barcodeSampleError}</span> : null}
+                        </label>
+                    ) : null}
                     {effectiveProtocolOptions?.flow_cell_present && !availableKits.length ? (
                         <p role="status" className="text-xs text-[var(--text-secondary)]">MinKNOW detects this cell but offers no sequencing kits for it. Test cells are used for hardware checks in MinKNOW. DNA and RNA sequencing kits appear with their matching sequencing cell.</p>
                     ) : null}
@@ -1039,6 +1069,12 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                             ) : null}
                         </div>
 
+                        {['completed', 'stopped'].includes(selectedGeneration.status) && selectedGeneration.output_counts.pod5 > 0 ? (
+                            <button type="button" disabled={openBarcodeBasecall.isPending} onClick={() => openBarcodeBasecall.mutate(selectedGeneration.run_id)}
+                                className="mr-2 inline-flex rounded-lg bg-[var(--accent-primary)] px-3 py-2 font-semibold text-[var(--text-on-accent)] disabled:opacity-50">
+                                {openBarcodeBasecall.isPending ? 'Opening…' : 'Basecall and demultiplex this run'}
+                            </button>
+                        ) : null}
                         <Link
                             to={contextHref('/ngs', {
                                 section: 'instrument-runs',

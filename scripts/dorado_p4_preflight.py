@@ -392,10 +392,9 @@ def _pod5_files(root: Path, allowed_ancillary: set[Path]) -> list[Path]:
             suffix = path.suffix.lower()
             if suffix == ".fast5":
                 raise ValueError(f"legacy FAST5 is outside the production contract: {path}")
+            # A sequencer run folder holds reports and FASTQ beside the POD5; only the POD5 files are the input.
             if suffix == ".pod5":
                 files.append(resolved)
-            elif resolved not in allowed_ancillary:
-                raise ValueError(f"POD5 root contains unsupported mixed file: {path}")
     if not files:
         raise ValueError("POD5 inventory contains no POD5 files")
     return sorted(files)

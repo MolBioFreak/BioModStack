@@ -479,13 +479,16 @@ def start_protocol(position_name: str, payload: dict[str, Any], *,
             barcoding=barcoding, alignment=None, min_qscore=payload.get("min_qscore"),
         )
     output = tools.OutputArgs(reads_per_file=None, batch_duration=None)
+    # Sample names per barcode, so MinKNOW labels its own output with them.
+    barcode_info = [tools.BarcodeUserData(barcode_name=str(item["barcode"]), alias=str(item["alias"]))
+                    for item in payload.get("barcode_samples") or []] or None
     try:
         run_id = tools.start_protocol(
             connection,
             identifier=protocol_id,
             sample_id=_string_or_none(payload.get("sample_id")) or "",
             experiment_group=_string_or_none(payload.get("experiment_group")) or "",
-            barcode_info=None,
+            barcode_info=barcode_info,
             basecalling=basecalling,
             pod5_arguments=output,
             fastq_arguments=output if basecalling else None,

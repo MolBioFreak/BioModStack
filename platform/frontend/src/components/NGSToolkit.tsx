@@ -4488,7 +4488,7 @@ export function NGSToolkit() {
                     initialValues={initialValues}
                 />
             ) : view === 'instrument' || view === 'raw-signal' ? (
-                <OntInstrumentPanel rawSignalOnly={view === 'raw-signal'} onAnalyzeExistingData={() => selectView('launch')} />
+                <OntInstrumentPanel rawSignalOnly={view === 'raw-signal'} onAnalyzeExistingData={(values) => { if (values) setInitialValues(values); selectView('launch'); }} />
             ) : (
                 <section className="space-y-4">
                     <div className="flex items-center gap-3" aria-label="Jobs pagination">
