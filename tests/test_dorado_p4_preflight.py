@@ -246,9 +246,13 @@ def test_barcode_and_sample_sheet_are_fail_closed(tmp_path: Path) -> None:
     filled = _preflight(module, pod5_root, barcode_kit="SQK-RBK114-96", sample_sheet=outside)["barcoding"]["sample_sheet"]
     assert filled["content"] == "experiment_id,kit,flow_cell_id,barcode,alias\nBMS_P4_SAMPLE,SQK-RBK114-96,PAO25751,barcode01,clone_a\n"
     assert filled["assignments"] == [{"barcode": "barcode01", "alias": "clone_a"}]
+    # A 24-barcode kit holds barcodes 01 to 24.
+    inventory = {"experiment_ids": ["E"], "sample_sheet_indexes": [{"experiment_id": "E", "flow_cell_id": "F", "position_id": "P"}]}
+    outside.write_text("experiment_id,kit,flow_cell_id,barcode,alias\n,SQK-RBK114-24,,barcode24,clone_a\n", encoding="utf-8")
+    assert module._validate_sample_sheet(outside, pod5_root.resolve(), "SQK-RBK114-24", inventory)["barcodes"] == ["barcode24"]
     outside.write_text("experiment_id,kit,flow_cell_id,barcode,alias\n,SQK-RBK114-24,,barcode30,clone_a\n", encoding="utf-8")
     with pytest.raises(ValueError, match="malformed|incompatible"):
-        _preflight(module, pod5_root, barcode_kit="SQK-RBK114-24", sample_sheet=outside)
+        module._validate_sample_sheet(outside, pod5_root.resolve(), "SQK-RBK114-24", inventory)
 
 
 def test_sample_sheet_rejects_pod5_without_dorado_experiment_metadata(tmp_path: Path) -> None:
