@@ -83,6 +83,32 @@ describe('mapping groups from initially partial native analysis', () => {
         expect(button('Map nicking').getAttribute('aria-pressed')).toBe('true');
     });
 
+    it('Golden Gate mapping narrows the list, bulk-map count and displayed analysis totals', async () => {
+        await mount(['Unique']);
+        await click('Map Golden Gate');
+        await act(async () => finish(full));
+        expect([...host.querySelectorAll('[data-enzyme-name]')].map(row => row.getAttribute('data-enzyme-name'))).toEqual(['Golden']);
+        expect(button('Map filtered (1)')).toBeTruthy();
+        expect(button('Clear map (2)')).toBeTruthy();
+        expect(new Set(mapped)).toEqual(new Set(['Unique', 'Golden']));
+        const counts = host.querySelector('[data-restriction-counts]')!;
+        expect(counts.textContent).toContain('1 definite enzyme-site match');
+        expect(counts.textContent).toContain('across 1 analyzed enzymes');
+        expect(counts.textContent).not.toContain('9 definite');
+        await click('All Types');
+        expect(host.querySelectorAll('[data-enzyme-name]')).toHaveLength(records.length);
+        expect(counts.textContent).toContain('9 definite enzyme-site matches');
+        expect(new Set(mapped)).toEqual(new Set(['Unique', 'Golden']));
+    });
+
+    it('the Golden Gate list filter can be selected without changing mapped enzymes', async () => {
+        await mount(['Unique']);
+        await click('Golden Gate');
+        expect([...host.querySelectorAll('[data-enzyme-name]')].map(row => row.getAttribute('data-enzyme-name'))).toEqual(['Golden']);
+        expect(mapped).toEqual(['Unique']);
+        expect(analyze).not.toHaveBeenCalled();
+    });
+
     it('merges rapid group requests and preserves manual mappings when one group is removed', async () => {
         await mount(['Zero']);
         await click('Map all 1x'); await click('Map Golden Gate'); await click('Map nicking');
