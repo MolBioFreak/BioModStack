@@ -76,3 +76,33 @@ No assertion or production gate was loosened to turn failures green.
 ## Existing documentation caveat for host provisioning
 
 The final paragraph of the historical `BNS_NGS_Runtime_Deployment.md` still says managed Dorado requires CUDA. That upstream text is stale, not a reason to disable CPU: the current contract supports CPU and CUDA (`BMS_ONT_DORADO_DEVICE=cpu` selects the installation default), and this lane's CPU-device tests passed. The historical guide's native acceptance claims describe its earlier host, not the new CachyOS host. Full host provisioning and a real new-host job remain parent-owned.
+
+## Second port: ONT/NGS commits from test, 2026-11-16
+
+Range `7e662af00f56..origin/test`, applied one commit at a time as three-way merges onto BNS `bef4e3544ea7`, so each file keeps this edition's own edits. Port commit `32d2f210df98`.
+
+- 55 commits with an `ONT ` subject in range: 53 applied, 2 held back whole.
+- The port commit adds 37, modifies 116 and deletes 2 files. No migration, database or schema-migration code changes, and no BioXP files.
+- Commits are in `Port_Inventory.json` under `port_2026_11_16`.
+
+Held back whole:
+
+- `4082bf3f` ONT T42: moves the signal image builds into the Tools installer and removes four wrapper scripts: this edition has no Tools installer.
+- `253255d6` ONT T33: bms.3 clone-source pin, its lock and patch change: this edition keeps its own clone-validation source pin.
+
+Held back inside applied commits:
+
+- Installer pieces (`biomodstack_tools.py`, `tools/recipes/*`, `tests/test_tools_installer.py`, `docs/Tool_Installer.md`): this edition has no Tools installer.
+- `config/ngs/wf_clone_validation_v1.8.4.lock.json` Nextflow block and `tests/test_wf_clone_nextflow_provisioning.py` (from `d62600c`): it repoints the lock's Nextflow to `${BMS_RUNTIME_HOME}/nextflow-25.10.0/nextflow`, which nothing provisions on this edition (the ONT box runs `/usr/local/bin/nextflow` 25.10.0); the lock keeps the existing path.
+- `scheduler/gpu_config.lock` (from `8cf8f95`): a zero-byte runtime lock file that test committed by accident.
+- `platform/frontend/tests/vitest/ngsResultRoutingMounted.test.tsx` changes (`3a213ecf`, `7fadc691`): the file does not exist in this edition.
+
+Hand-resolved:
+
+- `workflows/ngs/wf_clone_validation.nf`: keeps this edition's named-workflow completion form, takes test's no-expected-sequence path, and gates the verification and read-QC stage reports on an expected sequence. `nextflow lint` shows no error in `workflows/`; the six module errors it reports exist unchanged on the BNS tip.
+- `workflows/ngs/ont_construct_screening.nf` and `scripts/adapt_wf_clone_validation.py`: merged against the pin; this edition's side wins where both edited the same lines.
+- `tests/test_wf_clone_p3.py`: both sides' tests kept.
+
+Not carried: the non-`ONT ` commits in the range that touch NGS paths (`7418e67`, `7472395`, `77adc13`, `ee3b93f`, `44f66ed`, `7152b98`). They are installation-location, site-reference and BigBoy runtime-ledger changes.
+
+No new workflow admission or refusal gate is introduced by this port.

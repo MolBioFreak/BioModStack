@@ -1891,5 +1891,266 @@
         }
       ]
     }
-  ]
+  ],
+  "port_2026_11_16": {
+    "bns_base": "bef4e3544ea75a88a585891c3a072e02b40b4563",
+    "source_test_range": [
+      "7e662af00f56bdd70a74978ba0ff5fd54a6704fd",
+      "origin/test"
+    ],
+    "port_commit": "32d2f210df985c1f8c33f1140646b680a9feecb3",
+    "method": "per-commit three-way merge of ONT-subject commits onto the BNS tree; conflicts keep BNS where noted",
+    "applied_commits": [
+      {
+        "commit": "84bf6bbcff13ca7df77f2b068f6c843d0ce01793",
+        "subject": "ONT T01: accept the DNA analysis workflow id in the shared QC leaves and manifest helpers"
+      },
+      {
+        "commit": "f99e1c03317e560db145a826eea3d1dbf335d299",
+        "subject": "ONT T03: FASTQ QC with QC off completes through the shared importer and hides the QC result panel"
+      },
+      {
+        "commit": "8b75182c30ceafade67a753dac5f6843da6c5821",
+        "subject": "ONT T02: write DNA letters into the job reference for an RNA revision; the saved RNA is unchanged"
+      },
+      {
+        "commit": "536cede6ec97c3eba654b691c5bbadb01bdb325d",
+        "subject": "ONT T04: pooled score margin is a whole number in the form, matching the API"
+      },
+      {
+        "commit": "401ba219a6d1156176763972b3eeda25ffc73d84",
+        "subject": "ONT T05: do not submit a comparison panel the form is not showing"
+      },
+      {
+        "commit": "6e340578f64e72f7c64873bf70cb5289100973ae",
+        "subject": "ONT T06: pooled assignment resolves its FASTQ with the ordinary ONT input resolver"
+      },
+      {
+        "commit": "751be7df9653c7d989872356760ea404f5ce9226",
+        "subject": "ONT T07: a plain methylation request runs the methylation stage with the form's default modifications"
+      },
+      {
+        "commit": "f77fa474455abfcb0c3fe308262661f7d811d661",
+        "subject": "ONT T08: report the clone pipeline's own failure reason and name the failing Nextflow process on failed jobs"
+      },
+      {
+        "commit": "c5a3902d3f0d1e543f016dad48d3ed96a48caa08",
+        "subject": "ONT T09: count Dcm at the target C only, keep 5hmC apart, and name RNA modifications without bacterial methylase labels"
+      },
+      {
+        "commit": "0583cde404f451454c645412e528b1f67781e51d",
+        "subject": "ONT T10: comparison panel ranks competing references before the mapping-quality filter"
+      },
+      {
+        "commit": "f65300d94072031b21905c083cf3f151b7034496",
+        "subject": "ONT T47: clear the restored POD5 when a different raw signal file is chosen"
+      },
+      {
+        "commit": "acb31de8074d8d3047241c4fdcd9ddc681a44f90",
+        "subject": "ONT T47: register the raw signal input test with the vitest include list"
+      },
+      {
+        "commit": "bbb162cd70720a9b6d790159da170dacba778f43",
+        "subject": "ONT T11: name the below-1.5x length class truthfully and label capped figures and the cut reference list"
+      },
+      {
+        "commit": "69288e4144cf85f64e97a547ab37298c5850708e",
+        "subject": "ONT T13: state how each methylation number is computed and stop folding 5hmC into the Dcm pileup figure"
+      },
+      {
+        "commit": "5e1908cbb11f7723de121a3b805c95adacfa40a5",
+        "subject": "ONT T12: Project inspector says the result verdict and the Project assessment are separate"
+      },
+      {
+        "commit": "787896ce0ee7500ebb2be95d14314c5b6748626c",
+        "subject": "ONT T49: optional setting to accept POD5 from more than one run; off by default"
+      },
+      {
+        "commit": "fd39001f928a595c668511a5f54e35377601afe1",
+        "subject": "ONT T22: install the SUP model the default basecall uses, and download models with the image BMS runs"
+      },
+      {
+        "commit": "5fcffcb9c49d0430a0956c0226e5a143e5df610b",
+        "subject": "ONT T19: one container runtime choice for the installer, generated services and the ONT signal tools"
+      },
+      {
+        "commit": "8cf8f95a9d1238110a4792d5ee198a8783e5d85b",
+        "subject": "ONT T20: carry a locally built clone image by its own measured hash at launch and in remote transport"
+      },
+      {
+        "commit": "d62600c883f2f8302280a79d28e7ef370ca52153",
+        "subject": "ONT T21: the clone recipe installs its own locked Nextflow launcher and framework; no host launcher path in the lock"
+      },
+      {
+        "commit": "b4f1d84d89e482606da882a893badf3460973161",
+        "subject": "ONT T32: assembly report runs without an expected sequence; reads align to the assembled consensus; stage reports fire at run completion"
+      },
+      {
+        "commit": "9f4b3348269b6262559f0d1d3c6f79fce2259f3e",
+        "subject": "ONT T50: write a read-pileup AB1 of the consensus, list it with the downloads, and draw the chromatogram strip from the same counts"
+      },
+      {
+        "commit": "d369812a8dfc4cd95b00addce54bdeeb9c01f96c",
+        "subject": "ONT T39: plasmid summary page and files, built from outputs the run already wrote, with one zip of the set"
+      },
+      {
+        "commit": "3a213ecfa75251e60e03b6f6cd414c9d5e8869f9",
+        "subject": "ONT T37: the read report and read QC open by what the run published, not by workflow name or input kind"
+      },
+      {
+        "commit": "7fadc691ea27025d94beb181831934bfde574fd3",
+        "subject": "ONT T38: a run without a construct-QC manifest attaches to a Project and reopens by its published files"
+      },
+      {
+        "commit": "b6b066e40ce211839c8db240d26449863d36d60e",
+        "subject": "ONT T40: host genomic DNA share over the whole read population, with a labelled molar and mass estimate and an optional public K-12 reference"
+      },
+      {
+        "commit": "8ef865550d5a9f0697aa0f42f66db78c6fc1eeeb",
+        "subject": "ONT T14: a failed waveform lookup runs again when asked, on the same row; a single-read lookup needs space only for what it writes"
+      },
+      {
+        "commit": "a6c6ffa706ab081af2ad84555b9d90083d070d68",
+        "subject": "ONT T15: calibrate on the reads that are available, up to the requested count, and record both counts"
+      },
+      {
+        "commit": "11131af7c0bdd91234e534d0cf25c83b896e99e2",
+        "subject": "ONT T16: a restore interrupted by a restart is reported as interrupted and continues on request, keeping the files already finished"
+      },
+      {
+        "commit": "c1a226d884bb52a3d038e8766a4451909960aaa2",
+        "subject": "ONT T17: the quick squiggle is offered only when the run's own POD5 can be read; the final partial signal block stays with the last base; RNA signal order"
+      },
+      {
+        "commit": "c78b4a9d2082503deaf6eca51633eb20d1241d93",
+        "subject": "ONT T18: the signal image is resolved once at dispatch and the finished result is attributed to that image"
+      },
+      {
+        "commit": "c21c89cb7b4fc0aa49dd8cc19534d4bcc9398a1b",
+        "subject": "ONT T23: a waveform lookup hashes a BLOW5 file version once per process, off the event loop; the container checks the received version without reading it through"
+      },
+      {
+        "commit": "12ffb8b2ece249e865b9460b9226156571777952",
+        "subject": "ONT T24: preflight and the basecall step hash a file version once and check only the tools the run uses; the reference-free clone test follows T32"
+      },
+      {
+        "commit": "307858c964e67eeb6f847640fec85309c6444388",
+        "subject": "ONT T25: a FASTQ or BAM input is hashed once while its snapshot is written and not again while it is the same file version"
+      },
+      {
+        "commit": "c0907d9afcdc5eb24302989448b3e74492f83bf9",
+        "subject": "ONT T26 (part): the verifier hashes each input file once per run; the clone step derives the mapped read count instead of a third BAM pass"
+      },
+      {
+        "commit": "9c6efe908a68447690ff900605054e60c3816bb6",
+        "subject": "ONT T26 (part): realign reads signal coordinates from its checked parent reform file instead of decoding every read's raw signal again"
+      },
+      {
+        "commit": "9b4a993e2bdc6dc420faeb06e187b7479ef17b2e",
+        "subject": "ONT T27: the standalone IGV page is an optional export; a failed export is recorded and the QC result still completes"
+      },
+      {
+        "commit": "a37a5548f4f61ae0fe3f6d261ed91bedbea1eb85",
+        "subject": "ONT T41: retire the reconciliation repair writer and its CLI; keep the reader for saved results, with a saved receipt as its fixture"
+      },
+      {
+        "commit": "e1cd00f983a15c23d13cec4ca25996cf7fd94995",
+        "subject": "ONT T44: drop three scheduled-capability entries with no inventory record or workflow; retire the superseded clone candidate note, keeping its launcher instructions in the installer doc"
+      },
+      {
+        "commit": "afa51800639879a705ecbb7a1dae8e1334d3416a",
+        "subject": "ONT T28: a barcoded run can call modifications; methylation tables are chosen per batch in the barcode units panel and reach every barcode child"
+      },
+      {
+        "commit": "28abdc0f10fb7f63bf5da2a0bc2e346d1a1fb820",
+        "subject": "ONT T30: a barcode can hold several sequences; its reads are assigned once, then each sequence is analysed on its own whole BAM records so modification calls and signal tags survive"
+      },
+      {
+        "commit": "07361f2df497411556a23481404d15d0f22b5a7e",
+        "subject": "ONT T35: poly(A) tail length from Dorado's own estimate, for the end of a molecule or a tail inside a plasmid; per-read values reported as written, no-estimate counted apart from zero"
+      },
+      {
+        "commit": "dd05a04c5e54ea929efa3b84d4054ca52459598c",
+        "subject": "ONT T36: RNA basecalling can make per-site modification tables through the shared modkit stage, only for modifications the run calls"
+      },
+      {
+        "commit": "075531680856b70c0d76647c40b9febc3a172718",
+        "subject": "ONT T34: a linear reference is analysed without origin wrap or rotation; read ends are measured and read by the library prep named in the raw data, with no new threshold"
+      },
+      {
+        "commit": "b3138415a15f0706b609f1657de1d3ff1f0f34af",
+        "subject": "ONT T29: four barcode kits (rapid and native, 24 and 96) from the Dorado lock's list; both-ends option for native kits; 24-barcode kits list 24 barcodes"
+      },
+      {
+        "commit": "a2466c4ac5d4b11fb8a8bc5e8eff291a710ba671",
+        "subject": "ONT T31: a barcode left without a sequence is skipped and listed, its reads kept; the mapped barcodes still run"
+      },
+      {
+        "commit": "a933caeee66e422966e7091617fe3ee9ee4ec94c",
+        "subject": "ONT T43: the ONT form no longer needs an open Project for a basecall or an analysis against a saved sequence; a Project stays the presented, preferred path"
+      },
+      {
+        "commit": "c23491f9b5e68195ce914a1f36f46e2f05e0326a",
+        "subject": "ONT T29: the Project basecall schema carries the both-ends and multi-run settings"
+      },
+      {
+        "commit": "ef26d74cd7288969ca257e08fbafc492508f80bd",
+        "subject": "ONT barcoding for live runs: sample names from the form reach Dorado (sheet kept apart from the POD5, run identifiers read from the POD5); MinKNOW demultiplexes a barcoding kit; a finished run's POD5 folder can be chosen; 24-kit sheets hold barcodes 01-24"
+      },
+      {
+        "commit": "1b72a1db9452a1dab5e510b52d1fd7892ef712b6",
+        "subject": "ONT barcoding: test the 24-barcode limit on the sample sheet directly"
+      },
+      {
+        "commit": "a9b332f46e07a40f1e23bfe48b385591186eef64",
+        "subject": "ONT barcoding: sample names per barcode at run start reach MinKNOW; a finished run opens in the ONT form with its POD5 folder, kit and names; a run folder's reports and FASTQ beside the POD5 are left alone"
+      },
+      {
+        "commit": "0255f3c28bb9eba9ffca543de8c8d44b2e40c91e",
+        "subject": "ONT barcoding: panel test for sample names at run start; Data Analysis buttons call the handler without the click event"
+      },
+      {
+        "commit": "effaf4ba63819327578b654a4b287baa908bf11e",
+        "subject": "ONT run start: an idle device reports the rate it last ran at; find the kit's basecall model by the rate its configuration names"
+      }
+    ],
+    "held_commits": [
+      {
+        "commit": "4082bf3fceace445500ad5220d0b36005c879121",
+        "subject": "ONT T42: the Tools recipe is the one build route for the signal images; tag override honoured; four wrapper scripts removed",
+        "reason": "moves the signal image builds into the Tools installer and removes four wrapper scripts: this edition has no Tools installer"
+      },
+      {
+        "commit": "253255d6b3e96ebc5b39b484208918384c7a8160",
+        "subject": "ONT T33: clone source edition bms.3 fixes upstream host-region retention (the host filter read a BAM its step never writes)",
+        "reason": "bms.3 clone-source pin, its lock and patch change: this edition keeps its own clone-validation source pin"
+      }
+    ],
+    "held_pieces": [
+      {
+        "what": "Installer pieces (`biomodstack_tools.py`, `tools/recipes/*`, `tests/test_tools_installer.py`, `docs/Tool_Installer.md`)",
+        "reason": "this edition has no Tools installer"
+      },
+      {
+        "what": "`config/ngs/wf_clone_validation_v1.8.4.lock.json` Nextflow block and `tests/test_wf_clone_nextflow_provisioning.py` (from `d62600c`)",
+        "reason": "it repoints the lock's Nextflow to `${BMS_RUNTIME_HOME}/nextflow-25.10.0/nextflow`, which nothing provisions on this edition (the ONT box runs `/usr/local/bin/nextflow` 25.10.0); the lock keeps the existing path"
+      },
+      {
+        "what": "`scheduler/gpu_config.lock` (from `8cf8f95`)",
+        "reason": "a zero-byte runtime lock file that test committed by accident"
+      },
+      {
+        "what": "`platform/frontend/tests/vitest/ngsResultRoutingMounted.test.tsx` changes (`3a213ecf`, `7fadc691`)",
+        "reason": "the file does not exist in this edition"
+      }
+    ],
+    "not_carried_commits": [
+      "7418e67",
+      "7472395",
+      "77adc13",
+      "ee3b93f",
+      "44f66ed",
+      "7152b98"
+    ]
+  }
 }
