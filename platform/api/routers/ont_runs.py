@@ -560,7 +560,7 @@ def _confine_submitted_path(value: Any, label: str, *, directory: bool, allow_re
             except ValueError:
                 continue
             raise ValueError(f"{label} points into protected job results and requires source authorization")
-    root_keys = ("inputs", "uploads", "downloads", "data") + (result_keys if allow_results else ())
+    root_keys = ("inputs", "uploads", "downloads", "data", "sequencer_runs") + (result_keys if allow_results else ())
     for root in (roots[key] for key in root_keys if key in roots):
         root_resolved = root.resolve()
         try:

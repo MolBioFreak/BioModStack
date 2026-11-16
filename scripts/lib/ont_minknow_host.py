@@ -470,9 +470,13 @@ def start_protocol(position_name: str, payload: dict[str, Any], *,
         simplex_model = _string_or_none(payload.get("simplex_model"))
         if not simplex_model:
             return rejected(400, "Basecalling needs a simplex model")
+        # A barcoding kit is demultiplexed by MinKNOW as the run is basecalled.
+        kits = [str(kit) for kit in payload.get("barcoding_kits") or [] if str(kit).strip()]
+        barcoding = tools.BarcodingArgs(kits=kits, trim_barcodes=False,
+                                        barcodes_both_ends=payload.get("barcodes_both_ends") is True) if kits else None
         basecalling = tools.BasecallingArgs(
             simplex_model=simplex_model, modified_models=None, stereo_model=None,
-            barcoding=None, alignment=None, min_qscore=payload.get("min_qscore"),
+            barcoding=barcoding, alignment=None, min_qscore=payload.get("min_qscore"),
         )
     output = tools.OutputArgs(reads_per_file=None, batch_duration=None)
     try:

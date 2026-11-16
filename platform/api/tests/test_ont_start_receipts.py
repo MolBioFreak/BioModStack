@@ -112,3 +112,20 @@ def test_host_receipt_route_is_read_only_and_does_not_discover_devices(monkeypat
     _, response = host.start_protocol("X1", payload)
     monkeypatch.setattr(bms_host_agent, "discover_ont_status", lambda: pytest.fail("receipt read must not use instrument"))
     assert bms_host_agent.ont_route_payload(f"/ont/positions/X1/start-requests/{REQUEST_ID}") == response
+
+
+def test_a_barcoding_kit_is_passed_to_minknow_for_demultiplexing(fake_instrument):
+    calls, tools, payload = fake_instrument
+    tools.BasecallingArgs = lambda **kw: kw
+    tools.BarcodingArgs = lambda **kw: kw
+    request = {**payload, "basecalling_enabled": True, "simplex_model": "model"}
+    code, _ = host.start_protocol("X1", {**request, "barcoding_kits": ["SQK-RBK114-24"]})
+    assert code == 201
+    assert calls[0]["basecalling"]["barcoding"] == {"kits": ["SQK-RBK114-24"], "trim_barcodes": False, "barcodes_both_ends": False}
+
+
+def test_a_kit_without_barcodes_starts_as_before(fake_instrument):
+    calls, tools, payload = fake_instrument
+    tools.BasecallingArgs = lambda **kw: kw
+    code, _ = host.start_protocol("X1", {**payload, "basecalling_enabled": True, "simplex_model": "model"})
+    assert code == 201 and calls[0]["basecalling"]["barcoding"] is None

@@ -33,3 +33,9 @@ it('lists barcodes 01 to 24 for a 24-barcode kit and 96 for a 96 kit',async()=>{
     await act(async()=>root.render(<QueryClientProvider client={client}><Harness kit="SQK-NBD114-96"/></QueryClientProvider>));await settle();
     expect(host.querySelectorAll('select[aria-label="Barcode 1"] option')).toHaveLength(96);
 });
+it('saves sample names without run identifiers, to be read from the POD5 files',async()=>{
+    await click('Enter barcode samples');await input('Paste barcode sample rows','barcode01\tplasmid_A');await click('Apply pasted rows');await click('Save sample sheet');
+    await vi.waitFor(async()=>{await settle();expect(mocks.uploadFile).toHaveBeenCalledTimes(1);});
+    const file=mocks.uploadFile.mock.calls[0][1] as File;const text=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=reject;reader.readAsText(file);});
+    expect(text).toBe('experiment_id,kit,flow_cell_id,position_id,barcode,alias\n,SQK-RBK114-96,,,barcode01,plasmid_A\n');
+});

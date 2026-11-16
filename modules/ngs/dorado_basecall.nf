@@ -262,7 +262,15 @@ process DoradoBasecall {
     if [[ -n "\${pair_relative}" ]]; then command+=(--pairs "\${pod5_root}/\${pair_relative}"); fi
     if [[ -n "\${barcode_kit}" ]]; then command+=(--kit-name "\${barcode_kit}"); fi
     if [[ -n "\${barcode_kit}" && "\${barcode_both_ends}" == true ]]; then command+=(--barcode-both-ends); fi
-    if [[ -n "\${sample_relative}" ]]; then command+=(--sample-sheet "\${pod5_root}/\${sample_relative}"); fi
+    sample_sheet_file=""
+    if [[ -n "\${sample_relative}" ]]; then sample_sheet_file="\${pod5_root}/\${sample_relative}"; fi
+    if jq -e '.barcoding.sample_sheet.content' dorado_preflight.json >/dev/null; then
+      # A sheet kept apart from the POD5 files, or completed from them, travels inside the preflight record.
+      jq -j '.barcoding.sample_sheet.content' dorado_preflight.json > sample_sheet.csv
+      [[ "\$(sha256sum sample_sheet.csv | cut -d' ' -f1)" == "\$(jq -r '.barcoding.sample_sheet.sha256' dorado_preflight.json)" ]] || { echo 'sample sheet differs from the preflight record' >&2; exit 1; }
+      sample_sheet_file="\$PWD/sample_sheet.csv"
+    fi
+    if [[ -n "\${sample_sheet_file}" ]]; then command+=(--sample-sheet "\${sample_sheet_file}"); fi
     if (( \${#mod_model_ids[@]} )); then
       mod_model_paths=()
       for mod_model_id in "\${mod_model_ids[@]}"; do mod_model_paths+=("\$PWD/sealed_models/\${mod_model_id}"); done

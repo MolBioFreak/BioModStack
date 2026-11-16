@@ -311,6 +311,10 @@ def get_allowed_roots() -> dict[str, Path]:
     downloads = home / "Downloads"
     if downloads.exists():
         roots["downloads"] = downloads
+    # Where the sequencer writes its runs, so a finished run's POD5 can be chosen for analysis.
+    sequencer = os.getenv("BMS_ONT_SEQUENCER_OUTPUT_ROOT", "").strip()
+    if sequencer and Path(sequencer).is_dir():
+        roots["sequencer_runs"] = Path(sequencer)
     return roots
 
 

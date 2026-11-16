@@ -837,6 +837,11 @@ def _bounded_metadata(payload: dict[str, Any], key: str) -> str | None:
     return normalized or None
 
 
+def _barcoding_kits() -> frozenset[str]:
+    from services.ont_ngs_contract import accepted_barcode_kits  # noqa: PLC0415
+    return accepted_barcode_kits()
+
+
 async def create_run_intent(position: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Consume one opaque option receipt into an ARMED durable ledger row."""
     allowed = {"option_id", "option_receipt_id", "sample_id", "experiment_group"}
@@ -998,6 +1003,7 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
             "simplex_model": simplex_models[0] if simplex_models else None,
             "min_qscore": basecalling.get("min_qscore"),
             "run_hours": float(snapshot.get("run_hours") or DEFAULT_RUN_HOURS),
+            **({"barcoding_kits": [snapshot["kit"]]} if snapshot.get("kit") in _barcoding_kits() else {}),
             "sample_id": record.sample_id,
             "experiment_group": record.experiment_group,
         }

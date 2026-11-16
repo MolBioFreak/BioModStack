@@ -533,8 +533,27 @@ def _validate_pairs(path: Path, root: Path, read_ids: set[str]) -> dict[str, Any
     }
 
 
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        Path(path).resolve().relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _regular_file(path: Path, label: str) -> Path:
+    raw = Path(path)
+    if raw.is_symlink():
+        raise ValueError(f"{label} may not be a symlink")
+    resolved = raw.resolve(strict=True)
+    if not resolved.is_file():
+        raise ValueError(f"{label} must be a regular file")
+    return resolved
+
+
 def _validate_sample_sheet(path: Path, root: Path, barcode_kit: str, inventory: dict[str, Any]) -> dict[str, Any]:
-    path = _confined_file(path, root, "sample sheet")
+    inside = _inside(path, root)
+    path = _confined_file(path, root, "sample sheet") if inside else _regular_file(path, "sample sheet")
     # Dorado sample sheets are not an RFC-4180 CSV parser: it performs a literal comma
     # split, preserves field bytes, and requires every row to have the same
     # cardinality as its header map. Accept only a canonical subset with the
@@ -572,6 +591,18 @@ def _validate_sample_sheet(path: Path, root: Path, barcode_kit: str, inventory: 
     required = {"experiment_id", "kit", "barcode", "alias"}
     if not rows or not required <= fieldnames or not ({"flow_cell_id", "position_id"} & fieldnames) or not fieldnames <= allowed:
         raise ValueError("sample sheet has unsupported or missing required columns")
+    # Rows that name no run take the run recorded in the POD5 files, when there is exactly one.
+    content = None if inside else raw_sheet
+    if (all(not (row.get("experiment_id") or row.get("flow_cell_id") or row.get("position_id")) for row in rows)
+            and len(inventory["sample_sheet_indexes"]) == 1):
+        only = inventory["sample_sheet_indexes"][0]
+        for row in rows:
+            for key in ("experiment_id", "flow_cell_id", "position_id"):
+                if key in row:
+                    row[key] = str(only[key])
+        if any("," in value or '"' in value or "\n" in value for row in rows for value in row.values()):
+            raise ValueError("POD5 run identifiers cannot be written into a sample sheet")
+        content = "".join(",".join(line) + "\n" for line in [headers, *([row[h] for h in headers] for row in rows)])
     barcodes: set[str] = set()
     aliases: set[str] = set()
     experiment_ids: set[str] = set()
@@ -597,6 +628,8 @@ def _validate_sample_sheet(path: Path, root: Path, barcode_kit: str, inventory: 
                 or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", alias)
                 or re.fullmatch(r"barcode[0-9]+", alias)
                 or alias == "unclassified"
+                # A 24-barcode kit holds barcodes 01 to 24.
+                or (barcode_kit.endswith("-24") and barcode[7:].isdigit() and int(barcode[7:]) > 24)
                 or kit != barcode_kit or experiment_id not in set(inventory["experiment_ids"])
                 or not selector_matches
                 or barcode in barcodes or alias in aliases):
@@ -609,8 +642,10 @@ def _validate_sample_sheet(path: Path, root: Path, barcode_kit: str, inventory: 
         raise ValueError("sample sheet must contain exactly one experiment_id")
     return {
         "path": str(path),
-        "relative_path": path.relative_to(root).as_posix(),
-        "sha256": _sha256(path),
+        "relative_path": path.relative_to(root).as_posix() if content is None else None,
+        "sha256": _sha256(path) if content is None else hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        # A sheet kept apart from the POD5 files, or completed from them, travels in this record.
+        **({"content": content} if content is not None else {}),
         "rows": len(rows),
         "barcodes": sorted(barcodes),
         "assignments": sorted(assignments, key=lambda item: item["barcode"]),
@@ -660,9 +695,10 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
         raise ValueError("POD5 root may not be a symlink")
     root = root.resolve(strict=True)
     ancillary: set[Path] = set()
-    for value, label in ((pairs, "duplex pairs file"), (sample_sheet, "sample sheet")):
-        if value is not None:
-            ancillary.add(_confined_file(Path(value), root, label))
+    if pairs is not None:
+        ancillary.add(_confined_file(Path(pairs), root, "duplex pairs file"))
+    if sample_sheet is not None and _inside(Path(sample_sheet), root):
+        ancillary.add(_confined_file(Path(sample_sheet), root, "sample sheet"))
     files = _pod5_files(root, ancillary)
     # A retained POD5 was hashed when it was acquired; the same version is not hashed again.
     acquired_files = ((selected_binding or {}).get('inputs') or {}).get('files')

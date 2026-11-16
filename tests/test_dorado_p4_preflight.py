@@ -240,13 +240,15 @@ def test_barcode_and_sample_sheet_are_fail_closed(tmp_path: Path) -> None:
         "BMS_P4_SAMPLE,SQK-RBK114-96,PAO25751,barcode01,clone_a\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="confined"):
-        _preflight(
-            module,
-            pod5_root,
-            barcode_kit="SQK-RBK114-96",
-            sample_sheet=outside,
-        )
+    kept_apart = _preflight(module, pod5_root, barcode_kit="SQK-RBK114-96", sample_sheet=outside)["barcoding"]["sample_sheet"]
+    assert kept_apart["relative_path"] is None and kept_apart["content"] == outside.read_text(encoding="utf-8")
+    outside.write_text("experiment_id,kit,flow_cell_id,barcode,alias\n,SQK-RBK114-96,,barcode01,clone_a\n", encoding="utf-8")
+    filled = _preflight(module, pod5_root, barcode_kit="SQK-RBK114-96", sample_sheet=outside)["barcoding"]["sample_sheet"]
+    assert filled["content"] == "experiment_id,kit,flow_cell_id,barcode,alias\nBMS_P4_SAMPLE,SQK-RBK114-96,PAO25751,barcode01,clone_a\n"
+    assert filled["assignments"] == [{"barcode": "barcode01", "alias": "clone_a"}]
+    outside.write_text("experiment_id,kit,flow_cell_id,barcode,alias\n,SQK-RBK114-24,,barcode30,clone_a\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="malformed|incompatible"):
+        _preflight(module, pod5_root, barcode_kit="SQK-RBK114-24", sample_sheet=outside)
 
 
 def test_sample_sheet_rejects_pod5_without_dorado_experiment_metadata(tmp_path: Path) -> None:
