@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BioXpPipetteResults } from './BioXpPipetteResults';
 import { BioXpCalibrationRun } from './BioXpCalibrationRun';
 import { pipetteResults } from '../lib/bioxpPipetteResults';
-import { bioXpErrorText, useBioXpWorkflowFeedback, useSubmitBioXpProtocol,
+import { bioXpErrorText, useBioXpChildEvidence, useBioXpWorkflowFeedback, useSubmitBioXpProtocol,
     type BioXpDeckDestinationV1, type BioXpWorkflowJob } from '../lib/bioxpClient';
 import { BioXpSourcePipettingEditor, sourceDefaults, sourceLabels } from './BioXpSourcePipettingEditor';
 import { type BioXpSourceStep, manualPipettingDocument, type BioXpManualStep } from '../lib/bioxpManualPipetting';
@@ -70,6 +70,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     }, [query.data, observationId]);
     const mismatch = !!query.data && !!attempt && (query.data.job_id !== attempt.id || query.data.command?.idempotency_key != null && query.data.command.idempotency_key !== attempt.key);
     const job = mismatch ? null : query.data ?? accepted;
+    const evidence = useBioXpChildEvidence(job, attempt?.generation ?? generation, connected && sameConnection);
     // Historical jobs, receipts, unavailable observations and unrelated pending
     // controls are evidence, never a new admission lock. Only our HTTP is reserved.
     const enabled = connected && !pending;
@@ -218,7 +219,8 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         {query.error && <p role="alert">Job readback unavailable: {bioXpErrorText(query.error)}</p>}
         {job && <><p role="status">Robot job: {job.command?.status ?? job.status} · {job.execution?.runtime_state.workflow?.phase ?? 'phase unavailable'}. Job acceptance is not physical proof.</p>
             {job.execution?.runtime_state.action_results?.map((result, index) =>
-                <BioXpPipetteResults key={index} value={result} />)}</>}
+                <BioXpPipetteResults key={index} value={result} />)}
+            {evidence.map((value, index) => <BioXpPipetteResults key={`evidence-${index}`} value={value} />)}</>}
         {[...new Set((job?.execution?.runtime_state.action_results ?? []).flatMap(result =>
             pipetteResults(result).flatMap(value => value.run_id ? [value.run_id] : [])))].map(runId =>
             <BioXpCalibrationRun key={`${attempt?.generation}:${runId}`} runId={runId}

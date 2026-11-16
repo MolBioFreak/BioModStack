@@ -111,15 +111,25 @@ def duration_report(state):
     their span as the complete method's elapsed execution time.
     """
     import math
+    from datetime import datetime
     intervals = []
     for result in state.action_results:
         receipt = result.get("receipt")
-        if not isinstance(receipt, dict):
-            continue
-        start, end = receipt.get("dispatched_at"), receipt.get("finished_at")
+        if isinstance(receipt, dict):
+            # Jobs recorded before step records carried their own clock.
+            start, end = receipt.get("dispatched_at"), receipt.get("finished_at")
+            command_id, clock = receipt.get("command_id"), "native_receipt_dispatch_to_finish"
+        else:
+            # The native step record carries its own start/finish (ISO UTC).
+            try:
+                start = datetime.fromisoformat(result["started_at"]).timestamp()
+                end = datetime.fromisoformat(result["finished_at"]).timestamp()
+            except (KeyError, TypeError, ValueError):
+                continue
+            command_id, clock = result.get("command_id"), "native_step_start_to_finish"
         if all(type(value) in (int, float) and math.isfinite(value) for value in (start, end)) and end >= start:
             intervals.append({"action_id": result.get("action_id") or result.get("parent_action_id"),
-                "command_id": receipt.get("command_id"), "value": end - start, "unit": "seconds",
-                "start": start, "end": end, "clock": "native_receipt_dispatch_to_finish"})
+                "command_id": command_id, "value": end - start, "unit": "seconds",
+                "start": start, "end": end, "clock": clock})
     return {"value": None, "status": "unknown", "unit": "seconds", "action_intervals": intervals,
             "reason": "No whole-method execution clock; child receipt intervals exclude holds and may overlap"}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useBioXpDocumentVisible } from '../components/BioXpObservationVisibility';
-import { bioXpErrorText, useBioXpWorkflowJob, useSubmitBioXpProtocol, type BioXpWorkflowJob } from './bioxpClient';
+import { bioXpErrorText, useBioXpChildEvidence, useBioXpWorkflowJob, useSubmitBioXpProtocol, type BioXpWorkflowJob } from './bioxpClient';
 import { methodsPost, newMethod, type MethodCompile, type MethodValue } from './bioxpMethods';
 import { pipetteResults } from './bioxpPipetteResults';
 import { useInvalidateSettings } from './bioxpSettingsObservations';
@@ -39,6 +39,7 @@ export function useBioXpImmediateRun(generation: number, connected: boolean, vis
     }, [query.data, observationId]);
     const mismatch = !!query.data && !!attempt && (query.data.job_id !== attempt.id || query.data.command?.idempotency_key !== attempt.key);
     const job = mismatch ? null : query.data ?? accepted;
+    const evidence = useBioXpChildEvidence(job, attempt?.generation ?? generation, connected && sameConnection);
     const enabled = connected && !pending;
     async function run(build: () => MethodValue | Promise<MethodValue>) {
         if (!enabled || busy.current) return;
@@ -59,7 +60,7 @@ export function useBioXpImmediateRun(generation: number, connected: boolean, vis
         } catch (cause) { if (mounted.current) setError(bioXpErrorText(cause)); }
         finally { busy.current = false; if (mounted.current) setPending(false); }
     }
-    return { run, enabled, pending, error, setError, attempt, job, query, mismatch, sameConnection };
+    return { run, enabled, pending, error, setError, attempt, job, evidence, query, mismatch, sameConnection };
 }
 
 /** Every liquid_levels record a finished job returned, in order. */
@@ -77,7 +78,7 @@ export function searchClearanceMm(job: BioXpWorkflowJob | null | undefined): num
     return steps === null ? null : steps / 2015.748;
 }
 
-export function liquidLevels(job: BioXpWorkflowJob | null | undefined): Record<string, any>[] {
+export function liquidLevels(job: BioXpWorkflowJob | null | undefined, evidence: unknown[] = []): Record<string, any>[] {
     const out: Record<string, any>[] = [];
     const visit = (value: unknown) => {
         if (Array.isArray(value)) { value.forEach(visit); return; }
@@ -86,6 +87,6 @@ export function liquidLevels(job: BioXpWorkflowJob | null | undefined): Record<s
         if (Array.isArray(record.liquid_levels)) { out.push(...(record.liquid_levels as Record<string, any>[])); return; }
         Object.values(record).forEach(visit);
     };
-    visit(job?.execution?.runtime_state.action_results ?? []);
+    visit([job?.execution?.runtime_state.action_results ?? [], evidence]);
     return out;
 }

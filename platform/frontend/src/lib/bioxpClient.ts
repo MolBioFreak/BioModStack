@@ -1,6 +1,6 @@
 import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query';
 
 import { api } from './api.js';
 import { bioXpProviderFailure } from './bioxpEvidencePresentation';
@@ -2024,6 +2024,25 @@ export const bioXpDeckRecoveryResolution = (receipt: (BioXpOperatorReceiptV2 & P
         throw new Error('Invalid deck recovery resolution');
     }
     return value;
+};
+
+/** As on the OEM, a job keeps step progress only; each step's full evidence lives once on its
+ * child command. Read it after the job settles. */
+type BioXpJobChildren = { command?: { terminal?: boolean } | null;
+    execution?: { runtime_state: { workflow?: { child_command_ids?: string[] } | null } } | null };
+export const useBioXpChildEvidence = (job: BioXpJobChildren | null | undefined, connectionGeneration: number, enabled = true) => {
+    const ids = job?.command?.terminal ? (job.execution?.runtime_state.workflow?.child_command_ids ?? []) : [];
+    const queries = useQueries({ queries: ids.map(id => ({
+        queryKey: ['bioxp', 'operator-controls', 'v2', 'child-evidence', id, connectionGeneration],
+        queryFn: async ({ signal }: { signal: AbortSignal }) => decodeBioXpReceiptDetailV2((await api.get<BioXpOperatorReceiptDetailV2>(
+            `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(id)}`,
+            { signal, timeout: 12000, params: { detail: true, expected_connection_generation: connectionGeneration } })).data, id),
+        enabled: enabled && connectionGeneration > 0, staleTime: Infinity, gcTime: 0, retry: false,
+    })) });
+    return queries.flatMap(query => {
+        const evidence = query.data?.source_receipt?.terminal_evidence;
+        return evidence && typeof evidence === 'object' ? [evidence as Record<string, unknown>] : [];
+    });
 };
 
 export const decodeBioXpReceiptDetailV2 = (receipt: BioXpOperatorReceiptDetailV2, commandId: string) => {

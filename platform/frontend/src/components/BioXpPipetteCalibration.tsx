@@ -177,7 +177,7 @@ export function BioXpPipetteCalibration({ generation, connected, destinations, v
     const search = { step_id: 'search', type: 'action', action: 'cavro_application', inputs: { application: { implementation: 'original-adp.application.v1', operations: [{
         operation: 'liquid_search', channels, timeout_ms: 15000, location_id: loc, sensing, search_speed_native: speed,
         floor_clearance_steps: Math.round(clearance * STEPS_PER_MM) }] } } };
-    const levels = liquidLevels(runner.job);
+    const levels = liquidLevels(runner.job, runner.evidence);
     const latest = levels[levels.length - 1];
     // Heights are shown with the stop height the search ran with, not the current box value.
     const ranClearance = searchClearanceMm(runner.job) ?? clearance;
