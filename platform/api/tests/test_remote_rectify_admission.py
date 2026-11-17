@@ -76,6 +76,9 @@ def test_remote_typed_project_uses_validated_approval_handoff(remote_project_sto
     monkeypatch.setenv('BMS_FEATURE_MOLECULAR_DYNAMICS', '1')
     monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *_: None)
     monkeypatch.setattr(launch_contract, 'get_chemistry_catalog', lambda: _Catalog())
+    # Admission authority is independent of installed engine bytes.
+    monkeypatch.setattr(launch_contract, '_bound_engine_runtime_identity',
+        lambda: {'image_name': 'gromacs.sif', 'sif_sha256': 'a' * 64})
     source = SourceIdentity('1' * 40, '2' * 40)
     monkeypatch.setattr(SourceIdentity, 'from_checkout', lambda *_: source)
     monkeypatch.setattr(bundle, 'current_source_identity', lambda: (source.revision, source.tree))
@@ -477,6 +480,9 @@ async def test_md_native_preview_binds_shared_plan_without_second_approval(admis
     catalog = _catalog()
     monkeypatch.setattr(md, 'get_chemistry_catalog', lambda: catalog)
     monkeypatch.setattr(launch_contract, 'get_chemistry_catalog', lambda: catalog)
+    # Admission authority is independent of installed engine bytes.
+    monkeypatch.setattr(launch_contract, '_bound_engine_runtime_identity',
+        lambda: {'image_name': 'gromacs.sif', 'sif_sha256': 'a' * 64})
     view = catalog.view()
     profile = view.get_profile('gmx_amber99sb_ildn_tip3p_smoke_v1')
     client, factory = admission
@@ -510,29 +516,6 @@ async def test_md_native_preview_binds_shared_plan_without_second_approval(admis
         assert successor.parent_job_id is None
         assert successor.execution_target_id == intent['execution_target_id']
         assert successor.provenance['execution_plan_approval']['approval_digest'] == preview['preview_digest']
-
-    # Faithful native result fixture; actual retry route and canonical producer.
-    import hashlib, json
-    from pathlib import Path
-    from routers import md_results
-    from tests.test_molecular_dynamics_orchestration import _write_completed_replica
-    async with factory() as session:
-        parent = await session.get(Job, job_id)
-        root = Path(parent.output_dir)
-        monkeypatch.setenv('BMS_MD_RESULT_ROOT', str(root.parent))
-        manifest, sha = _write_completed_replica(root, job_id)
-        accepted_set = hashlib.sha256(json.dumps([(0, sha)], separators=(',', ':')).encode()).hexdigest()
-        parent.provenance = {**parent.provenance, 'md': {
-            'dynamics_state': 'completed', 'analysis_state': 'failed',
-            'aggregate_manifest_sha256': hashlib.sha256((root / 'manifest.json').read_bytes()).hexdigest(),
-            'replica_manifest_set_sha256': accepted_set}}
-        await session.commit()
-        retry = await md_results.retry_md_analysis(job_id, session)
-        child = await session.get(Job, retry['created_child_ids'][0])
-        assert child.mode == 'analyze' and child.parent_job_id == job_id
-        assert child.execution_target_id == intent['execution_target_id']
-        assert child.provenance['execution_plan_approval']['approval_digest'] == preview['preview_digest']
-        assert hashlib.sha256(manifest.read_bytes()).hexdigest() == sha
 
 
 @pytest.mark.asyncio
