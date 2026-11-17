@@ -71,6 +71,8 @@ async def test_no_enabled_threshold_and_computation_failure_controls(tmp_path, m
             db.add(owner); await db.commit()
             async def stronger(*a, **k): return 17
             monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', stronger)
+            # Primary publication now runs before the optional component; this Job's primary owner is RFD3.
+            monkeypatch.setattr(result_ingester, '_ingest_rfd3_generation_manifest', stronger)
             assert await result_ingester.ingest_job_results(owner.id, str(tmp_path), db) == 17
             await db.commit()
             await db.refresh(owner)
