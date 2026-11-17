@@ -30,9 +30,9 @@ TARGET_LINT_FILES = [
 ]
 
 CANONICAL_NGS_PREVIEW_ARGS = {
-    "ont_basecall_dna": ("--pod5_dir", "pod5"),
+    "ont_basecall_dna": ("--pod5_dir", "pod5", "--reference_fasta", "reference.fa"),
     "ont_basecall_rna": ("--pod5_dir", "pod5"),
-    "ont_plasmid_qc": ("--fastq_path", "reads.fastq", "--reference_fasta", "reference.fa"),
+    "ont_plasmid_qc": ("--bam_path", "reads.bam", "--reference_fasta", "reference.fa"),
     "ont_construct_screening": ("--fastq_path", "reads.fastq", "--reference_fasta", "reference.fa"),
     "ont_methylation_analysis": ("--bam_path", "reads.bam", "--reference_fasta", "reference.fa"),
     "ont_fastq_qc": ("--fastq_path", "reads.fastq", "--reference_fasta", "reference.fa"),
