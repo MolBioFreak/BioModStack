@@ -37,7 +37,16 @@ from experiment_services import ValidationFailure
 from services.global_experiments.result_surfaces import result_surface_for_receipt
 PROTEIN_TYPED_CORE_JOB_MODELS = {
     "boltz2", "boltz_cp_experimental", "boltzgen", "esmfold2", "ppiflow",
-    "protein_local_redesign", "protein_modification_experimental", "protenix", "rf3", "template_antibody_denovo",
+    "protein_modification_experimental", "protenix", "rf3", "template_antibody_denovo",
+}
+NATIVE_BINDER_MODELS = {
+    "bindcraft2", "boltzgen", "caliby_experimental", "complexa", "esmfold2", "fampnn",
+    "laproteina", "ligandmpnn", "ppiflow", "protein_cad_experimental",
+    "protein_modification_experimental", "proteinmpnn", "protonpottsmpnn", "rfd4_proteina",
+}
+# Historical normalized child Plans keep their launch adapter ID as a result adapter.
+NATIVE_BINDER_CORE_JOB_ALIASES = {
+    "caliby_experimental", "fampnn", "ligandmpnn", "proteinmpnn", "protonpottsmpnn",
 }
 
 
@@ -72,6 +81,13 @@ EXPECTED_ADAPTER_IDS = {
     "bms.ngs.ont-observation.adapter.v1",
     "bms.ngs.reference-revision.adapter.v1",
     "bms.ngs.result-manifest.adapter.v1",
+    "bms.family-msa.family_msa_protein.adapter.v1",
+    "bms.family-msa.family_msa_nucleic.adapter.v1",
+} | {
+    f"bms.core-job.{model_id}.adapter.v1"
+    for model_id in PROTEIN_TYPED_CORE_JOB_MODELS | NATIVE_BINDER_CORE_JOB_ALIASES
+} | {
+    f"bms.native-binder.{model_id}.adapter.v1" for model_id in NATIVE_BINDER_MODELS
 }
 
 RESULT_SURFACE_SCHEMA = json.loads(
@@ -119,9 +135,7 @@ def _class(name: str):
 
 
 def test_registry_exposes_complete_exact_adapter_id_set() -> None:
-    assert {item["adapter_id"] for item in adapter_module.registry.list()} == EXPECTED_ADAPTER_IDS | {
-        f"bms.core-job.{model_id}.adapter.v1" for model_id in PROTEIN_TYPED_CORE_JOB_MODELS
-    }
+    assert {item["adapter_id"] for item in adapter_module.registry.list()} == EXPECTED_ADAPTER_IDS
     with pytest.raises(adapter_module.AdapterError):
         adapter_module.registry.get("core.rfd3-local-redesign.v1")
 
@@ -791,7 +805,6 @@ async def test_result_surface_rejects_receipt_authority_or_acknowledgement_misma
 async def test_result_surfaces_dispatch_explicitly_for_every_adapter_entity_kind() -> None:
     broad_surface_kinds = {
         "design": "protein_design",
-        "rfd3_local_redesign_request": "protein_design",
         "conformational_mapping_request": "conformational_mapping",
         "md_result": "molecular_dynamics",
         "frustrampnn_result": "frustrampnn",
@@ -819,11 +832,11 @@ async def test_result_surfaces_dispatch_explicitly_for_every_adapter_entity_kind
         "ngs_result_manifest": "ngs",
         "ngs_evidence_assessment": "ngs",
         "typed_core_job_result": "protein_design",
+        "native_binder_job_result": "protein_design",
+        "family_msa_job_result": "ngs",
     }
     registered = adapter_module.registry.list()
-    assert {item["adapter_id"] for item in registered} == EXPECTED_ADAPTER_IDS | {
-        f"bms.core-job.{model_id}.adapter.v1" for model_id in PROTEIN_TYPED_CORE_JOB_MODELS
-    }
+    assert {item["adapter_id"] for item in registered} == EXPECTED_ADAPTER_IDS
     for adapter in registered:
         entity_kind = adapter["entity_kind"]
         reopen_uri = f"/native/results/entity-1?adapter={adapter['adapter_id']}&view=summary%2Fdetails"
