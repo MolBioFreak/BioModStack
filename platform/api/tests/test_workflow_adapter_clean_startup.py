@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -86,6 +87,14 @@ def test_system_python_is_rejected_before_copy():
         support.portable_runtime(Path("/usr/bin/python3"))
 
 
+# The launcher puts /usr/local/bin:/usr/bin:/bin ahead of $HOME/.local/bin, so a
+# system uv would run a real sync and server instead of the capture fixture.
+needs_fake_uv = pytest.mark.skipif(
+    shutil.which("uv", path="/usr/local/bin:/usr/bin:/bin") is not None,
+    reason="a system uv shadows the command-capture fixture in the launcher PATH",
+)
+
+
 def fake_uv_fixture(home):
     """Command capture only: no dependency resolution or server simulation."""
     binary = home / ".local/bin/uv"
@@ -94,6 +103,7 @@ def fake_uv_fixture(home):
     binary.chmod(0o700)
 
 
+@needs_fake_uv
 def test_clean_development_shell_reaches_server_command_without_copy(isolated):
     fake_uv_fixture(isolated)
     result = subprocess.run(["bash", str(ROOT / "scripts/run_biomodstack_workflow_adapter.sh")], capture_output=True, text=True)
@@ -105,6 +115,7 @@ def test_clean_development_shell_reaches_server_command_without_copy(isolated):
     assert not (isolated / "containers").exists()
 
 
+@needs_fake_uv
 def test_production_does_not_gain_unprovisioned_exception(isolated, monkeypatch):
     fake_uv_fixture(isolated)
     monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_LANE", "production")
@@ -135,6 +146,7 @@ def test_managed_launcher_uses_external_venv_not_checkout():
     assert 'local source_venv="$API_SOURCE_VENV"' in launcher
 
 
+@needs_fake_uv
 def test_broken_selection_blocks_shell_before_server(isolated, monkeypatch):
     fake_uv_fixture(isolated)
     monkeypatch.setenv("BMS_PROTENIX_CONTAINER_PATH", str(isolated / "missing.sif"))

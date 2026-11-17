@@ -200,6 +200,7 @@ def _mock_control_policy_prerequisites(monkeypatch, *, matches: bool) -> list[tu
         "daemon_reload",
         lambda project_root=None: calls.append(("daemon-reload", str(project_root))),
     )
+    monkeypatch.setattr(tailnet, "units_need_daemon_reload", lambda units, project_root=None: False)
     monkeypatch.setattr(tailnet, "service_is_active", lambda service, project_root=None: True)
     monkeypatch.setattr(
         tailnet,
