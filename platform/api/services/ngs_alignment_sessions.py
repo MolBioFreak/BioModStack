@@ -1752,7 +1752,7 @@ def _package_artifact_descriptor(
         display_order = display_order_override
     suffix = path.suffix.lower()
     mime_type = (
-        "application/octet-stream" if suffix in {".bam", ".bai", ".csi"}
+        "application/octet-stream" if suffix in {".bam", ".bai", ".csi", ".log"}
         else "text/x-vcf" if suffix == ".vcf"
         else mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     )
