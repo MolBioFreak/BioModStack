@@ -1,5 +1,5 @@
 {
-  "source_commit": "f0bb4dd3393c40c0883262ba23919ae33abeb15a",
+  "source_commit": "6329a731b2316e0c71dab2509fdee5b6751228fd",
   "application": {
     "$defs": {
       "AccountingContext": {
@@ -14097,6 +14097,36 @@
         "required": [
           "bank",
           "target_temp_c"
+        ]
+      },
+      "chiller_off": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bank": {
+            "enum": [
+              "rc",
+              "oc"
+            ]
+          }
+        },
+        "required": [
+          "bank"
+        ]
+      },
+      "thermal_off": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bank": {
+            "enum": [
+              "nest",
+              "lid"
+            ]
+          }
+        },
+        "required": [
+          "bank"
         ]
       },
       "snapshot": {
