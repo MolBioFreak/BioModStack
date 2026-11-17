@@ -120,9 +120,9 @@ def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
     param_name: str,
     payload: str,
 ) -> None:
-    nextflow = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
-    if not (nextflow.is_file() and os.access(nextflow, os.X_OK)):
-        pytest.skip(f"real Nextflow launcher unavailable: {nextflow}")
+    jar = os.environ.get("BMS_TEST_NEXTFLOW_JAR")
+    if not jar:
+        pytest.skip("BMS_TEST_NEXTFLOW_JAR required for real offline Nextflow")
 
     pod5_dir = tmp_path / "pod5"
     pod5_dir.mkdir()
@@ -145,12 +145,12 @@ def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
         encoding="utf-8",
     )
     env = os.environ.copy()
-    env["NXF_OFFLINE"] = "true"
+    env.update(NXF_OFFLINE="true", NXF_DISABLE_CHECK_LATEST="true", NXF_HOME=str(tmp_path / "nxf-home"))
     for key in ("SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"):
         env.pop(key, None)
     completed = subprocess.run(
         [
-            str(nextflow),
+            "java", "-jar", jar,
             "run",
             str(harness),
             "-c",

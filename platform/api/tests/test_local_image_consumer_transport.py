@@ -283,9 +283,11 @@ def test_ngs_module_render_has_no_nested_runtime_fallback(tmp_path, module, proc
     block = source.split('process ' + process + ' {', 1)[1].split('\nprocess ', 1)[0]
     assert "label 'fastq_qc_cpu'" in block
     body = block.split('    script:', 1)[1].rsplit('}', 1)[0]
-    helper = source.split('\nprocess ', 1)[0]
+    # Module includes serve publishDir only; plain Groovy cannot evaluate them.
+    helper = '\n'.join(line for line in source.split('\nprocess ', 1)[0].splitlines()
+                       if not line.startswith('include '))
     bindings = {
-        'params': {'code_root': str(ROOT)}, 'projectDir': str(ROOT),
+        'params': {'code_root': str(ROOT)}, 'projectDir': str(ROOT), 'task': {'cpus': 1},
         **{key: 'fixture' for key in ('reference', 'aligned_bam', 'aligned_bai',
             'verification_input', 'per_base_support', 'alignment_stats',
             'dimer_breakpoint_call', 'dimer_secondary_summary', 'result_root',

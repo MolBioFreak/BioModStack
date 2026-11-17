@@ -77,9 +77,9 @@ def test_fastq_does_not_invent_modification_probabilities(workflow):
 @pytest.mark.parametrize("workflow", ["ont_basecall_dna", "ont_plasmid_qc"])
 @pytest.mark.parametrize("mode,tandem", [("pod5", True), ("bam", True), ("fastq", False)])
 def test_native_workflow_graph_preview(tmp_path, workflow, mode, tandem):
-    launcher = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
-    if not launcher.is_file():
-        pytest.skip("installed Nextflow unavailable; no graph qualification")
+    jar = os.environ.get("BMS_TEST_NEXTFLOW_JAR")
+    if not jar:
+        pytest.skip("BMS_TEST_NEXTFLOW_JAR required for real offline Nextflow; no graph qualification")
     reads = tmp_path / ("pod5" if mode == "pod5" else f"reads.{mode}")
     if mode == "pod5":
         reads.mkdir()
@@ -87,9 +87,9 @@ def test_native_workflow_graph_preview(tmp_path, workflow, mode, tandem):
         reads.write_bytes(b"")  # Graph-only fixture, not claimed to be scientific input.
     reference = tmp_path / "reference.fa"
     reference.write_text(">ref\nACGT\n")
-    env = dict(os.environ, NXF_OFFLINE="true", NXF_DISABLE_CHECK_LATEST="true")
+    env = dict(os.environ, NXF_OFFLINE="true", NXF_DISABLE_CHECK_LATEST="true", NXF_HOME=str(tmp_path / "nxf-home"))
     result = subprocess.run([
-        str(launcher), "-log", str(tmp_path / "nextflow.log"), "run",
+        "java", "-jar", jar, "-log", str(tmp_path / "nextflow.log"), "run",
         str(ROOT / f"workflows/ngs/{workflow}.nf"), "-preview", "-offline",
         "-w", str(tmp_path / "work"), "--code_root", str(ROOT),
         "--out_dir", str(tmp_path / "out"),

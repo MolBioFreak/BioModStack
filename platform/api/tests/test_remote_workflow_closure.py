@@ -724,7 +724,7 @@ def test_launch_callers_structurally_share_helper_and_forward_command():
     ('oligo_design', 'oligo_design', 'oligo_design', {'oligo_validate_boltz': False}, {'RFDPolyDesign', 'NAMPNNDesign', 'PyRosettaRebuild'}),
     ('antibody_child', 'validation_batch', 'antibody_child', {'structure_validator': 'boltz2'}, {'BatchBoltzValidation', 'AlignBoltzValidation'}),
     ('protein_local_redesign', 'local_redesign', 'protein_local_redesign', {'plr_seq_method': 'mpnn'}, {'PrepProteinLocalMPNN', 'RunMPNN', 'ExportProteinLocalMPNNResults'}),
-    ('nanopore', 'fastq_qc', 'ngs/ont_fastq_qc', {'fastq_path': '/logical/reads.fastq', 'reference_fasta': '/logical/ref.fasta'}, {'FastqAlign', 'FastqDimerAnalysis', 'BuildDimerCanonicalOutputs', 'FastqPlasmidQC', 'ConstructVerify'}),
+    ('nanopore', 'fastq_qc', 'ngs/ont_fastq_qc', {'ont_workflow_id': 'ont_fastq_qc', 'ont_input_mode': 'fastq', 'fastq_path': '/logical/reads.fastq', 'reference_fasta': '/logical/ref.fasta'}, {'FastqAlign', 'FastqDimerAnalysis', 'BuildDimerCanonicalOutputs', 'FastqPlasmidQC', 'ConstructVerify'}),
 ])
 def test_selected_native_family_graphs_are_typed_not_placeholders(model, mode, entrypoint, params, expected):
     from model_registry import selected_execution_metadata

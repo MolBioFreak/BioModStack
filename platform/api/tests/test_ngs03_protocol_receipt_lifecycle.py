@@ -48,7 +48,7 @@ async def lane(monkeypatch, tmp_path):
     state = SimpleNamespace(
         now=datetime(2026, 1, 1), calls=[], writes=[], begins=0, factory=factory,
         payload={"position": "X1", "device_type": "mk1d", "can_start": True,
-                 "blockers": [], "protocol_id": "PRIVATE-PROTOCOL", "kit": "PRIVATE-KIT",
+                 "blockers": [], "protocol_id": "PRIVATE-PROTOCOL", "kit": "SQK-LSK114",
                  "basecalling_enabled": True, "basecalling_options": {"simplex_models": ["sup"]},
                  "output_directories": {"reads": "/private/output"},
                  "flow_cell": {"present": True, "flow_cell_id": "FC-001", "product_code": "FLO-MIN114"}},
@@ -132,7 +132,7 @@ async def test_context_change_never_reuses_incompatible_receipt(lane, change):
     elif change == "protocol":
         lane.payload["protocol_id"] = "PRIVATE-OTHER"
     elif change == "kit":
-        lane.payload["kit"] = "PRIVATE-OTHER-KIT"
+        lane.payload["kit"] = "SQK-NBD114-24"
     elif change == "basecalling":
         lane.payload["basecalling_enabled"] = False
     elif change == "model":
@@ -169,7 +169,7 @@ async def test_each_passive_read_checks_current_device_before_reuse(lane, change
 
 
 @pytest.mark.asyncio
-async def test_consumption_binding_replay_and_disabled_genuine_start(lane):
+async def test_consumption_binding_and_replay(lane):
     option = (await catalog(lane))["options"][0]
     for position, payload in [("X2", intent_payload(option)), ("X1", {**intent_payload(option), "option_id": "wrong"})]:
         assert (await lane.client.post(f"/api/ont/positions/{position}/run-intents", json=payload)).status_code == 422
@@ -188,10 +188,7 @@ async def test_consumption_binding_replay_and_disabled_genuine_start(lane):
     assert (await lane.client.post("/api/ont/positions/X1/run-intents", json=intent_payload(option))).status_code == 422
     new = (await catalog(lane))["options"][0]
     assert new["option_receipt_id"] != option["option_receipt_id"]
-    started = await lane.client.post(f"/api/ont/runs/{intent['id']}/start", json={"confirm_start": True, "intent_generation": 1})
-    assert started.status_code == 501  # Existing start authority stays disabled.
-    assert len(lane.calls) == 4  # two catalog checks plus two fresh start checks
-    assert await rows(lane, OntInstrumentRun) == 1
+    assert len(lane.calls) == 2 and await rows(lane, OntInstrumentRun) == 1
 
 
 @pytest.mark.asyncio

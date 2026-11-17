@@ -748,9 +748,17 @@ async def test_dorado_typed_selector_passes_actual_strict_sif_gate(package, loca
     monkeypatch.setattr(native.subprocess, 'run', stop_before_apptainer)
     kwargs = dict(lock_path=lock_path, pod5_root=roots['inputs'], molecule='dna', quality='hac',
                   mode='simplex', model_root=roots['weights'], verify_assets=True)
-    with pytest.raises(PassedStrictImageGate):
-        native.build_preflight(runtime_sif=selected, **kwargs)
     alias = Path(prepared.runtime_images[0].aliases[0])
+    # The worker's configured store, as the remote envelope exports it.
+    store = Path(target.remote_root) / 'cache/runtime-images'
+    assert selected.parents[3] == store
+    monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(store))
+    # The alias only names the store object; Apptainer still gets `selected`.
+    for runtime_sif in (selected, alias):
+        with pytest.raises(PassedStrictImageGate):
+            native.build_preflight(runtime_sif=runtime_sif, **kwargs)
+    monkeypatch.delenv('BMS_RUNTIME_IMAGE_STORE')
+    monkeypatch.delenv('BMS_CONTAINER_DIR', raising=False)
     with pytest.raises(ValueError, match='SIF identity mismatch'):
         native.build_preflight(runtime_sif=alias, **kwargs)
 
