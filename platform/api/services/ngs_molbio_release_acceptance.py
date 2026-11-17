@@ -11,7 +11,6 @@ import json
 import os
 import sqlite3
 import stat
-import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -477,99 +476,6 @@ def _validate_evidence_semantics(
             raise SharedPackageAcceptanceError("payload ownership evidence is not a passing retained audit")
         return
     raise SharedPackageAcceptanceError(f"unsupported acceptance evidence kind: {evidence_kind}")
-
-
-async def persist_shared_package_evidence(
-    session: AsyncSession,
-    evidence: Mapping[str, Any],
-    *,
-    verifier_id: str,
-) -> dict[str, Any]:
-    """Persist one exact, authenticated shared-package evidence receipt and return its pointer."""
-
-    if not verifier_id.strip():
-        raise SharedPackageAcceptanceError("authenticated package evidence verifier identity is required")
-    candidate = copy.deepcopy(dict(evidence))
-    _validate_closed_package_evidence(
-        candidate,
-        receipt_id="<submitted-package-evidence>",
-    )
-    if candidate.get("verifier_id") != verifier_id:
-        raise SharedPackageAcceptanceError(
-            "package evidence verifier_id does not match the authenticated operator"
-        )
-    source_commit, source_tree = candidate["source_commit"], candidate["source_tree"]
-    _validate_receipt_source_identities(
-        candidate,
-        expected_commit=source_commit,
-        expected_tree=source_tree,
-        receipt_id="<submitted-package-evidence>",
-    )
-    evidence_kind = str(candidate["evidence_kind"])
-    native_identity = str(candidate["native_identity"])
-    try:
-        body_bytes = rfc8785.dumps(candidate)
-        body = body_bytes.decode("utf-8")
-    except (TypeError, ValueError, UnicodeError) as exc:
-        raise SharedPackageAcceptanceError("package evidence is not canonically serializable") from exc
-    if len(body_bytes) > _MAX_EVIDENCE_RECEIPT_BYTES:
-        raise SharedPackageAcceptanceError("package evidence exceeds its fail-closed byte bound")
-    receipt_sha256 = _sha256(body_bytes)
-    receipt_id = str(
-        uuid.uuid5(
-            uuid.NAMESPACE_URL,
-            f"bms:shared-package-evidence:{evidence_kind}:{native_identity}",
-        )
-    )
-    expected = {
-        "receipt_id": receipt_id,
-        "operation_kind": "package_acceptance",
-        "workspace_id": None,
-        "native_identity": native_identity,
-        "state": "verified",
-        "receipt_json": body,
-        "receipt_sha256": receipt_sha256,
-        "source_revision": source_commit,
-        "occurred_at": candidate["verified_at"],
-        "verified_at": candidate["verified_at"],
-    }
-    prospective = ExperimentOperationalReceipt(**expected)
-    _validate_evidence_semantics(
-        candidate,
-        prospective,
-        evidence_kind=evidence_kind,
-        store_id=str(candidate["store_id"]) if evidence_kind == "migration" else None,
-    )
-    await _verify_retained_package_artifacts(
-        session,
-        _package_evidence_artifacts(candidate),
-    )
-    await session.execute(
-        text(
-            "INSERT OR IGNORE INTO operational_receipts "
-            "(receipt_id, operation_kind, workspace_id, native_identity, state, receipt_json, "
-            "receipt_sha256, source_revision, occurred_at, verified_at) "
-            "VALUES (:receipt_id, :operation_kind, :workspace_id, :native_identity, :state, "
-            ":receipt_json, :receipt_sha256, :source_revision, :occurred_at, :verified_at)"
-        ),
-        expected,
-    )
-    persisted = await session.get(ExperimentOperationalReceipt, receipt_id)
-    if persisted is None or any(
-        getattr(persisted, field) != value for field, value in expected.items()
-    ):
-        raise SharedPackageAcceptanceError(
-            "package evidence deterministic receipt identity conflicts with persisted authority"
-        )
-    await session.commit()
-    pointer = {
-        "receipt_id": persisted.receipt_id,
-        "receipt_sha256": persisted.receipt_sha256,
-        "native_identity": persisted.native_identity,
-    }
-    if evidence_kind == "migration":
-        pointer["store_id"] = candidate["store_id"]
-    return pointer
 
 
 async def _live_migration_authorities(
@@ -1200,6 +1106,5 @@ async def validate_shared_package_acceptance(
 
 __all__ = [
     "SharedPackageAcceptanceError",
-    "persist_shared_package_evidence",
     "validate_shared_package_acceptance",
 ]
