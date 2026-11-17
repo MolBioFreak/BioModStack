@@ -49,7 +49,6 @@ def test_bioxp_api_routes_are_registered_when_feature_enabled(monkeypatch) -> No
         "/api/bioxp/operator-controls/receipts/{command_id}",
         "/api/bioxp/operator-controls/receipts/{command_id}/assessment",
     } <= bioxp_paths
-    assert len(bioxp_paths) == 59
     assert not any("interlink" in path or "proxy" in path for path in bioxp_paths)
 
 

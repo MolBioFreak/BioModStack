@@ -9,8 +9,10 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.test_deck_scoped_authority import retained_rig
-from tests.test_deck_scoped_integration import installed_retained
+
+pytest.importorskip('bioxp', reason='runs in the robot native image, with the robot tests on the path')
+from tests.deck_scoped_rig import retained_rig
+from tests.deck_scoped_installed import installed_retained
 from tests.test_protocol_workflow_connected import mount_protocol_routes, request_payload, await_job
 
 
