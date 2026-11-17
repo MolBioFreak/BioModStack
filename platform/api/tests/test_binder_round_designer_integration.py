@@ -72,6 +72,8 @@ async def test_role_request_real_compiled_native_transport_and_ingestion(admissi
     if model == 'proteinmpnn':
         monkeypatch.setenv('BMS_TEST_MPNN_ROLE_FIXTURE', str(fixture.native_role_fixture(tmp_path)))
     else:
+        if not os.environ.get('BMS_G09_FAMPNN_SOURCE'):
+            pytest.skip('BMS_G09_FAMPNN_SOURCE (installed FA-MPNN source export) is not set')
         monkeypatch.setenv('BMS_TEST_FA_REAL_WRITER', '1')
     typed = role_request(tmp_path, model, order)
     response = await jobs._create_job(typed, BackgroundTasks(), admission)

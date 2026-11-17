@@ -30,6 +30,8 @@ def test_native_data_chain_to_scorer_sqlite_and_response(tmp_path, monkeypatch):
     import sys
     from pathlib import Path
     from types import SimpleNamespace
+    if not os.environ.get('BMS_G09_FAMPNN_SOURCE'):
+        pytest.skip('BMS_G09_FAMPNN_SOURCE (installed FA-MPNN source export) is not set')
     root = Path(__file__).resolve().parents[3]
     monkeypatch.syspath_prepend(str(root/'tests'))
     monkeypatch.syspath_prepend(str(root/'scripts'))

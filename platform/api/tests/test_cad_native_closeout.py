@@ -69,6 +69,8 @@ def atom(serial, name, residue=10, insertion='A'):
 
 
 def test_la_atom_spec_without_contig_reaches_native_config(tmp_path, monkeypatch):
+    if not os.environ.get('LAPROTEINA_TEST_SOURCE'):
+        pytest.skip('LAPROTEINA_TEST_SOURCE (installed La-Proteina source) is not set')
     from run_laproteina_inference import _configure_laproteina
     source = tmp_path/'motif.pdb'; source.write_text(atom(1, 'CA', insertion=' '))
     result = prep(tmp_path, monkeypatch, 'laproteina', 'motif_scaffolding', '40',
@@ -89,6 +91,8 @@ def test_la_atom_spec_without_contig_reaches_native_config(tmp_path, monkeypatch
 @pytest.mark.parametrize('task', ['monomer_motif_indexed', 'monomer_motif_unindexed'])
 @pytest.mark.parametrize('contig', [None, 'X10'])
 def test_complexa_evaluator_receives_native_ids_and_unchanged_mode(tmp_path, task, contig):
+    if not os.environ.get('COMPLEXA_TEST_SOURCE'):
+        pytest.skip('COMPLEXA_TEST_SOURCE (installed Complexa source) is not set')
     from scripts.lib.complexa_contract import Request
     from scripts.bms_complexa.inputs import prepare_source
     from scripts.bms_complexa.config import compose_request
@@ -124,6 +128,7 @@ def test_la_numeric_descriptors_preserve_raw_csv(tmp_path):
 
 
 def test_la_selected_motif_survives_closure_relocation(tmp_path):
+    pytest.importorskip('omegaconf', reason='omegaconf (La-Proteina native config dependency) is not installed')
     from services.laproteina_evaluation import prepare_for_job
     from run_laproteina_inference import evaluate_native
     from lib.portable_inputs import bind_native_document
