@@ -198,8 +198,8 @@ def test_actual_nextflow_boltz_export_receiving(tmp_path):
     predictions = tmp_path / 'predictions'; predictions.mkdir()
     for name, data in {'source.pdb': b'fixture-pdb', 'source.json': b'{"ptm":0}', 'source.pae.npz': b'fixture-pae', 'boltz_samples.manifest': b'{"samples":[]}'}.items():
         (predictions / name).write_bytes(data)
-    # Choose the old input dialect on baseline, rather than failing on arity.
-    value = "tuple(3, file('predictions'))" if 'path(sample_dir)' in block else "tuple(file('predictions/source.pdb'), file('predictions/source.json'))"
+    (tmp_path / 'boltz_completion.json').write_text('{"completed_candidates":[]}')
+    value = "tuple(3, file('predictions'), file('boltz_completion.json'))"
     helper = "def proteinlocalredesignPublishMode(a,b) { 'copy' }\n"
     nextflow(tmp_path, "params.out_dir = 'retained'\n" + helper + block + f"\nworkflow {{ ExportProteinLocalBoltzPredictions(Channel.value({value})) }}\n")
     published = tmp_path / 'retained/validation/boltz2'
