@@ -1,5 +1,8 @@
 """Job request normalization and execution-plan preview."""
 
+from pydantic import ConfigDict, model_validator
+from schemas import ExecutionPolicy
+
 from fastapi import HTTPException
 from typing import Optional, List, Dict, Any, NoReturn, Literal
 from dataclasses import dataclass
@@ -1382,3 +1385,29 @@ def _execution_plan_preview(job_data: JobCreate, declared_expansions=None) -> di
         'approval_digest': digest(authority), 'admissible': admissible,
         'deferred_preparation': [row.component_or_dependency_id for row in deferred],
         'blockers': replace(metadata, blockers=remaining).to_dict()['blockers']}
+
+
+class ResubmitJobRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
+    execution_policy: ExecutionPolicy | None = None
+
+
+class ResumeJobRequest(BaseModel):
+    """Resume overrides; omitted placement inherits, explicit null selects Local."""
+    checkpoint_id: Optional[str] = None
+    checkpoint_sha256: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    checkpoint_decision: Optional[Dict[str, Any]] = None
+    execution_target_id: Optional[str] = None
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
+    launch_context_id: Optional[str] = None
+    from_stage: Optional[str] = None
+    param_overrides: Dict[str, Any] = Field(default_factory=dict)
+    name_suffix: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_scientific_revision_input(cls, data: Any) -> Any:
+        from services.core_protein_scientific_contract import reject_reserved_marker
+        reject_reserved_marker(data)
+        return data

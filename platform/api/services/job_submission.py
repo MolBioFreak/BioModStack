@@ -1,5 +1,11 @@
 """Canonical Job submission: admission, launch-context binding and selected child batches."""
 
+from services.job_requests import ResubmitJobRequest, _normalize_antibody_job_params, _normalize_antibody_runtime_paths, _normalize_nanopore_runtime_paths, _normalize_structure_geometry_params, _normalize_structure_prediction_pred_method, _normalize_structure_runtime_paths, _should_normalize_antibody_job_params
+from services import ont_ngs_contract
+
+from typing import Optional
+from services.job_requests import _dedupe_preserve_order
+
 from fastapi import HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -3009,3 +3015,556 @@ async def preview_submission(job_data: JobCreate, session: AsyncSession, experim
         return await asyncio.to_thread(_execution_plan_preview, job_data, expansions)
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _retain_ont_replay_lineage(source: Job, replay: Job) -> None:
+    """Copy data ancestry, never historical approval, leases or attempt state."""
+    params = dict(replay.params or {})
+    params["reorchestrated_from_job_id"] = source.id
+    for key in (
+        "lineage_root_job_id", "stage_family", "stage_mode", "source_stage_job_id",
+        "source_stage_family", "source_stage_mode", "selection_source_type",
+        "selection_source_job_id", "source_selection_count",
+    ):
+        value = params.get(key, (source.params or {}).get(key, getattr(source, key, None)))
+        if key == "lineage_root_job_id":
+            value = value or source.id
+        if value is not None:
+            setattr(replay, key, value)
+            params[key] = value
+    independent = bool(params.get("barcode_mapping_binding") or params.get("pooled_assignment_release_binding"))
+    replay.parent_job_id = None if independent else source.parent_job_id
+    replay.child_stage = None if independent else source.child_stage
+    replay.params = params
+
+
+def _candidate_child_batch_aliases(
+    *,
+    job: Optional[Job],
+    root_job_id: str,
+    provided_batch_name: Optional[str] = None,
+) -> List[str]:
+    aliases: List[str] = []
+
+    def add(value: Any) -> None:
+        text = _coerce_nonempty_text(value)
+        if text and text not in aliases:
+            aliases.append(text)
+
+    add(provided_batch_name)
+
+    if job is None:
+        return aliases
+
+    params = job.params if isinstance(job.params, dict) else {}
+    add(job.batch_name)
+    add(params.get("batch_name"))
+
+    job_name = _coerce_nonempty_text(params.get("job_name")) or _coerce_nonempty_text(job.name)
+    if job_name:
+        add(f"{job_name}_{root_job_id}")
+
+    model_id_normalized = (job.model_id or "").strip().lower()
+    if _is_antibody_launch(job.model_id, params):
+        add(f"antibody_batch_{root_job_id}")
+    elif model_id_normalized == "boltzgen":
+        add(_coerce_nonempty_text(params.get("name")) or "boltzgen_campaign")
+
+    return aliases
+
+
+async def _resolve_resume_child_batch_name(
+    session: AsyncSession,
+    job: Job,
+    root_job_id: str,
+) -> Optional[str]:
+    parent_ids = _dedupe_preserve_order([root_job_id, job.id])
+    original_rows = await session.execute(
+        select(Job.batch_name)
+        .where(
+            Job.parent_job_id == root_job_id,
+            Job.batch_name.isnot(None),
+        )
+        .order_by(Job.created_at.asc())
+    )
+    original_batch_names = [
+        batch_name
+        for batch_name in original_rows.scalars().all()
+        if _coerce_nonempty_text(batch_name)
+    ]
+    if original_batch_names:
+        return original_batch_names[0]
+
+    lineage_rows = await session.execute(
+        select(Job.batch_name)
+        .where(
+            Job.parent_job_id.in_(parent_ids),
+            Job.batch_name.isnot(None),
+        )
+        .order_by(Job.created_at.asc())
+    )
+    lineage_batch_names = [
+        batch_name
+        for batch_name in lineage_rows.scalars().all()
+        if _coerce_nonempty_text(batch_name)
+    ]
+    if lineage_batch_names:
+        return lineage_batch_names[0]
+
+    aliases = _candidate_child_batch_aliases(job=job, root_job_id=root_job_id)
+    return aliases[0] if aliases else None
+
+
+async def create_resubmitted_job(
+    original_job, job_id, session, placement, grant_access,
+):
+    # Build resubmit name
+    resubmit_suffix = "_resubmit"
+    base_name = original_job.name
+    # Handle multiple resubmits by not doubling suffix
+    if base_name.endswith(resubmit_suffix):
+        new_name = base_name
+    else:
+        new_name = f"{base_name}{resubmit_suffix}"
+
+    # Create new job with same params - GPU orchestrator will pick it up
+    import uuid
+    import os
+    from pathlib import Path
+
+    # Create new output directory for resubmitted job
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
+    if original_job.model_id in {'family_msa_protein', 'family_msa_nucleic'}:
+        output_dir = str(get_results_dir() / f"{new_name}_{timestamp}_{uuid.uuid4().hex}")
+
+    resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
+    from scripts.lib.protein_cad_settings import replay_cad_settings
+    resubmit_params = replay_cad_settings(original_job.model_id, original_job.mode,
+                                          resubmit_params, resubmit_params)
+    if original_job.model_id == "nanopore":
+        resubmit_params = ont_submission_trust.fresh_computation_params(resubmit_params)
+        resubmit_params = ont_ngs_contract.replay_expected_plasmid_size(
+            resubmit_params, original_job.provenance, mode=original_job.mode,
+        )
+    resubmit_params.pop("remote_result_policy", None)
+    from services.msa_policy import apply_msa_policy
+    try:
+        resubmit_params = apply_msa_policy(original_job.model_id, resubmit_params)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    resubmit_params = _normalize_nanopore_runtime_paths(original_job.model_id, resubmit_params)
+    resubmit_params = _normalize_antibody_runtime_paths(original_job.model_id, resubmit_params)
+    resubmit_params = _normalize_structure_runtime_paths(original_job.model_id, resubmit_params)
+    resubmit_params = _normalize_structure_geometry_params(resubmit_params)
+    resubmit_params = _normalize_antibody_job_params(resubmit_params)
+    resubmit_workflow_id = str(
+        resubmit_params.get("ont_workflow_id")
+        or resubmit_params.get("ont_request_workflow_id")
+        or resubmit_params.get("workflow_id")
+        or ""
+    ).strip()
+    resubmit_input_mode = str(
+        resubmit_params.get("ont_input_mode") or resubmit_params.get("input_mode") or ""
+    ).strip()
+    if (
+        original_job.model_id == "nanopore"
+        and resubmit_workflow_id == "ont_fastq_qc"
+        and resubmit_input_mode == "fastq"
+    ):
+        resubmit_params = ont_ngs_contract.normalize_ont_launch_params(
+            "ont_fastq_qc", resubmit_params
+        )
+    # MSA refresh/cache intent is scientific input; replay never rewrites it.
+
+    _validate_protenix_template_requirements(original_job.model_id, resubmit_params)
+    _validate_protenix_checkpoint_requirements(original_job.model_id, resubmit_params)
+    _validate_fampnn_checkpoint_requirements(original_job.model_id, resubmit_params)
+    _validate_antibody_runtime_paths(original_job.model_id, resubmit_params)
+
+    from services.gpu_orchestrator import estimate_vram, estimate_protenix_tokens
+    resubmit_sequence_length = original_job.sequence_length or 300
+    if original_job.model_id == "protenix":
+        resubmit_sequence_length = estimate_protenix_tokens(
+            resubmit_params,
+            resubmit_sequence_length,
+        )
+    resubmit_vram_estimate = estimate_vram(
+        original_job.model_id,
+        resubmit_sequence_length,
+        resubmit_params,
+    )
+    if original_job.model_id in {'family_msa_protein', 'family_msa_nucleic'}:
+        for key in ('gpu_id', 'pinned_gpu', 'pinned_gpus', 'cpus_per_gpu'):
+            resubmit_params.pop(key, None)
+    if original_job.model_id == "nanopore" and resubmit_workflow_id == "ont_fastq_qc" and resubmit_input_mode == "fastq":
+        resubmit_vram_estimate = 0
+        for key in ("gpu_id", "pinned_gpu", "pinned_gpus", "cpus_per_gpu"):
+            resubmit_params.pop(key, None)
+    resubmit_selected_input_artifact_class = normalize_antibody_artifact_class(
+        resubmit_params.get("selected_input_artifact_class")
+    )
+    resubmit_selected_input_schema_version = normalize_antibody_pipeline_contract_version(
+        resubmit_params.get("selected_input_schema_version")
+    )
+
+    from services import core_protein_scientific_contract as scientific_contract
+    try:
+        source_revision = scientific_contract.revision_for_job(original_job)
+        # Every fresh attempt uses current admission, including former children.
+
+        resubmit_params.pop(scientific_contract.REVISION_KEY, None)
+        resubmit_params.pop('fampnn_analysis_declaration', None)
+        resubmit_params.pop('fampnn_analysis_policy', None)
+        scientific_contract.reject_reserved_marker(resubmit_params)
+        resubmit_revision = scientific_contract.admission_revision(
+            original_job.model_id, original_job.mode,
+        )
+
+        if resubmit_revision is not None:
+            errors = get_registry().validate_job_params(
+                original_job.model_id, original_job.mode,
+                _normalize_boltz_cp_params_for_validation(original_job.model_id, resubmit_params),
+            )
+            if errors:
+                raise HTTPException(status_code=422, detail={"validation_errors": errors})
+        resubmit_params, resubmit_provenance = scientific_contract.admitted_payload(
+            resubmit_params, {}, resubmit_revision,
+        )
+        resubmit_provenance['parameter_diagnostics'] = get_registry().parameter_diagnostics(
+            original_job.model_id, resubmit_params)
+        original_round = (original_job.provenance or {}).get('binder_round_request')
+        if original_round is not None:
+            resubmit_provenance['binder_round_request'] = deepcopy(original_round)
+        original_sequence = (original_job.provenance or {}).get('sequence_design_request')
+        if original_sequence is not None:
+            resubmit_provenance['sequence_design_request'] = deepcopy(original_sequence)
+        original_request = (original_job.provenance or {}).get('core_protein_requested_params')
+        if original_request is not None:
+            resubmit_provenance['core_protein_requested_params'] = deepcopy(original_request)
+        if resubmit_revision is not None:
+            from services.fampnn_policy_admission import compile_declaration, overrides_from_declaration
+            trusted_declaration = (original_job.provenance or {}).get('fampnn_analysis_declaration')
+            declaration = compile_declaration(original_job.model_id, original_job.mode, resubmit_params,
+                overrides_from_declaration(trusted_declaration),
+                parent=await session.get(Job, original_job.parent_job_id) if original_job.parent_job_id else None)
+            if declaration is not None:
+                resubmit_params['fampnn_analysis_declaration'] = declaration
+                resubmit_provenance['fampnn_analysis_declaration'] = declaration
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    resubmit_target = original_job.execution_target_id
+    resubmit_source_revision = original_job.execution_source_revision
+    resubmit_source_tree = original_job.execution_source_tree
+    if original_job.model_id == "nanopore":
+        resubmit_target = placement.execution_target_id if isinstance(placement, ResubmitJobRequest) else None
+        resubmit_source_revision = resubmit_source_tree = None
+        if resubmit_target:
+            from services.remote_execution.targets import target_eligible
+            target = await session.get(ExecutionTarget, resubmit_target, populate_existing=True)
+            if target is None or not target_eligible(target):
+                raise HTTPException(status_code=422, detail="execution_target_id is not an active ready execution target")
+            from services.remote_execution.bundle import current_source_identity
+            resubmit_source_revision, resubmit_source_tree = current_source_identity()
+
+    new_job = Job(
+        id=str(uuid.uuid4()),
+        name=new_name,
+        model_id=original_job.model_id,
+        mode=original_job.mode,
+        params={**resubmit_params, "remote_result_policy":
+                "automatic" if (original_job.params or {}).get("remote_result_policy") == "automatic" else "manual"},
+        provenance=resubmit_provenance,
+        status=JobStatus.QUEUED.value,
+        created_at=datetime.utcnow(),
+        output_dir=output_dir,
+        # Preserve batch info if any
+        batch_id=original_job.batch_id,
+        batch_name=original_job.batch_name,
+        selected_input_artifact_class=resubmit_selected_input_artifact_class,
+        selected_input_schema_version=resubmit_selected_input_schema_version,
+        execution_target_id=resubmit_target,
+        execution_source_revision=resubmit_source_revision,
+        execution_source_tree=resubmit_source_tree,
+        # GPU Orchestrator fields - let orchestrator pick it up
+        queue_status='queued',
+        vram_estimate_mb=resubmit_vram_estimate,
+        sequence_length=resubmit_sequence_length,
+        pinned_gpu=(None if original_job.model_id in {'family_msa_protein', 'family_msa_nucleic'}
+                    else original_job.pinned_gpu),
+        priority=0,
+        paused=False,
+        retry_count=0,
+        max_retries=2,
+    )
+
+    if new_job.model_id in {'family_msa_protein', 'family_msa_nucleic'} and resubmit_params.get('managed_operation'):
+        from services.family_msa.operations import ManagedOperation, bind_request
+        from experiment_database import experiment_session_factory
+        operation = ManagedOperation.model_validate(resubmit_params['managed_operation'])
+        async with experiment_session_factory() as project_session:
+            rebound = await bind_request(project_session, request=operation.request, project_id=operation.project_id,
+                shared_states=operation.shared_states, job_id=new_job.id)
+        new_job.params = {**new_job.params, 'managed_operation': rebound.model_dump(mode='json')}
+
+    if new_job.model_id == "nanopore":
+        _retain_ont_replay_lineage(original_job, new_job)
+        output_dir = str(get_results_dir() / new_job.id)
+        new_job.output_dir = output_dir
+        if isinstance(placement, ResubmitJobRequest) and placement.execution_policy is not None:
+            new_job.params = {**new_job.params, "remote_result_policy": placement.execution_policy.remote_result_policy}
+        new_job.provenance = grant_access(new_job.id, new_job.provenance)
+    os.makedirs(output_dir, exist_ok=True)
+    session.add(new_job)
+    await session.commit()
+    await session.refresh(new_job)
+
+    return {
+        "message": "Job resubmitted successfully",
+        "original_job_id": job_id,
+        "new_job_id": new_job.id,
+        "new_job_name": new_job.name
+    }
+
+
+async def create_resumed_job(
+    job, job_id, session, requested_name_suffix, param_overrides, effective_from_stage, fresh_execution,
+     target_changed, source_changed, execution_target_id, execution_source_revision,
+     execution_source_tree, grant_access,
+):
+    from services import core_protein_scientific_contract as scientific_contract
+    # Determine work directory for resumption
+    # We use the shared 'work' directory in project root by default
+    # This allows Nextflow to find cached tasks from the previous run
+    resume_work_dir = "work"
+
+    # Create new job with resume info
+    import uuid
+    new_job_id = str(uuid.uuid4())
+    base_name = job.name.replace("_resubmit", "").replace("_resumed", "")
+    suffix = requested_name_suffix.strip() if requested_name_suffix else "_resumed"
+    if not suffix.startswith("_"):
+        suffix = f"_{suffix}"
+    new_name = f"{base_name}{suffix}"
+
+    # True resume should keep the original execution directory so Nextflow can
+    # reuse cached task hashes that depend on params.out_dir/publishDir paths.
+    output_dir = str(get_results_dir() / new_job_id) if fresh_execution else job.output_dir
+
+    source_params = _normalize_structure_geometry_params(job.params or {})
+    if _should_normalize_antibody_job_params(job.model_id, job.mode, source_params):
+        source_params = _normalize_antibody_job_params(source_params)
+    merged_params = {**source_params, **param_overrides}
+    from scripts.lib.protein_cad_settings import replay_cad_settings
+    merged_params = replay_cad_settings(job.model_id, job.mode, source_params, merged_params, overrides=param_overrides)
+    # Use the existing prospective complex interpretation, as fresh admission does.
+    # The source Job (linked by resume_job_id) retains the original selector token.
+    if (
+        str(job.mode or "").strip().lower() == "complex"
+        and not _should_normalize_antibody_job_params(job.model_id, job.mode, merged_params)
+        and str(merged_params.get("pred_method") or "").strip().lower() in {"both", "all", "boltz_protenix"}
+    ):
+        merged_params = _normalize_structure_prediction_pred_method(job.model_id, job.mode, merged_params)
+    if job.model_id == "nanopore":
+        merged_params = ont_ngs_contract.replay_expected_plasmid_size(
+            merged_params, job.provenance, mode=job.mode,
+        )
+        if fresh_execution:
+            merged_params = ont_submission_trust.fresh_computation_params(merged_params)
+    from services.msa_policy import apply_msa_policy
+    try:
+        merged_params = apply_msa_policy(job.model_id, merged_params)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if fresh_execution:
+        # Placement or source drift starts fresh, never reusing historical runtime/cache state.
+        runtime_keys = {
+            "batch_name", "job_name", "out_dir", "output_dir", "work_dir", "stage_work_dir",
+            "cache_dir", "nxf_cache_dir", "NXF_CACHE_DIR", "lineage_root_job_id",
+            "execution_target_id", "execution_source_revision", "execution_source_tree",
+            "data_root", "code_root", "weights_root", "container_dir", "msa_cache_dir",
+        }
+        hardware_keys = {
+            "pinned_gpus", "gpu_ids", "bcp_gpu_ids", "gpu_id", "gpu_device",
+            "cuda_visible_devices", "CUDA_VISIBLE_DEVICES", "msa_preferred_gpu_ids",
+            "msa_excluded_gpus",
+        }
+        merged_params = {
+            key: value for key, value in merged_params.items()
+            if not key.startswith("resume_") and key not in runtime_keys
+            and (not target_changed or key not in hardware_keys or key in param_overrides)
+        }
+        merged_params["reorchestrated_from_job_id"] = job_id
+    merged_params = _ensure_job_resume_identity(
+        job_name=new_name if fresh_execution else (job.params or {}).get("job_name") or base_name,
+        job_id=new_job_id if fresh_execution else _coerce_nonempty_text(merged_params.get("resume_root_job_id")) or job_id,
+        model_id=job.model_id,
+        mode=job.mode,
+        params=merged_params,
+    )
+    resolved_child_batch_name = await _resolve_resume_child_batch_name(
+        session,
+        job,
+        _coerce_nonempty_text(merged_params.get("resume_root_job_id")) or job_id,
+    )
+    if resolved_child_batch_name and not fresh_execution:
+        merged_params["batch_name"] = resolved_child_batch_name
+    if "remote_result_policy" in param_overrides or "execution_policy" in param_overrides:
+        raise HTTPException(status_code=422, detail="execution policy is not a scientific override")
+    merged_params.pop("remote_result_policy", None)
+    merged_params = _normalize_antibody_runtime_paths(job.model_id, merged_params)
+    merged_params = _normalize_structure_runtime_paths(job.model_id, merged_params)
+    merged_params = _normalize_structure_geometry_params(merged_params)
+    if _should_normalize_antibody_job_params(job.model_id, job.mode, merged_params):
+        merged_params = _normalize_antibody_job_params(merged_params)
+    if job.model_id == "boltz_cp_experimental":
+        # An explicit workflow override must replace the parent's public value.
+        for public_key, workflow_key in (("cp_topology", "bcp_cp_topology"), ("size_cp", "bcp_size_cp")):
+            if public_key in param_overrides or workflow_key in param_overrides:
+                merged_params[public_key] = param_overrides.get(public_key, param_overrides.get(workflow_key))
+                merged_params.pop(workflow_key, None)
+        merged_params["cp_topology"] = merged_params.get(
+            "cp_topology", merged_params.get("bcp_cp_topology", "2d")
+        )
+        merged_params.pop("bcp_cp_topology", None)
+    _validate_antibody_runtime_paths(job.model_id, merged_params)
+    resume_selected_input_artifact_class = normalize_antibody_artifact_class(
+        merged_params.get("selected_input_artifact_class")
+    )
+    resume_selected_input_schema_version = normalize_antibody_pipeline_contract_version(
+        merged_params.get("selected_input_schema_version")
+    )
+
+    try:
+        # Only true cached resume stays in its original scientific cohort.
+        # Overrides may not supply authority (including review-payload defaults).
+        scientific_contract.reject_reserved_marker(param_overrides)
+        source_revision = scientific_contract.revision_for_job(job)
+        resume_revision = source_revision
+        merged_params.pop(scientific_contract.REVISION_KEY, None)
+        merged_params.pop('fampnn_analysis_declaration', None)
+        merged_params.pop('fampnn_analysis_policy', None)
+        scientific_contract.reject_reserved_marker(merged_params)
+        if fresh_execution:
+            # Match fresh resubmission: current admission, no silent downgrade,
+            # and current registry validation rather than historical authority.
+            resume_revision = scientific_contract.admission_revision(job.model_id, job.mode)
+
+            if resume_revision is not None:
+                errors = get_registry().validate_job_params(
+                    job.model_id, job.mode,
+                    _normalize_boltz_cp_params_for_validation(job.model_id, merged_params),
+                )
+                if errors:
+                    raise HTTPException(status_code=422, detail={"validation_errors": errors})
+        trusted_declaration = (job.provenance or {}).get('fampnn_analysis_declaration')
+        merged_params, resume_provenance = scientific_contract.admitted_payload(
+            merged_params, {}, resume_revision,
+        )
+        resume_provenance['parameter_diagnostics'] = get_registry().parameter_diagnostics(
+            job.model_id, merged_params)
+        original_request = (job.provenance or {}).get('core_protein_requested_params')
+        if original_request is not None:
+            resume_provenance['core_protein_requested_params'] = {
+                **deepcopy(original_request), **deepcopy(param_overrides),
+            }
+        if fresh_execution and resume_revision is not None:
+            from services.fampnn_policy_admission import compile_declaration, overrides_from_declaration
+            declaration = compile_declaration(
+                job.model_id, job.mode, merged_params,
+                overrides_from_declaration(trusted_declaration),
+                parent=await session.get(Job, job.parent_job_id) if job.parent_job_id else None,
+            )
+            if declaration is not None:
+                merged_params['fampnn_analysis_declaration'] = declaration
+                resume_provenance['fampnn_analysis_declaration'] = declaration
+        elif not fresh_execution and trusted_declaration is not None:
+            merged_params['fampnn_analysis_declaration'] = deepcopy(trusted_declaration)
+            resume_provenance['fampnn_analysis_declaration'] = deepcopy(trusted_declaration)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    os.makedirs(output_dir, exist_ok=True)
+    new_job = Job(
+        id=new_job_id,
+        name=new_name,
+        status="queued",
+        model_id=job.model_id,
+        mode=job.mode,
+        provenance=resume_provenance,
+        params={
+            **merged_params,
+            "remote_result_policy": "automatic" if (job.params or {}).get("remote_result_policy") == "automatic" else "manual",
+            **({} if fresh_execution else {
+                "resume_job_id": job_id,
+                "resume_work_dir": resume_work_dir,
+                "resume_source_dir": job.output_dir,
+                "resume_requested_stage": effective_from_stage,
+            }),
+        },
+        output_dir=output_dir,
+        batch_id=job.batch_id,
+        batch_name=job.batch_name,
+        selected_input_artifact_class=resume_selected_input_artifact_class,
+        selected_input_schema_version=resume_selected_input_schema_version,
+        parent_job_id=job.parent_job_id,
+        child_stage=job.child_stage,
+        # Don't copy completed_stages/stage_outputs - they will be re-populated
+        # as the resumed workflow re-emits cached results
+        completed_stages=[],
+        stage_outputs={},
+
+        # GPU Orchestrator fields - critical for scheduling
+        queue_status='queued',
+        vram_estimate_mb=job.vram_estimate_mb,
+        sequence_length=job.sequence_length,
+        pinned_gpu=None if target_changed else job.pinned_gpu,
+        execution_target_id=execution_target_id,
+        execution_source_revision=execution_source_revision,
+        execution_source_tree=execution_source_tree,
+        lineage_root_job_id=new_job_id if fresh_execution else job.lineage_root_job_id,
+        priority=job.priority,
+    )
+
+    history = list(job.decision_history or [])
+    if job.awaiting_input:
+        history.append({
+            "stage": job.awaiting_stage,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "new_job_id": new_job_id,
+            "from_stage": effective_from_stage,
+            "applied_overrides": sorted(param_overrides.keys()),
+        })
+        job.decision_history = history
+
+    if new_job.model_id == "nanopore":
+        _retain_ont_replay_lineage(job, new_job)
+        new_job.provenance = grant_access(new_job.id, new_job.provenance)
+    session.add(new_job)
+    await session.commit()
+
+    logger.info(
+        f"Job {job_id} resumed as {new_job_id} using work dir '{resume_work_dir}'"
+        + (f" (requested_stage_hint={effective_from_stage})" if effective_from_stage else "")
+    )
+
+    return {
+        "message": "Job re-orchestrated with current source and a fresh cache" if fresh_execution else f"Job resumed. Checking cache in '{resume_work_dir}'",
+        "execution_target_id": execution_target_id,
+        "placement_changed": target_changed,
+        "source_changed": source_changed,
+        "fresh_execution": fresh_execution,
+        "original_job_id": job_id,
+        "new_job_id": new_job_id,
+        "new_job_name": new_name,
+        "resume_from_stage": effective_from_stage or "auto",
+        "resume_stage_mode": "fresh" if fresh_execution else "hint",
+        "resume_stage_note": (
+            "BMS source changed; prior task caches are not reused." if source_changed
+            else "Execution target changed; prior task caches are not reused." if target_changed
+            else "Stage selection is advisory; cache hits determine exact task reuse."
+        ),
+        "preserved_stages": [],
+        "applied_overrides": sorted(param_overrides.keys())
+    }

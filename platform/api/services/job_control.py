@@ -4,6 +4,12 @@ Job control helpers shared across routers.
 
 from __future__ import annotations
 
+from fastapi import BackgroundTasks
+from database import Design, ExecutionTarget
+from services.binder_continuation import _awaiting_stage_to_resume_hint, _build_antibody_iteration_job, _build_selected_loop_scope, _derive_source_stage_payload, _materialize_antibody_selection, _native_gate_resume_params, _resolve_antibody_root_job, _should_spawn_antibody_refinement_on_resume
+from services.job_submission import _raise_if_workflow_launches_disabled, _require_prepared_remote_review, submit_job
+from services import ont_submission_trust
+
 from datetime import datetime
 from typing import Awaitable, Callable, Iterable, Optional, Sequence
 import json
@@ -174,6 +180,7 @@ async def reject_generic_md_lifecycle_control(job_id: str, session: AsyncSession
 
 
 async def pause_job(job_id: str, session: AsyncSession) -> Job:
+    await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
     job = result.scalar_one_or_none()
 
@@ -195,6 +202,7 @@ async def pause_job(job_id: str, session: AsyncSession) -> Job:
 
 
 async def resume_job(job_id: str, session: AsyncSession) -> Job:
+    await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
     job = result.scalar_one_or_none()
 
@@ -211,6 +219,7 @@ async def resume_job(job_id: str, session: AsyncSession) -> Job:
 
 
 async def release_job_gpu(job_id: str, session: AsyncSession) -> tuple[Job, int | None]:
+    await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
     job = result.scalar_one_or_none()
 
@@ -229,6 +238,7 @@ async def release_job_gpu(job_id: str, session: AsyncSession) -> tuple[Job, int 
 
 
 async def retry_job(job_id: str, session: AsyncSession) -> Job:
+    await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
     job = result.scalar_one_or_none()
 
@@ -691,3 +701,379 @@ def _plan_output_dir_cleanup(
         deletable.append(normalized)
 
     return deletable, preserved
+
+
+def _resume_defaults_from_awaiting_payload(payload: Optional[Dict[str, Any]]) -> tuple[dict[str, Any], Optional[str], Optional[str]]:
+    payload_dict = payload if isinstance(payload, dict) else {}
+
+    param_overrides = payload_dict.get("resume_param_overrides")
+    if not isinstance(param_overrides, dict):
+        param_overrides = {}
+
+    from_stage = payload_dict.get("resume_from_stage")
+    if isinstance(from_stage, str):
+        from_stage = from_stage.strip() or None
+    else:
+        from_stage = None
+
+    name_suffix = payload_dict.get("resume_name_suffix")
+    if isinstance(name_suffix, str):
+        name_suffix = name_suffix.strip() or None
+    else:
+        name_suffix = None
+
+    return dict(param_overrides), from_stage, name_suffix
+
+
+async def resubmit_failed_job(job_id, session, placement, *, authorize, grant_access):
+    _raise_if_workflow_launches_disabled("resubmit workflow jobs")
+    await reject_generic_md_lifecycle_control(job_id, session)
+    # Find original job
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    original_job = result.scalar_one_or_none()
+
+    if not original_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if original_job.model_id == "nanopore":
+        if not authorize(original_job.id, original_job.provenance):
+            raise HTTPException(status_code=403, detail="alignment access denied")
+    launch_context_id = (original_job.provenance or {}).get("launch_context_id")
+    if launch_context_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PROJECT_BOUND_REORCHESTRATION_REQUIRED",
+                "message": (
+                    "Project-bound Jobs must be resubmitted through the owning Domain Run Group "
+                    "with a new preparation, attempt, and launch context."
+                ),
+                "launch_context_id": launch_context_id,
+            },
+        )
+
+    # Only allow resubmit for failed or cancelled jobs
+    if original_job.status not in [JobStatus.FAILED.value, JobStatus.CANCELLED.value]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot resubmit job with status: {original_job.status}. Only failed or cancelled jobs can be resubmitted."
+        )
+
+    from services.job_submission import create_resubmitted_job
+    return await create_resubmitted_job(
+        original_job, job_id, session, placement, grant_access,
+    )
+
+
+async def resume_workflow_job(job_id, session, request, from_stage, background_tasks, *, authorize, grant_access):
+    from services import core_protein_scientific_contract as scientific_contract
+    try:
+        if request is not None:
+            scientific_contract.reject_reserved_marker(request.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _raise_if_workflow_launches_disabled("resume workflow jobs")
+    await reject_generic_md_lifecycle_control(job_id, session)
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.model_id == "nanopore":
+        if not authorize(job.id, job.provenance):
+            raise HTTPException(status_code=403, detail="alignment access denied")
+
+    if job.awaiting_stage == "remote_results" or job.remote_state in {
+        "results_available", "returning", "result_pull_failed"
+    }:
+        raise HTTPException(status_code=409, detail="Remote execution is finished; use Pull results, not Resume")
+
+    checkpoint = (job.awaiting_payload or {}).get("component_checkpoint")
+    if checkpoint:
+        if not job.awaiting_input or job.status != "awaiting_input":
+            raise HTTPException(status_code=409, detail="Checkpoint is not available for a new continuation")
+        if (request is None or request.checkpoint_id != checkpoint.get("checkpoint_id")
+                or request.checkpoint_sha256 != checkpoint.get("checkpoint_sha256")
+                or not request.checkpoint_decision):
+            raise HTTPException(status_code=422, detail="Explicit artifact-set-bound checkpoint decision required")
+        if request.param_overrides or request.from_stage or from_stage:
+            raise HTTPException(status_code=422, detail="Checkpoint continuation uses the bound native stage/settings")
+        from services.remote_execution.executor import (prepare_checkpoint_successor,
+            checkpoint_successor_id, RemoteExecutionError)
+        selected_target = (request.execution_target_id if "execution_target_id" in request.model_fields_set
+                           else job.execution_target_id)
+        binding = dict(source_job_id=job.id, checkpoint_id=request.checkpoint_id,
+            checkpoint_sha256=request.checkpoint_sha256, decision=request.checkpoint_decision,
+            execution_target_id=selected_target, name_suffix=request.name_suffix or "_continued")
+        try:
+            existing_id = checkpoint_successor_id(job, binding)
+            if existing_id:
+                if not await session.scalar(select(Job.id).where(Job.id == existing_id, visible_job_clause())):
+                    raise RemoteExecutionError("Checkpoint successor is no longer available")
+                return dict(original_job_id=job.id, new_job_id=existing_id,
+                    execution_target_id=selected_target, resume_stage_mode="checkpoint_successor")
+            if selected_target != job.execution_target_id:
+                prepared = await prepare_checkpoint_successor(session, job, checkpoint,
+                    request.checkpoint_decision, selected_target, name_suffix=binding["name_suffix"])
+                prepared.execution_policy = request.execution_policy
+                prepared.launch_context_id = request.launch_context_id
+                context = dict(original_job_id=job.id, execution_target_id=selected_target,
+                    resume_stage_mode="checkpoint_successor")
+                _require_prepared_remote_review(prepared, context)
+                launched = await submit_job(prepared, background_tasks or BackgroundTasks(), session)
+                return {**context, "new_job_id": launched.id}
+        except RemoteExecutionError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if job.execution_target_id:
+            from services.remote_execution.executor import request_remote_checkpoint_resume, RemoteExecutionError
+            try:
+                return await request_remote_checkpoint_resume(session, job, checkpoint, request.checkpoint_decision)
+            except RemoteExecutionError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        from services.nextflow import _local_checkpoint_resume
+        provenance = dict(job.provenance or {})
+        pending = dict(checkpoint_id=request.checkpoint_id, checkpoint_sha256=request.checkpoint_sha256,
+                       decision=request.checkpoint_decision, attempt_id=checkpoint.get("attempt_id"))
+        job.provenance = {**provenance, "component_checkpoint_resume": pending}
+        try:
+            retained = _local_checkpoint_resume(job)
+            _, context, runtime, trusted_checkpoint, _ = retained
+            state = runtime.root_state()
+            if (not state or state['state'] != 'paused' or not state.get('quiescent')
+                    or state.get('boot_id') != Path('/proc/sys/kernel/random/boot_id').read_text().strip()):
+                raise ValueError('Local checkpoint requires same-boot quiescent owner')
+            from services.nextflow import compile_component_checkpoint_continuation
+            compile_component_checkpoint_continuation(context, trusted_checkpoint, request.checkpoint_decision)
+        except (ValueError, RuntimeError, OSError, KeyError) as exc:
+            job.provenance = provenance
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # Only an ordinary scheduler claim can supply a continuation lease.
+        from sqlalchemy import update
+        values = dict(status="queued", queue_status="queued", paused=False, assigned_gpu=None,
+                      started_at=None, completed_at=None, nextflow_run_id=None,
+                      pinned_gpu=(context.get('resources') or {}).get('gpu_id'),
+                      awaiting_input=False, provenance=dict(job.provenance))
+        job.provenance = provenance
+        with session.no_autoflush:
+            claimed = await session.execute(update(Job).where(
+                *checkpoint_continuation_predicates(job),
+                Job.decision_history == job.decision_history,
+            ).values(**values).execution_options(synchronize_session=False))
+        if claimed.rowcount != 1:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail='Checkpoint owner changed while queueing')
+        await session.commit()
+        return dict(job_id=job.id, checkpoint_id=request.checkpoint_id, state='queued', execution_target_id=None)
+
+    if job.status not in ["failed", "cancelled", JobStatus.AWAITING_INPUT.value] and not job.awaiting_input:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot resume job with status: {job.status}"
+        )
+
+    # Resolve placement before filesystem writes or domain continuation side effects.
+    source_target_id = job.execution_target_id or None
+    execution_target_id = source_target_id
+    if request and "execution_target_id" in request.model_fields_set:
+        execution_target_id = request.execution_target_id
+        if execution_target_id is not None:
+            execution_target_id = execution_target_id.strip()
+            if not execution_target_id:
+                raise HTTPException(status_code=422, detail="Use null to select Local execution")
+    target_changed = execution_target_id != source_target_id
+    # Mirrors StructurePredictionUiState's GPU launcher model/mode mapping.
+    placement_supported = (
+        job.model_id in {"boltz2", "protenix", "esmfold2"} and job.mode in {"predict", "complex"}
+    ) or (job.model_id == "boltz_cp_experimental" and job.mode == "design") or job.model_id == "nanopore"
+    fresh_execution_supported = (
+        placement_supported
+        and job.status in {"failed", "cancelled"}
+        and not job.awaiting_input
+        and (not (job.parent_job_id or job.child_stage) or (
+            job.model_id == "nanopore" and bool((job.params or {}).get("barcode_mapping_binding")
+                                              or (job.params or {}).get("pooled_assignment_release_binding"))))
+    )
+    if target_changed and not fresh_execution_supported:
+        raise HTTPException(
+            status_code=422,
+            detail="Execution placement changes require a terminal structure root; child and interactive continuations must retain their target",
+        )
+    cached_ont = job.model_id == "nanopore" and not target_changed
+    execution_source_revision = job.execution_source_revision if cached_ont else None
+    execution_source_tree = job.execution_source_tree if cached_ont else None
+    source_changed = False
+    if execution_target_id:
+        from services.remote_execution.targets import target_eligible
+        target = await session.get(ExecutionTarget, execution_target_id, populate_existing=True)
+        if target is None or not target_eligible(target):
+            raise HTTPException(status_code=422, detail="execution_target_id is not an active ready execution target")
+        if not cached_ont and not target_changed and (not job.execution_source_revision or not job.execution_source_tree):
+            raise HTTPException(status_code=409, detail="Remote source Job is missing its immutable source identity")
+        try:
+            from services.remote_execution.bundle import current_source_identity
+            if not cached_ont:
+                execution_source_revision, execution_source_tree = current_source_identity()
+        except Exception as exc:
+            logger.exception("Unable to capture the re-orchestrated Job source identity")
+            raise HTTPException(status_code=503, detail="Committed BMS source identity is unavailable") from exc
+        source_changed = bool(source_target_id) and (
+            execution_source_revision != job.execution_source_revision
+            or execution_source_tree != job.execution_source_tree
+        )
+        if source_changed and not fresh_execution_supported:
+            raise HTTPException(
+                status_code=409,
+                detail="BMS source changed; child, interactive, and unsupported-domain continuations cannot reuse historical execution state. Submit a new supported root job with the current source instead.",
+            )
+    fresh_execution = target_changed or source_changed
+
+    completed = job.completed_stages or []
+    # Relaxed restriction: Allow resume even if no stages completed (start from scratch with cache)
+
+    # Allow body payload to override query-provided from_stage.
+    effective_from_stage = (request.from_stage if request and request.from_stage else from_stage)
+    if isinstance(effective_from_stage, str):
+        effective_from_stage = effective_from_stage.strip() or None
+    requested_overrides = dict(request.param_overrides) if request else {}
+    requested_overrides.pop("permanent_delete_cleanup", None)
+    if "execution_target_id" in requested_overrides:
+        raise HTTPException(status_code=422, detail="execution_target_id must be a top-level resume field")
+    requested_name_suffix = request.name_suffix if request else None
+
+    # Prevent callers from overriding resume control fields directly.
+    reserved_resume_keys = {"resume_job_id", "resume_work_dir", "resume_source_dir", "resume_stage_work_dir"}
+    payload_resume_overrides: dict[str, Any] = {}
+    payload_resume_from_stage: Optional[str] = None
+    payload_name_suffix: Optional[str] = None
+    if job.awaiting_input:
+        payload_resume_overrides, payload_resume_from_stage, payload_name_suffix = _resume_defaults_from_awaiting_payload(
+            job.awaiting_payload
+        )
+    if job.model_id == "nanopore":
+        forbidden_resume_overrides = sorted(set(requested_overrides) | set(payload_resume_overrides))
+        if forbidden_resume_overrides:
+            raise HTTPException(
+                status_code=422,
+                detail="Nanopore resume does not accept parameter overrides: " + ", ".join(forbidden_resume_overrides),
+            )
+        reserved_resume_keys |= ont_submission_trust.ONT_SERVER_CONTROLLED_PARAMS
+    param_overrides = {
+        key: value
+        for key, value in requested_overrides.items()
+        if key not in reserved_resume_keys
+    }
+    payload_resume_overrides = {
+        key: value
+        for key, value in payload_resume_overrides.items()
+        if key not in reserved_resume_keys
+    }
+    if not effective_from_stage and payload_resume_from_stage:
+        effective_from_stage = payload_resume_from_stage
+    if not requested_name_suffix and payload_name_suffix:
+        requested_name_suffix = payload_name_suffix
+    merged_resume_defaults = dict(payload_resume_overrides)
+    merged_resume_defaults.update(param_overrides)
+    param_overrides = merged_resume_defaults
+
+    param_overrides, effective_from_stage = _native_gate_resume_params(job, param_overrides, effective_from_stage)
+
+    if _should_spawn_antibody_refinement_on_resume(job):
+        if background_tasks is None:
+            background_tasks = BackgroundTasks()
+
+        source_job, root_job = await _resolve_antibody_root_job(session, job.id)
+        stage_design_result = await session.execute(
+            select(Design)
+            .where(
+                Design.job_id == job.id,
+                Design.source_stage == job.awaiting_stage,
+            )
+            .order_by(Design.created_at.asc(), Design.name.asc())
+        )
+        selected_designs = stage_design_result.scalars().all()
+        resume_source_hint = _awaiting_stage_to_resume_hint(job.awaiting_stage) or "generator"
+        resume_source_label = "BoltzGen" if resume_source_hint == "boltzgen" else "PPIFlow"
+
+        if not selected_designs:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{resume_source_label} review outputs are not materialized yet. "
+                    "Open the job in Results Viewer once review rows appear, or retry after the gate payload refreshes."
+                ),
+            )
+
+        design_ids = [design.id for design in selected_designs]
+        selection_dir = _materialize_antibody_selection(root_job, source_job, selected_designs, "continue_review")
+        launch_request = _build_antibody_iteration_job(
+            root_job=root_job,
+            source_job=source_job,
+            action="ui_refinement",
+            selection_dir=selection_dir,
+            design_ids=design_ids,
+            name_suffix=requested_name_suffix or "continued",
+            param_overrides=param_overrides,
+            selected_designs=selected_designs,
+        )
+        if isinstance(launch_request.params, dict):
+            source_stage_payload = _derive_source_stage_payload(source_job, selected_designs, selection_dir)
+            launch_request.params.update({
+                "lineage_root_job_id": root_job.id,
+                "stage_family": launch_request.params.get("stage_family"),
+                "stage_mode": launch_request.params.get("stage_mode"),
+                "selection_source_type": "review_gate",
+                "selection_source_job_id": source_job.id,
+                "selection_dataset_name": None,
+                "selected_loop_scope": _build_selected_loop_scope(launch_request.params),
+                "interactive_gate_continue": True,
+                **source_stage_payload,
+            })
+
+        _require_prepared_remote_review(launch_request, {
+            'message': f'{resume_source_label} review resumed into Antibody Refinement.',
+            'original_job_id': job_id, 'resume_from_stage': resume_source_hint,
+            'resume_stage_mode': 'spawn_refinement', 'preserved_stages': [],
+            'resume_stage_note': f'Paused {resume_source_label} review launches a refinement-compatible follow-on job using the filtered review cohort.',
+            'applied_overrides': sorted(param_overrides.keys()),
+        })
+        launched_job = await submit_job(launch_request, background_tasks, session)
+        history = list(job.decision_history or [])
+        history.append({
+            "stage": job.awaiting_stage,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "new_job_id": launched_job.id,
+            "from_stage": resume_source_hint,
+            "applied_overrides": sorted(param_overrides.keys()),
+            "resume_mode": "spawn_refinement",
+        })
+        job.decision_history = history
+        await session.commit()
+
+        return {
+            "message": f"{resume_source_label} review resumed into Antibody Refinement.",
+            "original_job_id": job_id,
+            "new_job_id": launched_job.id,
+            "new_job_name": launched_job.name,
+            "resume_from_stage": resume_source_hint,
+            "resume_stage_mode": "spawn_refinement",
+            "resume_stage_note": f"Paused {resume_source_label} review launches a refinement-compatible follow-on job using the filtered review cohort.",
+            "preserved_stages": [],
+            "applied_overrides": sorted(param_overrides.keys()),
+        }
+
+    # Only cached continuations retain their original declaration; fresh
+    # re-orchestration re-admits below before directories or rows are written.
+    trusted_declaration = (job.provenance or {}).get('fampnn_analysis_declaration')
+    if not fresh_execution and trusted_declaration is not None:
+        from services.fampnn_policy_admission import guard_cached_declaration
+        try:
+            guard_cached_declaration(trusted_declaration, job.params or {}, param_overrides)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    from services.job_submission import create_resumed_job
+    return await create_resumed_job(
+        job, job_id, session, requested_name_suffix, param_overrides, effective_from_stage, fresh_execution,
+         target_changed, source_changed, execution_target_id, execution_source_revision,
+         execution_source_tree, grant_access,
+    )

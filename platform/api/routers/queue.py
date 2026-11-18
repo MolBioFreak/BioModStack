@@ -594,7 +594,6 @@ async def get_queue_stats(session: AsyncSession = Depends(get_session)):
 @router.post("/{job_id}/pause")
 async def pause_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Pause a queued job (won't be scheduled until resumed)."""
-    await reject_generic_md_lifecycle_control(job_id, session)
     job = await pause_job_service(job_id, session)
     return {"success": True, "message": f"Job {job.name} paused", "job_id": job_id}
 
@@ -602,14 +601,12 @@ async def pause_job(job_id: str, session: AsyncSession = Depends(get_session)):
 @router.post("/{job_id}/resume")
 async def resume_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Resume a paused job."""
-    await reject_generic_md_lifecycle_control(job_id, session)
     job = await resume_job_service(job_id, session)
     return {"success": True, "message": f"Job {job.name} resumed", "job_id": job_id}
 
 
 @router.post("/{job_id}/release-gpu")
 async def release_job_gpu(job_id: str, session: AsyncSession = Depends(get_session)):
-    await reject_generic_md_lifecycle_control(job_id, session)
     job, released_gpu = await release_job_gpu_service(job_id, session)
     return {
         "success": True,
@@ -692,7 +689,6 @@ async def set_job_priority(
 @router.post("/{job_id}/retry")
 async def retry_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Retry a failed job (resets to queued)."""
-    await reject_generic_md_lifecycle_control(job_id, session)
     job = await retry_job_service(job_id, session)
     return {
         "success": True, 
