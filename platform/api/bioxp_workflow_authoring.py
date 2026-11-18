@@ -424,7 +424,7 @@ def _actions(step: dict) -> list[tuple[str, dict]]:
     if op == "move" and "target" in step:
         return [("pipette_position", {"operation": "move_sequence", "targets": [
             {"target": step["target"], "camera_offset": False}]})]
-    if op in ("move", "lower", "lift"):
+    if op in ("move", "lower", "lift", "move_sequence"):
         return [("pipette_position", step)]
     if op not in ("aspirate", "dispense", "mix"):
         return [("pipette_manual_physical", step)]
