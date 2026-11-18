@@ -44,61 +44,13 @@ BioXP linkage, or adapter services. Full workflow readiness requires the
 host-native scientific runtime stack in addition to a healthy core container
 runtime.
 
-## Frontend surfaces
+## Where work happens
 
-The current frontend routes are:
+Start in [Projects](Project_to_Result.md) to keep an experiment, its setups and its retained results together. The [workspace guide](Workspaces.md) lists browser destinations, including compatibility redirects. The [service and module map](Services.md) traces those workspaces to their API and data owners.
 
-- `/`
-  dashboard
-- `/submit`
-  job launcher across model/workflow families
-- `/results`, `/designs`, `/designs/:jobId`, `/jobs/:jobId`
-  results and job-detail review surfaces
-- `/designer`
-  molecular biology toolkit
-- `/ngs`
-  nanopore/NGS launch and review
-- `/infra`
-  workstation telemetry and runtime controls
-- `/bioxp`
-  BioXP control surface
+The browser submits requests to the managed API. The workflow adapter provides the host execution boundary; specialist services interpret native output. Job status, successful artifact publication and Project attachment answer different questions. For an existing run, keep the Job ID rather than searching by name. For a workstation or dependency problem, use the [operator guide](Operations.md).
 
-## Backend responsibilities
-
-The API does more than submit jobs. It currently:
-
-- serves model definitions and launch schemas
-- persists jobs, designs, lineage, stage-review metadata, and analyses
-- serves files and stage artifacts back to the frontend
-- exposes system/install-profile/runtime routes
-- proxies workflow launch/cancel/running-job calls to the host workflow adapter
-- exposes mobile update/feed endpoints for optional shell packaging
-- manages the bounded BioXP profile/status/connection/protocol/job control plane
-
-For BioXP specifically, BMS is not a robot proxy. The compact route inventory is
-defined in [BioXP Compact Control Plane](BioXP_Compact_Control_Plane.md). Retired
-hardware-family, arbitrary-path, host-lifecycle, shell, and remote-log routes are
-absent; robot-local runtime evidence remains authoritative.
-
-## Workflow families
-
-The source includes the following workflow families. Registry presence does not
-prove runtime acquisition, scientific qualification, or deployment acceptance:
-
-- antibody de novo and refinement
-- generic structure prediction and validation
-- RFdiffusion-based generation
-- protein local redesign
-- BoltzGen
-- Oligo Designer / RFDpoly
-- nanopore methylation and QC
-- experimental protein CAD (La-Proteina / DISCO)
-- Protein Hunter Experimental
-- Caliby Experimental
-- NVIDIA Fold-CP inside Structure Prediction
-
-See [Structure_Design_and_Refinement.md](Structure_Design_and_Refinement.md)
-for the workflow-level view.
+BioXP follows a different authority model: BMS hosts a feature-gated cockpit and typed integration; the robot owns physical readiness and action admission. See the [control-plane contract](BioXP_Compact_Control_Plane.md).
 
 ## Runtime layout
 

@@ -47,19 +47,9 @@ The main result-facing routes are:
 Supporting routes also feed result review, for example framework, MSA, and
 sequence-library endpoints.
 
-## Frontend Surfaces
+## Choose the reader
 
-The current review-facing routes are:
-
-- `/designs`
-  results browser / data viewer
-- `/jobs/:jobId`
-  job detail page
-- `/`
-  dashboard
-- `/infra`
-  workstation telemetry rather than scientific analysis, but still part of the
-  operator review surface
+Use `/jobs/:jobId` for execution and `/results` or `/designs` for design outputs. Family alignments have their own results page; sequencing artifacts reopen in the NGS Toolkit. A Project attachment identifies the retained result, not necessarily the latest output of the model. Workstation telemetry belongs to the Dashboard. See the [workspace guide](Workspaces.md) and [Projects, Jobs and results](Project_to_Result.md).
 
 ## Runtime Output Roots
 

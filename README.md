@@ -23,8 +23,7 @@ BMS is designed around a simple separation of responsibilities:
 For a new Development installation, begin with
 [Nonproduction Installation](docs/Nonproduction_Installation.md). For existing
 installations, use the managed launcher and verify the selected runtime before
-starting work. The [documentation index](docs/README.md) links the operating and
-scientific contracts; [AGENTS.md](AGENTS.md) defines contribution and service rules.
+starting work. The [workspace guide](docs/Workspaces.md) explains where to work; the [service map](docs/Services.md) identifies the code behind it. The [handbook](docs/README.md) links operating and scientific references; [AGENTS.md](AGENTS.md) defines contribution and service rules.
 
 ## What is in this repository
 

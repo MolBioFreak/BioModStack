@@ -1,6 +1,6 @@
 # Lab Automation, Mol Bio, and Sequencing
 
-BioModStack is not limited to protein-design workflows. The live UI and API
+BioModStack is not limited to protein-design workflows. The Development UI and API sources
 also expose sequence operations, nanopore analysis, and the BioXP compact control plane.
 
 ## Molecular Biology Toolkit
@@ -153,17 +153,15 @@ Important env vars:
 - `BMS_BIOXP_ALLOWED_HOSTS` / `BMS_BIOXP_ALLOWED_CIDRS`
   explicit target allowlists used when validating the saved profile
 
-Normal operation does not use BMS to start, stop, reset, reboot, shell into, or
-collect remote logs from the robot host. Those routes are absent; use the
-robot-local service/runbook instead.
+There is no general robot-host shell or reboot interface. The separately configured [service-only recovery](bioxp-service-restart.md) concerns one named service; it is not a robot reset or proof of hardware readiness.
 
 ## Workstation / System Operations
 
 BMS also exposes workstation-facing support surfaces outside the structure
 workflows:
 
-- `/infra`
-  system telemetry and power/fan controls
+- `/`
+  Dashboard telemetry; `/infra` redirects here
 - `start_ui.sh`
   API/frontend launcher
 - `biomodstack_panel.py`
@@ -171,7 +169,7 @@ workflows:
 
 ## What These Docs Deliberately Avoid
 
-These docs describe the live surfaces. They do not treat every robotics or
+These docs describe source interfaces, not proof of an active installation. They do not treat every robotics or
 sequencing idea note in `docs/` as current support. If a behavior matters for a
 run or operator flow, confirm it in the active frontend route, API router, or
 workflow entrypoint referenced above.

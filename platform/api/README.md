@@ -56,25 +56,9 @@ uv run --frozen --group dev python -m pytest <focused tests> -q -rs
 Keep the repository's route-free test guards enabled. Skipped native-tool checks
 are not evidence of native acceptance; see [AGENTS.md](../../AGENTS.md).
 
-## Major router surface
+## Find the owning module
 
-The API currently includes routers for:
-
-- models and input schemas
-- jobs and queue/orchestration controls
-- designs and persisted analyses
-- files and artifact browsing
-- analytics
-- system and GPU status
-- install-profile/runtime-state inspection
-- workflow-adapter launch/cancel/running-job bridge routes
-- framework lookup and MSA helpers
-- nucleotide sequence storage and mol bio operations
-- RCSB and Ribocentre helpers
-- the compact BioXP profile/status/connection/protocol/job/command control plane
-- mobile UI update/feed endpoints for optional phone shells
-
-Router registration lives in [main.py](main.py).
+Use the [service and module map](../../docs/Services.md) to locate the API, persistence owner and specialist reader for each workspace. [main.py](main.py) registers routers and applies feature gates. A router module is not a separately running service. For a mismatch between Project and Job status, trace the [launch binding](../../docs/Project_to_Result.md) before investigating the scheduler.
 
 ## Notable local-admin/runtime routes
 
@@ -180,11 +164,7 @@ The API is responsible for:
 - serving optional mobile shell update metadata/assets
 - enforcing the bounded BioXP control-plane and mutation-admission contract
 
-The BioXP router is intentionally compact and is not a generic robot proxy. It
-contains bounded profile, status, explicit connection, BMS-local logs, offline
-protocol, durable local job, typed command, and emergency-delivery routes.
-Hardware-family, arbitrary-path, host-lifecycle, shell, and remote-log routes are
-absent. See [../../docs/BioXP_Compact_Control_Plane.md](../../docs/BioXP_Compact_Control_Plane.md).
+The [BioXP package](routers/bioxp/) includes typed connection, camera, calibration, protocol, method, Job, operator-control and workflow routes. Those do not grant arbitrary host or robot access. See the [control-plane contract](../../docs/BioXP_Compact_Control_Plane.md).
 
 ## Related docs
 

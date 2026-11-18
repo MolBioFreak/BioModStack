@@ -53,72 +53,16 @@ Vite keeps its `development` mode and serves source modules. Do not remove
 `NODE_ENV=production` to identify Development; use Vite's mode and the managed
 runtime identity. See [AGENTS.md](../../AGENTS.md).
 
-## Current routes
+## Find the owning screen
 
-- `/`
-  dashboard
-- `/submit`
-  model/workflow launcher
-- `/designs`
-  results/data viewer
-- `/jobs/:jobId`
-  job detail page
-- `/designer`
-  molecular biology toolkit
-- `/ngs`
-  nanopore/NGS toolkit
-- `/infra`
-  workstation telemetry and runtime/admin controls
-- `/bioxp`
-  BioXP cockpit
+Use the [workspace guide](../../docs/Workspaces.md) for the complete route list and compatibility redirects. [App.tsx](src/App.tsx) selects the component; a route alone does not imply the selected record exists or that a feature is enabled.
 
-## Frontend responsibilities
+- [Project Manager](src/pages/ProjectManager.tsx) owns navigation through Projects, experiments and domains. [Job Submission](src/components/JobSubmission.tsx) is the launch screen, not the owner of a Project record.
+- [Results Viewer](src/components/ResultsViewer.tsx) opens designs and results; an individual Job has a separate detail page. Telemetry is [part of the Dashboard](src/components/dashboard/DashboardTelemetry.tsx), not a standalone `/infra` page.
+- The [Mol Bio editor](src/components/MolBioToolkit/MolBioToolkitV2.tsx) and [NGS Toolkit](src/components/NGSToolkit.tsx) are distinct workspaces. Family alignments have their own library, comparison and result routes.
+- The [BioXP cockpit](src/components/BioXpCockpit.tsx) hosts the workflows and live-deck views. The UI consumes the typed BMS integration; physical state is not inferred from a tab being visible.
 
-The UI currently provides:
-
-- dynamic model/workflow launch forms from API model definitions
-- results browsing and stage-aware output review
-- design analytics and comparison views
-- sequence library and mol bio editing tools
-- nanopore launch/review flows
-- workstation telemetry/runtime surfaces
-- status-first BioXP operation through the compact control-plane contract
-- shell-friendly hosted navigation for browser/Electron/mobile wrappers
-
-The frontend BioXP route consumes only the compact profile/status/connection,
-offline protocol, local job, typed command, and emergency-delivery contract. It
-does not expose retired hardware-family, arbitrary proxy, host-lifecycle, shell,
-or remote-log controls.
-
-## Important components
-
-- `components/JobSubmission.tsx`
-  main launcher surface
-- `components/ResultsViewer.tsx`
-  design/result browser
-- `components/MolBioToolkit/*`
-  mol bio toolkit
-- `components/NGSToolkit.tsx`
-  NGS review surface
-- `components/NanoporeTemplate.tsx`
-  nanopore launch form
-- `components/BioXpCockpit.tsx`
-  robotics control UI
-- `components/InfraMonitorPage.tsx`
-  system analytics/runtime page
-
-## API coupling
-
-The frontend depends on the FastAPI backend for:
-
-- model definitions and launch schemas
-- job launch and status
-- file browsing and artifact serving
-- results/design metadata
-- sequence libraries and mol bio operations
-- runtime/install-profile data for local control surfaces
-- BioXP and infra actions
-- optional mobile update/feed compatibility for shell packaging
+For a cross-layer issue, use the [service map](../../docs/Services.md) to locate the corresponding API module rather than adding a second interpretation of the record in the UI.
 
 ## Related docs
 

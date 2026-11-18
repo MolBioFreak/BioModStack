@@ -36,7 +36,9 @@ BioModStack has no independent BioXP command registry, command coordinator,
 command availability calculation, command history, or emergency-stop
 implementation. Git history is the archive for those retired implementations.
 
-## API inventory
+## Selected API routes
+
+The [router package](../platform/api/routers/bioxp/) is the full inventory. These tables focus on connection and operator authority. See also [methods](bioxp-methods-api.md), [calibration](bioxp-calibration-settings.md) and [service-only recovery](bioxp-service-restart.md).
 
 The feature-gated router is mounted at `/api/bioxp` only when
 `BMS_FEATURE_BIOXP` is enabled.
