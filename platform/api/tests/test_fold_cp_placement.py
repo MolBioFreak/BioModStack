@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import update
 from database import Job, ExecutionTarget
 import routers.jobs as jobs
+from services import job_requests
 from services.nextflow import build_nextflow_command
 import services.gpu_orchestrator as scheduler
 from test_multiworker_scheduling import workers
@@ -17,7 +18,7 @@ def test_requested_cp4_is_not_reduced_by_admission_or_native_compiler(ids, tmp_p
     params = dict(sequence='MKTIIALSYIFCLVFADYKDDDDA', bcp_size_cp=4,
                   bcp_gpu_ids=ids, run_frustrampnn=False)
     with pytest.raises(HTTPException) as error:
-        jobs._normalize_boltz_cp_params_for_validation('boltz_cp_experimental', params)
+        job_requests._normalize_boltz_cp_params_for_validation('boltz_cp_experimental', params)
     assert error.value.status_code == 422
     assert 'cannot be reduced' in error.value.detail
     with pytest.raises(ValueError, match='cannot be reduced'):
@@ -30,7 +31,7 @@ def test_four_device_admission_and_native_argv_preserve_science(key, tmp_path):
     params = dict(sequence='MKTIIALSYIFCLVFADYKDDDDA', bcp_size_cp=4,
                   boltz_num_samples=1, boltz_sampling_steps=200, run_frustrampnn=False)
     params[key] = [0, 1, 2, 3] if key == 'pinned_gpus' else '0,1,2,3'
-    normalized = jobs._normalize_boltz_cp_params_for_validation('boltz_cp_experimental', params)
+    normalized = job_requests._normalize_boltz_cp_params_for_validation('boltz_cp_experimental', params)
     assert (normalized['gpu_ids'], normalized['size_cp']) == ('0,1,2,3', 4)
     command = build_nextflow_command('boltz_cp_experimental', 'design', params, str(tmp_path))
     for flag, value in [('bcp_gpu_ids', '0,1,2,3'), ('bcp_size_cp', '4'),

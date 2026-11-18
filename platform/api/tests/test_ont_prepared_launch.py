@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job, MolBioNgsReceipt, NgsComparisonPanelReceipt
 from routers import ont_runs, jobs
+from services import job_requests
 from services import molbio_ngs_receipts as receipts, ngs_comparison_panels as panels
 from services import ont_submission_trust as custody
 from services.ont_ngs_contract import ONT_WORKFLOW_ALIASES, CANONICAL_ONT_WORKFLOWS
@@ -44,6 +45,7 @@ async def launch(tmp_path, monkeypatch):
     monkeypatch.setattr(result_roots, "get_results_dir", lambda: results)
     monkeypatch.setattr(ont_runs, "get_allowed_roots", lambda: {"inputs": inputs, "results": results})
     monkeypatch.setattr(jobs, "get_allowed_roots", lambda: {"inputs": inputs, "results": results})
+    monkeypatch.setattr(job_requests, "get_allowed_roots", lambda: {"inputs": inputs, "results": results})
     monkeypatch.setattr(paths, "get_allowed_roots", lambda: {"inputs": inputs, "results": results})
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core.db'}")
     factory = async_sessionmaker(engine, expire_on_commit=False)

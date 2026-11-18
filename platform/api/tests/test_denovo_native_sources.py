@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 from database import Job, get_session
 from experiment_database import get_experiment_session
 from routers import jobs, files, models
+from services import job_requests
 from schemas import JobCreate
 from tests.test_binder_source_materialization import cif
 from test_project_workflow_setups import setup_store
@@ -35,7 +36,7 @@ async def test_preview_insert_replay_clone_real_stores(isolated_core, setup_stor
         isolate_applied_local_policy, tmp_path, monkeypatch, model, source_kind, experimental):
     import paths
     roots = {'inputs': tmp_path / 'owned/inputs', 'bms_results': tmp_path / 'owned/results'}
-    for module in (paths, jobs, files):
+    for module in (paths, jobs, job_requests, files):
         monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
     original = roots['inputs'] / 'selected.cif.gz'
     original.write_bytes(gzip.compress(cif(models=(3, 7)).encode()))

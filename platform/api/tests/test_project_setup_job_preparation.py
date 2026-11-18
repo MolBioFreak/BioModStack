@@ -53,7 +53,7 @@ async def test_setup_reopen_prepare_reserve_and_validate_job(setup_store, includ
             session, project_id=project_id, setup_context_id=setup_id,
             expected_generation=1, idempotency_key="prepare") == prepared
         from schemas import JobCreate
-        from routers.jobs import normalize_job_request
+        from services.job_requests import normalize_job_request
         scheduler = json.loads(preparation.scheduler_payload_json)
         normalized = normalize_job_request(JobCreate(**scheduler))
         assert normalized.params == scheduler["params"]

@@ -19,20 +19,8 @@ from routers.designs import (
     _merge_review_payload,
     _should_force_review_stage_listing,
 )
-from routers.jobs import (
-    SavedReviewFilterSet,
-    _build_antibody_iteration_job,
-    _build_selection_manifest_item,
-    _child_job_has_reusable_outputs,
-    _derive_job_stage_tags,
-    _derive_source_stage_payload,
-    _iter_saved_review_filter_sets,
-    _looks_like_antibody_job,
-    _merge_preserved_gate_payload,
-    _normalize_antibody_job_params,
-    _prune_iteration_params,
-    _repair_job_for_response,
-)
+from routers.jobs import SavedReviewFilterSet, _build_antibody_iteration_job, _build_selection_manifest_item, _child_job_has_reusable_outputs, _derive_job_stage_tags, _derive_source_stage_payload, _iter_saved_review_filter_sets, _looks_like_antibody_job, _merge_preserved_gate_payload, _prune_iteration_params, _repair_job_for_response
+from services.job_requests import _normalize_antibody_job_params
 from services.result_ingester import (
     _apply_ppiflow_filter_fields,
     _apply_ppiflow_score_fields,

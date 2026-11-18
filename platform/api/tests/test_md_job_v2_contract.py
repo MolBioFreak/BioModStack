@@ -101,7 +101,7 @@ def test_v2_normalization_binds_catalog_generation_and_server_resolved_profile()
 
 def test_create_route_keeps_validation_preview_out_of_caller_owned_spec() -> None:
     """The raw request must reach materialization; resolved previews are server-only."""
-    source = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
+    source = (API_ROOT / "services" / "job_requests.py").read_text(encoding="utf-8")
     start = source.index('if job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate":')
     end = source.index("# Skip validation for template jobs", start)
     preview_block = source[start:end]

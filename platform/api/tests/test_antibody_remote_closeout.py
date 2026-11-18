@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 from component_runtime import SourceIdentity
 from model_registry import get_registry
-from routers.jobs import normalize_job_request
+from services.job_requests import normalize_job_request
 from schemas import JobCreate
 from services.nextflow import compile_nextflow_invocation, resolve_nextflow_entrypoint
 

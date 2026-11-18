@@ -7,6 +7,7 @@ import pytest
 
 from database import Job, Design
 from routers import jobs, files
+from services import job_requests
 from schemas import JobCreate
 from services.binder_source_materialization import StructureSourceRequest
 from tests.test_binder_source_materialization import source_api, stores, cif
@@ -37,7 +38,7 @@ async def test_selected_source_into_different_project_real_insertion(
 
     root = tmp_path / 'owned'
     roots = {'inputs': root / 'inputs', 'bms_results': root / 'results'}
-    for module in (paths, files, jobs):
+    for module in (paths, files, jobs, job_requests):
         monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
     async with setup_store() as exp, isolated_core() as core:
         source_context = await destination(exp)

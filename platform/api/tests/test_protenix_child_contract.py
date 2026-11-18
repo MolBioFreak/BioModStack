@@ -45,7 +45,7 @@ def test_child_result_uses_existing_prediction_contract(mode):
 @pytest.mark.parametrize('mode', ['flexible', 'conditioned', 'frozen'])
 @pytest.mark.parametrize('requested', [False, True, None])
 def test_geometry_normalization_preserves_generic_template_intent(mode, requested):
-    from routers.jobs import _normalize_structure_geometry_params
+    from services.job_requests import _normalize_structure_geometry_params
     params = {'protenix_target_geometry_mode': mode}
     if requested is not None:
         params['protenix_use_template'] = requested
@@ -57,7 +57,7 @@ def test_geometry_normalization_preserves_generic_template_intent(mode, requeste
 
 
 def test_generic_templates_do_not_invent_target_anchoring():
-    from routers.jobs import _normalize_structure_geometry_params
+    from services.job_requests import _normalize_structure_geometry_params
     assert _normalize_structure_geometry_params({'protenix_use_template': True}) == {'protenix_use_template': True}
 
 

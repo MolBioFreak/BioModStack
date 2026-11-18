@@ -14,6 +14,7 @@ if str(API_ROOT) not in sys.path:
 
 from model_registry import ModelRegistry
 import routers.jobs as jobs
+from services import job_requests
 from services.nextflow import build_nextflow_command
 from services.frustrampnn.settings import default_settings
 from template_registry import TemplateRegistry
@@ -142,7 +143,7 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params(tmp_path: Path
 
 def test_boltz_cp_structure_launcher_aliases_pass_registry_validation_without_explicit_input_path() -> None:
     registry = ModelRegistry()
-    validation_params = jobs._normalize_boltz_cp_params_for_validation(
+    validation_params = job_requests._normalize_boltz_cp_params_for_validation(
         "boltz_cp_experimental",
         {
             "sequence": "MKTIIALSYIFCLVFADYKDDDDA",
@@ -160,7 +161,7 @@ def test_boltz_cp_structure_launcher_aliases_pass_registry_validation_without_ex
         },
     )
 
-    assert validation_params["input_path"] == jobs.BOLTZ_CP_STRUCTURE_LAUNCHER_INPUT_SENTINEL
+    assert validation_params["input_path"] == job_requests.BOLTZ_CP_STRUCTURE_LAUNCHER_INPUT_SENTINEL
     assert validation_params["gpu_ids"] == "0,1,2,3"
     assert validation_params["size_cp"] == 4
     assert validation_params["input_format"] == "config_files"
@@ -174,7 +175,7 @@ def test_boltz_cp_structure_launcher_aliases_pass_registry_validation_without_ex
 
 def test_boltz_cp_structure_launcher_defaults_size_cp_to_largest_square_divisor() -> None:
     registry = ModelRegistry()
-    validation_params = jobs._normalize_boltz_cp_params_for_validation(
+    validation_params = job_requests._normalize_boltz_cp_params_for_validation(
         "boltz_cp_experimental",
         {
             "sequence": "MKTIIALSYIFCLVFADYKDDDDA",
@@ -199,7 +200,7 @@ def test_boltz_cp_structure_launcher_rejects_incompatible_requested_size_cp() ->
     import pytest
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as error:
-        jobs._normalize_boltz_cp_params_for_validation(
+        job_requests._normalize_boltz_cp_params_for_validation(
             "boltz_cp_experimental",
             {"sequence": "MKTIIALSYIFCLVFADYKDDDDA", "bcp_gpu_ids": "2,3", "bcp_size_cp": 4},
         )

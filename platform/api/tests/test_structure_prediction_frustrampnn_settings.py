@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job
 from routers import jobs as jobs_router
+from services import job_requests
 from schemas import JobCreate
 from services.frustrampnn.settings import FrustraMPNNRequestedSettings, default_settings
 from template_registry import TemplateRegistry
@@ -255,7 +256,7 @@ def test_every_enabled_parent_normalizes_complete_settings_and_durable_origin(
     model_id: str,
     mode: str,
 ) -> None:
-    normalized = jobs_router._normalize_frustrampnn_settings(
+    normalized = job_requests._normalize_frustrampnn_settings(
         model_id,
         mode,
         {"run_frustrampnn": True, "frustrampnn_settings": _custom_settings()},
@@ -281,7 +282,7 @@ def test_every_non_structure_enabled_parent_rejects_partial_settings_before_queu
     mode: str,
 ) -> None:
     with pytest.raises(HTTPException) as error:
-        jobs_router._normalize_frustrampnn_settings(
+        job_requests._normalize_frustrampnn_settings(
             model_id,
             mode,
             {

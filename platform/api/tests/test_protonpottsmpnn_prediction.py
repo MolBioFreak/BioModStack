@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from database import Base, Design, Job, get_session
 from experiment_database import get_experiment_session
 from routers import jobs, protonpottsmpnn_prediction as route
+from services import job_requests
 from schemas import JobCreate
 from services.protonpottsmpnn_prediction import PredictionSelection, prediction_requests, source_components
 
@@ -57,7 +58,7 @@ def test_prediction_uses_exact_redesigned_sequences_fixed_target_and_requested_p
         assert child.params['iteration_source_design_ids'] == ['original-design']
         assert 'target_pdb' not in child.params
         assert 'input_pdb' not in child.params
-        replay = jobs.normalize_job_request(JobCreate.model_validate(child.model_dump(mode='json')))
+        replay = job_requests.normalize_job_request(JobCreate.model_validate(child.model_dump(mode='json')))
         assert replay.model_dump(mode='json') == child.model_dump(mode='json')
     assert RESULT == original
     assert COMPONENTS[0]['sequence'] == 'AA'

@@ -16,6 +16,7 @@ from database import Job, ExecutionTarget
 from component_runtime import SourceIdentity
 
 import routers.jobs as jobs
+from services import job_requests
 from schemas import JobCreate
 from services.nextflow import compile_job_nextflow_invocation
 from services.remote_execution import bundle
@@ -96,7 +97,7 @@ async def test_approved_prepared_directory_reaches_real_bundle(
     target.unlink()  # Launch must never reopen an original after preparation.
     framework.unlink()
 
-    preview = jobs._execution_plan_preview(request)
+    preview = job_requests._execution_plan_preview(request)
     assert preview['admissible'], preview['blockers']
     approved = JobCreate.model_validate(prepared_body | {
         'execution_plan_approval': preview['approval_digest'],

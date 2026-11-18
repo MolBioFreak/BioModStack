@@ -703,7 +703,7 @@ async def normalize_md_provision_request(
 
 async def _compile_native_preview(intent: MdNativeLaunchIntent, session: AsyncSession):
     from component_runtime import canonical_bytes, digest, SourceIdentity
-    from routers.jobs import _resolve_md_input_path_for_runtime
+    from services.job_requests import _resolve_md_input_path_for_runtime
 
     require_molecular_dynamics_feature("molecular_dynamics")
     resolved = None
@@ -809,14 +809,15 @@ def _native_md_job_request(request, preview, resolved, *, md_input_resolver=None
         execution_policy=request.intent.execution_policy,
     )
     if md_input_resolver is not None:
-        from routers.jobs import normalize_job_request
+        from services.job_requests import normalize_job_request
         job_data = normalize_job_request(job_data, md_input_resolver=md_input_resolver)
     return job_data
 
 
 async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession, *, round_step=None,
                                 destination_launch_context_id=None, experiment_session=None):
-    from routers.jobs import create_job, ApprovedExecutionPlan, TypedMdProjectLaunch
+    from routers.jobs import create_job, TypedMdProjectLaunch
+    from services.job_requests import ApprovedExecutionPlan
     from component_runtime import canonical_bytes
 
     assert isinstance(request.intent, MdNativeLaunchIntent)
@@ -1033,7 +1034,7 @@ async def launch_typed_md_job(
         }
         if request.intent.execution_target_id:
             from component_runtime import canonical_bytes
-            from routers.jobs import ApprovedExecutionPlan
+            from services.job_requests import ApprovedExecutionPlan
             call_kwargs['_approved_execution_plan'] = ApprovedExecutionPlan(
                 canonical_bytes(job_data.model_dump(mode='json')),
                 canonical_bytes({'approval_digest': preview.preview_digest,
@@ -1243,7 +1244,7 @@ async def reorchestrate_failed_md_run(job_id: str, command: LifecycleCommand,
         approved_plan = None
         if parent.execution_target_id:
             from component_runtime import canonical_bytes
-            from routers.jobs import ApprovedExecutionPlan
+            from services.job_requests import ApprovedExecutionPlan
             approved = (parent.provenance or {}).get('execution_plan_approval') or {}
             if not approved.get('approval_digest') or not isinstance(approved.get('plan'), dict):
                 raise HTTPException(status_code=409, detail='Remote MD re-orchestration requires its retained approved plan; launch a new typed preview')

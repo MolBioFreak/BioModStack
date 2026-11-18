@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from database import Design, Job
 from routers import jobs
+from services import job_requests
 from schemas import JobCreate, JobResponse
 from services import binder_round as rounds
 from services.sequence_round_inputs import MODES, REQUEST, normalize_request
@@ -67,7 +68,7 @@ async def test_create_resubmit_retains_envelope_outside_generator_science(select
     request = JobCreate(name='general-sequence', model_id='protein_modification_experimental',
         mode='de_novo_design', params=params, sequence_design=envelope('fampnn', enabled=False))
     plain = request.model_copy(update={'sequence_design': None}, deep=True)
-    assert jobs.normalize_job_request(request).params == jobs.normalize_job_request(plain).params
+    assert job_requests.normalize_job_request(request).params == job_requests.normalize_job_request(plain).params
     response = await jobs.create_job(request, BackgroundTasks(), session)
     created = await session.get(Job, response.id)
     assert response.sequence_design.model_dump(mode='json') == envelope('fampnn', enabled=False)
@@ -216,6 +217,7 @@ async def test_model_owned_auxiliary_file_alias_reaches_child(selected, setup_st
     source.write_text('{"A": 0.0}\n' if model == 'proteinmpnn' else 'inert checkpoint transport fixture')
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: {'downloads': tmp})
     monkeypatch.setattr(jobs, 'resolve_allowed_path', files._allowed_lexical_path)
+    monkeypatch.setattr(job_requests, 'resolve_allowed_path', files._allowed_lexical_path)
     root.provenance = {REQUEST: envelope(model, params={key: 'downloads/' + filename})}
     await session.commit()
     async with setup_store() as experiments:
@@ -267,7 +269,7 @@ async def test_real_retained_plan_job_compiler_replay_failure_independence(selec
             assert child.params['design_chain'] == 'A'
         assert Path(metadata['source_binding']['path']).read_text() == PDB
         retained = JobCreate.model_validate(step['request'])
-        assert jobs.normalize_job_request(retained).model_dump() == retained.model_dump()
+        assert job_requests.normalize_job_request(retained).model_dump() == retained.model_dump()
         invocation = compile_job_nextflow_invocation(child, deepcopy(child.params), str(tmp / 'compiled'))
         assert invocation.entrypoint == ('workflows/caliby_native.nf' if model == 'caliby_experimental'
                                          else 'workflows/protein_sequence_design.nf')

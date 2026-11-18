@@ -72,9 +72,10 @@ def _prepared_spec() -> dict[str, Any]:
 
 
 def _mapped_http_error(exc: Exception) -> HTTPException:
-    jobs = _jobs_module()
+    _jobs_module()
+    job_requests = importlib.import_module("services.job_requests")
     with pytest.raises(HTTPException) as error:
-        jobs._raise_md_launch_http_error(exc)
+        job_requests._raise_md_launch_http_error(exc)
     return error.value
 
 
@@ -146,8 +147,9 @@ def test_md_launch_error_mapper_maps_transient_service_errors_to_safe_503(exc: E
 
 
 def test_preview_and_final_materialization_calls_are_both_wired_to_typed_mapper() -> None:
-    tree = ast.parse(JOBS_PATH.read_text(encoding="utf-8"))
-    functions = {node.name: node for node in tree.body
+    functions = {node.name: node
+                 for path in (JOBS_PATH, API_ROOT / "services" / "job_requests.py")
+                 for node in ast.parse(path.read_text(encoding="utf-8")).body
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     public_calls = {call.func.id for call in ast.walk(functions["create_job"])
                     if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)}
@@ -229,9 +231,11 @@ def _install_md_route_stubs(
     jobs = _jobs_module()
     monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _action: None)
+    job_requests = importlib.import_module("services.job_requests")
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(
-        jobs,
+        job_requests,
         "normalize_md_job_spec",
         lambda *, params, **_kwargs: dict(params["md_job_spec"]),
     )
@@ -282,7 +286,7 @@ async def test_md_route_rejects_prepared_gromacs_before_output_or_database_side_
     results_root.mkdir()
     jobs = _install_md_route_stubs(monkeypatch, results_root=results_root)
     launch = importlib.import_module("services.md.launch_contract")
-    monkeypatch.setattr(jobs, "normalize_md_job_spec", launch.normalize_md_job_spec)
+    monkeypatch.setattr(importlib.import_module("services.job_requests"), "normalize_md_job_spec", launch.normalize_md_job_spec)
     schemas = importlib.import_module("schemas")
     spec = _prepared_spec()
     spec["engine"] = "gromacs"

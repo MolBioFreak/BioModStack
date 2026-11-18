@@ -245,7 +245,7 @@ async def test_native_plan_draft_publish_prepare_routes(native_http, setup_store
         json={'input_dataset_revision_ids': []}, headers={'Idempotency-Key': 'plan-prepare'})
     assert response.status_code == 201, response.text
     assert response.json()['normalized_request']['launch_authority']['schema'] == 'bms.protein-setup-launch-authority.v1'
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from schemas import JobCreate
     scheduler = payload['scheduler']
     expected_params = normalize_job_request(JobCreate(name=scheduler['name'], model_id=scheduler['model_id'],

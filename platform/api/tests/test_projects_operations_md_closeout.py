@@ -14,10 +14,12 @@ from test_md_typed_launch import project_context_preview_store, _AcceptingRegist
 @pytest.mark.parametrize('initial', [False, True])
 def test_md_round_repeated_invocations_retry_cold(project_context_preview_store, monkeypatch, project, initial):
     from routers import jobs
+    from services import job_requests
     from services import gpu_orchestrator
     store = project_context_preview_store
     monkeypatch.setenv('BMS_FEATURE_MOLECULAR_DYNAMICS', '1')
     monkeypatch.setattr(jobs, 'get_registry', lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_requests, 'get_registry', lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: store['results_root'])
     monkeypatch.setattr(gpu_orchestrator, 'estimate_vram', lambda *_a, **_kw: 0)
     intent = deepcopy(store['native_intent'])

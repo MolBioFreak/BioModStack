@@ -17,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from component_runtime import SourceIdentity
 from database import Base, Job, MdRun
 from routers import jobs
+from services import job_requests
 from schemas import JobCreate
 from services import gpu_orchestrator as gpu, nextflow
 from services.md import lifecycle
@@ -78,8 +79,9 @@ async def test_real_create_job_v2_reserves_descendants_and_initializes(store, tm
     monkeypatch.setattr(jobs, 'require_molecular_dynamics_feature', lambda _: None)
     monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda _: None)
     monkeypatch.setattr(jobs, 'get_registry', _AcceptingRegistry)
+    monkeypatch.setattr(job_requests, 'get_registry', _AcceptingRegistry)
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
-    monkeypatch.setattr(jobs, 'normalize_md_job_spec', lambda **kw: normalize_md_job_spec(**kw, chemistry_catalog=catalog))
+    monkeypatch.setattr(job_requests, 'normalize_md_job_spec', lambda **kw: normalize_md_job_spec(**kw, chemistry_catalog=catalog))
     monkeypatch.setattr(jobs, 'materialize_md_job_spec', lambda **kw: materialize_md_job_spec(**kw, chemistry_catalog=catalog))
     request = spec()
     async with store() as session:
@@ -107,8 +109,9 @@ async def test_accepted_v1_caller_hands_unchanged_normalized_request_to_existing
     monkeypatch.setattr(jobs, 'require_molecular_dynamics_feature', lambda _: None)
     monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda _: None)
     monkeypatch.setattr(jobs, 'get_registry', _AcceptingRegistry)
+    monkeypatch.setattr(job_requests, 'get_registry', _AcceptingRegistry)
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
-    monkeypatch.setattr(jobs, 'normalize_md_job_spec', lambda **kw: kw['params']['md_job_spec'])
+    monkeypatch.setattr(job_requests, 'normalize_md_job_spec', lambda **kw: kw['params']['md_job_spec'])
     monkeypatch.setattr(jobs, 'materialize_md_job_spec', lambda **kw: dict(kw['params']))
     initialize = AsyncMock()
     monkeypatch.setattr(jobs, 'create_md_run', initialize)

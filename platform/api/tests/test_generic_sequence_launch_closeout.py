@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 from component_runtime import SourceIdentity
 from model_registry import get_registry
-from routers.jobs import normalize_job_request
+from services.job_requests import normalize_job_request
 from schemas import JobCreate
 from services.nextflow import compile_job_nextflow_invocation, compile_nextflow_invocation
 from services.remote_execution.bundle import compile_remote_dependencies
@@ -193,10 +193,12 @@ async def test_real_job_creation_preserves_sequence_request_without_launch(admis
 @pytest.mark.parametrize('model,mode', ROWS)
 def test_browser_pdb_alias_uses_existing_allowed_path_resolution(model, mode, tmp_path, monkeypatch):
     from routers import files, jobs
+    from services import job_requests
     typed = request(model, mode, tmp_path)
     original = typed.params['input_pdb']
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: {'downloads': tmp_path})
     monkeypatch.setattr(jobs, 'resolve_allowed_path', files._allowed_lexical_path)
+    monkeypatch.setattr(job_requests, 'resolve_allowed_path', files._allowed_lexical_path)
     typed.params['input_pdb'] = 'downloads/input.pdb'
     normalized = normalize_job_request(typed)
     assert normalized.params['input_pdb'] == original
@@ -254,6 +256,7 @@ async def test_actual_compiled_command_native_wrapper_and_sqlite_consumer(admiss
     from sqlalchemy import select
     from database import Design, Job
     from routers import jobs
+    from services import job_requests
     from services.result_ingester import ingest_job_results
     spec = importlib.util.spec_from_file_location('sequence_native_transport_fixture',
         ROOT / 'tests/test_generic_sequence_native_transport.py')
@@ -276,6 +279,7 @@ async def test_actual_compiled_command_native_wrapper_and_sqlite_consumer(admiss
         source_alias.write_bytes(source.read_bytes())
         monkeypatch.setattr(files, 'get_allowed_roots', lambda: {'inputs': tmp_path})
         monkeypatch.setattr(jobs, 'resolve_allowed_path', files._allowed_lexical_path)
+        monkeypatch.setattr(job_requests, 'resolve_allowed_path', files._allowed_lexical_path)
         # No scientific request field is replaced. Current nextflow.config owns
         # the unsupplied seqs_per_design default of eight.
         expected_count = 8

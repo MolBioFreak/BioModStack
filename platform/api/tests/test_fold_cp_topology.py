@@ -13,6 +13,7 @@ from model_registry import ModelRegistry
 from schemas import JobCreate
 from routers.jobs import ResumeJobRequest
 from routers import jobs
+from services import job_requests
 from services import gpu_orchestrator as scheduler
 from services.nextflow import build_nextflow_command, _derive_boltz_cp_gpu_launch_settings
 from test_core_protein_scientific_admission import admission
@@ -33,10 +34,10 @@ def test_admission_and_compiler_non_square_boundary(size, alias, tmp_path):
     if alias:
         values['bcp_cp_topology'] = values.pop('cp_topology')
         values['bcp_size_cp'] = values.pop('size_cp')
-    normalized = jobs.normalize_job_request(JobCreate(name='topology', model_id='boltz_cp_experimental',
+    normalized = job_requests.normalize_job_request(JobCreate(name='topology', model_id='boltz_cp_experimental',
                                                      mode='design', params=values))
     assert normalized.params['cp_topology'] == '1d'
-    validated = jobs._normalize_boltz_cp_params_for_validation('boltz_cp_experimental', normalized.params)
+    validated = job_requests._normalize_boltz_cp_params_for_validation('boltz_cp_experimental', normalized.params)
     assert validated['size_cp'] == size
     assert ModelRegistry().validate_job_params('boltz_cp_experimental', 'design', validated) == []
     command = build_nextflow_command('boltz_cp_experimental', 'design', normalized.params, str(tmp_path))
@@ -57,7 +58,7 @@ def test_explicit_1d_values_never_round(size, count, tmp_path):
     values = params()
     values.update(size_cp=size, pinned_gpus=list(range(count)))
     with pytest.raises(HTTPException) as error:
-        jobs._normalize_boltz_cp_params_for_validation('boltz_cp_experimental', values)
+        job_requests._normalize_boltz_cp_params_for_validation('boltz_cp_experimental', values)
     assert error.value.status_code == 422
     with pytest.raises(ValueError, match='cannot be reduced automatically'):
         build_nextflow_command('boltz_cp_experimental', 'design', values, str(tmp_path))
@@ -80,7 +81,7 @@ def test_topology_is_a_closed_enum(topology, tmp_path):
     from fastapi import HTTPException
     values = params(3, topology)
     with pytest.raises(HTTPException) as error:
-        jobs._normalize_boltz_cp_params_for_validation('boltz_cp_experimental', values)
+        job_requests._normalize_boltz_cp_params_for_validation('boltz_cp_experimental', values)
     assert error.value.status_code == 422
     with pytest.raises(ValueError, match='cp_topology must be one of'):
         build_nextflow_command('boltz_cp_experimental', 'design', values, str(tmp_path))

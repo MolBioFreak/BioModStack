@@ -366,7 +366,7 @@ def model_request(*, operation: str, params: dict, source: Job, root: Job,
         'native_sources': [item['native_source'] for item in manifest['designs'] if item.get('native_source')],
         'source_selection_count': len(manifest['designs']),
     })
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     request = JobCreate(name=f'{operation}-{source.name}', model_id=model_id, mode=mode,
                         params=effective, execution_target_id=execution_target_id)
     return normalize_job_request(request) if operation in {'refine', 'caliby'} else request

@@ -2397,7 +2397,7 @@ async def protein_setup_launch_authority(
 
 def _normalize_native_scheduler(scheduler: dict[str, Any]) -> dict[str, Any]:
     from schemas import JobCreate
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     resources = scheduler.get("resources") or {}
     request = normalize_job_request(JobCreate(
         name=scheduler["name"], model_id=scheduler["model_id"], mode=scheduler["mode"],

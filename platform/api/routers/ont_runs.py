@@ -49,7 +49,7 @@ from paths import (
     resolve_allowed_path,
 )
 from schemas import ExecutionPolicy, JobCreate, JobResponse
-from routers.jobs import JobExecutionPlanPreview
+from services.job_requests import JobExecutionPlanPreview
 from starlette.concurrency import run_in_threadpool
 from services import alignment_access, ont_raw_signal, ont_run_control, ont_submission_trust
 from services.ont_barcode_batches import (
@@ -1358,7 +1358,7 @@ async def ont_prepare_ngs_workflow(
     molbio_ngs_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> OntNgsPreparedReview:
     """Materialize stable selections without claiming receipts or inserting a Job."""
-    from routers.jobs import _execution_plan_preview
+    from services.job_requests import _execution_plan_preview
 
     job, retained, _, _ = await _prepare_ont_ngs_workflow(workflow_id, request, session, molbio_ngs_session)
     try:

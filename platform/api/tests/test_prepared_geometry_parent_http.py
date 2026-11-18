@@ -35,11 +35,12 @@ async def test_prepared_template_twice_cold(admission, monkeypatch):
 async def test_prepared_project_twice_cold(admission, setup_store, tmp_path, monkeypatch, record_property):
     import paths
     from routers import files, jobs
+    from services import job_requests
     value = envelope()
     roots = {'inputs': tmp_path / 'inputs', 'bms_results': tmp_path / 'results'}
     for root in roots.values():
         root.mkdir(parents=True, exist_ok=True)
-    for module in (paths, files, jobs):
+    for module in (paths, files, jobs, job_requests):
         monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
     for document in value['editor_state']['prepared_geometry_documents'].values():
         destination = tmp_path / document['source']['path']

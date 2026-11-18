@@ -62,7 +62,7 @@ async def test_round_inputs_once_per_missing_candidate_target_pair(selected, mon
 def test_ppiflow_display_requiredness_does_not_change_normalizer(mode, tmp_path):
     from services.ppiflow_generation import ppiflow_generation_inventory, parameter_contract
     from test_ppiflow_generation_launch import settings
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from schemas import JobCreate
     before = parameter_contract(mode)
     target, framework = tmp_path / 'target.pdb', tmp_path / 'framework.pdb'

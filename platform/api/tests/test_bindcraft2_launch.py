@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from services import bindcraft2_launch as launch
 from services.bindcraft2_native import compile_for_native, _canonical
 from schemas import JobCreate
-from routers.jobs import normalize_job_request
+from services.job_requests import normalize_job_request
 import hashlib
 
 

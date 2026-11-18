@@ -23,6 +23,7 @@ for candidate in (str(API_ROOT), str(REPO_ROOT)):
 
 from database import Base, Job  # noqa: E402
 from routers import jobs as jobs_router  # noqa: E402
+from services import job_requests
 from routers import md_results as md_results_router  # noqa: E402
 from schemas import JobCreate  # noqa: E402
 from services.gpu_orchestrator import GPUOrchestrator  # noqa: E402
@@ -138,6 +139,7 @@ async def test_analysis_child_is_validated_persisted_cpu_only_and_launched_witho
     monkeypatch.setattr(jobs_router, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(jobs_router, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs_router, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs_router, "get_results_dir", lambda: tmp_path / "results")
 
     async with sessions() as session:
@@ -191,6 +193,7 @@ async def test_analysis_child_rejects_any_requested_gpu_before_persistence(
     monkeypatch.setattr(jobs_router, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(jobs_router, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs_router, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'rejected-analysis.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from database import Base, get_session
 from model_registry import ModelRegistry
 from routers import jobs
+from services import job_requests
 from pathlib import Path
 from experiment_models import ExperimentBase
 from experiment_database import get_experiment_session
@@ -40,6 +41,7 @@ def test_http_scratch_project_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
     registry = ModelRegistry(Path(__file__).resolve().parents[3] / 'platform/api/config/models')
     monkeypatch.setattr(jobs, 'get_registry', lambda: registry)
+    monkeypatch.setattr(job_requests, 'get_registry', lambda: registry)
     engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "pm.sqlite"}')
     sessions = async_sessionmaker(engine, expire_on_commit=False)
 

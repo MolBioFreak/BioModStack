@@ -19,6 +19,7 @@ from database import Job, ShapeCadSource, ShapeDesignGeometry, ShapeDesignReques
 from experiment_database import get_experiment_session
 from paths import get_data_root
 from routers import jobs as jobs_router
+from services import job_requests
 from schemas import ExecutionPolicy
 from services.shape_geometry import MAX_MESH_BYTES, ShapeGeometryError
 from services.shape_requests import ShapeRequestError, SubmittedShapeRequest, materialize_shape_request, sequence_settings_definition, shape_job_request
@@ -317,7 +318,7 @@ async def submit_shape_request(
                 job_request, session=session, experiment_session=experiment_session)
             if preview['approval_digest'] != submitted.execution_plan_approval:
                 raise HTTPException(409, 'Execution plan approval is stale; preview and approve the current request')
-            approved_plan = jobs_router.ApprovedExecutionPlan(
+            approved_plan = job_requests.ApprovedExecutionPlan(
                 canonical_bytes(job_request.model_dump(mode='json')), canonical_bytes(preview))
         job_response = await jobs_router.create_job(
             job_request, background_tasks, session,

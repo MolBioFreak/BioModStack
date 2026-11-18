@@ -866,7 +866,7 @@ def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | N
     validation remains in the same normalizer used by ordinary Job creation.
     """
     from schemas import JobCreate
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from services.nextflow import MODEL_MODE_WORKFLOW_ENTRYPOINTS
     from services.workflow_adapter_registry import TYPED_CORE_JOB_ADAPTERS
 

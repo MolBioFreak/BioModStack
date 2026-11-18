@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job
 from routers import jobs
+from services import job_requests
 from schemas import JobCreate
 from services import bindcraft2_launch as launch
 from services.bindcraft2_runtime import NATIVE_ACTIONS, native_command
@@ -67,6 +68,6 @@ async def test_actual_lifecycle_creation_materializes_and_compiles_every_mode(tm
 
 def test_lifecycle_native_options_fail_at_existing_request_boundary():
     with pytest.raises(HTTPException) as failure:
-        jobs.normalize_job_request(JobCreate(name='bad native options', model_id='bindcraft2', mode='rank',
+        job_requests.normalize_job_request(JobCreate(name='bad native options', model_id='bindcraft2', mode='rank',
             params={'bc2_source_job_id': 'source', 'bc2_action_options': {'not_native': True}}))
     assert failure.value.status_code == 422

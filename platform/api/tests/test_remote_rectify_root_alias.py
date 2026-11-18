@@ -11,7 +11,7 @@ import pytest
 from antibody_pipeline_contract import ANTIBODY_DENOVO_PIPELINE, ANTIBODY_REFINEMENT_PIPELINE
 from component_runtime import canonical_bytes
 from model_registry import get_registry
-from routers.jobs import normalize_job_request
+from services.job_requests import normalize_job_request
 from schemas import JobCreate
 from services import nextflow
 from services.result_contracts import resolve_result_contract

@@ -110,7 +110,7 @@ def test_correspondence_wrong_document_and_npz_retention(tmp_path):
 @pytest.mark.asyncio
 async def test_compiled_wrapper_dependencies_survive_remote_source_archive(tmp_path, parent, target):
     from component_runtime import SourceIdentity
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from schemas import JobCreate
     from services.nextflow import compile_nextflow_invocation
     from services.remote_execution import bundle

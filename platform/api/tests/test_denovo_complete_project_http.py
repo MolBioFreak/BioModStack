@@ -15,6 +15,7 @@ from sqlalchemy import select
 from database import Job, ExecutionTarget
 from experiment_models import ExperimentLaunchContext, ExperimentWorkflowPreparation
 from routers import jobs, projects
+from services import job_requests
 from test_core_protein_scientific_admission import admission  # noqa: F401
 from test_denovo_project_http import app_for
 from test_project_workflow_setups import setup_store, _project_payload  # noqa: F401
@@ -52,7 +53,7 @@ async def test_mounted_native_project_http_lifecycle(admission, setup_store, tmp
         roots = {'inputs': tmp_path / 'inputs', 'bms_results': tmp_path / 'results'}
         for root in roots.values():
             root.mkdir(parents=True, exist_ok=True)
-        for module in (paths, jobs, files):
+        for module in (paths, jobs, job_requests, files):
             monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
         source = roots['inputs'] / 'project-source.cif.gz'
         source.write_bytes(gzip.compress(cif(models=(3, 7)).encode()))

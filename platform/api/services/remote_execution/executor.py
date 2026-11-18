@@ -1696,8 +1696,8 @@ async def prepare_checkpoint_successor(session: AsyncSession, job: Job, checkpoi
     from component_runtime import ResultReference, canonical_bytes, digest, durable_write
     from database import Design
     from schemas import JobCreate
-    from routers.jobs import (_native_gate_resume_params, _native_checkpoint_domain_follow_on,
-        _derive_source_stage_payload, _build_selection_manifest_item, _selection_manifest_path)
+    from routers.jobs import _native_gate_resume_params, _native_checkpoint_domain_follow_on, _derive_source_stage_payload, _build_selection_manifest_item
+    from services.job_requests import _selection_manifest_path
     from services.stage_review import ensure_stage_review_rows
 
     if (not job.awaiting_input or job.status != 'awaiting_input'

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from component_runtime import SourceIdentity
 from database import ExecutionTarget, Job
 from routers import jobs
+from services import job_requests
 from schemas import JobCreate
 from services.caliby_native import read_prepared_request
 from services.nextflow import compile_job_nextflow_invocation
@@ -88,7 +89,7 @@ async def test_remote_review_reuses_exact_retained_tree_after_source_removed(
     before = {p.relative_to(prepared): (p.read_bytes(), p.stat().st_mtime_ns)
               for p in prepared.rglob('*') if p.is_file()}
     target.unlink()
-    preview = jobs._execution_plan_preview(typed)
+    preview = job_requests._execution_plan_preview(typed)
     assert preview['admissible'], preview['blockers']
     approved = JobCreate.model_validate({**prepared_body, 'execution_plan_approval': preview['approval_digest']})
     result = await jobs._create_job(approved, BackgroundTasks(), admission)

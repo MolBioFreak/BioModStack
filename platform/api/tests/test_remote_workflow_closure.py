@@ -62,7 +62,7 @@ def test_component_compiler_reuses_native_and_trusted_parent(tmp_path, compiler_
     monkeypatch.setattr(SourceIdentity, 'from_checkout',
         classmethod(lambda *args: pytest.fail('worker compiler probed .git')))
     child = nextflow.compile_component_nextflow_invocation(request, context)
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from schemas import JobCreate
     normalized = normalize_job_request(JobCreate.model_validate(request.payload))
     params, provenance = admitted_payload(normalized.params, {}, 1)

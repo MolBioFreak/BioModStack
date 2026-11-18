@@ -761,7 +761,7 @@ async def md_request(session, root, row, params, placement, request, step_id):
 
 
 async def plan(session, root, retained):
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from services.binder_continuation import model_request, individual_model_requests
     request = SelectedRoundRequest.model_validate(retained['request'])
     steps = retained['steps']

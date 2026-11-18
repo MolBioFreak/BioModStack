@@ -550,7 +550,7 @@ async def prepare_workflow_setup_launch(
         # consumes; otherwise valid source materialization changes Plan params.
         # Unbound authoring drafts retain their existing Prepare behavior.
         from schemas import JobCreate
-        from routers.jobs import normalize_job_request
+        from services.job_requests import normalize_job_request
         from services.native_generation_sources import prepare_native_sources
         staged = normalize_job_request(JobCreate.model_validate(native_request))
         # Use the immutable Plan's serialization before deriving closure paths.

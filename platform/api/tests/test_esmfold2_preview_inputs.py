@@ -8,7 +8,7 @@ import pytest
 
 from schemas import JobCreate
 from services import nextflow
-from routers.jobs import _execution_plan_preview
+from services.job_requests import _execution_plan_preview
 from scripts.lib import portable_inputs
 
 

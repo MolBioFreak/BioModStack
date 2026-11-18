@@ -37,8 +37,10 @@ def _install_allowed_roots(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
         allowed_root.mkdir(parents=True, exist_ok=True)
     paths_module = importlib.import_module("paths")
     jobs_module = importlib.import_module("routers.jobs")
+    from services import job_requests
     monkeypatch.setattr(paths_module, "get_allowed_roots", lambda: roots)
     monkeypatch.setattr(jobs_module, "get_allowed_roots", lambda: roots, raising=False)
+    monkeypatch.setattr(job_requests, "get_allowed_roots", lambda: roots, raising=False)
 
 
 def test_md_route_strict_resolver_accepts_only_existing_files_under_allowed_roots(
@@ -47,7 +49,8 @@ def test_md_route_strict_resolver_accepts_only_existing_files_under_allowed_root
 ) -> None:
     _install_allowed_roots(monkeypatch, tmp_path)
     jobs_module = importlib.import_module("routers.jobs")
-    resolver = getattr(jobs_module, "_resolve_md_input_path_for_runtime", None)
+    from services import job_requests
+    resolver = getattr(job_requests, "_resolve_md_input_path_for_runtime", None)
     assert resolver is not None, "MD route strict resolver is missing"
     allowed = tmp_path / "inputs" / "md" / "system.gro"
     allowed.parent.mkdir(parents=True)
@@ -65,7 +68,8 @@ def test_md_route_strict_resolver_rejects_outside_and_unresolved_paths(
 ) -> None:
     _install_allowed_roots(monkeypatch, tmp_path)
     jobs_module = importlib.import_module("routers.jobs")
-    resolver = getattr(jobs_module, "_resolve_md_input_path_for_runtime", None)
+    from services import job_requests
+    resolver = getattr(job_requests, "_resolve_md_input_path_for_runtime", None)
     assert resolver is not None, "MD route strict resolver is missing"
 
     with pytest.raises(Exception) as error:

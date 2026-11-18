@@ -4609,7 +4609,7 @@ def compile_workflow_provision_request(request):
     from component_runtime import canonical_bytes, digest
     from model_registry import get_registry
     from paths import get_results_dir
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from schemas import JobCreate
     from services import core_protein_scientific_contract as scientific_contract
     from services.msa_policy import apply_msa_policy
@@ -5050,7 +5050,7 @@ def compile_component_nextflow_invocation(request, context: dict):
             params = prepare_runtime_child(payload, child_id=request.component_id, output_root=output_dir)
     else:
         from schemas import JobCreate
-        from routers.jobs import normalize_job_request
+        from services.job_requests import normalize_job_request
         normalized = normalize_job_request(JobCreate.model_validate(payload),
             native_entrypoint=MODEL_MODE_WORKFLOW_ENTRYPOINTS.get((model_id, mode)))
         revision = science.admission_revision(model_id, mode, parent=parent, scientific_child=True)

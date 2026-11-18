@@ -170,10 +170,12 @@ def test_native_envelope_and_existing_ownership_rules(native_files, change):
 def native_client(native_files, tmp_path, monkeypatch):
     from database import get_session
     from routers import molecular_dynamics, jobs
+    from services import job_requests
     import paths
     roots = {"inputs": native_files, "bms_results": tmp_path / "results"}
     monkeypatch.setattr(paths, "get_allowed_roots", lambda: roots)
     monkeypatch.setattr(jobs, "get_allowed_roots", lambda: roots, raising=False)
+    monkeypatch.setattr(job_requests, "get_allowed_roots", lambda: roots, raising=False)
     app = FastAPI()
     app.include_router(molecular_dynamics.router)
     async def unused_session():
@@ -235,6 +237,7 @@ def test_preview_binds_relative_includes_and_preserves_path_authority(native_cli
 async def test_native_launch_reaches_real_job_create_and_scratch_persistence(native_files, tmp_path, monkeypatch, mode):
     from database import Base, Job, MdRun
     from routers import jobs, molecular_dynamics as md
+    from services import job_requests
     from services import gpu_orchestrator
     from services.md.starting_structures import MdLaunchPreviewRequest, MdLaunchRequest
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -246,8 +249,10 @@ async def test_native_launch_reaches_real_job_create_and_scratch_persistence(nat
     roots = {"inputs": native_files, "bms_results": results}
     monkeypatch.setattr(paths, "get_allowed_roots", lambda: roots)
     monkeypatch.setattr(jobs, "get_allowed_roots", lambda: roots, raising=False)
+    monkeypatch.setattr(job_requests, "get_allowed_roots", lambda: roots, raising=False)
     monkeypatch.setattr(jobs, "get_results_dir", lambda: results)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(gpu_orchestrator, "estimate_vram", lambda *_args, **_kwargs: 0)
     for name, directory in {"BMS_DATA": "data", "BMS_RESULTS_DIR": "results", "BMS_WORK": "work", "BMS_STATE_DIR": "state", "BMS_SCHEDULER_STATE_DIR": "scheduler"}.items():
         monkeypatch.setenv(name, str(tmp_path / directory))

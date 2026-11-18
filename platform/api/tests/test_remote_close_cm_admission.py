@@ -58,7 +58,7 @@ def test_canonical_root_preview_and_bundle(placement, monkeypatch, backend):
         installed.parent.mkdir(parents=True, exist_ok=True)
         installed.write_bytes(checkpoint.read_bytes())
     from schemas import JobCreate
-    from routers.jobs import _execution_plan_preview
+    from services.job_requests import _execution_plan_preview
     # Preview describes requirements; dispatcher GPU bindings belong only to execution.
     physical = JobCreate(name="CM admission", model_id="conformational_mapping", mode="map", params=dict(job.params))
     with pytest.raises(ValueError, match="native preview cannot carry physical GPU bindings"):
@@ -140,7 +140,7 @@ async def test_actual_cm_operator_route_stored_job_bundle(placement, monkeypatch
         job.params = dict(job.params, gpu_id=0)
         invocation = compile_installed((roots,job,target), 'conformational_mapping','map')
         checkpoint.write_bytes(b'explicit offline checkpoint transport fixture')
-        from routers.jobs import _execution_plan_preview, normalize_job_request
+        from services.job_requests import _execution_plan_preview, normalize_job_request
         from schemas import JobCreate
         typed = JobCreate(name=job.name,model_id=job.model_id,mode=job.mode,params={k:v for k,v in job.params.items() if k not in {'remote_result_policy', 'gpu_id'}}, execution_policy={'remote_result_policy':job.params['remote_result_policy']})
         normalized = normalize_job_request(typed)

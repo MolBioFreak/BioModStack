@@ -16,6 +16,7 @@ from database import ExecutionTarget, Job, ShapeDesignRequest
 from experiment_models import ExperimentLaunchContext, ExperimentRunAttempt, ExperimentWorkflowPreparation
 from experiment_services import create_run_group, validate_preparation_authority
 from routers import jobs, shape_blueprint
+from services import job_requests
 from schemas import JobCreate
 from services import shape_requests, shape_resources
 from services.global_experiments import workflow_setups
@@ -90,7 +91,7 @@ async def prepare(core, factory, request):
         scheduler = json.loads(preparation.scheduler_payload_json)
         staged = await shape_requests.materialize_shape_request(core, data_root=Path(core.bind.url.database).parent,
                                                                submitted=request)
-        expected = jobs.normalize_job_request(shape_requests.shape_job_request(staged, request))
+        expected = job_requests.normalize_job_request(shape_requests.shape_job_request(staged, request))
         assert scheduler['params'] == {**expected.params,
             'workflow_adapter': 'bms.core-job.protein_modification_experimental.adapter.v1'}
         assert scheduler['name'] == request.name

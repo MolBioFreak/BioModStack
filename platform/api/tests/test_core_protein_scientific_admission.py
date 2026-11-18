@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from database import Base, Job
 from model_registry import ModelRegistry
 from routers import jobs
+from services import job_requests
 from schemas import JobCreate
 from services import core_protein_scientific_contract as contract
 
@@ -211,6 +212,7 @@ async def admission(monkeypatch, tmp_path):
     monkeypatch.setattr(jobs, "get_results_dir", lambda: tmp_path / "results")
     registry = ModelRegistry(Path(__file__).resolve().parents[1] / "config" / "models")
     monkeypatch.setattr(jobs, "get_registry", lambda: registry)
+    monkeypatch.setattr(job_requests, "get_registry", lambda: registry)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'jobs.sqlite'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -250,6 +252,7 @@ async def test_common_boundary_rejects_post_schema_mutation_before_handoff(monke
     def never(*args, **kwargs):
         raise AssertionError("trusted handoff/registry must not execute")
     monkeypatch.setattr(jobs, "get_registry", never)
+    monkeypatch.setattr(job_requests, "get_registry", never)
     monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", never)
     with pytest.raises(HTTPException) as exc:
         await jobs._create_job(payload, BackgroundTasks(), object())

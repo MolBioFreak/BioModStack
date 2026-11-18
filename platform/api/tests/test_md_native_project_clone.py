@@ -54,6 +54,7 @@ def test_native_project_route_create_readback_and_clone(project_context_preview_
     from database import Job
     from experiment_models import ExperimentLaunchContext, ExperimentRunAttempt
     from routers import jobs
+    from services import job_requests
     from services import gpu_orchestrator
     from services.global_experiments.launch_contexts import validate_bound_job
     from scripts.bms_md.contract import verify_input_snapshots
@@ -64,6 +65,7 @@ def test_native_project_route_create_readback_and_clone(project_context_preview_
     context_id = store["ids"]["context"]
     monkeypatch.setenv("BMS_FEATURE_MOLECULAR_DYNAMICS", "1")
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: store["results_root"])
     monkeypatch.setattr(gpu_orchestrator, "estimate_vram", lambda *_a, **_kw: 0)
     preview_body = {"schema_version": "bms.md.launch-preview-request.v1", "intent": intent}

@@ -168,7 +168,7 @@ def test_normalize_plr_input_pdb_path_ignores_missing_empty_and_non_string() -> 
     ("protein_modification_experimental", "de_novo_design", {"generator": "disco"}, True),
 ])
 def test_ingress_normalization_policy_preserves_native_requests(model, mode, params, expected) -> None:
-    from routers.jobs import _should_normalize_antibody_job_params
+    from services.job_requests import _should_normalize_antibody_job_params
 
     original = params.copy()
     # The shared helper owns create/resume normalization policy, not the number

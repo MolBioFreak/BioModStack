@@ -219,7 +219,7 @@ workflow {{
         launch_request = copy.deepcopy(original)
         if component_mode == 'hosted-wire':
             from schemas import JobCreate
-            from routers.jobs import normalize_job_request
+            from services.job_requests import normalize_job_request
             launch_request = normalize_job_request(JobCreate(name='wire', model_id='esmfold2', mode='predict', params=launch_request)).params
             # Scheduler-assignment double for compiler admission only; this
             # fixture invokes only the non-model ESMFold2 recorder process.

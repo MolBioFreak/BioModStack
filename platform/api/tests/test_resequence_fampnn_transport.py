@@ -17,6 +17,7 @@ from fastapi import BackgroundTasks
 
 from database import Job
 from routers import jobs
+from services import job_requests
 from test_core_protein_scientific_admission import admission
 from services.fampnn_policy_admission import compile_declaration, guard_cached_declaration
 
@@ -44,7 +45,7 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
     inputs = tmp_path / 'inputs'; inputs.mkdir()
     (tmp_path / 'results').mkdir(exist_ok=True)
     roots = {'inputs': inputs, 'bms_results': tmp_path / 'results'}
-    for module in (paths, files, jobs):
+    for module in (paths, files, jobs, job_requests):
         monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: inputs)
     selected = inputs / 'design_selections' / 'protein_local_redesign' / 'selection'; selected.mkdir(parents=True)
@@ -56,6 +57,7 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
     monkeypatch.setattr(jobs, '_create_generic_selection_dir', lambda *a: selected)
     monkeypatch.setattr(files, 'is_path_allowed', lambda p: True)
     monkeypatch.setattr(jobs, 'resolve_allowed_path', lambda p: Path(p))
+    monkeypatch.setattr(job_requests, 'resolve_allowed_path', lambda p: Path(p))
     async def resolve(request, session):
         return Path(request.path), {}
     monkeypatch.setattr(bsm, 'resolve_structure_source', resolve)

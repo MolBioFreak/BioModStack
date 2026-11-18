@@ -44,7 +44,7 @@ def admit_current_job(job, model, mode):
     """Use the typed request, policy and canonical normalization/admission producer."""
     from copy import deepcopy
     from schemas import JobCreate
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from services.msa_policy import apply_msa_policy
     from services.core_protein_scientific_contract import admitted_payload, admission_revision
     requested = deepcopy(job.params)

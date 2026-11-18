@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from routers.jobs import _execution_plan_preview
+from services.job_requests import _execution_plan_preview
 from schemas import JobCreate
 from services.nextflow import compile_nextflow_invocation, compile_workflow_provision_request
 from services.rfd3_generation import materialize_generation_request, normalize_generation_params

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, ExecutionTarget, Job, get_session
 from routers import jobs
+from services import job_requests
 from tests.test_msa_bundle_integration import offline_bundle
 
 
@@ -117,7 +118,7 @@ def test_preparation_rebind_keeps_approved_scientific_identity(offline_bundle):
     from services.model_msa_handoff import prepare_launch_msa
     _, job, _, _ = offline_bundle
     payload = JobCreate(name='prepared-identity', model_id=job.model_id, mode=job.mode, params=deepcopy(job.params))
-    approved = jobs._execution_plan_preview(payload)
+    approved = job_requests._execution_plan_preview(payload)
     assert approved['admissible']
     invocation = nextflow.compile_job_nextflow_invocation(job, job.params, job.output_dir)
     invocation.materialize_inputs(Path(job.output_dir))
@@ -128,7 +129,7 @@ def test_preparation_rebind_keeps_approved_scientific_identity(offline_bundle):
     assert prepared.effective_json == invocation.effective_json
     assert prepared.execution_plan.complete
     assert prepared.execution_plan.plan_sha256 != invocation.execution_plan.plan_sha256
-    assert jobs._execution_plan_preview(payload)['approval_digest'] == approved['approval_digest']
+    assert job_requests._execution_plan_preview(payload)['approval_digest'] == approved['approval_digest']
 
 
 @pytest_asyncio.fixture

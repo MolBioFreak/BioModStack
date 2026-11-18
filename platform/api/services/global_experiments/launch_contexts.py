@@ -572,7 +572,7 @@ async def validate_bound_job_request(
     if not params_match and (model_id, mode) == ("protein_modification_experimental", "shape_blueprint"):
         # Preserve historical literal equality. Shape's staged projection can
         # omit defaults that the canonical Job normalizer pinned at setup.
-        from routers.jobs import normalize_job_request
+        from services.job_requests import normalize_job_request
         from schemas import JobCreate
         normalized = normalize_job_request(JobCreate(
             name=job_name, model_id=model_id, mode=mode, params=dict(params), pinned_gpu=pinned_gpu,
@@ -922,7 +922,7 @@ async def validate_prepared_child_job_request(
         return False  # Historical/ordinary Plan handoffs retain their existing owner.
     actual_request = JobCreate.model_validate(job_request)
     if (actual_request.model_id, actual_request.mode) == ("protein_modification_experimental", "shape_blueprint"):
-        from routers.jobs import normalize_job_request
+        from services.job_requests import normalize_job_request
         actual_request = normalize_job_request(actual_request.model_copy(deep=True))
         actual_request.params = normalize_bound_job_params(
             supplied_params=actual_request.params,

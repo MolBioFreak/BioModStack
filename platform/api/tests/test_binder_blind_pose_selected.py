@@ -34,6 +34,7 @@ async def test_selected_remote_route_review_and_approved_insertion(admission, tm
     from datetime import datetime
     from database import ExecutionTarget
     from routers import jobs, ligandmpnn_interface_context as interface
+    from services import job_requests
     from schemas import JobCreate
     from services import ligandmpnn_interface_publication as publication
     from test_ligandmpnn_interface_context import example
@@ -44,7 +45,7 @@ async def test_selected_remote_route_review_and_approved_insertion(admission, tm
     candidate, _ = example(tmp_path)
     target = tmp_path / 'target.pdb'
     target.write_text(pdb('A', ['ALA', 'GLY']))
-    for owner in (paths, jobs, selected, interface):
+    for owner in (paths, jobs, job_requests, selected, interface):
         monkeypatch.setattr(owner, 'get_allowed_roots', lambda: {'inputs': tmp_path})
     for owner in (paths, jobs, selected, route, publication):
         monkeypatch.setattr(owner, 'get_inputs_dir', lambda: tmp_path)

@@ -43,7 +43,7 @@ def test_unsaved_full_structure_preview_is_nonexecutable_and_preserves_science(t
     # Raw metadata retains the hosted-MSA admission edge; the ordinary API
     # adapter may defer that specific preparation, not scientific/GPU guards.
     assert {row.component_or_dependency_id for row in preview.execution_plan.blockers} == {'protenix:msa'}
-    from routers.jobs import _execution_plan_preview
+    from services.job_requests import _execution_plan_preview
     approval = _execution_plan_preview(payload)
     assert approval['admissible'], approval['blockers']
     assert approval['deferred_preparation'] == ['protenix:msa']

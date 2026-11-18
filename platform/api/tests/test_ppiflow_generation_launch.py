@@ -8,6 +8,7 @@ import pytest
 
 from database import Job
 from routers import jobs, models
+from services import job_requests
 from schemas import JobCreate
 from services import nextflow
 from services.ppiflow_generation import (
@@ -27,6 +28,7 @@ def inputs(tmp_path, monkeypatch):
     framework.write_text('REMARK non-science transport framework\nEND\n')
     results = tmp_path / 'results'
     monkeypatch.setattr(jobs, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': results})
+    monkeypatch.setattr(job_requests, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': results})
     monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: root)
     import paths
     monkeypatch.setattr(paths, 'get_results_dir', lambda: results)
@@ -53,7 +55,7 @@ def settings(mode, inputs):
 def test_normalization_preserves_native_initial_contract(mode, inputs):
     original = JobCreate(name='initial', model_id='ppiflow', mode=mode, params=settings(mode, inputs))
     before = deepcopy(original.params)
-    normalized = jobs.normalize_job_request(original)
+    normalized = job_requests.normalize_job_request(original)
     assert original.params == before
     assert normalized.params == normalize_ppiflow_generation_params(mode, before)
     assert normalized.params['self_condition'] is False
@@ -64,7 +66,7 @@ def test_normalization_preserves_native_initial_contract(mode, inputs):
 @pytest.mark.parametrize('change', [{'unknown_science': 0}, {'samples_per_target': True}, {'rotation_corrupt': 'false'}])
 def test_invalid_initial_settings_are_rejected_by_native_owner(inputs, change):
     with pytest.raises(HTTPException) as exc:
-        jobs.normalize_job_request(JobCreate(name='invalid', model_id='ppiflow', mode='protein_binder',
+        job_requests.normalize_job_request(JobCreate(name='invalid', model_id='ppiflow', mode='protein_binder',
             params={**settings('protein_binder', inputs), **change}))
     assert exc.value.status_code == 422
 
@@ -153,7 +155,7 @@ async def test_remote_preparation_preview_approval_reuses_owned_sources(admissio
     assert len(calls) == 1
     assert not list(await admission.scalars(select(Job.id)))
     inputs[0].unlink()
-    preview = jobs._execution_plan_preview(prepared)
+    preview = job_requests._execution_plan_preview(prepared)
     assert preview['admissible'], preview['blockers']
     assert preview['input_identities']
     altered = prepared.model_copy(deep=True)

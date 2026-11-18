@@ -1292,6 +1292,7 @@ async def test_canonical_job_wrapper_binds_trusted_md_seams_by_behavior(
 ) -> None:
     from fastapi import BackgroundTasks
     from routers import jobs
+    from services import job_requests
     from schemas import JobCreate
     from services import gpu_orchestrator
 
@@ -1325,9 +1326,11 @@ async def test_canonical_job_wrapper_binds_trusted_md_seams_by_behavior(
     monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: results_root)
     monkeypatch.setattr(jobs, "_resolve_md_input_path_for_runtime", generic_resolver)
-    monkeypatch.setattr(jobs, "normalize_md_job_spec", normalize)
+    monkeypatch.setattr(job_requests, "_resolve_md_input_path_for_runtime", generic_resolver)
+    monkeypatch.setattr(job_requests, "normalize_md_job_spec", normalize)
     monkeypatch.setattr(jobs, "materialize_md_job_spec", materialize)
     monkeypatch.setattr(gpu_orchestrator, "estimate_vram", lambda *_args, **_kwargs: 0)
 
@@ -1366,6 +1369,7 @@ async def test_canonical_job_wrapper_keeps_generic_md_defaults_without_internal_
 ) -> None:
     from fastapi import BackgroundTasks
     from routers import jobs
+    from services import job_requests
     from schemas import JobCreate
     from services import gpu_orchestrator
 
@@ -1393,9 +1397,11 @@ async def test_canonical_job_wrapper_keeps_generic_md_defaults_without_internal_
     monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: results_root)
     monkeypatch.setattr(jobs, "_resolve_md_input_path_for_runtime", generic_resolver)
-    monkeypatch.setattr(jobs, "normalize_md_job_spec", normalize)
+    monkeypatch.setattr(job_requests, "_resolve_md_input_path_for_runtime", generic_resolver)
+    monkeypatch.setattr(job_requests, "normalize_md_job_spec", normalize)
     monkeypatch.setattr(jobs, "materialize_md_job_spec", materialize)
     monkeypatch.setattr(gpu_orchestrator, "estimate_vram", lambda *_args, **_kwargs: 0)
 
@@ -1530,6 +1536,7 @@ def test_project_v2_typed_md_launch_reaches_canonical_job_and_consumes_context(
         ExperimentRunAttempt,
     )
     from routers import jobs
+    from services import job_requests
     from services import gpu_orchestrator
     from sqlalchemy import func, select
 
@@ -1578,8 +1585,9 @@ def test_project_v2_typed_md_launch_reaches_canonical_job_and_consumes_context(
     monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: store["results_root"])
-    monkeypatch.setattr(jobs, "normalize_md_job_spec", normalize)
+    monkeypatch.setattr(job_requests, "normalize_md_job_spec", normalize)
     monkeypatch.setattr(jobs, "materialize_md_job_spec", materialize)
     monkeypatch.setattr(gpu_orchestrator, "estimate_vram", lambda *_args, **_kwargs: 0)
 
@@ -1802,6 +1810,7 @@ def test_ordinary_no_context_jobs_endpoint_remains_canonical(
 ) -> None:
     from database import Job
     from routers import jobs
+    from services import job_requests
     from services import gpu_orchestrator
     from sqlalchemy import func, select
 
@@ -1809,6 +1818,7 @@ def test_ordinary_no_context_jobs_endpoint_remains_canonical(
     monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: store["results_root"])
     monkeypatch.setattr(gpu_orchestrator, "estimate_vram", lambda *_args, **_kwargs: 0)
 
@@ -1840,6 +1850,7 @@ def test_design_typed_launch_persists_scientific_lineage_and_exact_snapshot(
 ):
     from database import Design, Job, MdRun
     from routers import jobs, molecular_dynamics
+    from services import job_requests
     from services import gpu_orchestrator
     from services.md import launch_contract
     from test_md_job_v2_contract import _catalog
@@ -1885,6 +1896,7 @@ def test_design_typed_launch_persists_scientific_lineage_and_exact_snapshot(
     monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _: None)
     monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: store["results_root"])
     monkeypatch.setattr(gpu_orchestrator, "estimate_vram", lambda *_args, **_kwargs: 0)
     intent = {**_intent_payload(), "name": "Design-MD-launch", "source_ref": {"kind": "design", "id": design_id},

@@ -9,6 +9,7 @@ import yaml
 
 from database import Job
 from routers import jobs
+from services import job_requests
 from schemas import JobCreate
 from services import nextflow
 from scripts.lib.boltzgen_inputs import input_identity, identity_digest
@@ -23,6 +24,7 @@ def target(tmp_path, monkeypatch):
     path = root / 'target.pdb'
     _write_pdb(path, 'A', [1, 2, 3])
     monkeypatch.setattr(jobs, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': tmp_path / 'results'})
+    monkeypatch.setattr(job_requests, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': tmp_path / 'results'})
     import paths
     monkeypatch.setattr(paths, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': tmp_path / 'results'})
     monkeypatch.setattr(paths, 'get_results_dir', lambda: tmp_path / 'results')
@@ -58,7 +60,7 @@ async def test_native_template_save_reopen_update_preserves_exact_science(admiss
     admission.expire_all()
     reopened = await user_templates.get_user_template(template_id, admission)
     assert reopened.params == changed
-    normalized = jobs.normalize_job_request(JobCreate(name=reopened.name,
+    normalized = job_requests.normalize_job_request(JobCreate(name=reopened.name,
         model_id=reopened.model_id, mode=reopened.mode, params=reopened.params))
     assert normalized.params['boltzgen_min_plddt'] is None
     assert normalized.params['boltzgen_skip_inverse_folding'] is False

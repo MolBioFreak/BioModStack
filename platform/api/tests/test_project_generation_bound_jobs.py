@@ -13,6 +13,7 @@ from database import Base, Job
 from experiment_models import ExperimentLaunchContext, ExperimentRunAttempt
 from schemas import JobCreate
 from routers import jobs
+from services import job_requests
 from services.global_experiments.launch_contexts import validate_bound_job
 from test_project_workflow_setups import setup_store
 from test_project_normalized_child_requests import destination
@@ -37,6 +38,7 @@ async def isolated_core(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "get_inputs_dir", lambda: inputs)
     monkeypatch.setattr(paths, "get_data_root", lambda: root)
     monkeypatch.setattr(jobs, "get_allowed_roots", lambda: {"inputs": tmp_path, "bms_results": results})
+    monkeypatch.setattr(job_requests, "get_allowed_roots", lambda: {"inputs": tmp_path, "bms_results": results})
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'bound-jobs.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)

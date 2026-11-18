@@ -9,7 +9,7 @@ from routers.user_templates import UserTemplateCreate, create_user_template, get
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from database import UserTemplate
 from model_registry import get_registry
-from routers.jobs import normalize_job_request
+from services.job_requests import normalize_job_request
 from schemas import JobCreate
 from routers.jobs import _resolve_antibody_root_job, _validate_selected_design_owners
 

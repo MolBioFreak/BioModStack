@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from database import Design, Job
 from routers import jobs
+from services import job_requests
 from schemas import JobCreate
 from services.nextflow import compile_job_nextflow_invocation
 from services.result_ingester import ingest_job_results
@@ -61,7 +62,7 @@ def test_existing_native_role_checks_are_called_by_jobs(settings, message, tmp_p
     typed = role_request(tmp_path)
     typed.params.update(settings)
     with pytest.raises(HTTPException) as error:
-        jobs.normalize_job_request(typed)
+        job_requests.normalize_job_request(typed)
     assert error.value.status_code == 422 and message in str(error.value.detail)
 
 

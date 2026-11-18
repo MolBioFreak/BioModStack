@@ -46,7 +46,7 @@ def source_components(path: Path) -> list[dict]:
 def prediction_requests(source: Job, root: Job, result: dict,
                         components: list[dict], request: PredictionSelection) -> list[JobCreate]:
     """Bind explicitly selected native IDs and sequences into normal JobCreate."""
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from services.binder_round_inputs import BOUND_INPUTS
 
     if len(set(request.design_ids)) != len(request.design_ids):

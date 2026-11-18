@@ -11,6 +11,7 @@ from database import Job, Design, get_session
 from experiment_database import get_experiment_session
 from experiment_models import ExperimentLaunchContext, ExperimentWorkflowPreparation
 from routers import jobs
+from services import job_requests
 from schemas import JobCreate
 from test_project_manager_adapters import stores
 from test_project_workflow_setups import setup_store
@@ -120,7 +121,7 @@ async def test_native_project_editor_save_reopen_and_prepare(setup_store, target
             setup_context_id=setup['setup_context_id'], expected_generation=1, idempotency_key='prepare')
         row = await db.get(ExperimentWorkflowPreparation, prepared['preparation_id'])
         scheduler = json.loads(row.scheduler_payload_json)
-        expected = jobs.normalize_job_request(request).params
+        expected = job_requests.normalize_job_request(request).params
         assert scheduler['params'] == {**expected, 'workflow_adapter': f'bms.core-job.{model}.adapter.v1'}
         assert scheduler['name'] == request.name
         assert not {'source_document', 'collapsed', 'native_job_request', 'editor_state'} & scheduler['params'].keys()
