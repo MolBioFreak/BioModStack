@@ -3,9 +3,9 @@
 .bld-heading h2 { font-size: 21px; font-weight: 650; margin: 0 0 4px; }
 .bld-heading p { margin: 0; color: var(--text-secondary); }
 .bld-status { color: var(--text-secondary); font-size: 12px; }
-.bld-workspace { display: grid; grid-template-columns: minmax(0, min(62%, calc(100dvh - 190px))) minmax(300px, 1fr); gap: 14px; align-items: start; }
+.bld-workspace { display: grid; grid-template-columns: minmax(0, 1fr) clamp(400px, 31%, 520px); gap: 14px; align-items: stretch; }
 .bld-map-pane, .bld-side, .bld-side > *, .bld-band > *, .bld-details { min-width: 0; max-width: 100%; }
-.bld-side { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; gap: 12px; overflow-wrap: anywhere; }
+.bld-side { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto 1fr; align-content: start; gap: 14px; overflow-wrap: anywhere; }
 .bld-pose-card { border: 1px solid var(--border-secondary); border-radius: 12px; background: var(--bg-secondary); padding: 8px 14px; font-size: 12px; margin-top: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 22px; }
 .bld-pose-card h3 { font-size: 14px; font-weight: 650; margin: 0; white-space: nowrap; }
 .bld-pose-card dt { color: var(--text-secondary); margin-top: 9px; }
@@ -69,7 +69,7 @@
 @media (max-width: 1100px) { .bld-workspace, .bld-band { grid-template-columns: minmax(0, 1fr); } .bld-side { grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); } }
 /* Same canvas presentation as the Workflows deck: overlay station picker and zoom, full-height map. */
 .bioxp-live-deck .bioxp-method-map { position: relative; }
-.bioxp-live-deck .bioxp-method-map .bwd-canvas-presentation .bwd-map { width: 100%; height: clamp(520px, calc(100dvh - 230px), 1300px); }
+.bioxp-live-deck .bioxp-method-map .bwd-canvas-presentation .bwd-map { width: 100%; height: var(--bld-deck-h); }
 .bld-prep { border: 1px solid var(--accent-primary); border-radius: 12px; padding: 14px; background: var(--bg-secondary); font-size: 13px; }
 .bld-prep h3 { margin: 0 0 8px; font-size: 15px; font-weight: 650; }
 .bld-prep ol { margin: 6px 0 10px 18px; list-style: decimal; }
@@ -124,17 +124,13 @@
 .bld-route-actions { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; }
 .bld-preview { margin: 8px 0 0 18px; list-style: decimal; font-size: 12px; color: var(--text-secondary); }
 .bld-pipette p { margin: 6px 0 0; font-size: 12px; }
-.bld-camera .aspect-\[4\/3\] { aspect-ratio: 16 / 9; max-height: 250px; }
+.bld-camera .aspect-\[4\/3\] { aspect-ratio: 16 / 10; }
 .bioxp-live-deck .bioxp-method-map .bwd-selection-tools { position: static; display: inline-block; margin: 0 0 6px !important; }
 .bioxp-live-deck .bioxp-method-map .bwd-selection-tools[open] { display: block; }
 .bld-route-options label:last-child { margin-left: 0; }
 .bld-route li { grid-template-columns: 20px minmax(0, 1fr) 96px 62px 18px 26px; }
-/* Wide screens: the cards and the record row fill the space beside the deck. */
-@media (min-width: 1700px) {
-  .bioxp-live-deck { display: grid; grid-template-columns: minmax(0, min(46%, calc(100dvh - 190px))) minmax(0, 1fr); column-gap: 14px; align-items: start; grid-template-rows: auto auto 1fr; }
-  .bioxp-live-deck > * { grid-column: 1 / -1; }
-  .bioxp-live-deck > .bld-workspace { display: contents; }
-  .bioxp-live-deck .bld-map-pane { grid-column: 1; grid-row: 2 / span 2; }
-  .bioxp-live-deck .bld-side { grid-column: 2; grid-row: 2; }
-  .bioxp-live-deck > .bld-band { grid-column: 2; grid-row: 3; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
-}
+/* Approved form: deck left, one card rail right, three record cards under. The whole
+   block keeps those proportions on any monitor: its width follows the deck height. */
+.bioxp-live-deck { --bld-deck-h: clamp(840px, calc(100dvh - 230px), 1300px); max-width: max(1408px, calc(var(--bld-deck-h) * 1.5)); }
+.bld-band { gap: 14px; margin-top: 14px; align-items: stretch; }
+@media (max-width: 1100px) { .bld-workspace { grid-template-columns: minmax(0, 1fr); } .bioxp-live-deck { --bld-deck-h: clamp(520px, 100vw, 840px); } }
