@@ -2084,5 +2084,6 @@ async def continue_protein_local_review(
 
 from routers import job_results, job_stages
 
+router.get("", response_model=JobList | JobSummaryList | BinderNavigationJobList)(job_results.list_jobs)
 router.include_router(job_results.router)
 router.include_router(job_stages.router)

@@ -358,7 +358,6 @@ def _scientific_family_ids(job_id: str):
     return select(family.c.id)
 
 
-@router.get("", response_model=JobList | JobSummaryList | BinderNavigationJobList)
 async def list_jobs(
     status: Optional[JobStatus] = None,
     q: Optional[str] = None,
