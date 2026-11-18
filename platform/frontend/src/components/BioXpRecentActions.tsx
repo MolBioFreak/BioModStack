@@ -34,10 +34,10 @@ export function BioXpRecentActions({ rows, generation, connected, message, pagin
             const expanded = open === row.command_id;
             return [<tr key={row.command_id} data-command={row.command_id}>
                 <td className="bx-recent-time">{bioXpReceiptTimestampText(row.finished_at ?? row.accepted_at)}</td>
+                <td className={`bx-recent-${tone}`}>{bioXpReceiptStatusText(row, row.status.replaceAll('_', ' '))}</td>
                 <td><b>{row.action_id}</b>
                     {row.status === 'ambiguous' && <div className="bx-recent-warn">Outcome ambiguous; do not resubmit.</div>}
                     {failure && <div className={report ? 'bx-recent-warn' : 'bx-recent-bad'}>{row.error && failure === row.error.message ? `${row.error.code}: ${failure}` : failure}</div>}</td>
-                <td className={`bx-recent-${tone}`}>{bioXpReceiptStatusText(row, row.status.replaceAll('_', ' '))}</td>
                 <td><button type="button" aria-label={`Receipt for ${row.action_id}`} aria-expanded={expanded} onClick={() => setOpen(expanded ? null : row.command_id)}>⋯</button></td>
             </tr>, expanded && <tr key={`${row.command_id}:receipt`}><td colSpan={4}><BioXpHistoryReceiptCard receipt={row} generation={generation} connected={connected} /></td></tr>];
         })}</tbody></table>}

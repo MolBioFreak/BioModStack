@@ -18,6 +18,7 @@ const CYCLER: Bank[] = [
     { id: 'pedestal', label: 'Pedestal', board: 6, axis: null, family: 'thermal', tuning: false },
 ];
 const RANGE = { chiller: [-20, 40], thermal: [0, 120] } as const;
+const target = (row: Reading | undefined) => !row ? '—' : row.tc_on === false ? 'Off' : typeof row.target_c === 'number' ? `${row.target_c.toFixed(1)} °C` : '—';
 const temp = (value: number | null | undefined) => typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)} °C` : null;
 
 /**
@@ -39,6 +40,7 @@ export function BioXpThermalControls({ variant, generation, ownershipGeneration,
     const heaters = useBioXpImmediateRun(generation, connected, visible);
     const [draft, setDraft] = useState<Record<string, string>>({});
     const [sent, setSent] = useState<string | null>(null);
+    const [confirmReset, setConfirmReset] = useState<'chiller' | 'thermal' | null>(null);
     const action = (path: string) => (actions ?? []).find(row => row.kind === 'primitive' && row.informational_path === path);
     const reading = (bank: Bank) => bank.axis === null ? undefined : readings.data?.services?.find(row => row.board === bank.board && row.axis === bank.axis);
     const value = (key: string) => draft[key] ?? '';
@@ -53,8 +55,14 @@ export function BioXpThermalControls({ variant, generation, ownershipGeneration,
         const spec = action(path);
         if (!spec || invoke.isPending) return;
         setSent(label);
-        invoke.mutate({ actionId: spec.action_id, connectionGeneration: generation, ownershipGeneration, inputs });
+        invoke.mutate({ actionId: spec.action_id, connectionGeneration: generation, ownershipGeneration, inputs }, { onSettled: () => { void readings.refetch(); } });
     };
+    // Reset controller is a USB hard reset of the robot link: it stops motion readiness, so it asks first.
+    const reset = (family: 'chiller' | 'thermal', name: string) => confirmReset === family
+        ? <span className="bx-th-confirm" role="group" aria-label={`Confirm ${name} reset`}>Resets the robot USB link; motion must be enabled and homed again.
+            {button(`/${family}/hard_reset`, 'Reset now', {}, `Reset ${name} controller now`, 'bx-danger-fill')}
+            <button type="button" onClick={() => setConfirmReset(null)}>Cancel</button></span>
+        : <button type="button" className="bx-warn" aria-label={`Reset ${name} controller`} onClick={() => setConfirmReset(family)}>Reset controller</button>;
     const button = (path: string, text: string, inputs: Record<string, unknown> | null, label: string, className?: string) => {
         const spec = action(path);
         const reason = !connected ? 'Connect to the robot first.' : catalogLoading ? 'Reading robot controls…' : !spec ? 'The robot does not list this control.'
@@ -95,7 +103,7 @@ export function BioXpThermalControls({ variant, generation, ownershipGeneration,
                 return <div key={bank.id} className="bx-th-row" data-bank={bank.id}>
                     <div><strong>{bank.family === 'thermal' ? `TC ${bank.label.toLowerCase()}` : bank.label}</strong>
                         <small>{row ? `ped ${temp(row.pedestal_c)?.replace(' °C', '') ?? '—'} · fan ${row.fan_speed ?? '—'}` : 'not reported'}</small></div>
-                    <span className="bx-th-now">{temp(row?.current_c) ?? '—'}</span>
+                    <span className="bx-th-now">{temp(row?.current_c) ?? '—'}<small data-target={bank.id}>set {target(row)}</small></span>
                     <span className="bx-th-set">{setpoint(bank)}</span>
                 </div>;
             })}
@@ -125,9 +133,9 @@ export function BioXpThermalControls({ variant, generation, ownershipGeneration,
         <section className="bx-card" aria-label="Chillers">
             <header className="bx-card-head"><h3>Chillers</h3><div className="bx-card-actions">{refresh}
                 {button('/chiller/baseline', 'Apply baseline', {}, 'Apply chiller baseline')}
-                {button('/chiller/hard_reset', 'Reset controller', {}, 'Reset chiller controller', 'bx-warn')}</div></header>
-            <table><thead><tr><th>Bank</th><th>Now</th><th>Pedestal</th><th>Fan</th><th className="bx-th-right">Set to (−20 to 40 °C)</th></tr></thead>
-                <tbody>{CHILLERS.map(bank => <tr key={bank.id} data-bank={bank.id}><th scope="row">{bank.label}</th><td className="bx-th-now">{now(bank)}</td>
+                {reset('chiller', 'chiller')}</div></header>
+            <table><thead><tr><th>Bank</th><th>Now</th><th>Setpoint</th><th>Pedestal</th><th>Fan</th><th className="bx-th-right">Set to (−20 to 40 °C)</th></tr></thead>
+                <tbody>{CHILLERS.map(bank => <tr key={bank.id} data-bank={bank.id}><th scope="row">{bank.label}</th><td className="bx-th-now">{now(bank)}</td><td data-target={bank.id}>{target(reading(bank))}</td>
                     <td>{temp(reading(bank)?.pedestal_c) ?? '—'}</td><td>{reading(bank)?.fan_speed ?? '—'}</td><td className="bx-th-set">{setpoint(bank)}</td></tr>)}</tbody></table>
             {tuning(CHILLERS, 'chiller')}
         </section>
@@ -135,11 +143,11 @@ export function BioXpThermalControls({ variant, generation, ownershipGeneration,
             <header className="bx-card-head"><h3>Thermal cycler</h3><div className="bx-card-actions">
                 {button('/thermal/baseline', 'Apply baseline', {}, 'Apply thermal cycler baseline')}
                 {button('/thermal/fast_profile', 'Fast profile', {}, 'Apply thermal cycler fast profile')}
-                {button('/thermal/hard_reset', 'Reset controller', {}, 'Reset thermal cycler controller', 'bx-warn')}
+                {reset('thermal', 'thermal cycler')}
                 {heatersOff}</div></header>
-            <table><thead><tr><th>Bank</th><th>Now</th><th>Fan</th><th className="bx-th-right">Set to (0 to 120 °C)</th></tr></thead>
+            <table><thead><tr><th>Bank</th><th>Now</th><th>Setpoint</th><th>Fan</th><th className="bx-th-right">Set to (0 to 120 °C)</th></tr></thead>
                 <tbody>{CYCLER.map(bank => <tr key={bank.id} data-bank={bank.id}><th scope="row">{bank.label}</th>
-                    <td className="bx-th-now">{bank.id === 'pedestal' ? temp(reading(CYCLER[0])?.pedestal_c) ?? <span className="bx-th-muted">not reported</span> : now(bank)}</td>
+                    <td className="bx-th-now">{bank.id === 'pedestal' ? temp(reading(CYCLER[0])?.pedestal_c) ?? <span className="bx-th-muted">not reported</span> : now(bank)}</td><td data-target={bank.id}>{bank.id === 'pedestal' ? '—' : target(reading(bank))}</td>
                     <td>{reading(bank)?.fan_speed ?? '—'}</td><td className="bx-th-set">{setpoint(bank)}</td></tr>)}</tbody></table>
             {tuning(CYCLER, 'thermal')}
         </section>
