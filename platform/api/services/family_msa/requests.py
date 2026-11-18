@@ -16,8 +16,8 @@ def request_schema() -> dict:
 
 
 def validate_run_roster(roster: SequenceSet) -> None:
-    if len(roster.rows) < 2:
-        raise ValueError('Add at least two sequences before starting an alignment.')
+    if not roster.rows:
+        raise ValueError('Add input sequences before starting an alignment.')
     if any(not row.sequence.strip() for row in roster.rows):
         raise ValueError('Every input row needs a sequence before starting an alignment.')
 

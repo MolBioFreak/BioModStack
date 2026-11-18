@@ -55,7 +55,7 @@ def test_source_evidence_survives_request_projection():
 
 
 def test_muscle_align_and_super5_are_both_accepted():
-    payload = {'roster': {'molecule': 'dna', 'rows': rows()},
+    payload = {'roster': {'molecule': 'dna', 'rows': rows()[:1]},
         'settings': {'engine': 'muscle', 'mode': 'align'}}
     assert prepare_request(payload)[1]['settings']['mode'] == 'align'
     payload['settings']['mode'] = 'super5'
@@ -63,8 +63,7 @@ def test_muscle_align_and_super5_are_both_accepted():
 
 
 @pytest.mark.parametrize(('roster_rows', 'message'), [
-    ([], 'at least two sequences'),
-    (rows()[:1], 'at least two sequences'),
+    ([], 'Add input sequences'),
     (rows(''), 'Every input row needs a sequence'),
 ])
 def test_run_admission_rejects_incomplete_input(roster_rows, message):
