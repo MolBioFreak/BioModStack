@@ -132,27 +132,17 @@ def test_square_corner_usage_is_explicit_and_contextual() -> None:
 
 def test_font_family_is_owned_by_global_theme_only() -> None:
     """Components may use semantic font weights/mono spans, but not define competing app fonts."""
+    # CSS and inline styles, Tailwind arbitrary fonts, canvas font strings and Plotly families.
+    named_font = re.compile(r"""font-family|fontFamily|font-\[|\.font\s*=\s*['"]|font:\s*\{[^{}]*\bfamily:\s*['"]""")
     offenders: list[str] = []
     for path in FRONTEND_SRC.rglob("*"):
         if path.suffix not in {".ts", ".tsx", ".css"}:
             continue
         rel = path.relative_to(FRONTEND_SRC).as_posix()
-        if rel in {
-            "index.css",
-            # Canvas/SVG drawing code needs explicit font metadata; app shell typography stays global.
-            "components/NGSToolkit.tsx",
-            "components/MolBioToolkit/RnaStructureViewer.tsx",
-            "components/MolBioToolkit/SequenceViewer.tsx",
-            "components/ngs/PileupChromatogram.tsx",
-            # Sandboxed iframe document; it cannot inherit the app theme.
-            "components/alignments/ViewerFrame.tsx",
-            # Generic monospace for fixed-width text: execution listing, sequence fragments and queries.
-            "components/BioXpMethodExecutionText.tsx",
-            "components/Rfd4VisualWorkbench.css",
-        }:
+        # index.css defines the fonts; lib/themeFont.ts reads them for canvas, Plotly and iframes.
+        if rel in {"index.css", "lib/themeFont.ts"}:
             continue
-        text = read(path)
-        if "font-family" in text or "fontFamily" in text or "font-[" in text:
+        if named_font.search(read(path)):
             offenders.append(rel)
 
     assert offenders == []

@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { anchorAt } from '../../lib/alignmentCoordinates'
+import { themeFontDeclaration } from '../../lib/themeFont'
 import type { AlignmentViewerProps } from './AlignmentWorkspace'
 import { frameSelection, projectMarks } from './viewerState'
 
@@ -22,7 +23,7 @@ export default function ViewerFrame(props: AlignmentViewerProps & {code: string;
   }
   const [srcDoc] = useState(() => {
     const payload = JSON.stringify({rows: document.rows.map(({rowId, label, aligned}) => ({rowId, label, aligned})), token, viewerHeight, ...control()}).replace(/</g, '\\u003c')
-    return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${token}'${unsafeEval ? " 'unsafe-eval'" : ''}; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; worker-src ${blobWorkers ? 'blob:' : "'none'"}; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><style>html,body{margin:0;background:#fff;color:#1f2937;color-scheme:light;font-family:system-ui,sans-serif}.metadata-title[style*="position-axis-metadata"]{visibility:hidden}.biojs_msa_labels{overflow:hidden}.biojs_msa_labels>span+span{display:inline-block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;vertical-align:top;padding-right:6px;box-sizing:border-box}${css.replace(/<\/style/gi, '<\\/style')}</style></head><body><div id="root"></div><div id="viewer"></div><script id="payload" type="application/json">${payload}</script><script nonce="${token}">${code.replace(/<\/script/gi, '<\\/script')}</script></body></html>`
+    return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${token}'${unsafeEval ? " 'unsafe-eval'" : ''}; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; worker-src ${blobWorkers ? 'blob:' : "'none'"}; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><style>html,body{margin:0;background:#fff;color:#1f2937;color-scheme:light;${themeFontDeclaration('sans')}}.metadata-title[style*="position-axis-metadata"]{visibility:hidden}.biojs_msa_labels{overflow:hidden}.biojs_msa_labels>span+span{display:inline-block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;vertical-align:top;padding-right:6px;box-sizing:border-box}${css.replace(/<\/style/gi, '<\\/style')}</style></head><body><div id="root"></div><div id="viewer"></div><script id="payload" type="application/json">${payload}</script><script nonce="${token}">${code.replace(/<\/script/gi, '<\\/script')}</script></body></html>`
   })
   useLayoutEffect(() => {
     const receive = (event: MessageEvent) => {

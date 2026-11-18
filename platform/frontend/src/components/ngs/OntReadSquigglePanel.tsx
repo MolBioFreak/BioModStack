@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../lib/api';
+import { themeFont } from '../../lib/themeFont';
 import { describeNgsError, withAlignmentAccessRecovery } from '../../lib/ngsAlignmentSession';
 
 export interface OntSquiggleReadSummary {
@@ -53,7 +54,7 @@ export function OntReadSquigglePanel({ jobId }: { jobId: string }) {
                 line: { color: 'rgba(148,163,184,0.5)', width: 1 } });
             const mods = Object.entries(base.modifications).map(([code, p]) => `${code} ${(p * 100).toFixed(0)}%`).join('<br>');
             annotations.push({ x: (base.sample_start + base.sample_end) / 2, y: 1.02, xref: 'x', yref: 'paper', text: base.base, showarrow: false,
-                font: { size: 10, color: BASE_COLOURS[base.base] ?? '#e2e8f0', family: 'monospace' },
+                font: { size: 10, color: BASE_COLOURS[base.base] ?? '#e2e8f0', family: themeFont('mono') },
                 hovertext: `base ${base.index + 1} ${base.base}${mods ? `<br>${mods}` : ''}` });
         }
         return { x, data, shapes, annotations };

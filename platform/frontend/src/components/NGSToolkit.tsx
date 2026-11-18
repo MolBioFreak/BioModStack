@@ -1,6 +1,7 @@
 import { hasPublishedReadsBam, ngsArtifactUrl, useNgsArtifacts, type NgsPackageArtifact } from '../lib/ngsArtifacts';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { JobStageProgress } from './JobStageProgress';
+import { themeFont } from '../lib/themeFont';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
@@ -2051,7 +2052,7 @@ function patchIgvRulerContrast(browser: UntypedApiValue): void {
 
             const textColor = resolveThemeColor('--text-primary', '#e5e7eb');
             const lineColor = resolveThemeColor('--border-secondary', textColor);
-            const fontFamily = getComputedStyle(document.body).fontFamily || 'sans-serif';
+            const bodyFont = themeFont('sans');
             const originalFillText = typeof context.fillText === 'function'
                 ? context.fillText.bind(context)
                 : null;
@@ -2063,13 +2064,13 @@ function patchIgvRulerContrast(browser: UntypedApiValue): void {
             context.fillStyle = textColor;
             context.strokeStyle = lineColor;
             context.lineWidth = 1.1;
-            context.font = `600 13px ${fontFamily}`;
+            context.font = `600 13px ${bodyFont}`;
             context.shadowColor = 'rgba(0, 0, 0, 0.5)';
             context.shadowBlur = 1;
             if (originalFillText) {
                 context.fillText = (...drawArgs: UntypedApiValue[]) => {
                     context.fillStyle = textColor;
-                    context.font = `600 13px ${fontFamily}`;
+                    context.font = `600 13px ${bodyFont}`;
                     return originalFillText(...drawArgs);
                 };
             }

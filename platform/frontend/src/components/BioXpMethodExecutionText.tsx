@@ -33,8 +33,8 @@ function TextExport({ text, label, filename }: { text: string; label: string; fi
         <button type="button" onClick={copy}>Copy</button>
         <button type="button" onClick={download}>Download txt</button>
         <span role="status">{status}</span>
-        <textarea aria-label={label} readOnly value={text} wrap="off" rows={18}
-            style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box', overflow: 'auto', fontFamily: 'monospace', whiteSpace: 'pre', userSelect: 'text' }} />
+        <textarea aria-label={label} readOnly value={text} wrap="off" rows={18} className="font-mono"
+            style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box', overflow: 'auto', whiteSpace: 'pre', userSelect: 'text' }} />
     </div>;
 }
 

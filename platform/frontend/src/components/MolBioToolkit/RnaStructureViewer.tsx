@@ -298,7 +298,7 @@ export function RnaStructureViewer({
                                         textAnchor="middle"
                                         fontSize="10"
                                         fill={color}
-                                        fontFamily="monospace"
+                                        className="font-mono"
                                     >
                                         {base}
                                     </text>
@@ -319,7 +319,7 @@ export function RnaStructureViewer({
                                         textAnchor="middle"
                                         fontSize="9"
                                         fill="#94a3b8"
-                                        fontFamily="monospace"
+                                        className="font-mono"
                                     >
                                         {index + 1}
                                     </text>
@@ -328,7 +328,7 @@ export function RnaStructureViewer({
                         );
                     })}
 
-                    <text x={startX} y={pairedTrackTop - 10} fill="#a5f3fc" fontSize="10" fontFamily="sans-serif">
+                    <text x={startX} y={pairedTrackTop - 10} fill="#a5f3fc" fontSize="10">
                         Paired probability
                     </text>
                     <rect x={startX} y={pairedTrackTop} width={innerWidth} height={pairedTrackBottom - pairedTrackTop} fill="rgba(34,197,94,0.06)" rx="6" />
@@ -339,7 +339,7 @@ export function RnaStructureViewer({
 
                     {evidenceSeries && (
                         <>
-                            <text x={startX} y={evidenceTop - 10} fill={evidenceTrack?.color || '#67e8f9'} fontSize="10" fontFamily="sans-serif">
+                            <text x={startX} y={evidenceTop - 10} fill={evidenceTrack?.color || '#67e8f9'} fontSize="10">
                                 {evidenceTrack?.name || 'Evidence track'}
                             </text>
                             <rect x={startX} y={evidenceTop} width={innerWidth} height={evidenceBottom - evidenceTop} fill="rgba(103,232,249,0.06)" rx="6" />
@@ -358,7 +358,7 @@ export function RnaStructureViewer({
                                 <path d={evidencePath} fill="none" stroke={evidenceTrack?.color || '#67e8f9'} strokeWidth="2" />
                             )}
                             <line x1={startX} y1={evidenceBottom} x2={width - startX} y2={evidenceBottom} stroke="#334155" strokeWidth="1" />
-                            <text x={width - startX} y={evidenceTop - 10} textAnchor="end" fill="#94a3b8" fontSize="9" fontFamily="sans-serif">
+                            <text x={width - startX} y={evidenceTop - 10} textAnchor="end" fill="#94a3b8" fontSize="9">
                                 {evidenceSeries.min.toFixed(2)} to {evidenceSeries.max.toFixed(2)}
                             </text>
                         </>

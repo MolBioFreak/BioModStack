@@ -146,7 +146,7 @@ export function PileupChromatogram({ tableUrl, ab1Url, initialPosition, coordina
                             <rect key="selected" x={i * step} y={0} width={step} height={plotHeight + 18} fill="var(--text-primary)" opacity={0.08} />
                         ))}
                         {shown.map((row, i) => (
-                            <text key={row.position} x={i * step + step / 2} y={12} textAnchor="middle" fontSize={11} fontFamily="monospace"
+                            <text key={row.position} x={i * step + step / 2} y={12} textAnchor="middle" fontSize={11} className="font-mono"
                                 fill={COLOUR[row.called] ?? 'var(--text-secondary)'} data-pileup-base={row.position}>
                                 {row.called in COLOUR ? row.called : '–'}
                             </text>

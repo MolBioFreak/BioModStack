@@ -138,7 +138,7 @@ function LinearBreakMarker({ circularProps }: { circularProps: SeqVizChildrenPro
             <rect x={-g.halfWidth} y={-g.halfHeight} width={g.halfWidth * 2} height={g.halfHeight * 2}
                 rx="5" fill="#451a03" stroke="#fcd34d" strokeWidth="2" />
             <text textAnchor="middle" y="-3" fill="#fef3c7" fontSize="10" fontWeight="700">LINEAR BREAK</text>
-            <text textAnchor="middle" y="11" fill="#fef3c7" fontSize="10" fontFamily="monospace">{seq.length.toLocaleString()} → 1</text>
+            <text textAnchor="middle" y="11" fill="#fef3c7" fontSize="10" className="font-mono">{seq.length.toLocaleString()} → 1</text>
         </g>
     </svg>;
 }
@@ -1282,13 +1282,12 @@ export function SequenceViewer({
                                     vectorEffect="non-scaling-stroke"
                                 />
                                 <text
-                                    className="la-vz-circular-label"
+                                    className="la-vz-circular-label font-mono"
                                     x={textX}
                                     y={textY}
                                     dominantBaseline="middle"
                                     textAnchor={geometry.textAnchor}
                                     style={{
-                                        fontFamily: 'Roboto Mono, Monaco, monospace',
                                         fontSize: 12,
                                         fontWeight: 300,
                                         userSelect: 'none',
