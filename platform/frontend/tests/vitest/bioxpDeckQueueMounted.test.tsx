@@ -11,6 +11,7 @@ import holderCatalog from '../fixtures/bioxp_bulk_holder_destinations.json';
 import park from '../fixtures/bioxp_park_completed_receipt.json';
 const state = vi.hoisted(() => ({ generation: 7, error: false, active: true }));
 vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
+vi.mock('../../src/components/BioXpThermalControls', () => ({ BioXpThermalControls: () => null }));
 vi.mock('../../src/lib/bioxpClient', async importOriginal => ({
     ...await importOriginal<typeof import('../../src/lib/bioxpClient')>(),
     useBioXpStatus: () => ({ data: { connection: { active: state.active, configured: true, generation: state.generation, reachable: true, runtime_ready: true }, mutation_access: { enabled: true } }, isError: state.error }),
@@ -33,7 +34,7 @@ const panel = () => container.querySelector('[data-testid="oem-deck-movement"]')
 const move = () => [...panel().querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
 const submit = async (target: string, cameraOffset = false) => {
     await act(async () => { const select = [...panel().querySelectorAll('label')].find(label => label.textContent?.startsWith('Robot destination'))!.querySelector('select')!; select.value = target; select.dispatchEvent(new Event('change', { bubbles: true })); });
-    await act(async () => { const checkbox = panel().querySelector('input[type=checkbox]') as HTMLInputElement; if (!checkbox.disabled && checkbox.checked !== cameraOffset) checkbox.click(); });
+    await act(async () => { const checkbox = panel().querySelector('[aria-label="Move head"] input[type=checkbox]') as HTMLInputElement; if (!checkbox.disabled && checkbox.checked !== cameraOffset) checkbox.click(); });
     await act(async () => move().click()); await advance();
 };
 const accept = async (index: number) => { await act(async () => admissions[index].resolve({ data: receipt(index) })); await advance(); };

@@ -130,7 +130,7 @@ test('BioXP handler cockpit uses terse operator copy, not explainer paragraphs',
 
     for (const snippet of [
         'Connection',
-        'Enable controllers',
+        'BioXpMotionToggle',
         'Recover controllers',
         'X Axis',
         'Camera',

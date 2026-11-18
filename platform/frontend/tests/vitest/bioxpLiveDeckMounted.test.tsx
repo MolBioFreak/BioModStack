@@ -48,7 +48,8 @@ beforeEach(() => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     query = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }); station.mockClear(); well.mockClear();
     geometryRead.mockReset().mockResolvedValue({ data: settings });
-    vi.spyOn(api, 'get').mockImplementation((url, config) => url.endsWith('/updates') ? new Promise(() => {}) : geometryRead(url, config));
+    vi.spyOn(api, 'get').mockImplementation((url, config) => url.endsWith('/updates') ? new Promise(() => {})
+        : url === '/api/bioxp/calibration-settings' ? geometryRead(url, config) : Promise.resolve({ data: {} })); // plate types, liquid record and tips read empty
     vi.spyOn(api, 'post').mockRejectedValue(new Error('No leaf mutation allowed'));
     props = { generation: 1, connected: true, visible: true, stale: false, dashboard: dashboard(), selection: { station: '', wells: [] },
         onMoveToStation: station, onMoveToWell: well, stationDisabledReason: () => null, wellDisabledReason: null,
@@ -258,12 +259,14 @@ it('respects only parent action admission, not missing pose/geometry, and preser
     await key('Select Waste bin', 'Enter'); await key('Magnetic station A1', ' '); expect(station).toHaveBeenCalledTimes(1); expect(well).toHaveBeenCalledTimes(1);
 });
 
-it('puts the deck record and the Move plate / cover card above door and movement controls', async () => {
-    await render({ deckRecord: <div>Record slot</div> });
-    const aside = el('Live movement controls');
-    const text = aside.textContent!;
-    expect(text.indexOf('Record slot')).toBeLessThan(text.indexOf('Move plate / cover'));
-    expect(text.indexOf('Move plate / cover')).toBeLessThan(text.indexOf('Door slot'));
+it('keeps camera, pipette and head moves beside the deck and thermal, plate moves and the deck record in one row under it', async () => {
+    await render({ deckRecord: <div>Record slot</div>, cameraControls: <div>Camera slot</div> });
+    const aside = el('Live movement controls').textContent!;
+    expect(aside.indexOf('Camera slot')).toBeLessThan(aside.indexOf('Pipette'));
+    expect(aside.indexOf('Pipette')).toBeLessThan(aside.indexOf('Movement slot'));
+    const text = host.querySelector('.bld-band')!.textContent!;
+    expect(text.indexOf('Door slot')).toBeLessThan(text.indexOf('Move plate / cover'));
+    expect(text.indexOf('Move plate / cover')).toBeLessThan(text.indexOf('Record slot'));
     expect(el('Move plate / cover').textContent).toContain('Transfer slot');
     expect([...host.querySelectorAll('summary')].map(s => s.textContent)).not.toContain('Plate and cover handling');
     expect(api.post).not.toHaveBeenCalled();
@@ -315,4 +318,42 @@ it('draws Bulk reagent holder rows and PCR wells at catalog XY and moves to the 
     await render({ destinations: options, stationDisabledReason: () => 'Native action unavailable' });
     await act(async () => host.querySelector('[data-holder-target="LOC_TROUGH_MICRO_ROW_1"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
     expect(station).not.toHaveBeenCalled(); expect(well).not.toHaveBeenCalled(); expect(api.post).not.toHaveBeenCalled();
+});
+
+it('mouse wheel never zooms; double-clicking a module and the +/- buttons do', async () => {
+    await render();
+    const map = el('BioXP deck map'), view = () => map.getAttribute('viewBox');
+    const start = view();
+    await act(async () => map.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -400 })));
+    expect(view()).toBe(start);
+    await act(async () => host.querySelector('g[data-resource="LOC_MS"] > g[data-station]')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    const zoomed = view(); expect(zoomed).not.toBe(start);
+    await click('Zoom out'); expect(view()).not.toBe(zoomed);
+    await button('Fit deck'); expect(view()).toBe(start);
+    expect(station).not.toHaveBeenCalled(); expect(well).not.toHaveBeenCalled(); expect(api.post).not.toHaveBeenCalled();
+});
+it('saves a well amount, builds a route from clicked wells and clears per module and for the whole deck', async () => {
+    const put = vi.spyOn(api, 'put').mockResolvedValue({ data: {} }), del = vi.spyOn(api, 'delete').mockResolvedValue({ data: {} });
+    vi.mocked(api.get).mockImplementation((url: string) => url.endsWith('/updates') ? new Promise(() => {})
+        : Promise.resolve({ data: url.endsWith('/deck/contents') ? { wells: { LOC_MS: { A1: 50 } } } : url === '/api/bioxp/calibration-settings' ? settings : {} }));
+    await render();
+    await button('Pipette');
+    await vi.waitFor(() => expect(el('Magnetic station A1').closest('g')?.outerHTML ?? '').toBeTruthy());
+    await click('Magnetic station A1');
+    const amount = el('Liquid in well (µL)') as HTMLInputElement;
+    await vi.waitFor(() => expect((el('Liquid in well (µL)') as HTMLInputElement).value).toBe('50'));
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(amount, '80'); amount.dispatchEvent(new Event('input', { bubbles: true })); });
+    await button('Save');
+    expect(put).toHaveBeenLastCalledWith('/api/bioxp/operator-controls/deck/contents', { station: 'LOC_MS', wells: { A1: 80 } });
+    await button('Aspirate from');
+    await click('Output chiller B2'); await button('Dispense to');
+    expect([...host.querySelectorAll('[data-route-stop]')].map(row => row.getAttribute('data-route-stop'))).toEqual(['A', 'B']);
+    expect(host.querySelector('[data-route-stop="B"]')!.textContent).toContain('Output chiller B2');
+    await click('Magnetic station A1'); await button('Clear module');
+    expect(del).toHaveBeenLastCalledWith('/api/bioxp/operator-controls/deck/contents', { params: { station: 'LOC_MS' } });
+    expect([...host.querySelectorAll('[data-route-stop]')]).toHaveLength(1);
+    await button('Clear deck'); await button('Yes, clear');
+    expect(del).toHaveBeenLastCalledWith('/api/bioxp/operator-controls/deck/contents');
+    expect(host.querySelectorAll('[data-route-stop]')).toHaveLength(0);
+    expect(well).not.toHaveBeenCalled(); expect(station).not.toHaveBeenCalled(); expect(api.post).not.toHaveBeenCalled();
 });

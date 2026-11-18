@@ -37,6 +37,10 @@ from services.bioxp.operator_requests import (
     PipetteApplicationPlanRequest,
     PipetteReadbackRequest,
 )
+from pydantic import BaseModel, ConfigDict, Field
+
+from paths import get_data_root
+from services.bioxp.deck_contents import DeckContentsError, DeckContentsStore
 from services.bioxp.runtime import BioXpRuntime
 
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
@@ -259,6 +263,49 @@ async def operator_deck_state(runtime: BioXpRuntime = Depends(get_bioxp_runtime)
 @router.get("/operator-controls/tip-trays", response_model=None)
 async def operator_tip_trays(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> Any:
     return await _query(runtime, "operator_tip_trays", require_fresh=False)
+
+
+class DeckContentsSave(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    station: str = Field(min_length=2, max_length=48)
+    wells: dict[str, float | None] = Field(min_length=1, max_length=96)
+
+
+def _deck_contents() -> DeckContentsStore:
+    return DeckContentsStore(get_data_root().expanduser().resolve() / "bioxp" / "deck_contents.json")
+
+
+def _deck_contents_call(call):
+    try:
+        return call()
+    except DeckContentsError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/operator-controls/deck/contents", response_model=None)
+def read_deck_contents() -> Any:
+    """Operator-entered liquid per well (uL). A saved estimate; survives restarts."""
+    return _deck_contents_call(_deck_contents().read)
+
+
+@router.put("/operator-controls/deck/contents", response_model=None,
+            dependencies=[Depends(require_bioxp_mutation_access)])
+def save_deck_contents(request: DeckContentsSave) -> Any:
+    """Record-only: set or clear (null) wells of one station."""
+    return _deck_contents_call(lambda: _deck_contents().set_wells(request.station, request.wells))
+
+
+@router.delete("/operator-controls/deck/contents", response_model=None,
+               dependencies=[Depends(require_bioxp_mutation_access)])
+def clear_deck_contents(station: str | None = Query(default=None, min_length=2, max_length=48)) -> Any:
+    """Record-only: clear one station, or the whole deck when no station is given."""
+    return _deck_contents_call(lambda: _deck_contents().clear(station))
+
+
+@router.get("/operator-controls/thermal/readings", response_model=None)
+async def operator_thermal_readings(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> Any:
+    """Robot's own block and chiller readings (temperature, pedestal, fan). Read-only."""
+    return await _query(runtime, "thermal_fan_services", require_fresh=False)
 
 
 @router.post("/operator-controls/deck/record", response_model=None,

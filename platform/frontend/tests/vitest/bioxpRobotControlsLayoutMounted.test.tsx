@@ -33,11 +33,6 @@ const row = (axis: string) => {
 const input = (axis: string, index: number) => row(axis).querySelectorAll<HTMLInputElement>('input[type="number"]')[index];
 const jogAxes = ['x', 'y', 'z', 'g'] as const;
 const publishedMaximum = { x: 90263, y: 102956, z: 160000, g: 160000 };
-const range = (axis: string, kind: 'relative steps' | 'absolute target') => {
-    const result = row(axis).querySelector<HTMLInputElement>(`input[type="range"][aria-label="${axis.toUpperCase()} ${kind}"]`);
-    expect(result, `${axis} ${kind} slider`).not.toBeNull();
-    return result!;
-};
 const refreshTelemetry = async () => {
     await act(async () => { await client.invalidateQueries(); });
     await tick(); await tick();
@@ -119,6 +114,7 @@ beforeEach(() => {
         if (url.includes('/receipts/')) return { data: rows.get(url.split('/').at(-1)!) };
         if (url.endsWith('/updates')) return new Promise((_resolve, reject) => options?.signal?.addEventListener?.('abort', () => reject(new Error('fixture aborted'))));
         if (url.includes('/history')) return { data: { items: [], next_cursor: null } };
+        if (url.endsWith('/thermal/readings')) return { data: { services: [] } };
         if (url.endsWith('/calibration-settings')) return { data: { active_motion_positions: [], saved_motion_positions: [], active_positions: [], saved_positions: [], active_loader_adjustments: [], saved_loader_adjustments: [] } };
         if (url.includes('/camera/')) return { data: { active: false, available: false, state: 'unavailable' } };
         if (url.endsWith('/protocols/jobs') || url.endsWith('/methods/runs')) return { data: [] };
@@ -216,7 +212,7 @@ describe('Robot controls layout transport parity (inert)', () => {
     });
     it('controller enable/recover, unique header Stops and Software Abort keep separate native lanes', async () => {
         await mount();
-        await expectAction(button('Enable controllers'), 'meta.activate_motion', {});
+        await expectAction(button('Enable motion'), 'meta.activate_motion', {});
         await expectAction(button('Recover controllers (no homing)'), 'meta.recover_motion_non_homing', {});
         for (const axis of ['x', 'y', 'z'] as const) {
             expect([...host.querySelectorAll('[aria-label="Stop controls"] button')].filter(el => name(el) === `Stop ${axis.toUpperCase()}`)).toHaveLength(1);
@@ -237,7 +233,7 @@ describe('Robot controls layout transport parity (inert)', () => {
         expect(vi.mocked(api.post).mock.calls[2]).toEqual(['/api/bioxp/service/restart', {}, { timeout: 75000 }]);
         expect(api.post).toHaveBeenCalledTimes(3);
     });
-    it('settings and position-table actions stay explicit rather than firing when Tools opens', async () => {
+    it('settings and position-table actions stay explicit rather than firing on load', async () => {
         await mount();
         const tools = [...host.querySelectorAll('details')].find(el => el.querySelector('summary')?.textContent?.includes('Tools'));
         if (tools) await act(async () => { tools.open = true; tools.dispatchEvent(new Event('toggle')); });
@@ -262,19 +258,17 @@ describe('Robot controls layout transport parity (inert)', () => {
         for (const tab of ['pipettes', 'workflows', 'live-deck', 'robot']) await click(host.querySelector(`#control-tab-${tab}`)!);
         for (const axis of jogAxes) {
             expect(input(axis, 0).value).toBe('1234'); expect(input(axis, 1).value).toBe('23456');
-            expect(range(axis, 'absolute target').value).toBe('23456');
+            expect(row(axis).querySelector('input[type="range"]')).toBeNull(); // no sliders
         }
         expect(api.post).not.toHaveBeenCalled();
     });
-    it.each(jogAxes)('%s sliders share exact numeric drafts and submit only through existing move actions', async axis => {
+    it.each(jogAxes)('%s numeric drafts submit only through existing move actions; step chips only fill the box', async axis => {
         await mount();
-        // Relative slider spans useful travel from the current position (repairManualJogDistances), covered in repairManualMounted.
-        const absolute = range(axis, 'absolute target');
-        expect(absolute.max).toBe(String(publishedMaximum[axis]));
-        expect(Number(absolute.min)).toBe(Math.max(0, Number(input(axis, 1).min)));
+        expect(row(axis).querySelector('input[type="range"]')).toBeNull();
         expect(input(axis, 1).labels?.[0].textContent).toContain('Absolute target (steps)');
-        await setInput(input(axis, 0), 1234); await setInput(absolute, 23456);
-        expect(input(axis, 0).value).toBe('1234'); expect(input(axis, 1).value).toBe('23456');
+        await click(button(`${axis.toUpperCase()} jog 5000 steps`, row(axis)));
+        expect(input(axis, 0).value).toBe('5000');
+        await setInput(input(axis, 0), 1234); await setInput(input(axis, 1), 23456);
         expect(api.post).not.toHaveBeenCalled();
         await expectAction(button('Move −', row(axis)), axis === 'g' ? v1Id(paths.relative) : `oem.${axis}.move_steps`,
             axis === 'g' ? { axis, steps: -1234 } : { steps: -1234 }, axis === 'g' ? 'v1' : 'v2');
@@ -282,9 +276,27 @@ describe('Robot controls layout transport parity (inert)', () => {
             axis === 'g' ? { axis, steps: 1234 } : { steps: 1234 }, axis === 'g' ? 'v1' : 'v2');
         await expectAction(button('Go absolute', row(axis)), axis === 'g' ? v1Id(paths.absolute) : `oem.${axis}.move_absolute`,
             axis === 'g' ? { axis, position_steps: 23456 } : axis === 'y' ? { target_steps: 23456 } : { position_steps: 23456 }, axis === 'g' ? 'v1' : 'v2');
-        await setInput(input(axis, 0), 4321); await setInput(input(axis, 1), 34567);
-        expect(range(axis, 'absolute target').value).toBe('34567');
         expect(api.post).toHaveBeenCalledTimes(3);
+    });
+    it.each(jogAxes)('%s Full sweep is one absolute move to the published end less 20 steps, and is refused until the axis is homed', async axis => {
+        const telemetry = catalog.dashboard.telemetry.axes.find((item: any) => item.axis === axis);
+        // Each axis publishes its homing state through its own provider block.
+        const setReference = (reference: string) => {
+            const t = catalog.dashboard.telemetry; telemetry.reference = reference;
+            if (axis === 'x' || axis === 'z') t[`${axis}_axis`] = { ...(t[`${axis}_axis`] ?? {}), status: { ...(t[`${axis}_axis`]?.status ?? {}), reference, position_steps: 0 } };
+            if (axis === 'y') Object.assign(catalog.dashboard.y_axis, { reference_state: reference, position_reply_valid: true, position_steps: 0, position_source: 'live' });
+        };
+        setReference('unreferenced');
+        await mount();
+        const sweep = () => button(`${axis.toUpperCase()} full sweep`, row(axis));
+        expect(sweep().disabled).toBe(true); expect(sweep().title).toContain('Home this axis first');
+        setReference('referenced'); await refreshTelemetry();
+        const target = publishedMaximum[axis] - 20;
+        await expectAction(sweep(), axis === 'g' ? v1Id(paths.absolute) : `oem.${axis}.move_absolute`,
+            axis === 'g' ? { axis, position_steps: target } : axis === 'y' ? { target_steps: target } : { position_steps: target }, axis === 'g' ? 'v1' : 'v2');
+        expect(api.post).toHaveBeenCalledTimes(1);
+        delete telemetry.max_steps; await refreshTelemetry();
+        expect(sweep().disabled).toBe(true); expect(sweep().title).toContain('no end point');
     });
     it.each(jogAxes)('%s changing telemetry bounds and clearing an absolute entry never rewrites the draft', async axis => {
         await mount();
@@ -293,8 +305,6 @@ describe('Robot controls layout transport parity (inert)', () => {
         const telemetry = catalog.dashboard.telemetry.axes.find((item: any) => item.axis === axis);
         telemetry.max_steps = 40000; telemetry.min_steps = 500;
         await refreshTelemetry();
-        expect(range(axis, 'absolute target').max).toBe('40000');
-        expect(Number(range(axis, 'absolute target').min)).toBe(Math.max(500, Number(input(axis, 1).min)));
         expect(input(axis, 0).value).toBe('54321'); expect(input(axis, 1).value).toBe('65432');
         expect([input(axis, 0).min, input(axis, 0).max, input(axis, 1).min, input(axis, 1).max]).toEqual(numericBounds);
         await setInput(input(axis, 1), '');
@@ -309,10 +319,7 @@ describe('Robot controls layout transport parity (inert)', () => {
             delete catalog.dashboard.telemetry[`${axis}_axis`].status.max_steps;
         }
         await mount();
-        for (const slider of row(axis).querySelectorAll<HTMLInputElement>('input[type="range"]')) {
-            expect(slider.disabled).toBe(true);
-            expect(Number(slider.max || 100)).toBeLessThan(2147483647);
-        }
+        expect(row(axis).querySelectorAll('input[type="range"]')).toHaveLength(0);
         await setInput(input(axis, 0), 1234); await setInput(input(axis, 1), 23456);
         expect(api.post).not.toHaveBeenCalled();
         await expectAction(button('Move +', row(axis)), axis === 'g' ? v1Id(paths.relative) : `oem.${axis}.move_steps`,

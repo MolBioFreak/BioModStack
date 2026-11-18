@@ -12,6 +12,8 @@ export type BioXpDeckLiveIntent = {
     selectedStation?: string | null;
     /** A click on a blocked destination; the owner may offer to resolve the block first. */
     onBlocked?: (intent: { station: string } | { locationId: number; well: string }) => void;
+    /** A click on a plate or strip housing opens its settings instead of moving; Move buttons still move. */
+    onModule?: (station: string) => void;
 };
 export type BioXpWorkflowDeckProps = {
     selection: BioXpDeckSelection; onChange: (selection: BioXpDeckSelection) => void; readOnly?: boolean;
@@ -30,19 +32,23 @@ export type BioXpWorkflowDeckProps = {
     annotations?: React.ReactNode;
     /** Catalog Bulk reagent holder destinations with native XY. Live clicks send the exact named target. */
     holderTargets?: HolderTarget[];
+    /** View shown at start and by Fit deck; the whole deck by default. */
+    fit?: DeckBounds;
+    /** Rendered at the start of the zoom / pan bar. */
+    navigationLead?: React.ReactNode;
 };
 const fullView: DeckBounds = { x: 0, y: 0, ...deckSize };
 const modes: DeckSelectionMode[] = ['well', 'range', 'row', 'column'];
 
 /** Shared presentation. Authoring defaults remain selection-only; live intents are explicit callbacks. */
-export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, connections, compact = false, canvas = false, tipOccupancy, contents, activity, activityLabels, activityKinds, annotations, holderTargets }: BioXpWorkflowDeckProps) {
+export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, connections, compact = false, canvas = false, tipOccupancy, contents, activity, activityLabels, activityKinds, annotations, holderTargets, fit = fullView, navigationLead }: BioXpWorkflowDeckProps) {
     const holder = holderMarkers(holderTargets ?? []);
     const holderRows = holder.filter((marker, index) => holder.findIndex(other => other.row === marker.row) === index);
     const id = useId();
     const svg = useRef<SVGSVGElement>(null);
     const anchor = useRef<{ station: string; well: string } | null>(null);
     const [mode, setMode] = useState<DeckSelectionMode>('well');
-    const [view, setView] = useState<DeckBounds>(fullView);
+    const [view, setView] = useState<DeckBounds>(fit);
     const [hover, setHover] = useState('');
     const [focusTarget, setFocusTarget] = useState('');
     const [cursor, setCursor] = useState<Record<string, string>>({});
@@ -132,6 +138,18 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
         if (suppressClick.current || event.button !== 0 || live && event.detail > 1) return;
         fn();
     };
+    // Live housings: one click opens the module, a double click zooms to it. The
+    // single click waits briefly so a double click does not also act.
+    const moduleClick = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => () => { if (moduleClick.current) clearTimeout(moduleClick.current); }, []);
+    const zoomTo = (bounds: DeckBounds) => { if (moduleClick.current) { clearTimeout(moduleClick.current); moduleClick.current = null; } setView({ x: bounds.x - 55, y: bounds.y - 65, width: bounds.width + 110, height: bounds.height + 110 }); };
+    const housingClick = (event: React.MouseEvent, resource: DeckResource) => {
+        if (!live?.onModule || resource.kind !== 'plate') { activate(event, () => chooseStation(resource.id)); return; }
+        event.stopPropagation();
+        if (suppressClick.current || event.button !== 0 || event.detail > 1) return;
+        if (moduleClick.current) clearTimeout(moduleClick.current);
+        moduleClick.current = setTimeout(() => { moduleClick.current = null; live.onModule?.(resource.id); }, 260);
+    };
     const moveButton = (target: string, label: string, x: number, y: number) => live && !readOnly &&
         <g key={target} className="bwd-move" role="button" tabIndex={0} data-move-to={target}
             aria-label={`Move to ${label}`} aria-disabled={!!live.stationDisabledReason(target)}
@@ -183,8 +201,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
         <div className="bwd-map">
             <svg ref={svg} viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} role="group" aria-label="BioXP deck map" aria-describedby={`${id}-help`}
                 onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={() => { drag.current = null; }}
-                onPointerCancel={() => { drag.current = null; suppressClick.current = true; }}
-                onWheel={live ? e => { e.preventDefault(); zoom(e.deltaY > 0 ? 1.12 : 1 / 1.12); } : undefined}>
+                onPointerCancel={() => { drag.current = null; suppressClick.current = true; }}>
                 <defs><pattern id={`${id}-dots`} width="28" height="28" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.8" className="bwd-dot" /></pattern></defs>
                 <rect width={deckSize.width} height={deckSize.height} fill={`url(#${id}-dots)`} />
                 {connections}
@@ -198,7 +215,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                     return <g key={resource.id} className={`bwd-resource bwd-${resource.kind}${selection.station === resource.id ? ' is-active' : ''}`} data-resource={resource.id}>
                         <g role={readOnly ? 'img' : 'button'} tabIndex={readOnly ? undefined : 0} data-station={resource.id} aria-label={`Select ${resource.label}`} aria-pressed={selection.station === resource.id}
                             aria-disabled={live ? !!live.stationDisabledReason(resource.id) : undefined}
-                            onClick={e => activate(e, () => chooseStation(resource.id))} onKeyDown={e => keyboardStation(e, resource.id)} onDoubleClick={live ? undefined : () => setView({ x: x - 55, y: y - 65, width: width + 110, height: height + 110 })}>
+                            onClick={e => housingClick(e, resource)} onKeyDown={e => { if (live?.onModule && resource.kind === 'plate' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.stopPropagation(); if (!e.repeat) live.onModule(resource.id); } else keyboardStation(e, resource.id); }} onDoubleClick={() => zoomTo({ x, y, width, height })}>
                             <title>{live?.stationDisabledReason(resource.id) ?? resource.label}</title>
                             <rect className="bwd-body" x={x - (strip ? 10 : 21)} y={y - (strip ? 17 : 44)} width={width + (strip ? 20 : 42)} height={height + (strip ? 34 : 66)} rx={strip ? 9 : 8} />
                             <rect className="bwd-band" x={x - (strip ? 7 : 21)} y={y - (strip ? 13 : 44)} width={width + (strip ? 14 : 42)} height="5" rx="2" />
@@ -227,7 +244,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                     </g>;
                 })}
                 {deckRegions.map(region => <g key={region.id} className={`bwd-region${selection.station === region.id ? ' is-active' : ''}`} role={readOnly ? 'img' : 'button'} tabIndex={readOnly ? undefined : 0}
-                    data-station={region.id} aria-label={`Select ${region.label}`} aria-pressed={selection.station === region.id} aria-disabled={live ? !!live.stationDisabledReason(region.id) : undefined} onClick={e => activate(e, () => chooseStation(region.id))} onKeyDown={e => keyboardStation(e, region.id)}>
+                    data-station={region.id} aria-label={`Select ${region.label}`} aria-pressed={selection.station === region.id} aria-disabled={live ? !!live.stationDisabledReason(region.id) : undefined} onClick={e => activate(e, () => chooseStation(region.id))} onKeyDown={e => keyboardStation(e, region.id)} onDoubleClick={live ? () => zoomTo(region.bounds) : undefined}>
                     <title>{region.label} · {live?.stationDisabledReason(region.id) ?? 'illustration-derived outline estimate'}</title>
                     {region.layers.map(layer => <polygon key={layer.name} className={`bwd-region-${layer.name}`} points={layer.points.map(p => `${p.x},${p.y}`).join(' ')} />)}
                     <text className="bwd-map-label" x={region.bounds.x} y={region.bounds.y - 15}>{region.label}</text>
@@ -277,8 +294,9 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
             </svg>
         </div>
         <div className="bwd-navigation" role="group" aria-label="Deck view controls">
+            {navigationLead}
             <button type="button" aria-label="Zoom out" onClick={() => zoom(1.3)}>−</button><span>{Math.round(deckSize.width / view.width * 100)}%</span>
-            <button type="button" aria-label="Zoom in" onClick={() => zoom(1 / 1.3)}>+</button><button type="button" onClick={() => setView(fullView)}>Fit deck</button>
+            <button type="button" aria-label="Zoom in" onClick={() => zoom(1 / 1.3)}>+</button><button type="button" onClick={() => setView(fit)}>Fit deck</button>
             <button type="button" aria-label="Pan left" onClick={() => pan(-0.2, 0)}>←</button><button type="button" aria-label="Pan up" onClick={() => pan(0, -0.2)}>↑</button>
             <button type="button" aria-label="Pan down" onClick={() => pan(0, 0.2)}>↓</button><button type="button" aria-label="Pan right" onClick={() => pan(0.2, 0)}>→</button>
         </div>
@@ -297,7 +315,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
             {station && !active && !live && <p>{station.locationId === null ? 'Inspect-only region; no native workflow binding.' : 'Utility / cover region. Choose any native action in the step editor.'}</p>}
         </Inspector>}
         <Help>{compact && <summary>Map help</summary>}
-        <p id={`${id}-help`} className="bwd-help">{live ? 'Enter / Space moves once. Arrows explore wells. Drag the background, zoom or Focus station to inspect without moving.' : readOnly ? 'Preview only; zoom and pan change the view, not the plan or hardware.' : 'Click or press Enter / Space to select. Shift selects a rectangular range; Ctrl / ⌘ toggles wells. Arrow keys move between map wells. Range mode: choose the first and last well.'}</p>
+        <p id={`${id}-help`} className="bwd-help">{live ? 'Enter / Space acts once. Arrows explore wells. Double-click a module or use − / + to zoom; drag the background to pan. The mouse wheel scrolls the page.' : readOnly ? 'Preview only; zoom and pan change the view, not the plan or hardware.' : 'Click or press Enter / Space to select. Shift selects a rectangular range; Ctrl / ⌘ toggles wells. Arrow keys move between map wells. Range mode: choose the first and last well.'}</p>
         {!readOnly && !live && <p className="bwd-help">Selection only — no robot movement. Multiple wells do not change the fixed four-head alignment.</p>}
         {!live && <p className="bwd-caption">Native well positions · cover and utility outlines are artwork estimates, not measured dimensions.</p>}
         </Help>

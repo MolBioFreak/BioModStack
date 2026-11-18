@@ -62,7 +62,7 @@ export function BioXpDeckRecordPanel({ generation, connected, visible = true, co
     return <section aria-label="Deck record" data-testid="deck-record-panel"
         className={`rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-secondary)] ${compact ? 'p-2 text-xs' : 'p-3 text-sm'}`}>
         <header className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-            <h3 className="font-semibold">Robot believes</h3>
+            <h3 className="font-semibold">Deck record</h3>
             <button type="button" className="text-xs underline" onClick={refresh} disabled={!enabled}>Refresh</button>
         </header>
         {!connected && <p role="status" className="text-xs text-[var(--text-secondary)]">Connect to read the deck record.</p>}

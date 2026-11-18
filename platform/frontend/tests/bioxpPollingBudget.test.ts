@@ -38,7 +38,7 @@ test('cockpit keeps one bounded catalog loop and uses age only as presentation',
     assert.match(cockpit, /localAgeMs >= 15_000 \|\| upstreamAgeMs >= 15_000/);
     assert.doesNotMatch(cockpit, /setInterval/);
     assert.match(cockpit, /stale=\{showingLastKnown\}/);
-    assert.match(cockpit, /useBioXpOperatorActionHistory\(generation, linkConnected && controlsVisible && historyOpen, historyLimit, historyPagination.cursor\)/);
+    assert.match(cockpit, /useBioXpOperatorActionHistory\(generation, linkConnected && controlsVisible, historyLimit, historyPagination.cursor\)/);
     assert.match(cockpit, /!displayConnected \? \[\]/);
 });
 

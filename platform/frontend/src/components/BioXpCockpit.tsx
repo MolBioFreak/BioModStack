@@ -41,7 +41,9 @@ import {
 
 import { bioXpDeckReadinessText, bioXpReceiptFailureText, bioXpReceiptStatusText } from '../lib/bioxpEvidencePresentation';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
-import { BioXpHistoryReceiptCard, BioXpHistoryPager, useBioXpHistoryPagination } from './BioXpHistoryReceiptCard';
+import { useBioXpHistoryPagination } from './BioXpHistoryReceiptCard';
+import { BioXpRecentActions } from './BioXpRecentActions';
+import { BioXpThermalControls } from './BioXpThermalControls';
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
 import { BioXpCalibrationAnalysis } from './BioXpCalibrationAnalysis';
 import { BioXpPressureCapture } from './BioXpPressureCapture';
@@ -55,7 +57,7 @@ import { BioXpMethodsWorkspace } from './BioXpMethodsWorkspace';
 import { BioXpWorkflowMutationProvider } from './BioXpWorkflowMutationOwner';
 import { BioXpLiveDeck } from './BioXpLiveDeck';
 import { deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
-import { BioXpAxisRow, BioXpAxisTelemetry, BioXpStepSlider, BioXpStepPresets, repairManualJogDistances } from './BioXpRobotPresentation';
+import { BioXpAxisRow, BioXpAxisTelemetry, BioXpStepPresets, type BioXpAxisSweep } from './BioXpRobotPresentation';
 import { BioXpStatusStrip } from './BioXpStatusStrip';
 import { RepairManualViewer, RepairManualFields } from './repairManualViewers';
 import { repairManualLatestRequest } from '../lib/repairManualFeedback';
@@ -66,7 +68,6 @@ import { BioXpManualPlateControls, type BioXpManualPlateIntent } from './BioXpMa
 import { BioXpDeckRecordPanel } from './BioXpDeckRecordPanel';
 import { BioXpMotionToggle } from './BioXpMotionToggle';
 import { occupancyByTray } from '../lib/bioxpDeckRecord';
-import { BioXpOperatorReports } from './BioXpOperatorReports';
 
 
 function DeckSubmissionRow({ item, generation, active, onSelect, onTerminal }: {
@@ -342,12 +343,9 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     useEffect(() => {
         currentGenerationRef.current = generation;
     }, [generation]);
-    const [historyOpen, setHistoryOpen] = useState(false);
-    const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(8);
+    const historyLimit = 8;
     const [pipetteSection, setPipetteSection] = useState<PipetteSection>('Move & pipette');
-    const [reportsOpen, setReportsOpen] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
-    const [cameraOpen, setCameraOpen] = useState(true);
     const [controlTab, setControlTab] = useState<ControlTab>(initialTab);
     const operationalVisible = documentVisible;
     const robotVisible = documentVisible && controlTab === 'robot';
@@ -489,7 +487,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         if (identity) setXYSubmission({ generation, commandId: identity.commandId, receipt: null });
     };
     const historyPagination = useBioXpHistoryPagination(linkConnected ? generation : 0, historyLimit);
-    const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected && controlsVisible && historyOpen, historyLimit, historyPagination.cursor);
+    const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected && controlsVisible, historyLimit, historyPagination.cursor);
     const connect = useConnectBioXp();
     const disconnect = useDisconnectBioXp();
 
@@ -586,7 +584,6 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     };
     const interruptPending = (actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.abort_all') => interruptMutation(actionId).isPending;
     const interruptAnyPending = interruptXStop.isPending || interruptYStop.isPending || interruptZStop.isPending || interruptAggregateAbort.isPending || componentStop.isPending;
-    const busy = invokeOperatorAction.isPending || invokeLifecycleActionMutation.isPending || invokeYAction.isPending || invokeDeckAction.isPending || xyPending || interruptAnyPending || componentStop.isPending;
     const feedbackQueryClient = useQueryClient();
     const latestRequest = repairManualLatestRequest([
         interruptAggregateAbort, interruptZStop, interruptYStop, interruptXStop,
@@ -1321,23 +1318,35 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         const reported = displayTelemetry?.axes.find(item => item.axis === axis);
         return { min: reported?.min_steps, max: reported?.max_steps };
     };
-    const jogDistances = (axis: Axis | 'y') => {
-        const telemetry = displayTelemetry?.axes.find(item => item.axis === axis);
-        const position = axis === 'y' ? yAxisV2?.position_steps : axis === 'x' ? xPosition : axis === 'z' ? dashboard?.z_axis?.status?.position_steps : telemetry?.position_steps;
-        return repairManualJogDistances(position, telemetry?.min_steps, telemetry?.max_steps);
-    };
-    const jogSliderMax = (axis: Axis | 'y') => {
-        const hint = jogDistances(axis);
-        if (hint) return Math.max(hint.negative, hint.positive);
-        // Position unreported (e.g. invalid Y reply): bound the draft slider by the published travel span.
-        const telemetry = displayTelemetry?.axes.find(item => item.axis === axis);
-        const span = typeof telemetry?.min_steps === 'number' && typeof telemetry?.max_steps === 'number' ? telemetry.max_steps - telemetry.min_steps - 40 : NaN;
-        return Number.isFinite(span) && span > 0 ? span : undefined;
-    };
     const axisPresentation = (axis: Axis | 'y') => {
         const telemetry = displayTelemetry?.axes.find(item => item.axis === axis);
         return { reference: axis === 'x' ? xReference : axis === 'y' ? yAxisV2?.reference_state : axis === 'z' ? dashboard?.z_axis?.status?.reference : telemetry?.reference,
             position: axis === 'x' ? xPosition : axis === 'y' ? (yAxisV2?.position_reply_valid === false || yAxisV2?.position_source === 'oem_error_sentinel' || yAxisV2?.position_source === 'oem_cached' ? null : yAxisV2?.position_steps) : axis === 'z' ? dashboard?.z_axis?.status?.position_steps : telemetry?.position_steps };
+    };
+    // Full sweep: one absolute move from the current position to the axis end point
+    // (published limit less the 20-step OEM margin). Refused unless the axis is homed.
+    const sweepFor = (axis: 'x' | 'y' | 'z' | 'g'): BioXpAxisSweep => {
+        const max = displayTelemetry?.axes.find(item => item.axis === axis)?.max_steps;
+        const target = typeof max === 'number' && Number.isFinite(max) ? max - 20 : undefined;
+        const { reference, position } = axisPresentation(axis);
+        const manualAbsolute = operatorActionForPath('/motion/oem/manual/absolute');
+        const reason = !linkConnected ? 'Connect to the robot first.'
+            : reference !== 'referenced' && reference !== 'homed' ? 'Home this axis first; a full sweep needs a homed axis.'
+            : target === undefined ? 'The robot reports no end point for this axis.'
+            : typeof position !== 'number' ? 'The robot reports no current position for this axis.'
+            : position >= target ? 'Already at the end point.'
+            : axis === 'x' ? integerInputError(target, xAbsoluteInput, 'X end point') ?? v2ActionDisabledReason('oem.x.move_absolute')
+            : axis === 'y' ? v2ActionDisabledReason('oem.y.move_absolute')
+            : axis === 'z' ? integerInputError(target, zAbsoluteInput, 'Z end point') ?? v2ActionDisabledReason('oem.z.move_absolute')
+            : manualAbsolute?.enabled !== true ? manualAbsolute?.disabled_reason ?? 'Robot action unavailable.'
+            : integerInputError(target, manualAbsolute.inputs.find(input => input.name === 'position_steps'), 'Gripper end point');
+        return { reason, target, run: () => {
+            if (reason !== null || target === undefined) return;
+            if (axis === 'y') { invokeYMoveAbsolute(target); return; }
+            if (axis === 'g') { invokeOperatorPath('/motion/oem/manual/absolute', { axis, position_steps: target }); return; }
+            const envelope = v2NormalEnvelope();
+            if (envelope) submitV2({ ...envelope, action_id: axis === 'x' ? 'oem.x.move_absolute' : 'oem.z.move_absolute', inputs: { position_steps: target } });
+        } };
     };
     return (
         <div className="bioxp-cockpit space-y-3 p-3 md:p-4" style={{ color: controlTab === 'live-deck' ? 'var(--text-primary)' : '#f1f5f9' }}>
@@ -1358,12 +1367,9 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         }}
                         onClick={() => selectControlTab(tab)}
                         className="bx-tab">
-                        {tab === 'robot' ? 'Robot controls' : tab === 'pipettes' ? 'Pipettes & plates' : tab === 'workflows' ? 'Workflows' : 'Live deck movement'}
+                        {tab === 'robot' ? 'Robot controls' : tab === 'pipettes' ? 'Pipettes & plates' : tab === 'workflows' ? 'Workflows' : 'Live deck'}
                     </button>)}
                 </div>
-                <BioXpMotionToggle enabled={motionControlsAvailable} reason={dashboard?.motion.reason} connected={linkConnected}
-                    onDisabledReason={v2ActionDisabledReason('meta.activate_motion')} pending={invokeLifecycleActionMutation.isPending}
-                    onOn={claimTransport} onOff={motionOff} />
                 <div title="Cancels software waiters, not motor motion. Motors may continue. This is not a physical emergency stop. Use Stop for motors." aria-label="Stop controls" className="bx-stops">
                     {(['x', 'y', 'z'] as const).map(axis => <button key={axis} type="button"
                         disabled={!linkConnected || generation <= 0 || interruptPending(`oem.${axis}.stop`)}
@@ -1383,31 +1389,26 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                             type="button"
                             disabled={!configured || linkHealthy || connect.isPending || disconnect.isPending}
                             onClick={() => connect.mutate(undefined)}
-                            className="bx-button"
-                         aria-label={linkHealthy ? 'BMS Link Connected' : active ? 'Reconnect BMS Link' : 'Connect BMS Link'}>{linkHealthy ? 'Connected' : active ? 'Reconnect' : 'Connect'}</button>
+                            className={linkHealthy ? 'bx-button' : 'bx-button bx-go'}
+                         aria-label={linkHealthy ? 'BMS Link Connected' : active ? 'Reconnect BMS Link' : 'Connect BMS Link'}>{active && !linkHealthy ? 'Reconnect' : 'Connect'}</button>
                         <button
                             type="button"
                             disabled={!active || connect.isPending || disconnect.isPending}
                             onClick={() => disconnect.mutate(undefined)}
-                            className="rounded bg-[var(--surface-control,var(--bg-tertiary))] px-3 py-2 text-sm font-semibold "
                         >Disconnect</button>
 </>}
+                motion={<BioXpMotionToggle enabled={motionControlsAvailable} reason={dashboard?.motion.reason} connected={linkConnected}
+                    onDisabledReason={v2ActionDisabledReason('meta.activate_motion')} pending={invokeLifecycleActionMutation.isPending}
+                    onOn={claimTransport} onOff={motionOff} />}
                 connectionMessages={<>                        {statusQuery.isError && <p role="status" className="mt-1 text-sm text-[var(--text-secondary)]">Connection status refresh failed; showing last-known observations. The robot checks each request.</p>}
                         {connection?.last_error && <p className="mt-1 break-words text-sm text-[var(--text-secondary)]">{connection.last_error}</p>}
 </>}
-                controllerControls={<>                    <button
-                        type="button"
-                        disabled={!linkConnected || v2ActionDisabledReason('meta.activate_motion') !== null || busy}
-                        title={v2ActionDisabledReason('meta.activate_motion') ?? 'Enable or recover controllers without homing. This does not establish axis references or clear earlier command outcomes.'}
-                        onClick={claimTransport}
-                        className="rounded bg-[var(--surface-control,var(--bg-tertiary))] px-4 py-2 font-semibold  disabled:cursor-not-allowed "
-                     aria-label="Enable controllers">Enable</button>
+                controllerControls={<>
                     <button
                         type="button"
                         disabled={recoveryDisabledReason !== null}
                         title={recoveryDisabledReason ?? 'Request non-homing controller preparation; the robot checks live ownership and safety.'}
                         onClick={recoverMotionNonHoming}
-                        className="rounded bg-[var(--surface-control,var(--bg-tertiary))] px-4 py-2 font-semibold  disabled:cursor-not-allowed "
                      aria-label="Recover controllers (no homing)">Recover</button>
 </>}
                 restart={<BioXpServiceRestart generation={generation} />} />
@@ -1453,9 +1454,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             </div>
             <div role="tabpanel" id="control-panel-live-deck" aria-labelledby="control-tab-live-deck" hidden={controlTab !== 'live-deck'}>
                 {liveDeckOpened && <>
-                    <p className="mb-2 text-sm" style={{ color: 'var(--text-secondary)' }}>{connectedLabel}
-                        {statusQuery.isError && ' · Status refresh unavailable; showing last-known observations.'}
-                    </p>
+                    {statusQuery.isError && <p className="mb-2 text-sm" style={{ color: 'var(--text-secondary)' }}>Status refresh unavailable; showing last-known observations.</p>}
                     <BioXpLiveDeck generation={generation} connected={linkConnected} visible={liveDeckVisible}
                         dashboard={catalogV2Query.data?.dashboard} stale={showingLastKnown || !linkHealthy}
                         selection={liveDeckIntent?.generation === generation ? liveDeckIntent.selection : { station: '', wells: [] }}
@@ -1467,7 +1466,8 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                             const reason = mapStationDisabledReason(target);
                             return reason === null ? null : bioXpDeckReadinessText(reason);
                         }} wellDisabledReason={mapWellDisabledReason === null ? null : bioXpDeckReadinessText(mapWellDisabledReason)}
-                        doorControls={<div data-testid="live-deck-door-controls" className="space-y-2">
+                        thermalControls={<BioXpThermalControls variant="compact" generation={generation} ownershipGeneration={ownershipGeneration} connected={linkConnected} visible={liveDeckVisible}
+                            actions={catalog?.actions} catalogLoading={operatorCatalog.isLoading} door={<div data-testid="live-deck-door-controls" className="bx-th-door">
                     <h3 className="font-semibold">Thermal door</h3>
                     <div className="flex gap-2">
                         {(['open', 'close'] as const).map(operation => {
@@ -1482,16 +1482,14 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                             </button>;
                         })}
                     </div>
-                    <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Direct door controls; not a state toggle.</p>
                     {invokeOperatorAction.variables?.actionId === operatorActionForPath('/motion/thermal_door/open')?.action_id
                         || invokeOperatorAction.variables?.actionId === operatorActionForPath('/motion/thermal_door/close')?.action_id
                         ? <YOperatorError label="Thermal door" error={invokeOperatorAction.error} /> : null}
-                </div>}
-                        cameraControls={<details className="bld-camera" data-testid="live-deck-camera" open={cameraOpen} onToggle={event => setCameraOpen(event.currentTarget.open)}>
-                            <summary className="cursor-pointer text-sm font-semibold">Camera</summary>
-                            <div className="mt-2"><BioXpCameraPanel visible={liveDeckVisible && cameraOpen} connected={active}
-                                connectionGeneration={active ? generation : null} mutationEnabled={linkConnected && status?.mutation_access?.enabled === true} /></div>
-                        </details>}
+                </div>} />}
+                        cameraControls={<div className="bld-camera" data-testid="live-deck-camera">
+                            <BioXpCameraPanel visible={liveDeckVisible} connected={active}
+                                connectionGeneration={active ? generation : null} mutationEnabled={linkConnected && status?.mutation_access?.enabled === true} />
+                        </div>}
                         movementControls={<div className="space-y-3 text-sm">
                     <div className="flex gap-2" role="group" aria-label="Movement mode">
                         {([['full', 'Full report'], ['fast', 'Fast lane'], ['retarget', 'Retarget']] as const).map(([mode, label]) =>
@@ -1605,14 +1603,14 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             <div hidden={controlTab === 'workflows' || controlTab === 'live-deck'}>
             <div role="tabpanel" id="control-panel-robot" aria-labelledby="control-tab-robot" hidden={controlTab !== 'robot'} className="bx-ui">
                 <section className="bx-axes" aria-label="Axis controls">
-                    <div className="bx-axis-heading"><span>Axis</span><span>Reference</span><span>Position</span><span>Move by</span><span>Home</span><span>Go to</span><span>Stop</span></div>
+                    <div className="bx-axis-heading"><span>Axis</span><span>Reference</span><span>Position</span><span>Move by</span><span>Home</span><span>Go to</span><span>Extras</span><span>Stop</span></div>
                     <div className="bx-axis-list"><BioXpAxisRow axis="y" label="Y Axis" testId="serial206-y-authority-panel" {...axisPresentation('y')}
  controls={<><button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(-Math.abs(yStepInput))} data-operation="move-negative" className="bx-button" aria-label="Move −">−</button>
 <button type="button" disabled={yMutationDisabled('oem.y.manual_panel_home')} title={yActionDisabledReason('oem.y.manual_panel_home', 'Y manual-panel home unavailable.')} onClick={() => invokeYHome('oem.y.manual_panel_home')} data-operation="home" className="bx-button" aria-label="Home">Home</button>
 <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(Math.abs(yStepInput))} data-operation="move-positive" className="bx-button" aria-label="Move +">+</button></>}
- relative={<><BioXpStepPresets axis="Y" onChange={setYStepInput} distances={jogDistances('y')} /><BioXpStepSlider label="Y relative steps" min={0} max={jogSliderMax('y')} value={yStepInput} onChange={setYStepInput} /><label className="bx-relative"><span className="bx-sr-only">Relative move steps</span><input type="number" min={0} max={BIOXP_Y_RELATIVE_MAX_STEPS} value={Number.isFinite(yStepInput) ? yStepInput : ''} onChange={(event) => setYStepInput(event.target.valueAsNumber)} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-2 font-mono text-sm" /></label>
+ relative={<><BioXpStepPresets axis="Y" onChange={setYStepInput} sweep={sweepFor('y')} /><label className="bx-relative"><span className="bx-sr-only">Relative move steps</span><input type="number" min={0} max={BIOXP_Y_RELATIVE_MAX_STEPS} value={Number.isFinite(yStepInput) ? yStepInput : ''} onChange={(event) => setYStepInput(event.target.valueAsNumber)} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-2 font-mono text-sm" /></label>
 </>}
- absolute={<div className="bx-absolute" title="Y absolute requests return before motion stops."><BioXpStepSlider label="Y absolute target" min={axisSliderBounds('y').min} max={axisSliderBounds('y').max} value={yTargetInput} onChange={setYTargetInput} />                            <label className="block text-xs text-[var(--text-secondary)]"><span className="bx-sr-only">Absolute target (steps)</span><input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={Number.isFinite(yTargetInput) ? yTargetInput : ''} onChange={(event) => setYTargetInput(event.target.valueAsNumber)} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-2 font-mono text-sm" /></label>
+ absolute={<div className="bx-absolute" title="Y absolute requests return before motion stops.">                            <label className="block text-xs text-[var(--text-secondary)]"><span className="bx-sr-only">Absolute target (steps)</span><input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={Number.isFinite(yTargetInput) ? yTargetInput : ''} onChange={(event) => setYTargetInput(event.target.valueAsNumber)} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-2 font-mono text-sm" /></label>
 <button type="button" disabled={yMutationDisabled('oem.y.move_absolute')} title={yActionDisabledReason('oem.y.move_absolute', 'Y absolute move unavailable.')} onClick={() => invokeYMoveAbsolute(yTargetInput)} data-operation="absolute" className="bx-button" aria-label="Go absolute">Go</button></div>}
  stop={<button type="button" disabled={yStopDisabled} title="Stop the Y motor independently of normal command submission." onClick={interruptY} className="rounded bg-[var(--surface-control,var(--bg-tertiary))] px-3 py-1.5 text-sm font-semibold  ">Stop</button>}
  details={<>                            <p className="mt-2 text-[var(--text-secondary)]">Robot-owned Serial-206 Y authority. Controller completion and physical observation stay separate.</p>
@@ -1723,7 +1721,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                                     );
                                 })}
 </>}
- relative={axis !== 'door' ? <><BioXpStepPresets axis={axis.toUpperCase()} onChange={value => setManualSteps(current => ({ ...current, [axis]: value }))} distances={jogDistances(axis)} /><BioXpStepSlider label={`${axis.toUpperCase()} relative steps`} min={1} max={jogSliderMax(axis)} value={manualSteps[axis]} onChange={value => setManualSteps(current => ({ ...current, [axis]: value }))} /><label className="bx-relative">
+ relative={axis !== 'door' ? <><BioXpStepPresets axis={axis.toUpperCase()} onChange={value => setManualSteps(current => ({ ...current, [axis]: value }))} sweep={sweepFor(axis)} /><label className="bx-relative">
                                         <span className="bx-sr-only">Relative move steps</span>
                                         <input
                                             type="number"
@@ -1741,10 +1739,6 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
 </> : null}
  absolute={axis !== 'door' ? <>                                    <div className="block text-xs text-[var(--text-secondary)]">
                                         <div className="bx-absolute">
-                                            <BioXpStepSlider label={`${axis.toUpperCase()} absolute target`}
-                                                min={axisSliderBounds(axis).min == null ? undefined : Math.max(axisSliderBounds(axis).min!, axis === 'x' ? xAbsoluteMinimum ?? -Infinity : axis === 'z' ? zAbsoluteMinimum ?? -Infinity : -Infinity)}
-                                                max={axisSliderBounds(axis).max == null ? undefined : Math.min(axisSliderBounds(axis).max!, axis === 'x' ? xAbsoluteMaximum ?? Infinity : axis === 'z' ? zAbsoluteMaximum ?? Infinity : Infinity)}
-                                                value={absoluteTargets[axis]} onChange={value => setAbsoluteTargets(current => ({ ...current, [axis]: value }))} />
                                             <label><span className="bx-sr-only">Absolute target (steps)</span>
                                             <input
                                                 type="number"
@@ -1766,9 +1760,10 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                                                 onClick={() => runAbsolute(axis)}
                                                 className="bx-button"
                                              aria-label="Go absolute">Go</button>
+                                            {axis === 'z' && <span data-testid="z-target-context" className="bx-target-hint">min {zTargetProvider?.current_minimum_steps ?? 'unavailable'}{zTargetPreview?.effective_position_steps != null && zTargetPreview.effective_position_steps !== absoluteTargets.z && ` → ${zTargetPreview.effective_position_steps}`}</span>}
                                         </div>
                                         </div>
-{axis === 'z' && <p data-testid="z-target-context" className="bx-target-hint">min {zTargetProvider?.current_minimum_steps ?? 'unavailable'}{zTargetPreview?.effective_position_steps != null && zTargetPreview.effective_position_steps !== absoluteTargets.z && ` → ${zTargetPreview.effective_position_steps}`}</p>}</> : null}
+</> : null}
  stop={                                    <button
                                         type="button"
                                         disabled={!linkConnected || ((axis === 'x' || axis === 'z')
@@ -1868,6 +1863,8 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         {xyReceipt && bioXpReceiptFailureText(xyReceipt) && <p role="status" className="mt-2 text-sm text-[var(--text-secondary)]">{bioXpReceiptFailureText(xyReceipt)}</p>}
                         {currentXYSubmission && xyReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-[var(--text-secondary)]">XY command status unavailable: {bioXpErrorText(xyReceiptQuery.error)}. {xyOutcomeUnresolved ? 'Do not retry until the outcome is reconciled.' : 'The received terminal outcome is retained.'}</p>}
 </div></article>                </section>
+                {controlTab === 'robot' && <BioXpThermalControls variant="full" generation={generation} ownershipGeneration={ownershipGeneration} connected={linkConnected} visible={robotVisible}
+                    actions={catalog?.actions} catalogLoading={operatorCatalog.isLoading} />}
             </div>
             <div role="tabpanel" id="control-panel-pipettes" aria-labelledby="control-tab-pipettes" hidden={controlTab !== 'pipettes'}>
                 {pipettesOpened && <>
@@ -1907,7 +1904,16 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 </div>
                 </>}
             </div>
-            <section aria-label="Latest command" className="bx-ui bx-last"><strong>Last command</strong>
+            <div className="bx-ui bx-bottom">
+                <BioXpRecentActions rows={recentCommands} generation={generation} connected={linkConnected && controlsVisible}
+                    pagination={historyPagination} nextCursor={historyQuery.data?.next_cursor ?? null}
+                    pagerDisabled={!displayConnected || historyQuery.isFetching || historyQuery.isError}
+                    message={!displayConnected ? 'Connect to load robot action receipts.'
+                        : historyQuery.isLoading && recentCommands.length === 0 ? 'Loading robot action receipts…'
+                        : historyQuery.isError && recentCommands.length === 0 ? 'No last-known receipts available; refresh failed.'
+                        : historyQuery.data == null ? 'Robot action receipts have not been loaded.'
+                        : recentCommands.length === 0 ? (historyPagination.cursor ? 'No robot action receipts recorded on this page.' : 'No robot action receipts recorded.') : null}
+                    current={<section aria-label="Latest command" className="bx-last">
                 {latestRequest && <p role="status">{String(latestRequestAction)} · {latestRequest.status === 'pending' ? 'Submitting; awaiting robot receipt' : latestRequest.status === 'error' ? 'Request error; see addressed details' : 'Receipt received'}</p>}
                 {latestRequest?.error && <p role="alert">{bioXpErrorText(latestRequest.error)}</p>}
                 {invokeOperatorAction.error && (
@@ -1926,60 +1932,19 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                          <p>{displayedLatestReceipt.command_id} · {displayedLatestReceipt.completion_class ?? "completion not reported"} · physical effect verified={String(displayedLatestReceipt.physical_effect_verified)}</p>
                     </details>
                 )}
-            </section>
-<div className="bx-ui bx-drawers">            <details onToggle={event => setHistoryOpen(event.currentTarget.open)} className="rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-3">
-                <summary className="cursor-pointer font-semibold">History <span>recent robot actions · reports &amp; export</span></summary><h3>Recent Robot Actions</h3>
-                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                    <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-                        Entries
-                        <select
-                            className="rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] px-2 py-1 text-[var(--text-secondary)]"
-                            value={historyLimit}
-                            onChange={(event) => setHistoryLimit(Number(event.target.value) as 8 | 25 | 50 | 100)}
-                            aria-label="Recent robot actions depth"
-                        >
-                            <option value={8}>8</option>
-                            <option value={25}>25</option>
-                            <option value={50}>50</option>
-                            <option value={100}>100</option>
-                        </select>
-                    </label>
-                </div>
-                {!displayConnected ? (
-                    <p className="mt-2 text-sm text-[var(--text-secondary)]">Connect to load robot action receipts.</p>
-                ) : historyQuery.isLoading && recentCommands.length === 0 ? (
-                    <p role="status" className="mt-2 text-sm text-[var(--text-secondary)]">Loading robot action receipts…</p>
-                ) : historyQuery.isError && recentCommands.length === 0 ? (
-                    <p className="mt-2 text-sm text-[var(--text-secondary)]">No last-known receipts available; refresh failed.</p>
-                ) : historyQuery.data == null ? (
-                    <p className="mt-2 text-sm text-[var(--text-secondary)]">Robot action receipts have not been loaded.</p>
-                ) : recentCommands.length === 0 ? (
-                    <p className="mt-2 text-sm text-[var(--text-secondary)]">{historyPagination.cursor ? 'No robot action receipts recorded on this page.' : 'No robot action receipts recorded.'}</p>
-                ) : (
-                    <div className="mt-3 space-y-2">
-                        {recentCommands.map((record) => (
-                            <BioXpHistoryReceiptCard key={`${generation}:${record.command_id}`} receipt={record} generation={generation} connected={linkConnected && controlsVisible && historyOpen} />
-                        ))}
-                    </div>
-                )}
-                <BioXpHistoryPager pagination={historyPagination} nextCursor={historyQuery.data?.next_cursor ?? null} disabled={!displayConnected || historyQuery.isFetching || historyQuery.isError} />
-                        <details className="rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-4" open={reportsOpen} onToggle={(event) => setReportsOpen(event.currentTarget.open)}>
-                <summary className="cursor-pointer text-lg font-semibold">Reports &amp; export</summary>
-                {reportsOpen && controlsVisible && <div className="mt-4"><BioXpOperatorReports generation={generation} connected={linkConnected} /></div>}
-            </details>
-
-</details>
-<details className="bx-tools"><summary>Tools &amp; service</summary><div className="bx-tools-body">                <div className="mt-3 flex flex-wrap gap-2">
+            </section>} />
+                <section className="bx-card bx-service" aria-label="Service"><header className="bx-card-head"><h3>Service</h3></header>
                     <RepairManualViewer kind="settings" generation={generation} connected={linkConnected}
                         disabled={!linkConnected || operatorActionForPath('/motion/oem/machine_config')?.enabled !== true || invokeOperatorAction.isPending} />
                     <RepairManualViewer kind="position-table" generation={generation} connected={linkConnected}
                         disabled={!linkConnected || operatorActionForPath('/motion/oem/position_table')?.enabled !== true || invokeOperatorAction.isPending} />
-                </div>
-<h3>Temperatures</h3><div>{!displayTelemetry?.temperatures.length && 'Not reported'}{displayTelemetry?.temperatures.map(sensor => <p key={sensor.sensor}>{sensor.label}: {sensor.available ? `${sensor.temperature_c ?? '—'} ${sensor.unit}` : 'Not reported'}</p>)}</div>            <details className="rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
-                <summary className="cursor-pointer text-lg font-semibold">Advanced Full Command Catalog</summary>
-                {advancedOpen && <><p className="mt-1 text-sm text-[var(--text-secondary)]">Additional service, recovery and diagnostic controls.</p><div className="mt-4"><BioXpOperatorControlTabs visible={controlsVisible} generation={generation} connected={robotControlReady} catalogObservation={operatorCatalog} zTargetSteps={Number.isInteger(absoluteTargets.z) ? absoluteTargets.z : undefined} /></div></>}
-            </details>
-</div></details></div><div className="bx-ui">                {historyQuery.isError && <p role="alert" className="mt-2 text-sm text-[var(--text-secondary)]">Robot action history unavailable: {bioXpErrorText(historyQuery.error)}</p>}
+                    <details className="bx-catalog" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
+                        <summary>Full command catalog{catalog?.actions ? ` · ${catalog.actions.length}` : ''}</summary>
+                        {advancedOpen && <BioXpOperatorControlTabs visible={controlsVisible} generation={generation} connected={robotControlReady} catalogObservation={operatorCatalog} zTargetSteps={Number.isInteger(absoluteTargets.z) ? absoluteTargets.z : undefined} />}
+                    </details>
+                </section>
+            </div>
+<div className="bx-ui">                {historyQuery.isError && <p role="alert" className="mt-2 text-sm text-[var(--text-secondary)]">Robot action history unavailable: {bioXpErrorText(historyQuery.error)}</p>}
             {error && <p role="alert" className="rounded border border-[var(--border-primary)] p-3 text-sm text-[var(--text-secondary)]">{bioXpErrorText(error)}</p>}
             {statusQuery.isError && <p role="alert" className="text-sm text-[var(--text-secondary)]">BioXP status unavailable.</p>}
 </div>

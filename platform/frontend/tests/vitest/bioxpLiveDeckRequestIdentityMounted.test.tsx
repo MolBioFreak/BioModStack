@@ -11,6 +11,7 @@ import park from '../fixtures/bioxp_park_completed_receipt.json';
 vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
 // Only unrelated status/history and camera presentation are stubbed; command,
 // request-key reconciliation, catalog parsing and interrupt hooks remain real.
+vi.mock('../../src/components/BioXpThermalControls', () => ({ BioXpThermalControls: () => null }));
 vi.mock('../../src/lib/bioxpClient', async importOriginal => ({
     ...await importOriginal<typeof import('../../src/lib/bioxpClient')>(),
     useBioXpStatus: () => ({ data: { connection: { active: true, configured: true, generation: 7, reachable: true, runtime_ready: true }, mutation_access: { enabled: true } }, isError: false }),

@@ -136,7 +136,7 @@ it('relocates deck controls to a fourth tab without changing the default robot l
     await mount('robot');
     expect(host.querySelector('[data-testid="oem-deck-movement"]')).toBeNull();
     expect([...host.querySelectorAll('[role="tablist"][aria-label="Robot controls"] [role="tab"]')].map(el => el.textContent))
-        .toEqual(['Robot controls', 'Pipettes & plates', 'Workflows', 'Live deck movement']);
+        .toEqual(['Robot controls', 'Pipettes & plates', 'Workflows', 'Live deck']);
     await tab('live-deck');
     expect(panel().hidden).toBe(false); expect(live()).not.toBeNull();
     expect(host.querySelector('#control-panel-robot [data-testid="oem-deck-movement"]')).toBeNull();
@@ -147,7 +147,7 @@ it('relocates deck controls to a fourth tab without changing the default robot l
     await vi.waitFor(() => expect(live().querySelector('[data-testid="deck-record-panel"]')?.textContent).toContain('Reagent chiller'));
     expect(live().querySelector('[data-testid="tips-3"]')?.textContent).toBe('0/96 tips · 0 pickups');
     expect(live().querySelectorAll('[data-station="TECANRACK3"] .bwd-tip')).toHaveLength(0);
-    expect(host.querySelector('header [data-testid="motion-toggle"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Robot state and recovery"] [data-testid="motion-toggle"]')).not.toBeNull();
     expect(mutations()).toEqual([]);
 });
 
@@ -156,7 +156,7 @@ it('opens the real robot-local deep link with one default-open camera and no rob
     expect(host.querySelector('#control-tab-live-deck')?.getAttribute('aria-selected')).toBe('true');
     expect(panel().hidden).toBe(false); expect(live()).not.toBeNull();
     expect(host.querySelectorAll('[data-testid="parent-test-camera"]')).toHaveLength(1);
-    expect(panel().querySelector<HTMLDetailsElement>('[data-testid="live-deck-camera"]')?.open).toBe(true);
+    expect(panel().querySelector('[data-testid="live-deck-camera"]')?.closest('details')).toBeNull(); // always visible, no fold
     expect(mutations()).toEqual([]);
 });
 
@@ -203,7 +203,7 @@ it('sends native named travel from map regions and keeps selector camera offset 
     await mount();
     const select = [...live().querySelectorAll('label')].find(el => el.textContent?.trim().startsWith('Robot destination'))!.querySelector('select')!;
     await act(async () => { select.value = 'LOC_TC'; select.dispatchEvent(new Event('change', { bubbles: true })); });
-    const offset = live().querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    const offset = live().querySelector<HTMLInputElement>('[aria-label="Move head"] input[type="checkbox"]')!;
     await click(offset);
     await click(button('Move to destination', live()));
     expect(deckWrites().at(-1)?.body.inputs).toEqual({ target: 'LOC_TC', camera_offset: true });
@@ -299,10 +299,10 @@ it('top-bar Motion Off posts Motion Off once even when the robot reports Activat
             response_schema_version: 'bioxp.operator_action_receipt.v2', interrupt: false, enabled: false, disabled_reason: 'Door open' },
     ]);
     await mount('robot');
-    const toggle = host.querySelector<HTMLElement>('header [data-testid="motion-toggle"]')!;
-    expect(button('On', toggle).disabled).toBe(true);
-    expect(button('Off', toggle).disabled).toBe(false);
-    await click(button('Off', toggle));
+    const toggle = host.querySelector<HTMLElement>('[data-testid="motion-toggle"]')!;
+    expect(button('Enable motion', toggle).disabled).toBe(true);
+    expect(button('Disable motion', toggle).disabled).toBe(false);
+    await click(button('Disable motion', toggle));
     const sent = mutations().filter(row => row.url.includes('/v2/actions/meta.'));
     expect(sent).toHaveLength(1);
     expect(sent[0].url).toBe('/api/bioxp/operator-controls/v2/actions/meta.deactivate_motion');

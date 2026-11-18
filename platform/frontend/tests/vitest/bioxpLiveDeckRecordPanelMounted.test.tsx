@@ -132,16 +132,16 @@ it('shows a robot refusal without retrying', async () => {
 it('Motion toggle: On follows the robot catalog, Off is never disabled by sensor state', async () => {
     const on = vi.fn(), off = vi.fn();
     await render(<BioXpMotionToggle enabled={false} reason="Door open" connected onDisabledReason="Door open; close it first." onOn={on} onOff={off} />);
-    expect(host.textContent).toContain('Motion Off');
-    expect(button('On').disabled).toBe(true);
-    expect(button('Off').disabled).toBe(false);
-    await act(async () => button('Off').click()); expect(off).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[data-motion]')!.getAttribute('data-motion')).toBe('off');
+    expect(button('Enable motion').disabled).toBe(true);
+    expect(button('Disable motion').disabled).toBe(false);
+    await act(async () => button('Disable motion').click()); expect(off).toHaveBeenCalledTimes(1);
     await render(<BioXpMotionToggle enabled connected onDisabledReason={null} pending onOn={on} onOff={off} />);
-    expect(host.textContent).toContain('Motion On');
-    expect(button('Off').disabled).toBe(false);
+    expect(host.querySelector('[data-motion]')!.getAttribute('data-motion')).toBe('on');
+    expect(button('Disable motion').disabled).toBe(false);
     await render(<BioXpMotionToggle enabled connected onDisabledReason={null} onOn={on} onOff={off} />);
-    await act(async () => button('On').click()); expect(on).toHaveBeenCalledTimes(1);
+    await act(async () => button('Enable motion').click()); expect(on).toHaveBeenCalledTimes(1);
     await render(<BioXpMotionToggle enabled={undefined} connected={false} onDisabledReason={null} onOn={on} onOff={off} />);
-    expect(host.textContent).toContain('Motion Unknown');
-    expect(button('Off').disabled).toBe(true);
+    expect(host.querySelector('[data-motion]')!.getAttribute('data-motion')).toBe('unknown');
+    expect(button('Disable motion').disabled).toBe(true);
 });

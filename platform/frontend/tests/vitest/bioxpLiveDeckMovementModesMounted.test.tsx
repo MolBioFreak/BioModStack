@@ -151,7 +151,7 @@ it('Fast lane station clicks carry the current camera-offset choice', async () =
     await mount();
     const select = [...live().querySelectorAll('label')].find(el => el.textContent?.trim().startsWith('Robot destination'))!.querySelector('select')!;
     await act(async () => { select.value = 'LOC_TC'; select.dispatchEvent(new Event('change', { bubbles: true })); }); await advance();
-    await click(live().querySelector<HTMLInputElement>('input[type="checkbox"]')!);
+    await click(live().querySelector<HTMLInputElement>('[aria-label="Move head"] input[type="checkbox"]')!);
     await click(button('Fast lane'));
     await click(move('LOC_RC')); await click(move('LOC_PARK'));
     await release(); await finishAll();

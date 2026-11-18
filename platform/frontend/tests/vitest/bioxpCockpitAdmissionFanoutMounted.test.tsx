@@ -418,9 +418,12 @@ const xHomeAction = () => ({
     stages: [],
 });
 
+vi.mock('../../src/components/BioXpThermalControls', () => ({ BioXpThermalControls: () => null }));
+vi.mock('../../src/components/BioXpLiveDeckPipette', () => ({ BioXpLiveDeckPipette: () => null }));
 vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
     const real = await importOriginal<typeof import('../../src/lib/bioxpClient')>();
     return ({
+    useCreateBioXpOperatorReportExport: () => ({ mutate: () => undefined, isPending: false, isError: false, error: null }),
     bioXpDeckRecoveryResolution: real.bioXpDeckRecoveryResolution,
     useBioXpOperatorUpdates: () => ({ data: undefined, isLoading: false, isError: false }),
     useBioXpWorkflowJobs: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
@@ -640,7 +643,6 @@ vi.mock('../../src/components/BioXpOperatorControlTabs', () => ({ BioXpOperatorC
 vi.mock('../../src/components/BioXpPipetteControlPanel', () => ({ BioXpPipetteControlPanel: () => null, BioXpSoftwareTipType: () => null,
     BioXpPipetteAdvancedTools: (props: Record<string, unknown>) => { state.pipetteProps = props; return null; } }));
 vi.mock('../../src/components/BioXpPipetteCalibration', () => ({ BioXpPipetteCalibration: () => null }));
-vi.mock('../../src/components/BioXpOperatorReports', () => ({ BioXpOperatorReports: () => null }));
 
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
 
@@ -739,22 +741,20 @@ describe('critical evidence presentation', () => {
             response: { http_status: 200, body: { ok: false, failure: 'RuntimeError: Reach GZ position time out! board=4; axis=0; position=10000' } },
         })];
         await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
-        const article = [...container.querySelectorAll('article')].find(node => node.textContent?.includes('failed-y') || node.textContent?.includes('oem.y.home'))!;
-        expect([...article.querySelectorAll('p')].some(p => p.textContent?.includes('Controller position wait timed out'))).toBe(true);
+        const row = container.querySelector('tr[data-command="failed-y"]')!;
+        expect(row.textContent).toContain('Controller position wait timed out');
+        await act(async () => (row.querySelector('button') as HTMLButtonElement).click());
+        const article = [...container.querySelectorAll('article')].find(node => node.textContent?.includes('oem.y.home'))!;
         expect(article.textContent).toContain('Physical effect unverified');
     });
 });
 
 describe('primary cockpit query ownership', () => {
-    it('fetches the primary catalog while history waits for its own open panel, independent of Advanced', async () => {
+    it('fetches the primary catalog and the always-visible recent actions, independent of Advanced', async () => {
         await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         expect(state.v1CatalogEnabled).toBe(true);
-        expect(state.historyEnabled).toBe(false);
-        const history = [...container.querySelectorAll('details')].find(node => node.querySelector('summary')?.textContent?.startsWith('History '))!;
-        await act(async () => { history.open = true; history.dispatchEvent(new Event('toggle')); });
         expect(state.historyEnabled).toBe(true);
-        await act(async () => { history.open = false; history.dispatchEvent(new Event('toggle')); });
-        expect(state.historyEnabled).toBe(false);
+        expect(container.querySelector('[aria-label="Recent robot actions"]')).not.toBeNull();
         const x = [...container.querySelectorAll('article')].find(node => node.textContent?.includes('X Axis'))!;
         expect([...x.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Move +')?.disabled).toBe(false);
     });
@@ -1041,6 +1041,8 @@ describe('primary cockpit query ownership', () => {
         const render = () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         const card = () => [...container.querySelectorAll('article')].find(node => node.querySelector('strong')?.textContent === actualY5.action_id)!;
         await render();
+        expect(container.querySelector(`tr[data-command="${actualY5.command_id}"]`)!.textContent).toContain('Robot route reported an HTTP conflict.');
+        await act(async () => (container.querySelector(`tr[data-command="${actualY5.command_id}"] button`) as HTMLButtonElement).click());
         expect(card().textContent).toContain('Robot route reported an HTTP conflict.');
         expect(card().textContent).not.toContain('Recorded stopped position');
         await act(async () => {
@@ -1631,7 +1633,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
         const panel = container; // Shared strip controls and immediately adjacent lifecycle outcomes.
         const activate = [...panel.querySelectorAll('button')].find(
-            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Enable controllers',
+            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Enable motion',
         ) as HTMLButtonElement;
         const recover = [...panel.querySelectorAll('button')].find(
             (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Recover controllers (no homing)',
@@ -1691,7 +1693,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
         const panel = container; // Shared strip controls and immediately adjacent lifecycle outcomes.
         const activate = [...panel.querySelectorAll('button')].find(
-            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Enable controllers',
+            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Enable motion',
         ) as HTMLButtonElement;
         const recover = [...panel.querySelectorAll('button')].find(
             (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Recover controllers (no homing)',
@@ -2910,6 +2912,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             for (let poll = 0; poll < 3; poll++) {
                 state.catalog.data = { ...state.catalog.data };
                 await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+                const receipt = container.querySelector('button[aria-label="Receipt for oem.z.move_absolute"]') as HTMLButtonElement;
+                if (receipt.getAttribute('aria-expanded') !== 'true') await act(async () => receipt.click());
                 const text = container.querySelector('[data-testid="z-target-context"]')?.textContent ?? container.textContent;
                 if (fixture.provider.target_preview.effective_position_steps !== fixture.requested) expect(text).toContain(`→ ${fixture.provider.target_preview.effective_position_steps}`);
                 else expect(text).not.toContain('→');
@@ -3176,21 +3180,26 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
-        const section = [...container.querySelectorAll('details')]
-            .find((node) => node.querySelector('summary')?.textContent?.startsWith('History ')) as HTMLElement;
-        expect(section.querySelectorAll('article')).toHaveLength(retainedHistory.receipts.length);
-        expect(section.textContent).toContain('Terminal proof unverified');
-        expect(section.textContent).toContain('Retained legacy record — not current control authority.');
+        const section = container.querySelector('[aria-label="Recent robot actions"]') as HTMLElement;
+        expect(section.querySelectorAll('tr[data-command]')).toHaveLength(retainedHistory.receipts.length);
+        // Full receipts open one at a time, on demand.
+        let receiptText = '';
+        for (const button of [...section.querySelectorAll('tr[data-command] button')] as HTMLButtonElement[]) {
+            await act(async () => button.click());
+            receiptText += section.querySelector('article')?.textContent ?? '';
+        }
+        expect(receiptText).toContain('Terminal proof unverified');
+        expect(receiptText).toContain('Retained legacy record — not current control authority.');
         state.history.isError = true;
         state.history.error = new Error('refresh failed');
         await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
-        expect(section.querySelectorAll('article')).toHaveLength(retainedHistory.receipts.length);
+        expect(section.querySelectorAll('tr[data-command]')).toHaveLength(retainedHistory.receipts.length);
         expect(container.textContent).toContain('Robot action history unavailable');
         expect(container.textContent).not.toContain('No robot action receipts recorded.');
         expect(state.admissionCalls).toBe(0);
     });
 
-    it('passes the selected depth to the history query and renders that many receipts (R-A5)', async () => {
+    it('reads one fixed page of recent actions and renders one row per receipt (R-A5)', async () => {
         state.history.data.items = Array.from({ length: 30 }, (_, i) => historyItem(xReceipt('completed', i)));
 
         await act(async () => {
@@ -3199,23 +3208,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
 
         expect(state.historyCalls.at(-1)).toBe(8);
-
-        const select = [...container.querySelectorAll('select')]
-            .find((node) => node.getAttribute('aria-label') === 'Recent robot actions depth') as HTMLSelectElement;
-        expect(select).not.toBeUndefined();
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set;
-        setter?.call(select, '50');
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-        await act(async () => {
-            await Promise.resolve();
-        });
-
-        expect(state.historyCalls.at(-1)).toBe(50);
-        const historySection = [...container.querySelectorAll('details')]
-            .find((node) => node.querySelector('summary')?.textContent?.startsWith('History ')) as HTMLElement;
-        const receiptArticles = [...historySection.querySelectorAll('article')]
-            .filter((node) => node.textContent?.includes('oem.x.move_steps'));
-        expect(receiptArticles.length).toBe(30);
+        const section = container.querySelector('[aria-label="Recent robot actions"]') as HTMLElement;
+        expect([...section.querySelectorAll('tr[data-command]')].filter(node => node.textContent?.includes('oem.x.move_steps')).length).toBe(8);
+        expect(section.querySelectorAll('article')).toHaveLength(0);
         expect(state.admissionCalls).toBe(0);
     });
 
@@ -3793,7 +3788,7 @@ describe('operator-requested recovery controls', () => {
         });
         vi.mocked(api.post).mockReset().mockImplementation(() => new Promise(() => {}));
         await render(); await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
-        const restart = [...container.querySelectorAll('button')].find(b => b.textContent === 'Restart robot service')!;
+        const restart = [...container.querySelectorAll('button')].find(b => b.textContent === 'Restart service')!;
         expect(restart.disabled).toBe(false);
         await act(async () => { restart.click(); restart.click(); });
         expect(api.post).toHaveBeenCalledTimes(1);

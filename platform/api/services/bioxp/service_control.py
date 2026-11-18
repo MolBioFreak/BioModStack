@@ -19,6 +19,11 @@ RESTART_COMMAND = (
     "--property=ActiveState --property=SubState --property=InvocationID --property=MainPID"
 )
 RESTART_TIMEOUT_SECONDS = 60.0
+# Full operating-system reboot of the robot computer. Scheduled two seconds out
+# so SSH returns before the host goes down; motor power drops with it.
+REBOOT_COMMAND = (
+    "sudo -n systemd-run --quiet --on-active=2 --timer-property=AccuracySec=100ms systemctl reboot"
+)
 # Deliberately supports only ordinary SSH aliases/hosts and optional user names.
 # No URI, option, port suffix, whitespace or shell syntax is accepted.
 _TARGET = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_-]*@)?[A-Za-z0-9][A-Za-z0-9.-]*\Z")
@@ -42,6 +47,10 @@ class ServiceRestartResult(BaseModel):
     sub_state: str
     invocation_id: str
     pid: int
+
+
+class ServiceRebootResult(BaseModel):
+    reboot_requested: Literal[True] = True
 
 
 class ServiceControlError(Exception):
@@ -124,8 +133,18 @@ class BioXpServiceControl:
         )
 
     async def restart(self, connection: BioXpConnectionService) -> ServiceRestartResult:
+        return _parse_observation(await self._ssh(
+            connection, RESTART_COMMAND, "Robot service restart", "A robot service restart is already in progress"))
+
+    async def reboot(self, connection: BioXpConnectionService) -> ServiceRebootResult:
+        """Reboot the robot computer itself; exit zero only means the reboot was scheduled."""
+        await self._ssh(connection, REBOOT_COMMAND, "Robot reboot",
+                        "A robot service restart or reboot is already in progress")
+        return ServiceRebootResult()
+
+    async def _ssh(self, connection: BioXpConnectionService, command: str, what: str, busy: str) -> bytes:
         if not self._restart_lock.acquire(blocking=False):
-            raise ServiceControlError(409, "A robot service restart is already in progress")
+            raise ServiceControlError(409, busy)
         process = None
         spawn = None
         try:
@@ -134,17 +153,17 @@ class BioXpServiceControl:
                 spawn = asyncio.create_task(asyncio.create_subprocess_exec(
                     "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
                     "-o", "StrictHostKeyChecking=yes", "-o", "ConnectionAttempts=1",
-                    "--", target, RESTART_COMMAND,
+                    "--", target, command,
                     stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
                 ))
                 process = await asyncio.shield(spawn)
                 stdout, _ = await process.communicate()
                 if process.returncode != 0:
-                    raise ServiceControlError(502, "Robot service restart SSH command failed; remote outcome is uncertain. No automatic retry was made")
-                return _parse_observation(stdout)
+                    raise ServiceControlError(502, f"{what} SSH command failed; remote outcome is uncertain. No automatic retry was made")
+                return stdout
         except (TimeoutError, OSError) as exc:
-            raise ServiceControlError(502, "Robot service restart transport failed or timed out; remote outcome is uncertain. No automatic retry was made") from exc
+            raise ServiceControlError(502, f"{what} transport failed or timed out; remote outcome is uncertain. No automatic retry was made") from exc
         finally:
             async def reap() -> None:
                 # Join a launch interrupted before it returned its process handle.
