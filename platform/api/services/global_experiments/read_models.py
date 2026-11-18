@@ -1994,7 +1994,9 @@ async def build_project_manager_read_model(
             if setup.validation_state == "ready":
                 actions.append("prepare_launch")
         elif setup.lifecycle_state == "submitted":
-            actions = ["resume", "open_launch"]
+            actions = ["resume", "edit", "open_launch"]
+            if setup.validation_state == "ready":
+                actions.append("prepare_launch")
             if latest_run is not None:
                 actions.extend(action for action in latest_run["available_actions"] if action not in actions)
         task_items.append(

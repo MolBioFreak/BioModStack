@@ -42,7 +42,7 @@ async def test_populated_v22_upgrade_and_reopen(tmp_path):
         db.executescript(migrations._V22_SETUP_SQL)
         db.execute('INSERT INTO workflow_setup_contexts SELECT * FROM setup_copy')
         db.execute('DROP TABLE setup_copy')
-        db.execute('DELETE FROM experiment_schema_migrations WHERE version = 23')
+        db.execute('DELETE FROM experiment_schema_migrations WHERE version >= 23')
         db.commit()
         ledger = db.execute('SELECT version, checksum FROM experiment_schema_migrations ORDER BY version').fetchall()
     finally:

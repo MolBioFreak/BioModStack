@@ -377,3 +377,46 @@ async def test_native_terminal_state_is_not_gated_on_missing_accounting(
         generation = group.generation
         again = await reconcile_run_group(session, core, project_id, group.resource_id)
         assert again.state == status and again.generation == generation
+
+@pytest.mark.asyncio
+async def test_edited_setup_launch_keeps_both_job_settings(native_http, native_core_store, setup_store):
+    from fastapi import BackgroundTasks
+    from sqlalchemy import select
+    from database import Job, current_launch_context_id
+    from schemas import JobCreate
+    from services.job_submission import submit_job
+
+    client = native_http
+    project, setup, prepared, domain_path = await prepared_setup(client, 'esmfold2')
+    path = f"/api/projects/{project}/workflow-setups/{setup['setup_context_id']}"
+    ids = []
+    for generation, sequence in enumerate(('MQIFVK', 'MQIFV'), 1):
+        if generation == 2:
+            reopened = (await client.get(path)).json()
+            assert reopened['state'] == 'submitted'
+            saved = await client.put(path + '/draft', json={'expected_generation': reopened['generation'],
+                'draft': {'sequence': sequence}}, headers={'Idempotency-Key': 'edit'})
+            assert saved.status_code == 200, saved.text
+            result = await client.post(path + '/prepare-launch', json={'expected_generation': saved.json()['generation']},
+                headers={'Idempotency-Key': 'prepare-edit'})
+            assert result.status_code == 200, result.text
+            prepared = result.json()
+        context_id = prepared['launch_context_id']
+        group = await client.post(domain_path + '/run-groups', json={'preparation_launches': [
+            {'preparation_id': prepared['preparation_id'], 'launch_context_id': context_id}]},
+            headers={'Idempotency-Key': f'run-{generation}'})
+        assert group.status_code == 201, group.text
+        handoff = (await client.get(f'/api/launch-contexts/{context_id}')).json()['pinned_scheduler']
+        token = current_launch_context_id.set(context_id)
+        try:
+            for _ in range(2):  # Replay the exact submitted request, not an edited retry.
+                async with native_core_store() as core, setup_store() as db:
+                    response = await submit_job(JobCreate.model_validate({**handoff, 'launch_context_id': context_id}),
+                                                BackgroundTasks(), core, experiment_session=db)
+                    assert response.id == group.json()['runs'][0]['attempts'][0]['canonical_job_id']
+            ids.append(response.id)
+        finally:
+            current_launch_context_id.reset(token)
+    assert ids[0] != ids[1]
+    async with native_core_store() as core:
+        assert {job.id: job.params['sequence'] for job in await core.scalars(select(Job))} == dict(zip(ids, ('MQIFVK','MQIFV'), strict=True))

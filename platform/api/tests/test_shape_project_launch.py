@@ -71,7 +71,7 @@ async def prepare(core, factory, request):
         assert setup['validation_state'] == 'incomplete'
         # Editor state alone must reopen, but is not a runnable preparation.
         from experiment_services import ValidationFailure
-        with pytest.raises(ValidationFailure, match='open and ready'):
+        with pytest.raises(ValidationFailure, match='active and ready'):
             await workflow_setups.prepare_workflow_setup_launch(db, core_session=core,
                 project_id=project_id, setup_context_id=setup['setup_context_id'],
                 expected_generation=0, idempotency_key='incomplete')

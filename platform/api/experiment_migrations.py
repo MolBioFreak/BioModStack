@@ -59,7 +59,9 @@ MIGRATION_V22_VERSION = 22
 MIGRATION_V22_NAME = "native_model_workflow_setup_routes"
 MIGRATION_V23_VERSION = 23
 MIGRATION_V23_NAME = "family_msa_workflow_setup_routes"
-LATEST_MIGRATION_VERSION = MIGRATION_V23_VERSION
+MIGRATION_V24_VERSION = 24
+MIGRATION_V24_NAME = "editable_submitted_workflow_setups"
+LATEST_MIGRATION_VERSION = MIGRATION_V24_VERSION
 MIGRATION_V2_CHECKSUM = "db24d1ef056e560f10eb2fe9f8ef4dac0d4e4dbe90fd0a49efed88f0d111935c"
 MIGRATION_V3_CHECKSUM = "46f1a1d28a02334e87d628070e2bd9c6d78e158caa23d583951fdc582e7b11d2"
 MIGRATION_V4_CHECKSUM = "ec2966efee9129f8890019bee0d569de2cdf8d2a9fc4bb2e05138839880f375b"
@@ -2293,6 +2295,19 @@ MIGRATION_V23_SQL = (
 )
 MIGRATION_V23_CHECKSUM = hashlib.sha256(MIGRATION_V23_SQL.encode("utf-8")).hexdigest()
 
+MIGRATION_V24_SQL = """
+DROP TRIGGER trg_experiment_workflow_setup_terminal_immutable;
+CREATE TRIGGER trg_experiment_workflow_setup_terminal_immutable
+BEFORE UPDATE ON workflow_setup_contexts
+WHEN OLD.lifecycle_state = 'deleted' OR (OLD.lifecycle_state = 'submitted' AND
+     (NEW.lifecycle_state IS NOT OLD.lifecycle_state OR NEW.submitted_at IS NOT OLD.submitted_at
+      OR NEW.setup_context_id IS NOT OLD.setup_context_id))
+BEGIN
+    SELECT RAISE(ABORT, 'terminal workflow setup identity is immutable');
+END;
+""".strip()
+MIGRATION_V24_CHECKSUM = hashlib.sha256(MIGRATION_V24_SQL.encode("utf-8")).hexdigest()
+
 _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_resource_owner_same_workspace_insert",
     "trg_experiment_resource_owner_same_workspace_update",
@@ -2565,10 +2580,11 @@ def _accepted_migration_ledgers() -> tuple[list[tuple[int, str, str]], ...]:
     v21 = (MIGRATION_V21_VERSION, MIGRATION_V21_NAME, _migration_v21_checksum())
     v22 = (MIGRATION_V22_VERSION, MIGRATION_V22_NAME, MIGRATION_V22_CHECKSUM)
     v23 = (MIGRATION_V23_VERSION, MIGRATION_V23_NAME, MIGRATION_V23_CHECKSUM)
+    v24 = (MIGRATION_V24_VERSION, MIGRATION_V24_NAME, MIGRATION_V24_CHECKSUM)
     v1 = (LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM)
     return (
-        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23],
-        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23],
+        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24],
+        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24],
     )
 
 
@@ -2750,6 +2766,10 @@ def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dic
         _apply_additive_migration(
             expected, MIGRATION_V23_VERSION, MIGRATION_V23_NAME,
             MIGRATION_V23_CHECKSUM, "Family MSA workflow setup routes", MIGRATION_V23_SQL,
+        )
+        _apply_additive_migration(
+            expected, MIGRATION_V24_VERSION, MIGRATION_V24_NAME, MIGRATION_V24_CHECKSUM,
+            "Keep submitted Project setups editable", MIGRATION_V24_SQL,
         )
         manifest = _schema_definition_manifest(expected)
         if legacy_lineage:
@@ -3990,7 +4010,7 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-2] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-3] for ledger in _accepted_migration_ledgers()):
             _apply_additive_migration(
                 connection, MIGRATION_V22_VERSION, MIGRATION_V22_NAME,
                 MIGRATION_V22_CHECKSUM, "Native model workflow setup routes", MIGRATION_V22_SQL,
@@ -3999,7 +4019,7 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-1] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-2] for ledger in _accepted_migration_ledgers()):
             _apply_additive_migration(
                 connection, MIGRATION_V23_VERSION, MIGRATION_V23_NAME,
                 MIGRATION_V23_CHECKSUM, "Family MSA workflow setup routes", MIGRATION_V23_SQL,
@@ -4008,6 +4028,15 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
+        if rows in tuple(ledger[:-1] for ledger in _accepted_migration_ledgers()):
+            _apply_additive_migration(
+                connection, MIGRATION_V24_VERSION, MIGRATION_V24_NAME, MIGRATION_V24_CHECKSUM,
+                "Keep submitted Project setups editable", MIGRATION_V24_SQL,
+            )
+            rows = connection.execute(
+                "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+            ).fetchall()
+
         if rows not in _accepted_migration_ledgers():
             raise RuntimeError(f"experiment migration ledger mismatch: {rows!r}")
         connection.execute(
