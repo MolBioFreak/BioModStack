@@ -9,12 +9,10 @@ const FAST = 'thermo-4483485-enduraplate-fast';
 let host: HTMLDivElement, root: Root, client: QueryClient, calls: { method: string; url: string; body: any }[];
 const original = api.defaults.adapter;
 const profiles = { plates: { [FAST]: { name: 'MicroAmp EnduraPlate Optical 96-Well Fast Clear Reaction Plate with Barcode (4483485)',
-    gripper: { LOC_P_MS: { z_low_offset_steps: -10236, source: 'titrated' } }, depth_offsets: [] },
-    'thermo-4483354-enduraplate': { name: 'MicroAmp EnduraPlate Optical 96-Well (4483354)', gripper: {}, depth_offsets: [] } },
+    gripper: { LOC_P_MS: { z_low_offset_steps: -10236, source: 'titrated' } }, depth_offsets: [] } },
     loaded: { OUTPUT_PLATE: FAST }, stations: { LOC_MS: FAST },
     station_depth_offsets: [{ tip_type: 10, location: 'LOC_RC', offset_mm: 5.4, source: 'creep' }, { tip_type: 10, location: 'LOC_STRIP1', offset_mm: 1 }] };
-const library = { profiles: [{ id: FAST, short_name: 'EnduraPlate Fast 96', name: 'MicroAmp EnduraPlate Optical 96-Well Fast Clear Reaction Plate with Barcode (4483485)', vessel_geometry: { max_volume_ul: 100 } },
-    { id: 'thermo-4483354-enduraplate', short_name: 'EnduraPlate 96', name: 'Thermo MicroAmp EnduraPlate Optical 96-Well (4483354)', vessel_geometry: {} }] };
+const library = { profiles: [{ id: FAST, short_name: 'EnduraPlate Fast 96', name: 'MicroAmp EnduraPlate Optical 96-Well Fast Clear Reaction Plate with Barcode (4483485)', vessel_geometry: { max_volume_ul: 200 } }] };
 const calibration = { active_positions: [{ name: 'LOC_P_MS', zLow: 143882 }, { name: 'LOC_P_TC', zLow: 129851 }, { name: 'LOC_P_OC', zLow: 153750 }] };
 const depth = { max_mm: 15, entries: [], standard: [{ offset_mm: 0, label: 'None', source: 'x' }, { offset_mm: 5, label: '+5 mm', source: 'RC bottom' }] };
 async function tick() { await act(async () => { await new Promise(r => setTimeout(r, 20)); }); }
