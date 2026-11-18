@@ -98,13 +98,14 @@ async def test_actual_jobs_action_calls_pass_published_custody(tmp_path, monkeyp
                      'campaign_root': 'bindcraft2/campaign', 'attempt': 0,
                      'remote_attempt_id': None,
                  }})
-    tree = ast.parse(Path(jobs.__file__).read_text())
-    owner = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == '_create_job')
-    calls = [node for node in ast.walk(owner) if isinstance(node, ast.Await)
+    from services import job_submission
+    tree = ast.parse(Path(job_submission.__file__).read_text())
+    owners = {node.name: node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)}
+    calls = [node for name in ('_create_job', '_materialize_job_inputs')
+             for node in ast.walk(owners[name]) if isinstance(node, ast.Await)
              and isinstance(node.value, ast.Call) and node.value.args
              and isinstance(node.value.args[0], ast.Name)
              and node.value.args[0].id == 'materialize_native_action']
-    calls.sort(key=lambda node: node.lineno)
     assert len(calls) == 2  # Remote preparation and ordinary local submission.
     output = tmp_path / 'child'
     namespace = dict(asyncio=asyncio, Path=Path, bc2_action_source=source,
@@ -112,7 +113,7 @@ async def test_actual_jobs_action_calls_pass_published_custody(tmp_path, monkeyp
         job_data=SimpleNamespace(params={}),
         published_campaign_immutable=published_campaign_immutable,
         materialize_native_action=partial(materialize_native_action, compiler=compiler))
-    result = await eval(compile(ast.Expression(calls[callsite].value), jobs.__file__, 'eval'), namespace)
+    result = await eval(compile(ast.Expression(calls[callsite].value), job_submission.__file__, 'eval'), namespace)
     received = Path(result['bc2_campaign_dir']) / 'campaign' / retained.relative_to(campaign)
     assert received.samefile(retained) is published
     assert received.read_bytes() == retained.read_bytes()

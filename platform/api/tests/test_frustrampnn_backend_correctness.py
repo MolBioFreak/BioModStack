@@ -9,7 +9,6 @@ from pydantic import ValidationError
 
 from routers import frustrampnn as frustrampnn_router
 from routers import jobs as jobs_router
-from routers import job_results
 from services import binder_continuation
 from services.frustrampnn import jobs as frustrampnn_jobs
 from services.frustrampnn.settings import (
@@ -143,7 +142,7 @@ async def test_antibody_iteration_frustrampnn_passes_validated_requested_setting
     monkeypatch.setattr(binder_continuation, "_resolve_antibody_root_job", fake_root)
     monkeypatch.setattr(jobs_router, "_resolve_saved_review_filter_set", lambda *_args: None)
     monkeypatch.setattr(jobs_router, "_resolve_launch_design_ids", lambda *_args: ["design-1"])
-    monkeypatch.setattr(job_results, "get_job", fake_get_job)
+    monkeypatch.setattr(jobs_router, "get_job", fake_get_job)
     monkeypatch.setattr(jobs_router, "AntibodyIterationLaunchResponse", lambda **payload: payload)
     monkeypatch.setattr(frustrampnn_jobs, "design_selections", fake_selections)
     monkeypatch.setattr(frustrampnn_router, "_fanout_design_selections", fake_fanout)

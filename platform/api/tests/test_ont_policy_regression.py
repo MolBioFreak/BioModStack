@@ -28,10 +28,10 @@ _REAL_CREATE = job_submission.submit_job
 async def policy_context(pooled_context, monkeypatch):
     context = pooled_context
     monkeypatch.setattr(job_submission, "submit_job", _REAL_CREATE)
-    monkeypatch.setattr(jobs, "get_results_dir", lambda: context.results_root)
+    monkeypatch.setattr(job_submission, "get_results_dir", lambda: context.results_root)
     monkeypatch.setattr(job_submission, "get_inputs_dir", lambda: context.inputs_root)
     monkeypatch.setattr(binder_continuation, "get_inputs_dir", lambda: context.inputs_root)
-    monkeypatch.setattr(jobs, "get_data_root", lambda: context.inputs_root.parent)
+    monkeypatch.setattr(job_submission, "get_data_root", lambda: context.inputs_root.parent)
     monkeypatch.setattr(binder_continuation, "get_data_root", lambda: context.inputs_root.parent)
     monkeypatch.setattr(job_readback, "get_data_root", lambda: context.inputs_root.parent)
     monkeypatch.setattr(job_submission, "get_allowed_roots", lambda: {"inputs": context.inputs_root, "results": context.results_root})
