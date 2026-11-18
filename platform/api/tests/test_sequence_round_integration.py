@@ -461,19 +461,20 @@ async def test_actual_caliby_child_native_publication_and_round_readback(selecte
 @pytest.mark.parametrize('after_commit', [False, True])
 async def test_cancellation_and_concurrent_replay(selected, setup_store, monkeypatch, after_commit):
     session, root, _ = await root_request(selected, 'proteinmpnn')
-    name = 'submit_selected_child_jobs' if after_commit else 'create_job'
-    original = getattr(jobs, name)
+    from services import job_submission
+    name = 'submit_selected_child_jobs' if after_commit else 'submit_job'
+    original = getattr(job_submission, name)
     async def interrupted(*args, **kwargs):
         await original(*args, **kwargs)
         raise asyncio.CancelledError()
-    monkeypatch.setattr(jobs, name, interrupted)
+    monkeypatch.setattr(job_submission, name, interrupted)
     async with setup_store() as experiments:
         with pytest.raises(asyncio.CancelledError):
             await rounds.reconcile_round(session, experiments, 'root')
         children = list(await session.scalars(select(Job).where(Job.model_id == 'proteinmpnn')))
         assert len(children) == int(after_commit)
         await session.rollback()
-    monkeypatch.setattr(jobs, name, original)
+    monkeypatch.setattr(job_submission, name, original)
     factory = async_sessionmaker(session.bind, expire_on_commit=False)
     async def poll():
         async with factory() as core, setup_store() as experiments:

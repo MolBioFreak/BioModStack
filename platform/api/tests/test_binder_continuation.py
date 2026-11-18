@@ -32,7 +32,7 @@ async def selected(tmp_path, monkeypatch, setup_store):
     monkeypatch.setattr(paths, 'get_results_dir', lambda: tmp_path / 'results')
     monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: tmp_path / 'inputs')
-    monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
+    monkeypatch.setattr(job_submission, 'get_results_dir', lambda: tmp_path / 'results')
     monkeypatch.setattr(jobs, '_resolve_design_structure_path', lambda path: Path(path))
     monkeypatch.setattr(binder_continuation, '_resolve_design_structure_path', lambda path: Path(path))
     engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "selected.db"}')
