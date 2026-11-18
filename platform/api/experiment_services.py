@@ -183,6 +183,17 @@ def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def hierarchy_dependency_graph_json(payload: dict[str, Any], references: list[dict[str, Any]]) -> str:
+    """Canonical dependency graph whose digest identifies a hierarchy revision."""
+    return canonical_json(
+        {
+            "nodes": payload.get("nodes", []),
+            "edges": payload.get("edges", []),
+            "references": references,
+        }
+    )
+
+
 def _capability_model_modes(capability: dict[str, Any]) -> list[dict[str, str]]:
     """Normalize the installed capability's exact permitted scheduler pairs."""
     raw_pairs = capability.get("allowed_model_modes")
@@ -1685,13 +1696,7 @@ async def _save_revision(
                     "Domain Experiment parent Global revision authority is invalid"
                 )
     payload_json = canonical_json(payload)
-    graph_json = canonical_json(
-        {
-            "nodes": payload.get("nodes", []),
-            "edges": payload.get("edges", []),
-            "references": hierarchy_bindings,
-        }
-    )
+    graph_json = hierarchy_dependency_graph_json(payload, hierarchy_bindings)
     if aggregate_kind in {"workspace", "experiment", "domain_experiment"}:
         # Parent Global authority is part of a Domain revision's identity, even
         # when its user-authored metadata has not changed. Older revisions used
@@ -1705,11 +1710,7 @@ async def _save_revision(
                 "ordinal": 0,
                 "expected_sha256": parent_global_revision.payload_sha256,
             })
-            graph_json = canonical_json({
-                "nodes": payload.get("nodes", []),
-                "edges": payload.get("edges", []),
-                "references": revision_bindings,
-            })
+            graph_json = hierarchy_dependency_graph_json(payload, revision_bindings)
         candidates = (await session.execute(
             select(ExperimentRevision).where(
                 ExperimentRevision.subject_id == aggregate_id,
