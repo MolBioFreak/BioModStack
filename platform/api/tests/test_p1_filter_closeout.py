@@ -177,7 +177,7 @@ async def test_rf3_export_filter_receipt_sqlite_api(tmp_path, monkeypatch):
     from test_rf_filter_stage_accounting import job
     from test_core_protein_candidates import setup
     from services import result_ingester, rf_filter_task_roster as roster
-    from routers.jobs import get_job
+    from routers.job_results import get_job
     test_native_rf3_export_to_prediction_cli(tmp_path, None)
     publication = tmp_path / 'results/best_designs'; publication.mkdir(parents=True)
     selected = next((tmp_path / 'out').glob('*.pdb'))

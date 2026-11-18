@@ -133,7 +133,7 @@ class SelectedOperationRequest(BaseModel):
 async def _launch_selected(request: SelectedOperationRequest, background_tasks: BackgroundTasks,
                           session: AsyncSession = Depends(get_session),
                           experiment_session: AsyncSession = Depends(get_experiment_session)):
-    from routers.jobs import get_job
+    from routers.job_results import get_job
     from services.job_submission import submit_job
     if not request.design_ids and not request.native_sources:
         raise HTTPException(422, 'Select at least one Design or native source')

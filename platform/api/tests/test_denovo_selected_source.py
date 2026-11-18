@@ -7,6 +7,7 @@ import pytest
 
 from database import Job, Design
 from routers import jobs, files
+from routers import job_results
 from services import binder_source_materialization
 from services import job_submission
 from services import job_requests
@@ -40,7 +41,7 @@ async def test_selected_source_into_different_project_real_insertion(
 
     root = tmp_path / 'owned'
     roots = {'inputs': root / 'inputs', 'bms_results': root / 'results'}
-    for module in (paths, files, jobs, job_requests):
+    for module in (paths, files, binder_source_materialization, job_submission, job_requests):
         monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
     async with setup_store() as exp, isolated_core() as core:
         source_context = await destination(exp)
@@ -104,7 +105,7 @@ async def test_selected_source_into_different_project_real_insertion(
         assert child.provenance['source_structure'] == retained
         assert retained_path.read_bytes() == retained_bytes
         assert {key: getattr(source, key) for key in source_before} == source_before
-        detail = await jobs.get_job(child.id, core)
+        detail = await job_results.get_job(child.id, core)
         assert detail.source_structure.model_dump(mode='json', exclude_none=True) == retained
         reopened = JobCreate(name='Clone retained source', model_id=child.model_id,
             mode=child.mode, params={'sequence': 'MQIFVK', 'pred_method': 'esmfold2'},
@@ -133,8 +134,8 @@ async def source_rows(session, root, native):
         # one generated, not accepted, source specimen; no inference is claimed.
         job.params = {'rfd3_generation_request': {}, 'rfd3_generation_result_manifest_sha256': '4' * 64,
                       'rfd3_generation_aggregate': {'requested': 1, 'generated': 1, 'accepted': 0,
-                          'length': jobs._rfd3_generation_range([1.0]),
-                          'radius_of_gyration': jobs._rfd3_generation_range([0.0])}}
+                          'length': job_results._rfd3_generation_range([1.0]),
+                          'radius_of_gyration': job_results._rfd3_generation_range([0.0])}}
         design = next(row for row in session.new if isinstance(row, Design))
         design.provenance = {**design.provenance, 'accepted': False,
                              'metrics': {'residue_count': 1, 'radius_of_gyration': 0.0,
@@ -148,7 +149,7 @@ async def source_rows(session, root, native):
 async def test_exact_source_conversion_offline_and_wrong_owner(source_api, native):
     client, session, _, root = source_api
     path, selection = await source_rows(session, root, native)
-    readback = await jobs.get_rfd3_generation_result('source', session)
+    readback = await job_results.get_rfd3_generation_result('source', session)
     row = readback['candidates'][0]
     assert row['source_structure'] == {**{k: v for k, v in selection.items() if k != 'model_number'},
                                        'output_format': 'native'}
@@ -222,7 +223,7 @@ async def test_preview_approved_insert_offline_independent_lineage(admission, se
     monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: roots)
     from services import job_result_roots
     monkeypatch.setattr(job_result_roots, 'get_results_dir', lambda: roots['bms_results'])
-    for module in (paths, jobs, bundle):
+    for module in (paths, job_submission, bundle):
         monkeypatch.setattr(module, 'get_results_dir', lambda: roots['bms_results'])
         monkeypatch.setattr(module, 'get_inputs_dir', lambda: roots['inputs'])
         monkeypatch.setattr(module, 'get_data_root', lambda: tmp_path)

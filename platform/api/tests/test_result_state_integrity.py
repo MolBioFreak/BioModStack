@@ -28,7 +28,7 @@ from database import (
 )
 from services.result_ingester import _design_lineage_fields
 from services.result_state_integrity import finalize_successful_job, job_expects_design_results, repair_result_state
-from routers.jobs import reingest_job_results
+from routers.job_results import reingest_job_results
 
 
 

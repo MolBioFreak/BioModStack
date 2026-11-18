@@ -19,7 +19,8 @@ from routers.designs import (
     _merge_review_payload,
     _should_force_review_stage_listing,
 )
-from routers.jobs import _iter_saved_review_filter_sets, _merge_preserved_gate_payload, _repair_job_for_response
+from routers.job_stages import _iter_saved_review_filter_sets
+from routers.job_results import _merge_preserved_gate_payload, _repair_job_for_response
 from services.job_submission import _child_job_has_reusable_outputs
 from services.binder_continuation import _build_antibody_iteration_job, _build_selection_manifest_item, _derive_job_stage_tags, _derive_source_stage_payload, _looks_like_antibody_job, _prune_iteration_params
 from services.job_readback import SavedReviewFilterSet

@@ -213,7 +213,7 @@ def test_literal_nextflow_filter_receipt_publication(tmp_path, model, scenario):
         from test_core_protein_candidates import setup
         from database import Job
         from services.rf_filter_stage_accounting import prepare_filter_stages, retain_filter_stages
-        from routers.jobs import get_job
+        from routers.job_results import get_job
         factory, engine = await setup(tmp_path)
         try:
             async with factory() as db:

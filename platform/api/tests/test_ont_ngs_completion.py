@@ -347,8 +347,9 @@ async def test_stage_start_rolls_back_lost_cas_and_rejects_terminal_reread(
 ) -> None:
     # Scripted rowcounts exercise retry handling, not competing SQL predicates.
     from routers import jobs
+    from routers import job_stages
 
-    publish = cast(Any, getattr(jobs, "_publish_generic_stage_start", None))
+    publish = cast(Any, getattr(job_stages, "_publish_generic_stage_start", None))
     assert callable(publish)
     initial = SimpleNamespace(
         id="job-a",
@@ -422,6 +423,7 @@ async def test_stage_terminal_retry_propagates_current_stage_from_reread(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from routers import jobs
+    from routers import job_stages
 
     initial = SimpleNamespace(
         id="job-a",
@@ -469,7 +471,7 @@ async def test_stage_terminal_retry_propagates_current_stage_from_reread(
 
     monkeypatch.setattr(jobs.stage_reporting, "token_is_authorized", lambda *_args: True)
     session = Session()
-    response = await jobs._publish_generic_stage_terminal(
+    response = await job_stages._publish_generic_stage_terminal(
         session=cast(Any, session),
         job_id="job-a",
         stage="fastq_align",

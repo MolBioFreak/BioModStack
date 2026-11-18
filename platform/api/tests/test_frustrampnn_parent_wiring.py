@@ -408,6 +408,7 @@ def test_stage_reporter_routes_non_success_terminal_states(
 async def test_stage_terminal_endpoint_persists_immutable_non_success_state() -> None:
     from database import Job
     from routers import jobs
+    from routers import job_stages
     from services import stage_reporting
     from starlette.requests import Request
 
@@ -460,7 +461,7 @@ async def test_stage_terminal_endpoint_persists_immutable_non_success_state() ->
             "headers": [(b"authorization", f"Bearer {token}".encode("ascii"))],
         }
     )
-    response = await jobs.report_stage_terminal(
+    response = await job_stages.report_stage_terminal(
         job.id, request, "frustrampnn", "not_requested", [], session
     )
     assert response["status"] == "not_requested"

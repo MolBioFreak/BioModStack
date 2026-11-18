@@ -48,7 +48,7 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
     inputs = tmp_path / 'inputs'; inputs.mkdir()
     (tmp_path / 'results').mkdir(exist_ok=True)
     roots = {'inputs': inputs, 'bms_results': tmp_path / 'results'}
-    for module in (paths, files, jobs, job_requests):
+    for module in (paths, files, binder_source_materialization, job_submission, job_requests):
         monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: inputs)
     monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: inputs)

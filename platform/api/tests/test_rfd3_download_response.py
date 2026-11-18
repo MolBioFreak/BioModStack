@@ -8,6 +8,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from routers import jobs
+from routers import job_results
 
 
 @pytest.mark.asyncio
@@ -44,7 +45,7 @@ async def test_rfd3_download_filename_matches_http_decoded_content(tmp_path, own
     @app.get("/artifact")
     async def artifact():
         if owner == "generation":
-            return await jobs.get_rfd3_generation_artifact(job.id, "candidate", role, session)
+            return await job_results.get_rfd3_generation_artifact(job.id, "candidate", role, session)
         return await jobs.get_rfd3_local_redesign_artifact(job.id, "artifact", session)
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:

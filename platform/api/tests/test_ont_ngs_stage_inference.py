@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job
 from routers import jobs
+from routers import job_stages
 from services.job_readback import (
     _infer_nanopore_stage_outputs,
     _planned_nanopore_stages,
@@ -176,7 +177,7 @@ async def test_legacy_clone_stage_callback_persists_canonical_stage_id(tmp_path:
                 }
             )
 
-            await jobs.report_stage_complete(
+            await job_stages.report_stage_complete(
                 job.id,
                 request,
                 "clone_validation",

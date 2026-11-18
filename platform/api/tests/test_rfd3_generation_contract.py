@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from database import Base, Design, Job
 from routers import jobs as jobs_router
 from services import job_requests
-from routers.jobs import get_rfd3_generation_result
+from routers.job_results import get_rfd3_generation_result
 from services import rfd3_generation as generation_contract
 from services.nextflow import build_nextflow_command, resolve_nextflow_entrypoint
 from services.rfd3_generation import (
