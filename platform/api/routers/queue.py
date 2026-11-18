@@ -26,7 +26,11 @@ from services.job_control import (
     cancel_job_lineage,
     force_launch_job as force_launch_job_service,
     get_md_owned_job_ids,
+    pause_job as pause_job_service,
     reject_generic_md_lifecycle_control,
+    release_job_gpu as release_job_gpu_service,
+    resume_job as resume_job_service,
+    retry_job as retry_job_service,
     visible_job_clause,
 )
 from services.workflow_adapter import WorkflowAdapterRequestError, request_via_workflow_adapter, workflow_adapter_enabled
@@ -591,24 +595,7 @@ async def get_queue_stats(session: AsyncSession = Depends(get_session)):
 async def pause_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Pause a queued job (won't be scheduled until resumed)."""
     await reject_generic_md_lifecycle_control(job_id, session)
-    result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
-    job = result.scalar_one_or_none()
-    
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.queue_status not in ['queued', 'running']:
-        raise HTTPException(status_code=400, detail=f"Cannot pause job with status: {job.queue_status}")
-    if job.execution_target_id and job.queue_status == 'running':
-        raise HTTPException(
-            status_code=409,
-            detail="Running remote Jobs cannot be paused; cancel them or wait for completion",
-        )
-    
-    job.paused = True
-    job.queue_status = 'paused'
-    await session.commit()
-    
+    job = await pause_job_service(job_id, session)
     return {"success": True, "message": f"Job {job.name} paused", "job_id": job_id}
 
 
@@ -616,40 +603,14 @@ async def pause_job(job_id: str, session: AsyncSession = Depends(get_session)):
 async def resume_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Resume a paused job."""
     await reject_generic_md_lifecycle_control(job_id, session)
-    result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
-    job = result.scalar_one_or_none()
-    
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if not job.paused:
-        raise HTTPException(status_code=400, detail="Job is not paused")
-    
-    job.paused = False
-    job.queue_status = 'queued'
-    await session.commit()
-    
+    job = await resume_job_service(job_id, session)
     return {"success": True, "message": f"Job {job.name} resumed", "job_id": job_id}
 
 
 @router.post("/{job_id}/release-gpu")
 async def release_job_gpu(job_id: str, session: AsyncSession = Depends(get_session)):
     await reject_generic_md_lifecycle_control(job_id, session)
-    result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
-    job = result.scalar_one_or_none()
-
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if job.execution_target_id:
-        raise HTTPException(
-            status_code=409,
-            detail="Remote Jobs release their GPU only through remote terminal reconciliation",
-        )
-
-    released_gpu = job.assigned_gpu
-    job.assigned_gpu = None
-    await session.commit()
-
+    job, released_gpu = await release_job_gpu_service(job_id, session)
     return {
         "success": True,
         "job_id": job_id,
@@ -732,59 +693,7 @@ async def set_job_priority(
 async def retry_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Retry a failed job (resets to queued)."""
     await reject_generic_md_lifecycle_control(job_id, session)
-    result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
-    job = result.scalar_one_or_none()
-    
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    launch_context_id = (getattr(job, "provenance", None) or {}).get("launch_context_id")
-    if launch_context_id:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "PROJECT_BOUND_REORCHESTRATION_REQUIRED",
-                "message": (
-                    "Project-bound Jobs must be retried through the owning Domain Run Group "
-                    "with a replacement preparation, attempt, and launch context."
-                ),
-                "launch_context_id": launch_context_id,
-            },
-        )
-    
-    if job.queue_status != 'failed':
-        raise HTTPException(status_code=400, detail="Can only retry failed jobs")
-    
-    if job.retry_count >= job.max_retries:
-        raise HTTPException(status_code=400, detail=f"Max retries ({job.max_retries}) exceeded")
-    
-    job.retry_count += 1
-    job.status = 'queued'
-    job.queue_status = 'queued'
-    job.paused = False
-    job.error_message = None
-    job.assigned_gpu = None
-    job.started_at = None
-    job.completed_at = None
-    job.current_stage = None
-    job.stage_progress = None
-    if getattr(job, "execution_target_id", None):
-        provenance = dict(getattr(job, "provenance", None) or {})
-        prior_receipt = provenance.pop("remote_execution_receipt", None)
-        provenance.pop("remote_execution_assignment", None)
-        if isinstance(prior_receipt, dict):
-            history = list(provenance.get("remote_execution_attempt_history") or [])
-            history.append(prior_receipt)
-            provenance["remote_execution_attempt_history"] = history
-        job.provenance = provenance
-        job.nextflow_run_id = None
-        job.remote_attempt_id = None
-        job.execution_bundle_sha256 = None
-        job.remote_state = "queued"
-        from services.execution_ownership import release_scheduler_gpu_assignment
-
-        job.params = release_scheduler_gpu_assignment(job.params)
-    await session.commit()
-    
+    job = await retry_job_service(job_id, session)
     return {
         "success": True, 
         "message": f"Job {job.name} requeued (retry {job.retry_count}/{job.max_retries})", 

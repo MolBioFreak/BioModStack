@@ -170,6 +170,115 @@ async def reject_generic_md_lifecycle_control(job_id: str, session: AsyncSession
         )
 
 
+async def pause_job(job_id: str, session: AsyncSession) -> Job:
+    result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.queue_status not in ['queued', 'running']:
+        raise HTTPException(status_code=400, detail=f"Cannot pause job with status: {job.queue_status}")
+    if job.execution_target_id and job.queue_status == 'running':
+        raise HTTPException(
+            status_code=409,
+            detail="Running remote Jobs cannot be paused; cancel them or wait for completion",
+        )
+
+    job.paused = True
+    job.queue_status = 'paused'
+    await session.commit()
+    return job
+
+
+async def resume_job(job_id: str, session: AsyncSession) -> Job:
+    result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if not job.paused:
+        raise HTTPException(status_code=400, detail="Job is not paused")
+
+    job.paused = False
+    job.queue_status = 'queued'
+    await session.commit()
+    return job
+
+
+async def release_job_gpu(job_id: str, session: AsyncSession) -> tuple[Job, int | None]:
+    result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.execution_target_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Remote Jobs release their GPU only through remote terminal reconciliation",
+        )
+
+    released_gpu = job.assigned_gpu
+    job.assigned_gpu = None
+    await session.commit()
+    return job, released_gpu
+
+
+async def retry_job(job_id: str, session: AsyncSession) -> Job:
+    result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    launch_context_id = (getattr(job, "provenance", None) or {}).get("launch_context_id")
+    if launch_context_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PROJECT_BOUND_REORCHESTRATION_REQUIRED",
+                "message": (
+                    "Project-bound Jobs must be retried through the owning Domain Run Group "
+                    "with a replacement preparation, attempt, and launch context."
+                ),
+                "launch_context_id": launch_context_id,
+            },
+        )
+
+    if job.queue_status != 'failed':
+        raise HTTPException(status_code=400, detail="Can only retry failed jobs")
+
+    if job.retry_count >= job.max_retries:
+        raise HTTPException(status_code=400, detail=f"Max retries ({job.max_retries}) exceeded")
+
+    job.retry_count += 1
+    job.status = 'queued'
+    job.queue_status = 'queued'
+    job.paused = False
+    job.error_message = None
+    job.assigned_gpu = None
+    job.started_at = None
+    job.completed_at = None
+    job.current_stage = None
+    job.stage_progress = None
+    if getattr(job, "execution_target_id", None):
+        provenance = dict(getattr(job, "provenance", None) or {})
+        prior_receipt = provenance.pop("remote_execution_receipt", None)
+        provenance.pop("remote_execution_assignment", None)
+        if isinstance(prior_receipt, dict):
+            history = list(provenance.get("remote_execution_attempt_history") or [])
+            history.append(prior_receipt)
+            provenance["remote_execution_attempt_history"] = history
+        job.provenance = provenance
+        job.nextflow_run_id = None
+        job.remote_attempt_id = None
+        job.execution_bundle_sha256 = None
+        job.remote_state = "queued"
+        job.params = release_scheduler_gpu_assignment(job.params)
+    await session.commit()
+    return job
+
+
 def _job_is_cancelable(job: Job) -> bool:
     status = str(getattr(job, "status", "") or "").strip().lower()
     queue_status = str(getattr(job, "queue_status", "") or "").strip().lower()
