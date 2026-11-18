@@ -417,6 +417,16 @@ async def test_edited_setup_launch_keeps_both_job_settings(native_http, native_c
             ids.append(response.id)
         finally:
             current_launch_context_id.reset(token)
+        if generation == 1:
+            from experiment_models import ExperimentRunGroup
+            group_id = group.json()['run_group_id']
+            async with setup_store() as db:
+                current = await db.get(ExperimentRunGroup, group_id)
+                revision = current.generation
+            cancelled = await client.post(domain_path + f'/run-groups/{group_id}/cancel',
+                json={'expected_run_group_generation': revision, 'reason': 'End first fixture run'},
+                headers={'Idempotency-Key': 'end-first'})
+            assert cancelled.status_code == 200, cancelled.text
     assert ids[0] != ids[1]
     async with native_core_store() as core:
         assert {job.id: job.params['sequence'] for job in await core.scalars(select(Job))} == dict(zip(ids, ('MQIFVK','MQIFV'), strict=True))
