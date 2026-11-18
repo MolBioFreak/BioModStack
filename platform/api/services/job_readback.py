@@ -1,5 +1,9 @@
 """Job readback: the public response projection of one Job."""
 
+from services.rfd3_generation_results import (
+    _rfd3_public_json,
+)
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import Optional, List, Dict, Any, Literal
@@ -423,55 +427,6 @@ def _resolve_stage_state_for_response(job: Job) -> tuple[List[str], Dict[str, Li
     _inferred_completed, stage_outputs = infer_antibody_stage_state(job, list(completed), stage_outputs)
 
     return completed, stage_outputs
-
-
-def _rfd3_public_json(value: Any, *, field: str | None = None) -> Any:
-    """Project stored RFD3 provenance without exposing absolute host paths."""
-
-    if isinstance(value, dict):
-        return {key: _rfd3_public_json(item, field=str(key)) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_rfd3_public_json(item, field=field) for item in value]
-    field_name = str(field or "").lower()
-    is_path_field = field_name in {
-        "input",
-        "input_structure",
-        "input_pdb",
-        "input_cif",
-        "plr_input_pdb",
-        "rfd3_request_path",
-        "path",
-        "paths",
-        "file",
-        "files",
-        "dir",
-        "directory",
-        "directories",
-        "filepath",
-        "filepaths",
-        "dirname",
-        "dirnames",
-        "storage_path",
-    } or field_name.endswith(
-        (
-            "_path",
-            "_paths",
-            "_file",
-            "_files",
-            "_dir",
-            "_directory",
-            "_directories",
-            "_filepath",
-            "_filepaths",
-            "_dirname",
-            "_dirnames",
-        )
-    )
-    if isinstance(value, str) and is_path_field:
-        candidate = Path(value).expanduser()
-        if candidate.is_absolute():
-            return candidate.name
-    return value
 
 
 def _is_native_rfd3_job(job: Any) -> bool:

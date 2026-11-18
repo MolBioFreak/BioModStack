@@ -16,6 +16,7 @@ sys.path.insert(0, str(API))
 sys.path.insert(0, str(API.parent.parent))
 from database import get_session
 from routers import files
+from services import binder_source_materialization
 import paths
 
 
@@ -51,6 +52,7 @@ def capture_api(tmp_path, monkeypatch):
         root.mkdir()
     monkeypatch.setattr(paths, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: roots)
+    monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: roots)
     app = FastAPI()
     app.include_router(files.router, prefix='/api/files')
     app.dependency_overrides[files.get_governed_ngs_result_roots] = lambda: ()

@@ -179,7 +179,9 @@ def test_v2_run_manifest_truthfully_identifies_its_job_contract(tmp_path: Path) 
 def test_capabilities_advertise_v2_without_removing_retained_v1(monkeypatch: pytest.MonkeyPatch) -> None:
     import main
     from routers import molecular_dynamics
+    from services.md import native_launch
     monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: _catalog())
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: _catalog())
     client = TestClient(main.app)
     try:
         response = client.get("/api/molecular-dynamics/capabilities")

@@ -238,6 +238,7 @@ def test_preview_binds_relative_includes_and_preserves_path_authority(native_cli
 async def test_native_launch_reaches_real_job_create_and_scratch_persistence(native_files, tmp_path, monkeypatch, mode):
     from database import Base, Job, MdRun
     from routers import jobs, molecular_dynamics as md
+    from services.md import native_launch
     from services import job_requests
     from services import gpu_orchestrator
     from services.md.starting_structures import MdLaunchPreviewRequest, MdLaunchRequest
@@ -267,6 +268,7 @@ async def test_native_launch_reaches_real_job_create_and_scratch_persistence(nat
             if mode == "guided":
                 intent, catalog, _profile = _guided_intent()
                 monkeypatch.setattr(md, "get_chemistry_catalog", lambda: catalog)
+                monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: catalog)
                 monkeypatch.setattr(contract, "get_chemistry_catalog", lambda: catalog)
             preview = await md.preview_typed_md_launch(MdLaunchPreviewRequest.model_validate({
                 "schema_version": "bms.md.launch-preview-request.v1", "intent": intent,

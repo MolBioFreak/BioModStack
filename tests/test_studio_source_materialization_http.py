@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from test_atomworks_studio_http import BASE, client, sidecar
 from database import get_session
 from routers import files
+from services import binder_source_materialization
 
 
 
@@ -48,6 +49,7 @@ def custody(tmp_path, monkeypatch):
     roots['inputs'].mkdir()
     monkeypatch.setattr(paths, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: roots)
+    monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: roots)
     app = FastAPI()
     app.include_router(files.router, prefix='/api/files')
     async def session():

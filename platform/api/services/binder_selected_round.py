@@ -714,7 +714,7 @@ async def md_request(session, root, row, params, placement, request, step_id):
     No prediction requirement, alternate runner, or scientific defaults live here.
     The parent-owned router hunk exposes its existing request builder verbatim.
     """
-    from routers.molecular_dynamics import _compile_native_preview, _native_md_job_request
+    from services.md.native_launch import _compile_native_preview, _native_md_job_request
     from services.md.starting_structures import MdNativeLaunchIntent, MdLaunchRequest, StartingStructureSourceRef, resolve_source, read_resolved_structure
     if not isinstance(params.get('intent'), dict):
         raise ValueError('MD operation requires its existing native launch intent')

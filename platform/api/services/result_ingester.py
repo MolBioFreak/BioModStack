@@ -5,6 +5,10 @@ Reads all_designs.csv and success_metrics.json from completed jobs
 and populates the Design table in SQLite.
 """
 
+from services.result_contracts import (
+    _parse_job_params,
+)
+
 import csv
 import copy
 import hashlib
@@ -69,7 +73,6 @@ from .frustrampnn.persistence import (
 from .structure_utils import calculate_epitope_contacts, compute_contact_geometry_metrics, compute_gyration_radius
 
 
-
 def _normalize_boltzgen_design_name(design_name: str) -> str:
     """Normalize upstream ``rankN_name`` artifacts to the UI/API ``name_N`` contract."""
     import re
@@ -114,18 +117,6 @@ def parse_backbone_id(design_name: str) -> Optional[int]:
         if matches:
             return int(matches[-1])
     return None
-
-
-def _parse_job_params(raw_params: Any) -> Dict[str, Any]:
-    if isinstance(raw_params, dict):
-        return raw_params
-    if isinstance(raw_params, str) and raw_params:
-        try:
-            parsed = json.loads(raw_params)
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:
-            return {}
-    return {}
 
 
 def _job_has_explicit_binder_target_roles(job: Optional[Job]) -> bool:
@@ -6337,7 +6328,6 @@ async def ingest_collected_ppiflow_structures(
         print(f"[Ingester] Backfilled {created} collected PPIFlow structures for job {job_id}")
 
     return created
-
 
 
 def _relocate_caliby_native_output(payload: Dict[str, Any], metadata_path: Path) -> Dict[str, Any]:

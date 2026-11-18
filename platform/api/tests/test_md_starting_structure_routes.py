@@ -31,6 +31,7 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     import main
     from database import get_session
     from routers import molecular_dynamics
+    from services.md import native_launch
     from services.md import starting_structures
 
     async def override_session():
@@ -40,6 +41,7 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         starting_structures, "get_inputs_dir", lambda: tmp_path / "inputs", raising=False
     )
     monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: None)
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: None)
     main.app.dependency_overrides[get_session] = override_session
     test_client = TestClient(main.app)
     try:
@@ -79,6 +81,7 @@ def test_governed_content_uses_verified_multichunk_snapshot_stream(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from routers import molecular_dynamics
+    from services.md import native_launch
     from services.md.starting_structures import ResolvedStartingStructure
 
     source = tmp_path / "large-source.pdb"
@@ -105,6 +108,7 @@ def test_governed_content_uses_verified_multichunk_snapshot_stream(
             super().__init__(observed_content(), *args, **kwargs)
 
     monkeypatch.setattr(molecular_dynamics, "resolve_source", resolve_large)
+    monkeypatch.setattr(native_launch, "resolve_source", resolve_large)
     monkeypatch.setattr(
         molecular_dynamics,
         "StreamingResponse",
@@ -132,6 +136,7 @@ def test_stream_snapshot_is_immutable_after_response_setup(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from routers import molecular_dynamics
+    from services.md import native_launch
     from services.md.starting_structures import ResolvedStartingStructure
 
     source = tmp_path / "mutable-source.pdb"
@@ -154,6 +159,7 @@ def test_stream_snapshot_is_immutable_after_response_setup(
             super().__init__(content, *args, **kwargs)
 
     monkeypatch.setattr(molecular_dynamics, "resolve_source", resolve_mutable)
+    monkeypatch.setattr(native_launch, "resolve_source", resolve_mutable)
     monkeypatch.setattr(
         molecular_dynamics,
         "StreamingResponse",
@@ -173,6 +179,7 @@ def test_governed_content_rejects_source_drift_since_inspection(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from routers import molecular_dynamics
+    from services.md import native_launch
     from services.md.starting_structures import ResolvedStartingStructure
 
     source = tmp_path / "drifted-source.pdb"
@@ -190,6 +197,7 @@ def test_governed_content_rejects_source_drift_since_inspection(
         )
 
     monkeypatch.setattr(molecular_dynamics, "resolve_source", resolve_drifted)
+    monkeypatch.setattr(native_launch, "resolve_source", resolve_drifted)
     response = client.get(
         "/api/molecular-dynamics/starting-structures/managed_fixture/drifted/content"
         f"?expected_sha256={inspected_sha256}"
@@ -202,6 +210,7 @@ def test_governed_content_preserves_cif_media_type_and_canonical_suffix(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from routers import molecular_dynamics
+    from services.md import native_launch
     from services.md.starting_structures import ResolvedStartingStructure
 
     source = tmp_path / "source.mmcif"
@@ -217,6 +226,7 @@ def test_governed_content_preserves_cif_media_type_and_canonical_suffix(
         )
 
     monkeypatch.setattr(molecular_dynamics, "resolve_source", resolve_cif)
+    monkeypatch.setattr(native_launch, "resolve_source", resolve_cif)
     response = client.get(
         "/api/molecular-dynamics/starting-structures/upload/cif-source/content"
         f"?expected_sha256={expected_sha256}"
@@ -231,6 +241,7 @@ def test_governed_content_rejects_files_over_100_mib_before_delivery(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from routers import molecular_dynamics
+    from services.md import native_launch
     from services.md.starting_structures import ResolvedStartingStructure
 
     oversized = tmp_path / "oversized.pdb"
@@ -246,6 +257,7 @@ def test_governed_content_rejects_files_over_100_mib_before_delivery(
         )
 
     monkeypatch.setattr(molecular_dynamics, "resolve_source", resolve_oversized)
+    monkeypatch.setattr(native_launch, "resolve_source", resolve_oversized)
     response = client.get(
         "/api/molecular-dynamics/starting-structures/managed_fixture/oversized/content"
         f"?expected_sha256={'0' * 64}"
@@ -272,6 +284,7 @@ def test_content_re_resolves_every_source_kind_before_streaming(
     source_id: str,
 ) -> None:
     from routers import molecular_dynamics
+    from services.md import native_launch
     from services.md.starting_structures import ResolvedStartingStructure
 
     resolved_kinds: list[str] = []
@@ -285,6 +298,7 @@ def test_content_re_resolves_every_source_kind_before_streaming(
         )
 
     monkeypatch.setattr(molecular_dynamics, "resolve_source", record_resolution)
+    monkeypatch.setattr(native_launch, "resolve_source", record_resolution)
     response = client.get(
         f"/api/molecular-dynamics/starting-structures/{kind}/{source_id}/content"
         f"?expected_sha256={ONE_AKI_SHA256}"
@@ -463,6 +477,7 @@ def test_server_file_resolution_carries_one_pinned_file_through_every_consumer(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from routers import jobs, molecular_dynamics
+    from services.md import native_launch
     from services.md import starting_structures
 
     root = tmp_path / "server-files"
@@ -512,6 +527,7 @@ def test_server_file_resolution_carries_one_pinned_file_through_every_consumer(
             return _View()
 
     monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: _Catalog())
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: _Catalog())
     listed = client.get("/api/molecular-dynamics/starting-structures/server-files")
     assert listed.status_code == 200, listed.text
     handle = listed.json()["items"][0]["id"]
@@ -532,6 +548,7 @@ def test_server_file_resolution_carries_one_pinned_file_through_every_consumer(
         return resolved
 
     monkeypatch.setattr(molecular_dynamics, "resolve_source", resolve_then_replace)
+    monkeypatch.setattr(native_launch, "resolve_source", resolve_then_replace)
 
     restore_original()
     inspected = client.post(
@@ -561,6 +578,7 @@ def test_server_file_resolution_carries_one_pinned_file_through_every_consumer(
     assert preview.json()["source"]["sha256"] == ONE_AKI_SHA256
 
     monkeypatch.setattr(molecular_dynamics, "resolve_source", real_resolve)
+    monkeypatch.setattr(native_launch, "resolve_source", real_resolve)
     restore_original()
     launch_preview = client.post(
         "/api/molecular-dynamics/launch-preview",
@@ -571,6 +589,7 @@ def test_server_file_resolution_carries_one_pinned_file_through_every_consumer(
     )
     assert launch_preview.status_code == 200, launch_preview.text
     monkeypatch.setattr(molecular_dynamics, "resolve_source", resolve_then_replace)
+    monkeypatch.setattr(native_launch, "resolve_source", resolve_then_replace)
     restore_original()
     launch_bytes: list[bytes] = []
 
@@ -627,6 +646,7 @@ def test_server_file_capability_gates_inspect_content_preview_and_launch(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from routers import molecular_dynamics
+    from services.md import native_launch
     from services.md import starting_structures
 
     root = tmp_path / "server-files"
@@ -672,6 +692,7 @@ def test_server_file_capability_gates_inspect_content_preview_and_launch(
             return _View()
 
     monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: _Catalog())
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: _Catalog())
     monkeypatch.setenv("BMS_MD_SERVER_FILE_BROWSER_ENABLED", "1")
     listed = client.get("/api/molecular-dynamics/starting-structures/server-files")
     assert listed.status_code == 200, listed.text

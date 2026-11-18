@@ -65,8 +65,10 @@ def request_fixture(roots, tmp_path, monkeypatch, form, retained):
 @pytest.mark.parametrize('retained', [False, True])
 def test_current_compile_preview_prepare_and_retry(roots, tmp_path, monkeypatch, form, retained):
     from routers import conformational_mapping as router
+    from services.conformational_mapping import submission
     materialized, checkpoint = request_fixture(roots, tmp_path, monkeypatch, form, retained)
     monkeypatch.setattr(router, 'get_weights_root', lambda: roots['weights'])
+    monkeypatch.setattr(submission, 'get_weights_root', lambda: roots['weights'])
     original = materialized.request_path.read_bytes()
     before = checkpoint.stat()
     params = dict(materialized.launch_params, run_frustrampnn=True)
@@ -142,8 +144,10 @@ def test_retained_digest_uses_old_object_not_current_native_name(roots, tmp_path
 
 def test_retained_private_version_remains_supported_without_default_substitution(roots, tmp_path, monkeypatch):
     from routers import conformational_mapping as router
+    from services.conformational_mapping import submission
     materialized, checkpoint = request_fixture(roots, tmp_path, monkeypatch, 'regular', True)
     monkeypatch.setattr(router, 'get_weights_root', lambda: roots['weights'])
+    monkeypatch.setattr(submission, 'get_weights_root', lambda: roots['weights'])
     original_snapshot = materialized.request_path.parent / 'registered/historical-source-id.pt'
     authority = router._build_retry_authority(materialized.request_path.parent)
     checkpoint.write_bytes(b'different current default')
@@ -161,8 +165,10 @@ def test_retained_private_version_remains_supported_without_default_substitution
 def test_retry_keeps_sealed_checkpoint_authority_digest_check(roots, tmp_path, monkeypatch):
     from fastapi import HTTPException
     from routers import conformational_mapping as router
+    from services.conformational_mapping import submission
     materialized, _ = request_fixture(roots, tmp_path, monkeypatch, 'pinned', True)
     monkeypatch.setattr(router, 'get_weights_root', lambda: roots['weights'])
+    monkeypatch.setattr(submission, 'get_weights_root', lambda: roots['weights'])
     authority = router._build_retry_authority(materialized.request_path.parent)
     authority['files']['registered/historical-source-id.pt']['sha256'] = 'f' * 64
     authority['authority_sha256'] = router.canonical_sha256({k: v for k, v in authority.items() if k != 'authority_sha256'})

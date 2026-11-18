@@ -144,7 +144,8 @@ async def test_real_acquisition_holds_sources_across_await(source_api, monkeypat
     target = directory.with_name('acquired'); target.mkdir()
     request = sources.StructureSourceRequest(path=sources.to_allowed_relative(directory / 'input.pdb'))
     from routers import files
-    original = files.materialize_structure_source
+    from services import binder_source_materialization
+    original = binder_source_materialization.materialize_structure_source
     entered, resume = asyncio.Event(), asyncio.Event()
 
     async def delayed(*args, **kwargs):
@@ -152,7 +153,7 @@ async def test_real_acquisition_holds_sources_across_await(source_api, monkeypat
         await resume.wait()
         return await original(*args, **kwargs)
 
-    monkeypatch.setattr(files, 'materialize_structure_source', delayed)
+    monkeypatch.setattr(binder_source_materialization, 'materialize_structure_source', delayed)
     async with AsyncSession(bind=session.bind) as writer:
         if kind == 'explicit':
             acquisition = sources.prepare_resequence_sources([request], writer, target, ())

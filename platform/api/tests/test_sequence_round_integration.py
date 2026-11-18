@@ -214,10 +214,12 @@ async def root_request(selected, model, *, remote=False):
     ('fampnn', 'fampnn_checkpoint_path', 'custom.pt')])
 async def test_model_owned_auxiliary_file_alias_reaches_child(selected, setup_store, monkeypatch, model, key, filename):
     from routers import files
+    from services import binder_source_materialization
     session, root, tmp = await root_request(selected, model)
     source = tmp / filename
     source.write_text('{"A": 0.0}\n' if model == 'proteinmpnn' else 'inert checkpoint transport fixture')
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: {'downloads': tmp})
+    monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: {'downloads': tmp})
     monkeypatch.setattr(jobs, 'resolve_allowed_path', files._allowed_lexical_path)
     monkeypatch.setattr(job_requests, 'resolve_allowed_path', files._allowed_lexical_path)
     root.provenance = {REQUEST: envelope(model, params={key: 'downloads/' + filename})}

@@ -23,6 +23,7 @@ if str(API_ROOT) not in sys.path:
 from model_registry import ModelRegistry  # noqa: E402
 from routers import jobs as jobs_router  # noqa: E402
 from routers import conformational_mapping as cm_router  # noqa: E402
+from services.conformational_mapping import submission
 from schemas import JobCreate  # noqa: E402
 from services import nextflow  # noqa: E402
 from services.conformational_mapping import request_builder  # noqa: E402
@@ -55,10 +56,10 @@ def test_server_confornets_identity_matches_the_executed_upstream_commit(
 ) -> None:
     image = tmp_path / "confornets-canonical.sif"
     image.write_bytes(b"canonical-confornets")
-    monkeypatch.setattr(cm_router, "_registered_image_digest",
+    monkeypatch.setattr(submission, "_registered_image_digest",
                         lambda _: hashlib.sha256(image.read_bytes()).hexdigest())
 
-    identity = cm_router._server_confornets_identity()
+    identity = submission._server_confornets_identity()
 
     assert identity["backend_version"] == "canonical-4df561a"
     assert identity["backend_commit"] == "4df561a1fbd0fd2b9c7a230fa62957a837d9f72d"
@@ -303,7 +304,7 @@ def test_snapshot_chain_context_uses_schema_mapping_fields() -> None:
     fixture = json.loads(
         (API_ROOT / "tests" / "fixtures" / "conformational_mapping" / "schemas" / "positive" / "all_schemas.json").read_text()
     )
-    assert cm_router._snapshot_chain_ids([fixture["cm_complex_snapshot_v1"]]) == ["A", "B"]
+    assert submission._snapshot_chain_ids([fixture["cm_complex_snapshot_v1"]]) == ["A", "B"]
 
 
 def test_external_import_binding_reseals_authoritative_input_context(tmp_path: Path) -> None:

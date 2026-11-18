@@ -79,7 +79,7 @@ async def inspect_rfd4_condition(payload, session):
     from starlette.concurrency import run_in_threadpool
     from paths import resolve_allowed_path
     from services.native_generation_sources import NativeSources, NativeFileSource
-    from routers.files import materialize_structure, get_governed_ngs_result_roots
+    from services.binder_source_materialization import materialize_structure_source, governed_ngs_result_roots
 
     inp, row = payload['input'], payload['row']
     if inp['kind'] != 'condition_spec':
@@ -90,7 +90,7 @@ async def inspect_rfd4_condition(payload, session):
     example = inp['examples'][index]
     bindings = TypeAdapter(NativeSources).validate_python({
         source['slot']: payload['native_sources'][source['slot']] for source in example['sources']})
-    governed = await get_governed_ngs_result_roots(session)
+    governed = await governed_ngs_result_roots(session)
     receipts, paths = {}, {}
     for source in example['sources']:
         slot = source['slot']
@@ -99,7 +99,7 @@ async def inspect_rfd4_condition(payload, session):
         binding = bindings[slot]
         if isinstance(binding, NativeFileSource):
             raise ValueError('Condition inspection requires a structure source')
-        receipt = await materialize_structure(binding.model_copy(update={'output_format': 'native'}), session, governed_roots=governed)
+        receipt = await materialize_structure_source(binding.model_copy(update={'output_format': 'native'}), session, governed_roots=governed)
         if receipt.get('inspection_error'):
             raise ValueError('Source identity readback unavailable: ' + receipt['inspection_error'])
         if receipt['model_number'] is None and len(receipt['model_numbers']) != 1:

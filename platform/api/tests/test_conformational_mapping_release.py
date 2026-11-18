@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 
 from routers import conformational_mapping as cm_router
+from services.conformational_mapping import submission
 from routers.conformational_mapping import (
     _artifact_byte_range,
     _cm_job_admission,
@@ -41,6 +42,7 @@ def test_artifact_download_resolves_host_storage_path_before_descriptor_pinning(
     monkeypatch.setenv("BMS_DATA", str(persisted_host_root))  # alias root recognised by the product
 
     monkeypatch.setattr(cm_router, "get_data_root", lambda: runtime_root)
+    monkeypatch.setattr(submission, "get_data_root", lambda: runtime_root)
     descriptor = _open_verified_artifact_descriptor(
         storage_path=str(persisted_host_root / "final" / "native.cif"),
         root_path=str(persisted_host_root),
@@ -73,6 +75,7 @@ def test_artifact_download_resolves_custom_state_root_and_http_ranges(
     artifact.write_bytes(b"0123456789")
     custom_host_root = Path("/srv/custom-biomodstack-state")
     monkeypatch.setattr(cm_router, "get_data_root", lambda: runtime_root)
+    monkeypatch.setattr(submission, "get_data_root", lambda: runtime_root)
     monkeypatch.setenv("BMS_STATE_DIR", str(custom_host_root))
 
     descriptor = _open_verified_artifact_descriptor(

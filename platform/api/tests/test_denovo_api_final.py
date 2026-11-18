@@ -13,6 +13,7 @@ from sqlalchemy import select
 from database import Job, Design, ExecutionTarget, get_session
 from experiment_database import get_experiment_session
 from routers import jobs, files
+from services import binder_source_materialization
 from services import job_submission
 from services import binder_continuation
 from services import job_control
@@ -31,6 +32,7 @@ async def api(stores, monkeypatch):
     roots = {'inputs': root / 'inputs', 'bms_results': root / 'results'}
     monkeypatch.setattr(paths, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: roots)
+    monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(job_submission, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(job_requests, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: root / 'inputs')

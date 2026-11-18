@@ -478,12 +478,14 @@ async def test_unsupported_plan_and_forged_parent_do_not_enqueue(admission):
 @pytest.mark.asyncio
 async def test_md_native_preview_binds_shared_plan_without_second_approval(admission, monkeypatch):
     from routers import molecular_dynamics as md
+    from services.md import native_launch
     from tests.test_md_typed_launch import _intent_payload
     from tests.test_md_job_v2_contract import _catalog
     from services.md import launch_contract
     monkeypatch.setenv('BMS_FEATURE_MOLECULAR_DYNAMICS', '1')
     catalog = _catalog()
     monkeypatch.setattr(md, 'get_chemistry_catalog', lambda: catalog)
+    monkeypatch.setattr(native_launch, 'get_chemistry_catalog', lambda: catalog)
     monkeypatch.setattr(launch_contract, 'get_chemistry_catalog', lambda: catalog)
     # Admission authority is independent of installed engine bytes.
     monkeypatch.setattr(launch_contract, '_bound_engine_runtime_identity',

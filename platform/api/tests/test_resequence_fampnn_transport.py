@@ -36,6 +36,7 @@ def pdb(domain):
 @pytest.mark.parametrize('sidechains', [False, True])
 async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_path, monkeypatch, selection, sidechains):
     import routers.files as files
+    from services import binder_source_materialization
     import services.binder_source_materialization as bsm
     import paths
     from services.nextflow import compile_job_nextflow_invocation
@@ -59,7 +60,7 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
         source = inputs / f'source{i}.pdb'; source.write_text(pdb(domain)); sources.append(source)
     monkeypatch.setattr(jobs, '_create_generic_selection_dir', lambda *a: selected)
     monkeypatch.setattr(binder_continuation, '_create_generic_selection_dir', lambda *a: selected)
-    monkeypatch.setattr(files, 'is_path_allowed', lambda p: True)
+    monkeypatch.setattr(binder_source_materialization, 'is_path_allowed', lambda p: True)
     monkeypatch.setattr(jobs, 'resolve_allowed_path', lambda p: Path(p))
     monkeypatch.setattr(job_requests, 'resolve_allowed_path', lambda p: Path(p))
     async def resolve(request, session):

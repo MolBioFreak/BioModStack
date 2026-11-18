@@ -86,6 +86,7 @@ async def test_actual_cm_operator_route_stored_job_bundle(placement, monkeypatch
     from sqlalchemy.orm import sessionmaker
     from database import Base, Job, ConformationalMappingSource
     from routers import conformational_mapping as cm
+    from services.conformational_mapping import submission
     from services.remote_execution import bundle
     from services.conformational_mapping.contracts import canonical_json_bytes
     from biomodstack_msa_handoff import digest
@@ -98,7 +99,7 @@ async def test_actual_cm_operator_route_stored_job_bundle(placement, monkeypatch
     # Runtime image registry is an explicit offline boundary double, not science.
     identity = _request_params('confornets')['confornets']['backend_identity']
     identity['backend_commit'] = '4df561a1fbd0fd2b9c7a230fa62957a837d9f72d'
-    monkeypatch.setattr(cm, '_server_confornets_identity', lambda: dict(identity))
+    monkeypatch.setattr(submission, '_server_confornets_identity', lambda: dict(identity))
     monkeypatch.setattr(cm, '_runtime_registry', lambda _: {'schema_name':'cm_runtime_registry', 'schema_version':1, 'offline_fixture':True})
     real_resolve = bundle.resolve_image
     monkeypatch.setattr(bundle, 'resolve_image', lambda name, root, params: root / name if name == 'frustrampnn.sif' else real_resolve(name, root, params))

@@ -4563,10 +4563,10 @@ async def compile_native_workflow_provision_request(workflow_request, http_reque
         raise ValueError('Native provisioning requires an authenticated request and session')
     source = SourceIdentity(*await asyncio.to_thread(current_source_identity))
     if isinstance(workflow_request, ConformationalMappingProvisionWorkflow):
-        from routers.conformational_mapping import normalize_cm_provision_request
+        from services.conformational_mapping.submission import normalize_cm_provision_request
         normalized = await normalize_cm_provision_request(workflow_request.request, http_request, session)
     elif isinstance(workflow_request, MolecularDynamicsProvisionWorkflow):
-        from routers.molecular_dynamics import normalize_md_provision_request
+        from services.md.native_launch import normalize_md_provision_request
         normalized = await normalize_md_provision_request(workflow_request.request.intent, session)
     else:
         raise ValueError('Expected a closed native workflow provisioning request')

@@ -37,11 +37,13 @@ def md_package(package, monkeypatch):
 @pytest.mark.asyncio
 async def test_configured_md_preview_resolves_real_runtime_leaves(md_package, monkeypatch):
     from routers import molecular_dynamics as md
+    from services.md import native_launch
     roots, job, target, lock = md_package
     # Source archive fixture supplies actual selected support-tool bytes.
     compile_native(job, job.params)
     monkeypatch.setenv('BMS_FEATURE_MOLECULAR_DYNAMICS', '1')
     monkeypatch.setattr(md, 'get_chemistry_catalog', lambda: _Catalog())
+    monkeypatch.setattr(native_launch, 'get_chemistry_catalog', lambda: _Catalog())
     monkeypatch.setattr(cache, 'current_source_identity', lambda: ('a' * 40, 'b' * 40))
     selection = WorkflowProvisionSelection.model_validate({'kind': 'workflow', 'workflow_request': {
         'workflow_type': 'molecular_dynamics', 'request': {

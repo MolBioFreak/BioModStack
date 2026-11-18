@@ -28,6 +28,7 @@ from services.nextflow import (
     resolve_nextflow_executable,
 )
 import routers.files as files_router
+from services import binder_source_materialization
 from scripts.rfd3_local_redesign.contract import ContractError, build_request
 
 
@@ -56,9 +57,16 @@ async def test_content_addressed_structure_upload_is_atomic_immutable_and_hash_v
     inputs_root = tmp_path / "inputs"
     inputs_root.mkdir()
     monkeypatch.setattr(files_router, "get_allowed_roots", lambda: {"inputs": inputs_root})
+    monkeypatch.setattr(binder_source_materialization, "get_allowed_roots", lambda: {"inputs": inputs_root})
     monkeypatch.setattr(files_router, "resolve_allowed_path", files_router._allowed_lexical_path)
+    monkeypatch.setattr(binder_source_materialization, "resolve_allowed_path", files_router._allowed_lexical_path)
     monkeypatch.setattr(
         files_router,
+        "to_allowed_relative",
+        lambda value: f"inputs/{value.relative_to(inputs_root)}",
+    )
+    monkeypatch.setattr(
+        binder_source_materialization,
         "to_allowed_relative",
         lambda value: f"inputs/{value.relative_to(inputs_root)}",
     )

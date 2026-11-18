@@ -20,6 +20,7 @@ from experiment_services import (
     _validate_workflow_payload,
 )
 from routers import conformational_mapping as cm
+from services.conformational_mapping import submission as cm_submission
 from services import job_control
 from services.conformational_mapping import global_adapter
 from services.conformational_mapping.persistence import issue_request_capability
@@ -44,13 +45,13 @@ def test_cm_principal_requires_effective_authentication_and_valid_proxy(monkeypa
     monkeypatch.setenv("BMS_CM_AUTHORIZATION_ENABLED", "1")
     monkeypatch.setenv("BMS_CM_TRUSTED_PROXY_SECRET", "trusted-secret")
     with pytest.raises(HTTPException) as missing:
-        cm._principal(_request())
+        cm_submission._principal(_request())
     assert missing.value.status_code == 401
     with pytest.raises(HTTPException) as wrong:
-        cm._principal(_request(proxy="wrong"))
+        cm_submission._principal(_request(proxy="wrong"))
     assert wrong.value.status_code == 401
-    assert cm._principal(_request(proxy="trusted-secret")) == "local-application-operator"
-    assert cm._principal(_request(principal="alice")) == "alice"
+    assert cm_submission._principal(_request(proxy="trusted-secret")) == "local-application-operator"
+    assert cm_submission._principal(_request(principal="alice")) == "alice"
 
 
 @pytest.mark.asyncio
@@ -93,7 +94,7 @@ def test_external_import_contract_is_singular() -> None:
             "registered_artifact_ids": ["a", "b"], "ordered_seeds": [0], "samples_per_seed": 1,
             "feature_policy": {"mode": "features_disabled_control_v1"},
             "runtime_policy": {"use_default_params": True},
-            "analysis_policy": cm._canonical_analysis_policy(),
+            "analysis_policy": cm_submission._canonical_analysis_policy(),
         })
 
 

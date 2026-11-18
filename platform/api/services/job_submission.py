@@ -730,17 +730,17 @@ async def _prepare_selected_structure(job_data: JobCreate, session):
     if job_data.source_structure is None:
         return None
     from services.binder_source_materialization import resolve_structure_source
-    from routers.files import (materialize_structure, get_governed_ngs_result_roots,
+    from services.binder_source_materialization import (materialize_structure_source, governed_ngs_result_roots,
         _under_persisted_ngs_root, _reject_governed_ngs_artifact, _sha256_regular_file_nofollow)
     source = job_data.source_structure
     try:
         path, identity = await resolve_structure_source(source, session)
-        governed_roots = await get_governed_ngs_result_roots(session)
+        governed_roots = await governed_ngs_result_roots(session)
         if _under_persisted_ngs_root(path, governed_roots):
             raise HTTPException(403, "Access denied to this structure")
         _reject_governed_ngs_artifact(path)
         if source.path is None or not (path.parent.name.startswith('structure-') and source.expected_sha256):
-            prepared = await materialize_structure(source, session, governed_roots=governed_roots)
+            prepared = await materialize_structure_source(source, session, governed_roots=governed_roots)
             old_path = str(path)
             consumed = str(resolve_allowed_path(prepared['path']))
             def retained(value):
@@ -2440,7 +2440,7 @@ async def _validated_typed_md_project_params(
         ExperimentValidation,
         ExperimentWorkflowPreparation,
     )
-    from routers.molecular_dynamics import _launch_context_source_refs
+    from services.md.native_launch import _launch_context_source_refs
 
     preparation = await experiment_session.get(
         ExperimentWorkflowPreparation, context.preparation_id

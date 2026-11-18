@@ -84,7 +84,7 @@ async def submit_step(session, experiments, step, *, destination, context):
     tasks = BackgroundTasks()
     try:
         if step['metadata'].get('route') == 'md_native':
-            from routers.molecular_dynamics import _launch_native_md_job
+            from services.md.native_launch import _launch_native_md_job
             from services.md.starting_structures import MdLaunchRequest
             launch = MdLaunchRequest.model_validate(step['metadata']['md_launch_request'])
             if (launch.intent.execution_target_id and
@@ -388,7 +388,7 @@ async def _plan(session, root, progress, request, *, retry=False, branch=None):
 async def refresh_md_retry(session, replacement):
     if replacement['metadata'].get('route') != 'md_native':
         return
-    from routers.molecular_dynamics import _compile_native_preview, _native_md_job_request
+    from services.md.native_launch import _compile_native_preview, _native_md_job_request
     from services.md.starting_structures import MdLaunchRequest
     launch = MdLaunchRequest.model_validate(replacement['metadata']['md_launch_request'])
     launch.intent.name = replacement['request']['name']

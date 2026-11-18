@@ -2780,7 +2780,7 @@ async def _prepare_resequence_job(request: ResequenceLaunchRequest, session: Asy
     """Acquire exact cold-portable sources and only authored scientific settings."""
     from services.binder_source_materialization import (prepare_resequence_sources,
         prepare_resequence_existing_basket, begin_resequence_preparation, resequence_submission_guard)
-    from routers.files import get_governed_ngs_result_roots
+    from services.binder_source_materialization import governed_ngs_result_roots
     from services.resequence_settings import designer_params, validator_params
     from services.resequence_designers import build_template
 
@@ -2788,7 +2788,7 @@ async def _prepare_resequence_job(request: ResequenceLaunchRequest, session: Asy
     template_path = selection_dir.with_name(selection_dir.name + "_designer.json")
     try:
         async with resequence_submission_guard(request.model_dump(mode="json"), session):
-            roots = await get_governed_ngs_result_roots(session)
+            roots = await governed_ngs_result_roots(session)
             if request.sources:
                 roster = await prepare_resequence_sources(request.sources, session, selection_dir, roots)
             elif request.backbone_input_pdbs:

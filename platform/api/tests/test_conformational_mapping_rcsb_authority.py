@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from database import ConformationalMappingSource
 import routers.conformational_mapping as cm_router
+from services.conformational_mapping import submission
 
 
 def _multi_context_mmcif() -> bytes:
@@ -277,6 +278,7 @@ async def test_rcsb_registration_materializes_exact_selected_model_chain_entity_
         }
 
     monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path)
+    monkeypatch.setattr(submission, "get_data_root", lambda: tmp_path)
     monkeypatch.setattr(
         cm_router,
         "_rcsb_http_client",
@@ -290,7 +292,7 @@ async def test_rcsb_registration_materializes_exact_selected_model_chain_entity_
         "1abc",
         _request(),
         session,  # type: ignore[arg-type]
-        cm_router.RcsbSelection(
+        submission.RcsbSelection(
             accession="1ABC",
             model_id="2",
             sample_id="asymmetric-unit",
@@ -332,9 +334,9 @@ async def test_rcsb_registration_materializes_exact_selected_model_chain_entity_
 @pytest.mark.parametrize(
     ("selection", "message"),
     [
-        (cm_router.RcsbSelection(accession="1ABC"), "ambiguous"),
+        (submission.RcsbSelection(accession="1ABC"), "ambiguous"),
         (
-            cm_router.RcsbSelection(
+            submission.RcsbSelection(
                 accession="1ABC",
                 model_id="1",
                 sample_id="asymmetric-unit",
@@ -344,7 +346,7 @@ async def test_rcsb_registration_materializes_exact_selected_model_chain_entity_
             "chain/entity",
         ),
         (
-            cm_router.RcsbSelection(
+            submission.RcsbSelection(
                 accession="1ABC",
                 model_id="1",
                 sample_id="biological-assembly-1",
@@ -357,7 +359,7 @@ async def test_rcsb_registration_materializes_exact_selected_model_chain_entity_
 )
 async def test_rcsb_registration_rejects_ambiguous_or_unsupported_context_before_registration(
     monkeypatch: pytest.MonkeyPatch,
-    selection: cm_router.RcsbSelection,
+    selection: submission.RcsbSelection,
     message: str,
 ) -> None:
     registered = False

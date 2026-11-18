@@ -15,7 +15,9 @@ from sqlalchemy.orm import sessionmaker
 
 from database import Base, ConformationalMappingRequest, ConformationalMappingSource, Job
 import routers.conformational_mapping as cm_router
-from routers.conformational_mapping import SubmitRequest, _external_import_target_ids, _validated_source_suffix
+from services.conformational_mapping import submission
+from routers.conformational_mapping import SubmitRequest, _validated_source_suffix
+from services.conformational_mapping.submission import _external_import_target_ids
 from services.conformational_mapping.contracts import canonical_sha256, request_sha256
 from services.conformational_mapping.import_snapshot import (
     ImportSnapshotError,
@@ -489,6 +491,7 @@ async def test_local_application_upload_and_submit_materializes_snapshot_and_job
         await connection.run_sync(Base.metadata.create_all)
     factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path / "data")
+    monkeypatch.setattr(submission, "get_data_root", lambda: tmp_path / "data")
     monkeypatch.setattr(cm_router, "get_results_dir", lambda: tmp_path / "results")
     # This submission test needs a regular installed-name runtime leaf; it does
     # not execute a container or claim scientific runtime qualification.
@@ -496,6 +499,7 @@ async def test_local_application_upload_and_submit_materializes_snapshot_and_job
     containers.mkdir()
     (containers / "frustrampnn.sif").write_bytes(b"isolated runtime presence fixture")
     monkeypatch.setattr(cm_router, "get_container_dir", lambda: containers)
+    monkeypatch.setattr(submission, "get_container_dir", lambda: containers)
     request = Request({
         "type": "http", "method": "POST", "scheme": "http",
         "path": "/api/conformational-mapping/sources", "query_string": b"",
@@ -526,7 +530,7 @@ async def test_local_application_upload_and_submit_materializes_snapshot_and_job
             "samples_per_seed": 1,
             "feature_policy": {"mode": "features_disabled_control_v1"},
             "runtime_policy": {"use_default_params": True},
-            "analysis_policy": cm_router._canonical_analysis_policy(),
+            "analysis_policy": submission._canonical_analysis_policy(),
             "frustrampnn_settings": operator_settings,
         })
         from services.nextflow import compile_native_workflow_provision_request
@@ -549,11 +553,11 @@ async def test_local_application_upload_and_submit_materializes_snapshot_and_job
         request.state.authenticated_principal = {"subject": "different-operator", "roles": ["operator"]}
         from fastapi import HTTPException
         with monkeypatch.context() as auth:
-            auth.setattr(cm_router, "_authorization_enabled", lambda: True)
+            auth.setattr(submission, "_authorization_enabled", lambda: True)
             with pytest.raises(HTTPException) as denied:
                 await compile_native_workflow_provision_request(selection.workflow_request, request, session)
             assert denied.value.status_code == 403
-            request.state.authenticated_principal = {"subject": cm_router._PERSONAL_WORKFLOW_PRINCIPAL, "roles": ["operator"]}
+            request.state.authenticated_principal = {"subject": submission._PERSONAL_WORKFLOW_PRINCIPAL, "roles": ["operator"]}
             authorized = await compile_native_workflow_provision_request(selection.workflow_request, request, session)
             assert authorized.plan_sha256 == plan.plan_sha256
         replay = WorkflowProvisionSelection.model_validate_json(selection.model_dump_json())
@@ -674,7 +678,7 @@ async def test_rcsb_mmcif_bridge_maps_timeout_without_registering(
 async def test_rcsb_mmcif_bridge_stops_at_streaming_source_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setitem(cm_router._SOURCE_MAX_BYTES, "structure_upload", 8)
+    monkeypatch.setitem(submission._SOURCE_MAX_BYTES, "structure_upload", 8)
     monkeypatch.setattr(
         cm_router,
         "_rcsb_http_client",
@@ -691,6 +695,7 @@ async def test_rcsb_mmcif_bridge_streams_success_into_normal_registration(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path)
+    monkeypatch.setattr(submission, "get_data_root", lambda: tmp_path)
     rcsb_mmcif = MMCIF.replace(b"data_minimal", b"data_1UBQ").replace(
         b"_entry.id minimal", b"_entry.id 1UBQ"
     )
@@ -700,7 +705,7 @@ async def test_rcsb_mmcif_bridge_streams_success_into_normal_registration(
         source_kind="structure_upload",
         metadata_json={"name": "RCSB 1UBQ"},
         content_sha256="",
-        principal_id=cm_router._PERSONAL_WORKFLOW_PRINCIPAL,
+        principal_id=submission._PERSONAL_WORKFLOW_PRINCIPAL,
     )
 
     class FakeSession:
@@ -748,7 +753,7 @@ async def test_rcsb_mmcif_bridge_streams_success_into_normal_registration(
     assert authority_receipt["payload"]["download_sha256"] == hashlib.sha256(
         b"  \n" + rcsb_mmcif
     ).hexdigest()
-    assert cm_router._read_source_authority(source) == authority_receipt  # type: ignore[arg-type]
+    assert submission._read_source_authority(source) == authority_receipt  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -761,6 +766,7 @@ async def test_registered_source_deduplicates_and_commit_failure_removes_publica
         await connection.run_sync(Base.metadata.create_all)
     factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path / "data")
+    monkeypatch.setattr(submission, "get_data_root", lambda: tmp_path / "data")
     request = _rcsb_request()
     async with factory() as session:
         first = await cm_router.register_source(

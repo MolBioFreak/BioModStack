@@ -90,17 +90,20 @@ async def test_native_provision_plan_preserves_settings_input_identity_without_w
     from starlette.requests import Request
     from services import nextflow
     from routers import molecular_dynamics as md
+    from services.md import native_launch
     from services.remote_execution import bundle, cache
     from services.remote_execution.contracts import WorkflowProvisionSelection
     from component_runtime import SelectedExecutionPlan
     from types import SimpleNamespace
     monkeypatch.setenv("BMS_FEATURE_MOLECULAR_DYNAMICS", "1")
     monkeypatch.setattr(md, "get_chemistry_catalog", lambda: _Catalog())
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: _Catalog())
     monkeypatch.setattr(bundle, "current_source_identity", lambda: ("a" * 40, "b" * 40))
     monkeypatch.setattr(cache, "current_source_identity", lambda: ("a" * 40, "b" * 40))
     def forbidden(*args, **kwargs):
         pytest.fail("dependency-only provisioning must not resolve biology, compile commands or create Jobs")
     monkeypatch.setattr(md, "resolve_source", forbidden)
+    monkeypatch.setattr(native_launch, "resolve_source", forbidden)
     monkeypatch.setattr(nextflow, "compile_workflow_provision_request", forbidden)
     monkeypatch.setattr(nextflow, "compile_nextflow_invocation", forbidden)
     request = Request({"type": "http", "headers": []})
@@ -318,11 +321,13 @@ def typed_client(monkeypatch: pytest.MonkeyPatch):
     import main
     from database import get_session
     from routers import molecular_dynamics
+    from services.md import native_launch
 
     async def override_session():
         yield _UnusedSession()
 
     monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: _Catalog())
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: _Catalog())
     main.app.dependency_overrides[get_session] = override_session
     test_client = TestClient(main.app)
     try:
@@ -398,6 +403,7 @@ def test_preview_rejects_every_profile_fixed_setting_mismatch_without_side_effec
     different_value: int | float,
 ) -> None:
     from routers import jobs, molecular_dynamics
+    from services.md import native_launch
 
     calls: list[str] = []
 
@@ -412,6 +418,9 @@ def test_preview_rejects_every_profile_fixed_setting_mismatch_without_side_effec
     monkeypatch.setattr(job_submission, "submit_job", forbidden_job)
     monkeypatch.setattr(
         molecular_dynamics, "experiment_session_factory", forbidden_context, raising=False
+    )
+    monkeypatch.setattr(
+        native_launch, "experiment_session_factory", forbidden_context, raising=False
     )
     intent = _intent_payload()
     intent["requested_settings"] = {**_settings(), field: different_value}
@@ -597,6 +606,7 @@ def project_context_preview_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
         ExperimentWorkflowRun,
     )
     from routers import molecular_dynamics
+    from services.md import native_launch
     from services.md import starting_structures
     from services.resource_usage_evidence import build_resource_admission_handoff
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -1033,8 +1043,15 @@ def project_context_preview_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
             yield session
 
     monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: _Catalog())
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: _Catalog())
     monkeypatch.setattr(
         molecular_dynamics,
+        "experiment_session_factory",
+        override_experiment_session,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        native_launch,
         "experiment_session_factory",
         override_experiment_session,
         raising=False,
@@ -1049,6 +1066,7 @@ def project_context_preview_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
         monkeypatch.setattr(launch_contract, "_bound_engine_runtime_identity", lambda: {"image_name": "gromacs.sif", "sif_sha256": "a" * 64})
         if native_catalog is not None:
             monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: native_catalog)
+            monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: native_catalog)
             monkeypatch.setattr(launch_contract, "get_chemistry_catalog", lambda: native_catalog)
     main.app.dependency_overrides[get_session] = override_core_session
     test_client = TestClient(main.app)
@@ -1439,6 +1457,7 @@ async def test_typed_launch_preserves_optional_launch_context_wrapper_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from routers import jobs, molecular_dynamics
+    from services.md import native_launch
     from services import job_submission
     from services.md import starting_structures
 
@@ -1471,11 +1490,15 @@ async def test_typed_launch_preserves_optional_launch_context_wrapper_session(
         return None
 
     monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: _Catalog())
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: _Catalog())
     monkeypatch.setattr(
-        molecular_dynamics, "_validate_preview_launch_context", validated_elsewhere
+        native_launch, "_validate_preview_launch_context", validated_elsewhere
     )
     monkeypatch.setattr(
         molecular_dynamics, "experiment_session_factory", fake_factory, raising=False
+    )
+    monkeypatch.setattr(
+        native_launch, "experiment_session_factory", fake_factory, raising=False
     )
     monkeypatch.setattr(job_submission, "submit_job", fake_create_job)
 
@@ -1857,6 +1880,7 @@ def test_design_typed_launch_persists_scientific_lineage_and_exact_snapshot(
 ):
     from database import Design, Job, MdRun
     from routers import jobs, molecular_dynamics
+    from services.md import native_launch
     from services import job_submission
     from services import job_requests
     from services import gpu_orchestrator
@@ -1900,6 +1924,7 @@ def test_design_typed_launch_persists_scientific_lineage_and_exact_snapshot(
     digest = hashlib.sha256(selected_bytes).hexdigest()
     assert digest != profile["launch_constraints"]["structure_sha256"]
     monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: catalog)
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: catalog)
     monkeypatch.setattr(launch_contract, "get_chemistry_catalog", lambda: catalog)
     monkeypatch.setattr(job_submission, "require_molecular_dynamics_feature", lambda _: None)
     monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _: None)

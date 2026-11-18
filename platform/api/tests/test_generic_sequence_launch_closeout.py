@@ -194,10 +194,12 @@ async def test_real_job_creation_preserves_sequence_request_without_launch(admis
 @pytest.mark.parametrize('model,mode', ROWS)
 def test_browser_pdb_alias_uses_existing_allowed_path_resolution(model, mode, tmp_path, monkeypatch):
     from routers import files, jobs
+    from services import binder_source_materialization
     from services import job_requests
     typed = request(model, mode, tmp_path)
     original = typed.params['input_pdb']
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: {'downloads': tmp_path})
+    monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: {'downloads': tmp_path})
     monkeypatch.setattr(jobs, 'resolve_allowed_path', files._allowed_lexical_path)
     monkeypatch.setattr(job_requests, 'resolve_allowed_path', files._allowed_lexical_path)
     typed.params['input_pdb'] = 'downloads/input.pdb'
@@ -273,6 +275,7 @@ async def test_actual_compiled_command_native_wrapper_and_sqlite_consumer(admiss
     captured_path = os.environ.get('BMS_GENERIC_SEQUENCE_REQUEST_FIXTURE')
     if captured_path:
         from routers import files
+        from services import binder_source_materialization
         captured = json.loads(Path(captured_path).read_text())
         matches = [value for value in captured if value.get('name') == f'generic-native-{model}-{mode}']
         assert len(matches) == 1, 'actual mounted request missing or duplicated'
@@ -281,6 +284,7 @@ async def test_actual_compiled_command_native_wrapper_and_sqlite_consumer(admiss
         source_alias = tmp_path / 'generic-sequence-fixture.pdb'
         source_alias.write_bytes(source.read_bytes())
         monkeypatch.setattr(files, 'get_allowed_roots', lambda: {'inputs': tmp_path})
+        monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: {'inputs': tmp_path})
         monkeypatch.setattr(jobs, 'resolve_allowed_path', files._allowed_lexical_path)
         monkeypatch.setattr(job_requests, 'resolve_allowed_path', files._allowed_lexical_path)
         # No scientific request field is replaced. Current nextflow.config owns

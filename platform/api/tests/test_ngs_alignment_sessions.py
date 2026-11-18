@@ -27,6 +27,7 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 from routers import files as files_router  # noqa: E402
+from services import binder_source_materialization
 from routers import ngs_alignment_sessions as ngs_routes  # noqa: E402
 
 
@@ -1972,7 +1973,9 @@ def test_generic_file_routes_hide_governed_ngs_tree(
         encoding="utf-8",
     )
     monkeypatch.setattr(files_router, "get_allowed_roots", lambda: {"bms_results": tmp_path})
+    monkeypatch.setattr(binder_source_materialization, "get_allowed_roots", lambda: {"bms_results": tmp_path})
     monkeypatch.setattr(files_router, "resolve_allowed_path", lambda value: tmp_path / Path(value).relative_to("bms_results"))
+    monkeypatch.setattr(binder_source_materialization, "resolve_allowed_path", lambda value: tmp_path / Path(value).relative_to("bms_results"))
 
     app = _ngs_app()
     app.include_router(files_router.router, prefix="/api/files")

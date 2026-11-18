@@ -7,6 +7,7 @@ import pytest
 
 from database import Job, Design
 from routers import jobs, files
+from services import binder_source_materialization
 from services import job_submission
 from services import job_requests
 from schemas import JobCreate
@@ -218,6 +219,7 @@ async def test_preview_approved_insert_offline_independent_lineage(admission, se
         directory.mkdir(exist_ok=True)
     monkeypatch.setattr(paths, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: roots)
+    monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: roots)
     from services import job_result_roots
     monkeypatch.setattr(job_result_roots, 'get_results_dir', lambda: roots['bms_results'])
     for module in (paths, jobs, bundle):

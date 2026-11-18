@@ -160,6 +160,7 @@ def test_la_selected_motif_survives_closure_relocation(tmp_path):
 def test_la_shared_source_snapshot_keeps_motif_generations_distinct(tmp_path, monkeypatch):
     import paths
     from routers import files
+    from services import binder_source_materialization
     from services.native_generation_sources import prepare_native_sources
     def motif_references(config):
         bindings=json.loads(config.with_name(config.name+'.motifs.json').read_text())
@@ -167,6 +168,7 @@ def test_la_shared_source_snapshot_keeps_motif_generations_distinct(tmp_path, mo
     roots={'inputs':tmp_path/'inputs'}; roots['inputs'].mkdir()
     monkeypatch.setattr(paths,'get_allowed_roots',lambda: roots)
     monkeypatch.setattr(files,'get_allowed_roots',lambda: roots)
+    monkeypatch.setattr(binder_source_materialization,'get_allowed_roots',lambda: roots)
     async def no_governed_roots(session): return []
     monkeypatch.setattr(files,'get_governed_ngs_result_roots',no_governed_roots)
     samples=roots['inputs']/'samples'; samples.mkdir()

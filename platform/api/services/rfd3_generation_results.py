@@ -1,4 +1,7 @@
 """Native RFD3 v1/v2 receiving; incremental population, immutable candidates."""
+
+from typing import Any
+from pathlib import Path
 import uuid
 from scripts.rfd3_generation.manifest_records import iter_manifest_records
 from urllib.parse import quote
@@ -136,7 +139,7 @@ async def _ingest_rfd3_generation_manifest(
     manifest_path = output_path / "collected" / "rfd3_generation" / "rfd3_generation_result_manifest.json"
     if manifest_path.is_symlink() or not manifest_path.is_file():
         raise GenerationContractError("RFD3 generation result manifest is absent or unsafe")
-    from services.result_ingester import _parse_job_params
+    from services.result_contracts import _parse_job_params
     params = _parse_job_params(job.params)
     request = params.get("rfd3_generation_request")
     if not isinstance(request, dict):
@@ -242,7 +245,6 @@ async def read_generation_results(job, session, *, offset=0, limit=None):
     Omitted limit preserves the historical API. Explicit pages avoid loading
     coordinates and retain full producer totals rather than page-sized totals.
     """
-    from services.job_readback import _rfd3_public_json
     if offset < 0 or (limit is not None and not 1 <= limit <= 1000):
         raise HTTPException(422, 'Invalid native page')
     params = job.params if isinstance(job.params, dict) else {}
@@ -289,3 +291,52 @@ async def read_generation_results(job, session, *, offset=0, limit=None):
         'aggregates': aggregates,
         'offset': offset, 'limit': limit, 'total': total,
         'candidates': candidates}
+
+
+def _rfd3_public_json(value: Any, *, field: str | None = None) -> Any:
+    """Project stored RFD3 provenance without exposing absolute host paths."""
+
+    if isinstance(value, dict):
+        return {key: _rfd3_public_json(item, field=str(key)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_rfd3_public_json(item, field=field) for item in value]
+    field_name = str(field or "").lower()
+    is_path_field = field_name in {
+        "input",
+        "input_structure",
+        "input_pdb",
+        "input_cif",
+        "plr_input_pdb",
+        "rfd3_request_path",
+        "path",
+        "paths",
+        "file",
+        "files",
+        "dir",
+        "directory",
+        "directories",
+        "filepath",
+        "filepaths",
+        "dirname",
+        "dirnames",
+        "storage_path",
+    } or field_name.endswith(
+        (
+            "_path",
+            "_paths",
+            "_file",
+            "_files",
+            "_dir",
+            "_directory",
+            "_directories",
+            "_filepath",
+            "_filepaths",
+            "_dirname",
+            "_dirnames",
+        )
+    )
+    if isinstance(value, str) and is_path_field:
+        candidate = Path(value).expanduser()
+        if candidate.is_absolute():
+            return candidate.name
+    return value
