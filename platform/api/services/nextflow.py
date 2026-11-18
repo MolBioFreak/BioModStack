@@ -1974,23 +1974,39 @@ async def launch_msa_batch_job(
             "msa_batch execution is only permitted inside the transient workflow runner"
         )
     from database import async_session, Job
-    from sqlalchemy import select
+    from sqlalchemy import update
     from schemas import JobStatus
 
     logger.info(f"[MSA BATCH] Launching job {job_id}")
 
     async with async_session() as session:
-        # Update job to running
-        result = await session.execute(select(Job).where(Job.id == job_id))
-        job = result.scalar_one_or_none()
-        if not job:
-            logger.error(f"[MSA BATCH] Job {job_id} not found")
+        # Update job to running, unless it is missing or no longer queued/running.
+        started = await session.execute(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+                Job.queue_status.in_(['queued', 'running']),
+            )
+            .values(
+                status=JobStatus.RUNNING.value,
+                queue_status='running',
+                started_at=datetime.utcnow(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if started.rowcount != 1:
+            await session.rollback()
+            logger.error(f"[MSA BATCH] Job {job_id} not found or no longer queued/running")
             return
-
-        job.status = JobStatus.RUNNING.value
-        job.queue_status = 'running'
-        job.started_at = datetime.utcnow()
         await session.commit()
+
+    # Terminal writes apply only while the row is still this runner's running Job.
+    still_running = (
+        Job.id == job_id,
+        Job.status == JobStatus.RUNNING.value,
+        Job.queue_status == 'running',
+    )
 
     # Get activity metadata from params for logging/touch_query_activity.
     raw_gpu_id = params.get('gpu_id')
@@ -2039,9 +2055,6 @@ async def launch_msa_batch_job(
             f.write(stdout.decode() if stdout else "")
         
         async with async_session() as session:
-            result = await session.execute(select(Job).where(Job.id == job_id))
-            job = result.scalar_one_or_none()
-            
             if exit_code == 0:
                 manifest_path = str(Path(output_dir) / "msa_manifest.json")
                 unlocked = await apply_msa_manifest_to_child_jobs(
@@ -2049,10 +2062,21 @@ async def launch_msa_batch_job(
                     job_id,
                     manifest_path,
                 )
-                job.status = JobStatus.COMPLETED.value
-                job.queue_status = 'completed'
-                job.completed_at = datetime.utcnow()
-                job.msa_manifest_path = manifest_path
+                finished = await session.execute(
+                    update(Job)
+                    .where(*still_running)
+                    .values(
+                        status=JobStatus.COMPLETED.value,
+                        queue_status='completed',
+                        completed_at=datetime.utcnow(),
+                        msa_manifest_path=manifest_path,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if finished.rowcount != 1:
+                    await session.rollback()
+                    logger.info(f"[MSA BATCH] Job {job_id} is no longer running; completion not published")
+                    return
                 logger.info(f"[MSA BATCH] Job {job_id} completed successfully")
                 touch_query_activity(
                     {
@@ -2066,9 +2090,20 @@ async def launch_msa_batch_job(
                 await session.commit()
                 logger.info("[MSA COMPLETE] Unlocked %s inference jobs", unlocked)
             else:
-                job.status = JobStatus.FAILED.value
-                job.queue_status = 'failed'
-                job.error_message = f"MSA batch failed with exit code {exit_code}"
+                finished = await session.execute(
+                    update(Job)
+                    .where(*still_running)
+                    .values(
+                        status=JobStatus.FAILED.value,
+                        queue_status='failed',
+                        error_message=f"MSA batch failed with exit code {exit_code}",
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if finished.rowcount != 1:
+                    await session.rollback()
+                    logger.info(f"[MSA BATCH] Job {job_id} is no longer running; failure not published")
+                    return
                 logger.error(f"[MSA BATCH] Job {job_id} failed: exit code {exit_code}")
                 touch_query_activity(
                     {
@@ -2097,13 +2132,17 @@ async def launch_msa_batch_job(
         except Exception:
             pass
         async with async_session() as session:
-            result = await session.execute(select(Job).where(Job.id == job_id))
-            job = result.scalar_one_or_none()
-            if job:
-                job.status = JobStatus.FAILED.value
-                job.queue_status = 'failed'
-                job.error_message = str(e)
-                await session.commit()
+            await session.execute(
+                update(Job)
+                .where(*still_running)
+                .values(
+                    status=JobStatus.FAILED.value,
+                    queue_status='failed',
+                    error_message=str(e),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            await session.commit()
 
 
 async def apply_msa_manifest_to_child_jobs(
