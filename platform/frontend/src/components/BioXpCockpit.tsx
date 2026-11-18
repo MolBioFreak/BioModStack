@@ -47,6 +47,7 @@ import { BioXpCalibrationAnalysis } from './BioXpCalibrationAnalysis';
 import { BioXpPressureCapture } from './BioXpPressureCapture';
 import { BioXpPipetteAdvancedTools, BioXpPipetteControlPanel, BioXpSoftwareTipType } from './BioXpPipetteControlPanel';
 import { BioXpPipetteCalibration } from './BioXpPipetteCalibration';
+import { BioXpPlatesPanel } from './BioXpPlatesPanel';
 import { BioXpCalibrationSettings } from './BioXpCalibrationSettings';
 import { BioXpPipetteSettings } from './BioXpPipetteSettings';
 import { BioXpWellPipettingPanel, PIPETTE_SECTIONS, type PipetteSection } from './BioXpWellPipettingPanel';
@@ -1357,7 +1358,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         }}
                         onClick={() => selectControlTab(tab)}
                         className="bx-tab">
-                        {tab === 'robot' ? 'Robot controls' : tab === 'pipettes' ? 'Pipettes' : tab === 'workflows' ? 'Workflows' : 'Live deck movement'}
+                        {tab === 'robot' ? 'Robot controls' : tab === 'pipettes' ? 'Pipettes & plates' : tab === 'workflows' ? 'Workflows' : 'Live deck movement'}
                     </button>)}
                 </div>
                 <BioXpMotionToggle enabled={motionControlsAvailable} reason={dashboard?.motion.reason} connected={linkConnected}
@@ -1884,6 +1885,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                     {pipetteSection === 'Tips' && <div className="mb-3"><BioXpSoftwareTipType connected={robotControlReady && operatorCatalog.data !== undefined}
                         pipettes={operatorCatalog.data?.dashboard.pipettes ?? undefined} actions={catalog?.actions} catalogLoading={operatorCatalog.isLoading}
                         invokePending={invokeOperatorAction.isPending} invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)} /></div>}
+                    {pipetteSection === 'Plates' && <BioXpPlatesPanel visible={documentVisible && controlTab === 'pipettes'} generation={generation} connected={linkConnected} />}
                     {pipetteSection === 'Calibration' && <div className="mb-4 space-y-4">
                         <BioXpPipetteCalibration visible={documentVisible && controlTab === 'pipettes'} generation={generation} connected={linkConnected}
                             destinations={selectionAction?.destination_options ?? []} />

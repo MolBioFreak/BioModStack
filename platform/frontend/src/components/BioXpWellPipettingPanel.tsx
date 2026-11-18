@@ -17,7 +17,7 @@ const operations: Operation[] = ['move', 'lower', 'lift', 'aspirate', 'dispense'
 const label = (operation: Operation) => operation in sourceLabels ? sourceLabels[operation as BioXpSourceStep['operation']] : operation === 'load_tip' ? 'Load tip' : operation === 'measure_fluid_height' ? 'Measure fluid height' : operation === 'source_fluid_offset' ? 'OEM fluid offset scan' : operation === 'diagnostic_detect_fluid' ? 'OEM Detect Fluid' : operation === 'source_calwith_fluid' ? 'OEM calibrate with fluid' : operation[0].toUpperCase() + operation.slice(1);
 const wells = [...'ABCDEFGH'].flatMap(row => Array.from({ length: 12 }, (_, col) => `${row}${col + 1}`));
 
-export const PIPETTE_SECTIONS = ['Move & pipette', 'Tips', 'Calibration', 'Advanced'] as const;
+export const PIPETTE_SECTIONS = ['Move & pipette', 'Tips', 'Calibration', 'Plates', 'Advanced'] as const;
 export type PipetteSection = typeof PIPETTE_SECTIONS[number];
 
 export function BioXpWellPipettingPanel({ generation, connected, destinations = [], positionTableRevision, visible = true, section }: { visible?: boolean;
@@ -129,6 +129,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         'Move & pipette': ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix'],
         Tips: ['load_tip', 'source_load_tips'],
         Calibration: ['measure_fluid_height', 'source_fluid_offset', 'diagnostic_detect_fluid', 'source_calwith_fluid'],
+        Plates: [],
         Advanced: ['diagnostic_pipette', 'source_mix', 'source_aspirate_air', 'source_dispense_air', 'source_purge'],
     };
     const show = (...ops: Operation[]) => ops.some(op => categories[category].includes(op));

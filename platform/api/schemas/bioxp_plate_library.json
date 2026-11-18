@@ -44,7 +44,7 @@
       "adapter_support": "unknown",
       "consumable_fit": "in use (NGS commissioning)",
       "qualification": "not BioXP-qualified",
-      "robot_profile": "Gripper heights and pipetting depths: robot /deck/plate-profiles, keyed by this id"
+      "short_name": "EnduraPlate Fast 96"
     },
     {
       "id": "thermo-4483354-enduraplate",
@@ -115,7 +115,8 @@
       "source": "PyLabRobot resources/thermo_fisher/plates.py Thermo_AB_96_wellplate_300ul_Vb_EnduraPlate (measured height-to-volume). Not the Fast plate.",
       "adapter_support": "unknown",
       "consumable_fit": "unknown",
-      "qualification": "not BioXP-qualified"
+      "qualification": "not BioXP-qualified",
+      "short_name": "EnduraPlate 96"
     }
   ]
 }

@@ -136,7 +136,7 @@ it('relocates deck controls to a fourth tab without changing the default robot l
     await mount('robot');
     expect(host.querySelector('[data-testid="oem-deck-movement"]')).toBeNull();
     expect([...host.querySelectorAll('[role="tablist"][aria-label="Robot controls"] [role="tab"]')].map(el => el.textContent))
-        .toEqual(['Robot controls', 'Pipettes', 'Workflows', 'Live deck movement']);
+        .toEqual(['Robot controls', 'Pipettes & plates', 'Workflows', 'Live deck movement']);
     await tab('live-deck');
     expect(panel().hidden).toBe(false); expect(live()).not.toBeNull();
     expect(host.querySelector('#control-panel-robot [data-testid="oem-deck-movement"]')).toBeNull();
