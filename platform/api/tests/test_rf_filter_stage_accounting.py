@@ -87,7 +87,7 @@ async def test_stage_metadata_persists_and_serializes_without_replacing_owner(tm
                 return 17  # Later owner has its own, deliberately different domain.
             monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', stronger_owner)
             # Primary publication now runs before the optional component; this Job's primary owner is RFD3.
-            monkeypatch.setattr(result_ingester, '_ingest_rfd3_generation_manifest', stronger_owner)
+            monkeypatch.setattr('services.rfd3_generation_results._ingest_rfd3_generation_manifest', stronger_owner)
             assert await result_ingester.ingest_job_results(owner.id, str(tmp_path), db, commit=False) == 17
             await db.commit(); await db.refresh(owner)
             assert owner.provenance[KEY]['rf3_prediction_filter']['counts']['input_count'] == 4

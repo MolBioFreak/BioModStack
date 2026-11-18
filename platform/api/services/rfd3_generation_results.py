@@ -4,8 +4,10 @@ from scripts.rfd3_generation.manifest_records import iter_manifest_records
 from urllib.parse import quote
 from fastapi import HTTPException
 from sqlalchemy import select, func
+from sqlalchemy.orm.attributes import flag_modified
 from database import Design
-from services.rfd3_generation import GenerationContractError, RESULT_SCHEMA_V2
+from services.result_contracts import REVIEW_ARTIFACT_SCHEMA
+from services.rfd3_generation import GenerationContractError, RESULT_SCHEMA_V2, file_sha256
 
 
 def load_incremental_manifest(path, *, request, output_root, job_id):
@@ -122,6 +124,116 @@ async def retain_unpaired_artifacts(session, job, root, manifest):
             session.add(JobArtifact(id=identity, owner_job_id=job.id, attempt=job.retry_count or 0,
                 logical_path=relative, storage_path=expected[0], sha256=expected[1], bytes=expected[2],
                 media_type=descriptor['media_type'], provenance=provenance))
+
+
+async def _ingest_rfd3_generation_manifest(
+    job,
+    output_path,
+    session,
+    *,
+    commit: bool,
+) -> int:
+    manifest_path = output_path / "collected" / "rfd3_generation" / "rfd3_generation_result_manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise GenerationContractError("RFD3 generation result manifest is absent or unsafe")
+    from services.result_ingester import _parse_job_params
+    params = _parse_job_params(job.params)
+    request = params.get("rfd3_generation_request")
+    if not isinstance(request, dict):
+        raise GenerationContractError("persisted RFD3 generation request is missing")
+    manifest_sha256 = file_sha256(manifest_path)
+    try:
+        manifest, candidates, candidate_names = load_incremental_manifest(manifest_path,
+            request=request, output_root=output_path, job_id=str(job.id))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise GenerationContractError(f"RFD3 generation result manifest is malformed: {exc}") from exc
+    existing_names = set(await session.scalars(select(Design.name).where(Design.job_id == job.id)))
+    if not existing_names <= candidate_names:
+        raise GenerationContractError('persisted RFD3 generation candidates conflict with the producer manifest')
+    await retain_unpaired_artifacts(session, job, output_path, manifest)
+
+    async for candidate_index, candidate, existing_row in candidate_batches(session, job.id, candidates):
+        if existing_row is not None:
+            check_incremental_candidates([existing_row], {**manifest, 'candidates': [candidate]}, manifest_sha256)
+            continue
+        artifacts = {item["role"]: item for item in candidate["artifacts"]}
+        structure = artifacts["candidate_structure"]
+        metadata = artifacts["candidate_metadata"]
+        metrics = candidate["metrics"]
+        session.add(
+            Design(
+                id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"bms:rfd3-generation:{job.id}:{candidate['candidate_id']}")),
+                job_id=job.id,
+                name=candidate["candidate_id"],
+                producer_model_id="rfd3",
+                pdb_path=structure["resolved_path"],
+                json_path=metadata["resolved_path"],
+                lineage_root_job_id=job.lineage_root_job_id or job.id,
+                stage_family="de_novo_design",
+                stage_mode="rfd3_generation",
+                artifact_class="rfd3_general_generation",
+                artifact_schema_version=1,
+                review_profile_id="de_novo_generation_v1",
+                review_contract_version=1,
+                review_contract_source="rfd3_generation_producer",
+                review_role_map={"result_role": "generated_backbone", "generator": "rfd3"},
+                review_artifact_manifest={
+                    "schema": REVIEW_ARTIFACT_SCHEMA,
+                    "artifacts": {
+                        "structure": {
+                            "kind": "structure",
+                            "state": "ready",
+                            "path": structure["resolved_path"],
+                            "relative_path": structure["relative_path"],
+                            "sha256": structure["sha256"],
+                            "bytes": structure["bytes"],
+                        },
+                        "native_metadata": {
+                            "kind": "native_metadata",
+                            "state": "ready",
+                            "path": metadata["resolved_path"],
+                            "relative_path": metadata["relative_path"],
+                            "sha256": metadata["sha256"],
+                            "bytes": metadata["bytes"],
+                        },
+                    },
+                    "roles": {"result_role": "generated_backbone", "generator": "rfd3", "has_binder": False},
+                },
+                num_helices=metrics["helix_count"],
+                num_strands=metrics["strand_count"],
+                rfd_rog=metrics["radius_of_gyration"],
+                # Whole-candidate values remain in native provenance below;
+                # they are not per-chain confidence records.
+                chain_metrics=None,
+                provenance={
+                    "schema": "bms.rfd3.generation.candidate-provenance.v1",
+                    "request_id": manifest["request_id"],
+                    "request_sha256": manifest["request_sha256"],
+                    "result_manifest_sha256": manifest_sha256,
+                    "artifact_manifest_sha256": candidate["artifact_manifest_sha256"],
+                    "metrics": metrics,
+                    "accepted": candidate["accepted"],
+                    "artifacts": candidate["artifacts"],
+                },
+            )
+        )
+        if candidate_index % 256 == 0:
+            await session.flush()
+    if file_sha256(manifest_path) != manifest_sha256:
+        raise GenerationContractError('RFD3 generation manifest changed during import')
+    persisted_params = dict(params)
+    persisted_params["rfd3_generation_result_manifest_sha256"] = manifest_sha256
+    persisted_params["rfd3_generation_aggregate"] = manifest["aggregate"]
+    persisted_params["rfd3_generation_result_schema"] = manifest["schema"]
+    persisted_params["rfd3_generation_population"] = manifest.get("population")
+    persisted_params["rfd3_generation_execution_status"] = manifest.get("execution_status", job.status)
+    job.params = persisted_params
+    flag_modified(job, "params")
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
+    return len(candidate_names)
 
 
 async def read_generation_results(job, session, *, offset=0, limit=None):

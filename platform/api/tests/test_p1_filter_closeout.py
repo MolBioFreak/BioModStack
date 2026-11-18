@@ -204,7 +204,7 @@ async def test_rf3_export_filter_receipt_sqlite_api(tmp_path, monkeypatch):
     async def later_owner(*a, **k): return 17
     monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', later_owner)
     # Primary publication now runs before the optional component; this Job's primary owner is RFD3.
-    monkeypatch.setattr(result_ingester, '_ingest_rfd3_generation_manifest', later_owner)
+    monkeypatch.setattr('services.rfd3_generation_results._ingest_rfd3_generation_manifest', later_owner)
     factory, engine = await setup(tmp_path)
     try:
         async with factory() as db:
