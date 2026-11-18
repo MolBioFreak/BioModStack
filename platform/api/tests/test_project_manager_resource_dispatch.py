@@ -20,6 +20,7 @@ for root in (API_ROOT, REPO_ROOT):
         sys.path.insert(0, str(root))
 
 from routers import jobs, workflow_adapter
+from services import job_submission
 from database import Base, Job
 from services import gpu_orchestrator, ngs_molbio_n5, resource_usage_evidence as resource_evidence
 from services.execution_ownership import (
@@ -1129,8 +1130,8 @@ async def test_startup_recovery_refuses_active_systemd_owner(
 def test_typed_sequence_field_drives_job_sequence_length() -> None:
     sequence = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
 
-    assert jobs._resolve_job_sequence_length(None, {"sequence": sequence}) == len(sequence)  # noqa: SLF001
+    assert job_submission._resolve_job_sequence_length(None, {"sequence": sequence}) == len(sequence)  # noqa: SLF001
 
 
 def test_explicit_sequence_length_remains_authoritative() -> None:
-    assert jobs._resolve_job_sequence_length(99, {"sequence": "ACDE"}) == 99  # noqa: SLF001
+    assert job_submission._resolve_job_sequence_length(99, {"sequence": "ACDE"}) == 99  # noqa: SLF001

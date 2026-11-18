@@ -9,6 +9,7 @@ from uuid import uuid5, NAMESPACE_URL
 
 import pytest
 from sqlalchemy import select
+from services import job_submission
 from database import Job, Design
 from routers import jobs
 from services import binder_continuation
@@ -196,7 +197,7 @@ async def test_rollback_recovery_reuses_prepared_selection(admission, monkeypatc
     _, factory = admission
     owner, members, pdb = await admit_seed(admission, monkeypatch)
     await complete(factory, members, pdb)
-    original = jobs.create_job
+    original = job_submission.submit_job
     original_link = jobs.shutil.copyfile
     links = []
     def record_link(source, destination, *args, **kwargs):
@@ -206,13 +207,13 @@ async def test_rollback_recovery_reuses_prepared_selection(admission, monkeypatc
     monkeypatch.setattr(jobs.shutil, 'copyfile', record_link)
     async def fail_before_insertion(*args, **kwargs):
         raise RuntimeError('controlled prequeue interruption')
-    monkeypatch.setattr(jobs, 'create_job', fail_before_insertion)
+    monkeypatch.setattr(job_submission, 'submit_job', fail_before_insertion)
     await trigger(factory, members[0])
     async with factory() as session:
         assert await session.get(Job, child_id(owner)) is None
         assert not (await session.get(Job, owner)).params.get('_mutation_seed_refinement_triggered')
     assert len(links) == len(members)
-    monkeypatch.setattr(jobs, 'create_job', original)
+    monkeypatch.setattr(job_submission, 'submit_job', original)
     await trigger(factory, members[-1])
     assert len(links) == len(members)
     async with factory() as session:
@@ -225,7 +226,7 @@ async def test_derived_child_forgery_rejected_at_canonical_admission(admission, 
     _, factory = admission
     owner, members, pdb = await admit_seed(admission, monkeypatch)
     await complete(factory, members, pdb)
-    original = jobs.create_job
+    original = job_submission.submit_job
     reached = []
     async def forge_before_admission(request, *args, **kwargs):
         reached.append(True)
@@ -246,7 +247,7 @@ async def test_derived_child_forgery_rejected_at_canonical_admission(admission, 
             selected.unlink()  # do not edit the native source through its symlink
             selected.write_text('HEADER forged seed\n')
         return await original(request, *args, **kwargs)
-    monkeypatch.setattr(jobs, 'create_job', forge_before_admission)
+    monkeypatch.setattr(job_submission, 'submit_job', forge_before_admission)
     await trigger(factory, members[0])
     assert reached == [True]
     async with factory() as session:

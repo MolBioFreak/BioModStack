@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from database import Job
 from routers import jobs
+from services import job_submission
 from schemas import JobCreate
 from services import core_protein_scientific_contract as contract
 from test_core_protein_scientific_admission import admission
@@ -44,7 +45,7 @@ def payload(tmp_path, overrides):
 @pytest.mark.asyncio
 async def test_typed_override_admission_persists_only_declaration(admission, monkeypatch, tmp_path):
     request = payload(tmp_path, {'summary': [{'chain_id': 'B', 'author_number': 2}], 'mutation': []})
-    response = await jobs._create_job(request, BackgroundTasks(), admission)
+    response = await job_submission._create_job(request, BackgroundTasks(), admission)
     admission.expire_all()
     row = await admission.get(Job, response.id)
     declaration = row.provenance['fampnn_analysis_declaration']
@@ -98,7 +99,7 @@ async def test_forbidden_override_has_zero_writes(admission, monkeypatch, tmp_pa
         raise AssertionError('invalid policy must fail before writes')
     monkeypatch.setattr(admission, 'add', no_add)
     with pytest.raises(HTTPException) as exc:
-        await jobs._create_job(payload(tmp_path, override), BackgroundTasks(), admission)
+        await job_submission._create_job(payload(tmp_path, override), BackgroundTasks(), admission)
     assert exc.value.status_code == 422
     assert not list((await admission.execute(select(Job))).scalars())
     assert not (tmp_path / 'results').exists()
@@ -116,7 +117,7 @@ def test_compiled_authority_forbidden_in_nested_extras(key, tmp_path):
 @pytest.mark.parametrize('operation', ['resubmit', 'resume'])
 async def test_declared_attempt_retry_retains_authority(admission, monkeypatch, tmp_path, operation):
     from fastapi import Request, Response
-    response = await jobs._create_job(payload(tmp_path, {'mutation': []}), BackgroundTasks(), admission)
+    response = await job_submission._create_job(payload(tmp_path, {'mutation': []}), BackgroundTasks(), admission)
     original = await admission.get(Job, response.id)
     original.status = 'failed'
     await admission.commit()
@@ -150,11 +151,11 @@ async def test_real_child_inherits_parent_biology_not_revision(admission, monkey
         fampnn_analysis_overrides={'summary': []} if forbidden else {'mutation': []})
     if forbidden:
         with pytest.raises(HTTPException) as exc:
-            await jobs._create_job(child_request, BackgroundTasks(), admission)
+            await job_submission._create_job(child_request, BackgroundTasks(), admission)
         assert exc.value.status_code == 422
         assert len(list((await admission.execute(select(Job))).scalars())) == 1
     else:
-        response = await jobs._create_job(child_request, BackgroundTasks(), admission)
+        response = await job_submission._create_job(child_request, BackgroundTasks(), admission)
         row = await admission.get(Job, response.id)
         assert row.provenance['fampnn_analysis_declaration']['owner'] == 'protein_design'
         assert row.provenance['fampnn_analysis_declaration']['mutation_override'] == []
@@ -164,7 +165,7 @@ async def test_real_child_inherits_parent_biology_not_revision(admission, monkey
 
 @pytest.mark.asyncio
 async def test_default_admission_preserves_empty_mutation_override(admission, tmp_path):
-    response = await jobs._create_job(payload(tmp_path, {'mutation': []}), BackgroundTasks(), admission)
+    response = await job_submission._create_job(payload(tmp_path, {'mutation': []}), BackgroundTasks(), admission)
     row = await admission.get(Job, response.id)
     assert contract.revision_for_job(row) == contract.REVISION
     assert row.params[contract.REVISION_KEY] == contract.REVISION
@@ -190,11 +191,11 @@ async def test_local_parent_authorized_region_is_not_whole_design_chain(admissio
     if forbidden:
         monkeypatch.setattr(admission, 'add', lambda *a: pytest.fail('forbidden override wrote a row'))
         with pytest.raises(HTTPException) as exc:
-            await jobs._create_job(request, BackgroundTasks(), admission)
+            await job_submission._create_job(request, BackgroundTasks(), admission)
         assert exc.value.status_code == 422
         assert not list((await admission.execute(select(Job))).scalars())
     else:
-        result = await jobs._create_job(request, BackgroundTasks(), admission)
+        result = await job_submission._create_job(request, BackgroundTasks(), admission)
         admission.expire_all()
         row = await admission.get(Job, result.id)
         declaration = row.provenance['fampnn_analysis_declaration']

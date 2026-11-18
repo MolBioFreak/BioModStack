@@ -23,6 +23,7 @@ for candidate in (str(API_ROOT), str(REPO_ROOT)):
 
 from database import Base, Job  # noqa: E402
 from routers import jobs as jobs_router  # noqa: E402
+from services import job_submission
 from services import job_requests
 from routers import md_results as md_results_router  # noqa: E402
 from schemas import JobCreate  # noqa: E402
@@ -137,7 +138,7 @@ async def test_analysis_child_is_validated_persisted_cpu_only_and_launched_witho
         await session.commit()
 
     monkeypatch.setattr(jobs_router, "require_molecular_dynamics_feature", lambda _model_id: None)
-    monkeypatch.setattr(jobs_router, "_raise_if_workflow_launches_disabled", lambda _action: None)
+    monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs_router, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs_router, "get_results_dir", lambda: tmp_path / "results")
@@ -191,7 +192,7 @@ async def test_analysis_child_rejects_any_requested_gpu_before_persistence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(jobs_router, "require_molecular_dynamics_feature", lambda _model_id: None)
-    monkeypatch.setattr(jobs_router, "_raise_if_workflow_launches_disabled", lambda _action: None)
+    monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs_router, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'rejected-analysis.db'}")
@@ -626,7 +627,7 @@ async def test_retry_endpoint_schedules_cpu_analysis_only_and_preserves_replica_
         captured.append(job_data)
         return type("Created", (), {"id": "analysis-retry-0"})()
 
-    monkeypatch.setattr(jobs_router, "create_job", fake_create_job)
+    monkeypatch.setattr(job_submission, "submit_job", fake_create_job)
     async with sessions() as session:
         accepted_set_sha256 = hashlib.sha256(
             json.dumps([(0, replica_sha256)], separators=(",", ":")).encode("utf-8")
@@ -711,7 +712,7 @@ async def test_retry_rejects_a_changed_dynamics_generation_without_creating_a_ch
         created.append(job_data)
         return SimpleNamespace(id="must-not-exist")
 
-    monkeypatch.setattr(jobs_router, "create_job", fake_create_job)
+    monkeypatch.setattr(job_submission, "submit_job", fake_create_job)
     async with sessions() as session:
         session.add_all(
             [
@@ -764,7 +765,7 @@ async def test_retry_child_creation_failure_restores_a_truthful_recoverable_pare
     async def fail_create_job(_job_data: JobCreate, _background: BackgroundTasks, _session: AsyncSession):
         raise RuntimeError("injected scheduling failure")
 
-    monkeypatch.setattr(jobs_router, "create_job", fail_create_job)
+    monkeypatch.setattr(job_submission, "submit_job", fail_create_job)
     async with sessions() as session:
         session.add(
             Job(
@@ -829,7 +830,7 @@ async def test_partial_multi_replica_retry_admission_cancels_created_children_an
         await session.commit()
         return child
 
-    monkeypatch.setattr(jobs_router, "create_job", create_then_fail)
+    monkeypatch.setattr(job_submission, "submit_job", create_then_fail)
     async with sessions() as session:
         session.add(Job(id=parent_id, name="md", model_id="molecular_dynamics", mode="simulate", params={}, status="failed", queue_status="failed", output_dir=str(parent_root), provenance={"md": {"dynamics_state": "completed", "analysis_state": "failed", "aggregate_manifest_sha256": aggregate_sha, "replica_manifest_set_sha256": manifest_set}}))
         await session.commit()
@@ -842,7 +843,7 @@ async def test_partial_multi_replica_retry_admission_cancels_created_children_an
         retry_ids = iter(["retry-lane-0", "retry-lane-1"])
         async def replayable_create(_job_data: JobCreate, _background: BackgroundTasks, _session: AsyncSession):
             return SimpleNamespace(id=next(retry_ids))
-        monkeypatch.setattr(jobs_router, "create_job", replayable_create)
+        monkeypatch.setattr(job_submission, "submit_job", replayable_create)
         response = await md_results_router.retry_md_analysis(parent_id, session)
         assert response["created_child_ids"] == ["retry-lane-0", "retry-lane-1"]
         assert _sha256(manifest0) == digest0

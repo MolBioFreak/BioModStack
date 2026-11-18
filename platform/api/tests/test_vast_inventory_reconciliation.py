@@ -215,12 +215,13 @@ async def test_scheduler_claim_rechecks_inventory_in_atomic_update(store, monkey
 async def test_submission_rejects_legacy_ready_before_source_or_transport(store, monkeypatch):
     from fastapi import BackgroundTasks, HTTPException
     from routers import jobs
+    from services import job_submission
     session, _ = store
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *args: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda *args: None)
     before = (await session.execute(select(Job.__table__))).all()
     request = jobs.JobCreate(name='new placement', model_id='boltz2', mode='monomer', params={}, execution_target_id='vast:49684651')
     with pytest.raises(HTTPException) as error:
-        await jobs._create_job(request, BackgroundTasks(), session)
+        await job_submission._create_job(request, BackgroundTasks(), session)
     assert error.value.status_code == 422
     assert 'active ready' in error.value.detail
     assert (await session.execute(select(Job.__table__))).all() == before

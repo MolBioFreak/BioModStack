@@ -5,6 +5,7 @@ from fastapi import BackgroundTasks, HTTPException, Request, Response
 from sqlalchemy import select
 from database import Job
 from routers import jobs
+from services import job_submission
 from schemas import JobCreate
 from test_core_protein_scientific_admission import admission  # noqa: F401
 
@@ -37,7 +38,7 @@ async def test_auto_admission_persists_effective_policy_without_losing_intent(ad
     request = JobCreate(name='explicit-no-msa', model_id='boltz2', mode='predict', params={
         'sequence': 'ACDEFGHIK', 'msa_provider': 'auto', 'boltz_use_msa': False, 'use_msa': False,
     })
-    response = await jobs._create_job(request, BackgroundTasks(), admission)
+    response = await job_submission._create_job(request, BackgroundTasks(), admission)
     job = await admission.get(Job, response.id)
     assert job.params['msa_provider'] == 'colabfold_api'
     assert job.params['boltz_use_msa'] is False

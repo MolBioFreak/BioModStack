@@ -17,7 +17,8 @@ if str(API_ROOT) not in sys.path:
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
-from routers.jobs import _dedupe_child_attempts, _ensure_job_resume_identity, _reconcile_child_jobs_from_history, _resume_defaults_from_awaiting_payload
+from routers.jobs import _dedupe_child_attempts, _reconcile_child_jobs_from_history, _resume_defaults_from_awaiting_payload
+from services.job_submission import _ensure_job_resume_identity
 from services.binder_continuation import _awaiting_stage_to_resume_hint, _should_spawn_antibody_refinement_on_resume
 from services.job_control import _normalize_output_dir_reference, _plan_output_dir_cleanup
 from services.stage_review import (

@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from database import Design, Job
 from routers import jobs
+from services import job_submission
 from schemas import BinderRoundRequest, JobCreate, JobResponse
 from services import binder_round as rounds
 from services.binder_round_inputs import normalize_request
@@ -111,7 +112,7 @@ async def test_remote_review_is_retained_and_get_never_launches(selected, setup_
         assert second['steps'] == first['steps']
         async def fail(*args, **kwargs):
             raise AssertionError('GET cannot submit')
-        monkeypatch.setattr(jobs, 'submit_selected_child_jobs', fail)
+        monkeypatch.setattr(job_submission, 'submit_selected_child_jobs', fail)
         response = await selected[0].get(f'/api/binder-continuation/{root.id}/round')
         assert response.status_code == 200
         assert response.json()['steps'] == first['steps']
@@ -242,7 +243,7 @@ async def test_partial_submission_failure_retries_only_missing_child(selected, s
     session.add(Design(id='extra', job_id=root.id, name='extra', artifact_class='binder_complex',
         pdb_path=str(tmp / 'state-0.pdb')))
     await session.commit()
-    original = jobs.create_job
+    original = job_submission.submit_job
     failed = False
     async def fail_once(request, *args, **kwargs):
         nonlocal failed
@@ -250,7 +251,7 @@ async def test_partial_submission_failure_retries_only_missing_child(selected, s
             failed = True
             raise HTTPException(422, 'fixture native submission failure')
         return await original(request, *args, **kwargs)
-    monkeypatch.setattr(jobs, 'create_job', fail_once)
+    monkeypatch.setattr(job_submission, 'submit_job', fail_once)
     async with setup_store() as experiments:
         result = await rounds.reconcile_round(session, experiments, root.id)
         assert result['state'] == 'needs_retry'
@@ -414,11 +415,11 @@ async def test_concurrent_reconciliation_and_cancelled_submission_recover_atomic
     from sqlalchemy.ext.asyncio import async_sessionmaker
     session, root, _ = await fixture_root(selected)
     factory = async_sessionmaker(session.bind, expire_on_commit=False)
-    original = jobs.create_job
+    original = job_submission.submit_job
     async def cancel_after_insert(*args, **kwargs):
         await original(*args, **kwargs)
         raise asyncio.CancelledError()
-    monkeypatch.setattr(jobs, 'create_job', cancel_after_insert)
+    monkeypatch.setattr(job_submission, 'submit_job', cancel_after_insert)
     async with setup_store() as experiments:
         with pytest.raises(asyncio.CancelledError):
             await rounds.reconcile_round(session, experiments, 'root')
@@ -427,7 +428,7 @@ async def test_concurrent_reconciliation_and_cancelled_submission_recover_atomic
         step_id = next(iter(persisted['steps']))
         assert persisted['steps'][step_id]['state'] == 'prepared'
         await session.rollback()
-    monkeypatch.setattr(jobs, 'create_job', original)
+    monkeypatch.setattr(job_submission, 'submit_job', original)
     async def poll():
         async with factory() as core, setup_store() as experiments:
             return await rounds.reconcile_round(core, experiments, 'root')
@@ -442,11 +443,11 @@ async def test_concurrent_reconciliation_and_cancelled_submission_recover_atomic
 async def test_crash_after_committed_child_reconciles_by_atomic_step_provenance(selected, setup_store, monkeypatch):
     import asyncio
     session, root, _ = await fixture_root(selected)
-    original = jobs.submit_selected_child_jobs
+    original = job_submission.submit_selected_child_jobs
     async def crash_after_commit(*args, **kwargs):
         await original(*args, **kwargs)
         raise asyncio.CancelledError()
-    monkeypatch.setattr(jobs, 'submit_selected_child_jobs', crash_after_commit)
+    monkeypatch.setattr(job_submission, 'submit_selected_child_jobs', crash_after_commit)
     async with setup_store() as experiments:
         with pytest.raises(asyncio.CancelledError):
             await rounds.reconcile_round(session, experiments, 'root')
@@ -454,7 +455,7 @@ async def test_crash_after_committed_child_reconciles_by_atomic_step_provenance(
         assert len(children) == 1
         child_id = children[0].id
         await session.rollback()
-        monkeypatch.setattr(jobs, 'submit_selected_child_jobs', original)
+        monkeypatch.setattr(job_submission, 'submit_selected_child_jobs', original)
         result = await rounds.reconcile_round(session, experiments, 'root')
         assert next(iter(result['steps'].values()))['job_id'] == child_id
         assert len(list(await session.scalars(select(Job).where(Job.model_id == 'protenix')))) == 1

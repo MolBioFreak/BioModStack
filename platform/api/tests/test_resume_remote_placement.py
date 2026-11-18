@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, ExecutionTarget, Job, get_session
 from routers import jobs
+from services import job_submission
 from services import job_readback
 from services.remote_execution import bundle
 
@@ -27,7 +28,7 @@ async def store(tmp_path, monkeypatch):
         await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *_: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda *_: None)
     monkeypatch.setattr(bundle, 'current_source_identity', lambda: ('a' * 40, 'b' * 40))
     app = FastAPI()
     app.include_router(jobs.router, prefix='/jobs')

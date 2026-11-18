@@ -1764,7 +1764,7 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
             return
 
         from fastapi import BackgroundTasks
-        from routers.jobs import create_job
+        from services.job_submission import submit_job
         from services.binder_continuation import _materialize_seed_selection_from_completed_designs, _build_antibody_iteration_job
 
         # The batch claim and canonical follow-on insertion commit together.
@@ -1822,7 +1822,7 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
         if msa_job.execution_target_id:
             from services.declared_job_expansion import approve_derived
             approved = await approve_derived(launch_request, msa_job, session)
-        await create_job(launch_request, BackgroundTasks(), session,
+        await submit_job(launch_request, BackgroundTasks(), session,
                          _preallocated_job_id=follow_on_id, _commit=False,
                          _approved_execution_plan=approved)
         await session.commit()

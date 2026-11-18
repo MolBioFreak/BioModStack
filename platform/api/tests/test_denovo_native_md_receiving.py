@@ -19,9 +19,10 @@ def test_optional_navigation_is_not_scientific_authority(current_project_store, 
     from tests import test_md_typed_launch as typed
     from services.md import launch_contract
     from routers import jobs
+    from services import job_submission
     store = current_project_store
     monkeypatch.setenv('BMS_FEATURE_MOLECULAR_DYNAMICS', '1')
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *_: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda *_: None)
     monkeypatch.setattr(launch_contract, 'get_chemistry_catalog', lambda: typed._Catalog())
     # Navigation authority is independent of installed engine bytes.
     monkeypatch.setattr(launch_contract, '_bound_engine_runtime_identity',

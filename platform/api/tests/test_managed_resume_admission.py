@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from routers import jobs
+from services import job_submission
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -22,8 +23,8 @@ def resume_paths(tmp_path, monkeypatch):
 
 def test_managed_resume_path_is_read_only_and_optional(resume_paths):
     root, retained = resume_paths
-    assert jobs._managed_resume_output_dir(None) is None
-    assert jobs._managed_resume_output_dir(str(retained)) == str(retained)
+    assert job_submission._managed_resume_output_dir(None) is None
+    assert job_submission._managed_resume_output_dir(str(retained)) == str(retained)
     assert (retained / 'result.txt').read_text() == 'retained evidence'
     assert sorted(p.name for p in root.iterdir()) == ['retained']
 
@@ -72,7 +73,7 @@ async def test_invalid_resume_is_named_422_before_admission(resume_paths, monkey
     app.dependency_overrides[jobs.get_experiment_session] = session
     def no_launch(*args, **kwargs):
         raise AssertionError('Invalid resume reached workflow launch admission')
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', no_launch)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', no_launch)
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
         result = await client.post(endpoint, json={'name': 'resume refusal',
             'model_id': 'boltz_cp_experimental', 'mode': 'predict',

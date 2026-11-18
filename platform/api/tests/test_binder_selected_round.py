@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from database import Design, Job
 from routers import jobs
+from services import job_submission
 from schemas import SelectedRoundRequest
 from services import binder_round as rounds
 from services import binder_selected_round as selected_round
@@ -122,16 +123,16 @@ async def test_remote_preparation_and_crash_after_committed_insert(selected, set
     step = result.json()['round']['steps'][0]
     assert step['review']['response_context']['round_id'] == result.json()['round_id'] if 'response_context' in step['review'] else step['review']['round_id'] == result.json()['round_id']
     evidence('remote-review.json', result.json())
-    original = jobs.submit_selected_child_jobs
+    original = job_submission.submit_selected_child_jobs
     async def lost_response(*args, **kwargs):
         await original(*args, **kwargs)
         raise RuntimeError('lost post-commit response')
-    monkeypatch.setattr(jobs, 'submit_selected_child_jobs', lost_response)
+    monkeypatch.setattr(job_submission, 'submit_selected_child_jobs', lost_response)
     local = request('crash')
     result = await client.post('/api/binder-continuation/selected', json=local)
     assert result.status_code == 201, result.text
     identity = result.json()['round_id']
-    monkeypatch.setattr(jobs, 'submit_selected_child_jobs', original)
+    monkeypatch.setattr(job_submission, 'submit_selected_child_jobs', original)
     # The real router committed this child, but its response never reached the
     # progress owner. Complete it before recovery, the former closure race.
     children = list(await session.scalars(select(Job).where(Job.provenance[rounds.STEP]['round_id'].as_string() == identity)))

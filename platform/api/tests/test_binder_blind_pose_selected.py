@@ -8,6 +8,7 @@ import pytest
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from services import job_submission
 from database import Design, Job, JobArtifact, get_session
 from routers import binder_blind_pose as route
 from services import binder_blind_pose_selected as selected
@@ -312,7 +313,7 @@ async def test_bc2_route_resolves_only_declared_target(source, monkeypatch):
     async def enqueue(request, background_tasks, session):
         assert request.params['target_pdb'].endswith('target.cif')
         return {'job_id': 'child'}
-    monkeypatch.setattr(jobs, 'create_job', enqueue)
+    monkeypatch.setattr(job_submission, 'submit_job', enqueue)
     body = route.SelectedBlindPoseRequest(source_job_id='source', target_name='on',
         design_ids=[designs[0].id], binder_chains={designs[0].id: ['B']},
         target_chains=['T'], settings=route.BlindPoseSettings(model_variant='fast',
@@ -336,7 +337,7 @@ def test_api_contract_rejects_unrouted_mode_before_queue(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_generic_job_submission_cannot_bypass_selected_design_owner():
-    from routers.jobs import _create_job
+    from services.job_submission import _create_job
     from schemas import JobCreate
     request = JobCreate(name='unowned-blind-pose', model_id='esmfold2',
                         mode='blind_pose', params={})
@@ -364,7 +365,7 @@ async def test_selected_api_builds_exact_scheduler_job(source, monkeypatch):
         assert len(request.params['blind_pose_candidate_pdbs']) == len(designs)
         assert request.params['esmfold2_validation_num_sampling_steps'] == 25
         return {'job_id': 'child'}
-    monkeypatch.setattr(jobs, 'create_job', enqueue)
+    monkeypatch.setattr(job_submission, 'submit_job', enqueue)
     body = route.SelectedBlindPoseRequest(source_job_id='source',
         design_ids=[d.id for d in designs], binder_chains={d.id: ['B'] for d in designs},
         target_chains=['T'], settings=route.BlindPoseSettings(

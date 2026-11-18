@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from scripts.bms_md.contract import normalize_job_config, prepare_verified_worker_inputs, verify_input_snapshots
 from scripts.bms_md.native_config import parse_mdp, render_mdp
+from services import job_submission
 from services.md import launch_contract as contract
 from services.md.starting_structures import MdNativeLaunchIntent, compile_native_job_intent
 from test_md_job_v2_contract import _catalog, ONE_AKI_FIXTURE
@@ -204,7 +205,7 @@ def test_http_preview_launch_materializes_exact_native_document(native_client, n
             resolve_runtime_path=kwargs["_md_input_resolver"],
         ))
         raise ReachedMaterializer
-    monkeypatch.setattr(jobs, "create_job", receiving_create)
+    monkeypatch.setattr(job_submission, "submit_job", receiving_create)
     request = {"schema_version": "bms.md.launch-request.v1", "intent": intent, "preview_digest": preview["preview_digest"]}
     stale = copy.deepcopy(request)
     stale["intent"]["replicas"] += 1

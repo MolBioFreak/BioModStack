@@ -10,7 +10,7 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-from routers.jobs import _validate_protenix_checkpoint_requirements, _validate_protenix_template_requirements
+from services.job_submission import _validate_protenix_checkpoint_requirements, _validate_protenix_template_requirements
 from services.job_requests import _normalize_boltz_no_msa_quality_params, _normalize_structure_geometry_params, _normalize_structure_prediction_pred_method
 from fastapi import HTTPException
 from services.nextflow import _write_sequence_batch_payloads, build_nextflow_command

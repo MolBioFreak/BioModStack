@@ -13,6 +13,7 @@ from database import Base, Job
 from experiment_models import ExperimentLaunchContext, ExperimentRunAttempt
 from schemas import JobCreate
 from routers import jobs
+from services import job_submission
 from services import binder_continuation
 from services import job_requests
 from services.global_experiments.launch_contexts import validate_bound_job
@@ -86,7 +87,7 @@ async def test_reserved_native_children_create_bind_replay_and_reopen(setup_stor
         # queue insertion, not science, scheduler dispatch, a worker or a live DB.
         tasks = BackgroundTasks()
         try:
-            responses = await jobs.submit_selected_child_jobs(
+            responses = await job_submission.submit_selected_child_jobs(
                 requests, tasks, core, exp, destination_launch_context_id=dest["launch_context_id"],
                 idempotency_key="native-children", response_context={"operation": "generation"},
             )
@@ -134,7 +135,7 @@ async def test_reserved_native_children_create_bind_replay_and_reopen(setup_stor
                 await validate_bound_job(exp, context, job)
         assert source.provenance == original_source
         assert (await exp.get(ExperimentLaunchContext, dest["launch_context_id"])).state == "issued"
-        replay = await jobs.submit_selected_child_jobs(
+        replay = await job_submission.submit_selected_child_jobs(
             requests, BackgroundTasks(), core, exp, destination_launch_context_id=dest["launch_context_id"],
             idempotency_key="native-children", response_context={"operation": "generation"},
         )

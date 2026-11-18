@@ -9,6 +9,7 @@ import yaml
 
 from database import Job
 from routers import jobs
+from services import job_submission
 from services import job_readback
 from services import job_requests
 from schemas import JobCreate
@@ -73,7 +74,7 @@ async def test_native_template_save_reopen_update_preserves_exact_science(admiss
 
 @pytest.mark.asyncio
 async def test_initial_boltzgen_saved_replay_uses_snapshot_after_source_removed(admission, target):
-    first = await jobs._create_job(JobCreate(name='native-original', model_id='boltzgen', mode='protein_binder',
+    first = await job_submission._create_job(JobCreate(name='native-original', model_id='boltzgen', mode='protein_binder',
         params={'target_pdb': 'inputs/target.pdb', 'alpha': 0, 'skip_inverse_folding': False}),
         BackgroundTasks(), admission)
     parent = await admission.get(Job, first.id)
@@ -85,7 +86,7 @@ async def test_initial_boltzgen_saved_replay_uses_snapshot_after_source_removed(
     replay = job_readback._public_job_params(parent)
     replay.pop('remote_result_policy', None)
     replay.pop('core_protein_scientific_contract', None)  # Server reassigns its own producer contract.
-    second = await jobs._create_job(JobCreate(name='native-replay', model_id='boltzgen',
+    second = await job_submission._create_job(JobCreate(name='native-replay', model_id='boltzgen',
         mode='protein_binder', params=replay), BackgroundTasks(), admission)
     child = await admission.get(Job, second.id)
     child_root = Path(child.params['boltzgen_yaml_config'])

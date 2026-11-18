@@ -16,6 +16,7 @@ from database import Job, ExecutionTarget
 from component_runtime import SourceIdentity
 
 import routers.jobs as jobs
+from services import job_submission
 from services import binder_continuation
 from services import job_requests
 from schemas import JobCreate
@@ -86,7 +87,7 @@ async def test_approved_prepared_directory_reaches_real_bundle(
     raw = JobCreate(name='transport fixture', model_id=model, mode=mode,
                     params=params, execution_target_id=selected_target.id)
     with pytest.raises(HTTPException) as review:
-        await jobs._create_job(raw, tasks, session)
+        await job_submission._create_job(raw, tasks, session)
     assert review.value.status_code == 409
     assert review.value.detail['code'] == 'remote_prepared_job_review_required'
     assert not list(await session.scalars(select(Job.id)))
@@ -104,7 +105,7 @@ async def test_approved_prepared_directory_reaches_real_bundle(
     approved = JobCreate.model_validate(prepared_body | {
         'execution_plan_approval': preview['approval_digest'],
     })
-    response = await jobs._create_job(approved, tasks, session)
+    response = await job_submission._create_job(approved, tasks, session)
     job = await session.get(Job, response.id)
     job.provenance = {**job.provenance, **bundle_assignment_fixture()}
     assert job.params[path_key] == str(reviewed_directory)

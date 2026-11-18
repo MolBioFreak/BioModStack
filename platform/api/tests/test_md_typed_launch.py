@@ -1,4 +1,5 @@
 from __future__ import annotations
+from services import job_submission
 
 import asyncio
 import hashlib
@@ -408,7 +409,7 @@ def test_preview_rejects_every_profile_fixed_setting_mismatch_without_side_effec
         calls.append("context")
         raise AssertionError("preview must not claim a launch context")
 
-    monkeypatch.setattr(jobs, "create_job", forbidden_job)
+    monkeypatch.setattr(job_submission, "submit_job", forbidden_job)
     monkeypatch.setattr(
         molecular_dynamics, "experiment_session_factory", forbidden_context, raising=False
     )
@@ -536,7 +537,7 @@ def test_launch_recompiles_digest_and_calls_one_canonical_job_wrapper(
             conformational_mapping_request_id=None,
         )
 
-    monkeypatch.setattr(jobs, "create_job", fake_create_job)
+    monkeypatch.setattr(job_submission, "submit_job", fake_create_job)
     stale = typed_client.post(
         "/api/molecular-dynamics/launch",
         json={
@@ -1292,6 +1293,7 @@ async def test_canonical_job_wrapper_binds_trusted_md_seams_by_behavior(
 ) -> None:
     from fastapi import BackgroundTasks
     from routers import jobs
+    from services import job_submission
     from services import job_requests
     from schemas import JobCreate
     from services import gpu_orchestrator
@@ -1324,7 +1326,7 @@ async def test_canonical_job_wrapper_binds_trusted_md_seams_by_behavior(
         raise _BindingProbe("trusted MD seams reached materialization")
 
     monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
-    monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _action: None)
+    monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: results_root)
@@ -1369,6 +1371,7 @@ async def test_canonical_job_wrapper_keeps_generic_md_defaults_without_internal_
 ) -> None:
     from fastapi import BackgroundTasks
     from routers import jobs
+    from services import job_submission
     from services import job_requests
     from schemas import JobCreate
     from services import gpu_orchestrator
@@ -1395,7 +1398,7 @@ async def test_canonical_job_wrapper_keeps_generic_md_defaults_without_internal_
         raise _BindingProbe("generic MD defaults reached materialization")
 
     monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
-    monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _action: None)
+    monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: results_root)
@@ -1436,6 +1439,7 @@ async def test_typed_launch_preserves_optional_launch_context_wrapper_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from routers import jobs, molecular_dynamics
+    from services import job_submission
     from services.md import starting_structures
 
     intent_payload = {**_intent_payload(), "launch_context_id": "context-one"}
@@ -1473,7 +1477,7 @@ async def test_typed_launch_preserves_optional_launch_context_wrapper_session(
     monkeypatch.setattr(
         molecular_dynamics, "experiment_session_factory", fake_factory, raising=False
     )
-    monkeypatch.setattr(jobs, "create_job", fake_create_job)
+    monkeypatch.setattr(job_submission, "submit_job", fake_create_job)
 
     result = await molecular_dynamics.launch_typed_md_job(request, _UnusedSession())
     assert result == "created"
@@ -1483,7 +1487,7 @@ async def test_typed_launch_preserves_optional_launch_context_wrapper_session(
     assert callable(call["_md_input_resolver"])
     assert call["experiment_session"] is experiment_session
     adapter = call["_typed_md_project_launch"]
-    assert isinstance(adapter, jobs.TypedMdProjectLaunch)
+    assert isinstance(adapter, job_submission.TypedMdProjectLaunch)
     assert adapter.request_schema_version == "bms.md.launch-request.v1"
     assert adapter.intent["launch_context_id"] == "context-one"
     assert adapter.preview_digest == preview.preview_digest
@@ -1536,6 +1540,7 @@ def test_project_v2_typed_md_launch_reaches_canonical_job_and_consumes_context(
         ExperimentRunAttempt,
     )
     from routers import jobs
+    from services import job_submission
     from services import job_requests
     from services import gpu_orchestrator
     from sqlalchemy import func, select
@@ -1583,7 +1588,7 @@ def test_project_v2_typed_md_launch_reaches_canonical_job_and_consumes_context(
         return {**params, "md_job_spec": compiled}
 
     monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
-    monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _action: None)
+    monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: store["results_root"])
@@ -1667,6 +1672,7 @@ def test_typed_md_project_adapter_rejects_divergent_authority_without_side_effec
     )
     from fastapi import BackgroundTasks, HTTPException
     from routers import jobs
+    from services import job_submission
     from schemas import JobCreate
     from services.md import starting_structures
     from sqlalchemy import func, select
@@ -1735,7 +1741,7 @@ def test_typed_md_project_adapter_rejects_divergent_authority_without_side_effec
     adapter = (
         True
         if case == "arbitrary_flag"
-        else jobs.TypedMdProjectLaunch(
+        else job_submission.TypedMdProjectLaunch(
             request_schema_version="bms.md.launch-request.v1",
             intent=adapter_intent,
             preview=adapter_preview,
@@ -1810,13 +1816,14 @@ def test_ordinary_no_context_jobs_endpoint_remains_canonical(
 ) -> None:
     from database import Job
     from routers import jobs
+    from services import job_submission
     from services import job_requests
     from services import gpu_orchestrator
     from sqlalchemy import func, select
 
     store = project_context_preview_store
     monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
-    monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _action: None)
+    monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: store["results_root"])
@@ -1850,6 +1857,7 @@ def test_design_typed_launch_persists_scientific_lineage_and_exact_snapshot(
 ):
     from database import Design, Job, MdRun
     from routers import jobs, molecular_dynamics
+    from services import job_submission
     from services import job_requests
     from services import gpu_orchestrator
     from services.md import launch_contract
@@ -1894,7 +1902,7 @@ def test_design_typed_launch_persists_scientific_lineage_and_exact_snapshot(
     monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: catalog)
     monkeypatch.setattr(launch_contract, "get_chemistry_catalog", lambda: catalog)
     monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _: None)
-    monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _: None)
+    monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: store["results_root"])

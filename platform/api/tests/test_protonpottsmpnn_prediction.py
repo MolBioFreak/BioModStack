@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from database import Base, Design, Job, get_session
 from experiment_database import get_experiment_session
 from routers import jobs, protonpottsmpnn_prediction as route
+from services import job_submission
 from services import binder_continuation
 from services import job_requests
 from schemas import JobCreate
@@ -116,7 +117,7 @@ async def selected(tmp_path, monkeypatch):
     weights = tmp_path / 'protenix-weights'
     (weights / 'checkpoint').mkdir(parents=True)
     (weights / 'checkpoint' / 'protenix-v2.pt').write_bytes(b'inert submission fixture')
-    monkeypatch.setattr(jobs, '_resolve_protenix_weights_dir', lambda params: weights)
+    monkeypatch.setattr(job_submission, '_resolve_protenix_weights_dir', lambda params: weights)
     engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "prediction.db"}')
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)

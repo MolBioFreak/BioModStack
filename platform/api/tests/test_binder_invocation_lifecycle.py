@@ -92,13 +92,14 @@ def test_initial_envelope_wire_preserves_legacy_and_off():
 @pytest.mark.parametrize('enabled', [True, False])
 async def test_initial_shared_plan_repeated_calls_recover_once(selected, setup_store, monkeypatch, enabled):
     from routers import jobs
+    from services import job_submission
     client, session, root, tmp = await source(selected)
     root.status = 'completed'
     root.execution_target_id = None
     root.provenance = {**(root.provenance or {}), 'sequence_design_request': {
         'schema_version': 2, 'enabled': enabled, 'round_plan': invocation_plan()}}
     await session.commit()
-    original = jobs.submit_selected_child_jobs
+    original = job_submission.submit_selected_child_jobs
     interrupted = False
     async def lose_response(*args, **kwargs):
         nonlocal interrupted
@@ -107,7 +108,7 @@ async def test_initial_shared_plan_repeated_calls_recover_once(selected, setup_s
             interrupted = True
             raise asyncio.CancelledError('committed child before progress save')
         return response
-    monkeypatch.setattr(jobs, 'submit_selected_child_jobs', lose_response)
+    monkeypatch.setattr(job_submission, 'submit_selected_child_jobs', lose_response)
     async with setup_store() as experiments:
         if enabled:
             with pytest.raises(asyncio.CancelledError):
@@ -115,7 +116,7 @@ async def test_initial_shared_plan_repeated_calls_recover_once(selected, setup_s
         else:
             result = await rounds.reconcile_round(session, experiments, 'root')
             assert result['state'] == 'generation_only'
-    monkeypatch.setattr(jobs, 'submit_selected_child_jobs', original)
+    monkeypatch.setattr(job_submission, 'submit_selected_child_jobs', original)
     for _ in range(2):
         async with setup_store() as experiments:
             result = await rounds.reconcile_round(session, experiments, 'root')

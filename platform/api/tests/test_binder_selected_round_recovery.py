@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from database import Job
 from routers import jobs
+from services import job_submission
 from services import binder_round as rounds, binder_selected_round as selected_round
 from test_binder_continuation import selected
 from test_project_workflow_setups import setup_store
@@ -36,12 +37,12 @@ async def test_interrupted_insertion_completed_native_child_recovers(selected, s
         root.provenance = {**(root.provenance or {}), rounds.SEQUENCE_REQUEST: {
             'schema_version': 2, 'enabled': True, 'round_plan': payload['round_plan']}}
         await session.commit()
-    original = jobs.submit_selected_child_jobs
+    original = job_submission.submit_selected_child_jobs
     async def interrupted(*args, **kwargs):
         if after_commit:
             await original(*args, **kwargs)
         raise asyncio.CancelledError('process interrupted at insertion boundary')
-    monkeypatch.setattr(jobs, 'submit_selected_child_jobs', interrupted)
+    monkeypatch.setattr(job_submission, 'submit_selected_child_jobs', interrupted)
     with pytest.raises(asyncio.CancelledError):
         if envelope_kind == 'initial_invocations':
             async with setup_store() as experiments:
@@ -55,7 +56,7 @@ async def test_interrupted_insertion_completed_native_child_recovers(selected, s
     assert all(s['job_id'] is None for s in retained['steps'].values())
     children = list(await session.scalars(select(Job).where(Job.provenance[rounds.STEP]['round_id'].as_string() == identity)))
     assert len(children) == int(after_commit)
-    monkeypatch.setattr(jobs, 'submit_selected_child_jobs', original)
+    monkeypatch.setattr(job_submission, 'submit_selected_child_jobs', original)
     sessions = async_sessionmaker(session.bind, expire_on_commit=False)
     monkeypatch.setattr(analysis_autorun, 'schedule_viewer_minimum_analyses_for_job', lambda *a: None)
     await session.rollback()
@@ -164,15 +165,15 @@ async def test_corrupt_publication_does_not_block_prepared_sibling(selected, set
     payload['round_plan']['stages'][0] = {**independent, 'id': 'redesign', 'models': [
         {'model_id': 'protonpottsmpnn', 'params': {'binder_chain': 'A'}}]}
     payload['round_plan']['stages'].append(independent)
-    original = jobs.submit_selected_child_jobs
+    original = job_submission.submit_selected_child_jobs
     async def interrupted(*args, **kwargs):
         await original(*args, **kwargs)
         raise asyncio.CancelledError()
-    monkeypatch.setattr(jobs, 'submit_selected_child_jobs', interrupted)
+    monkeypatch.setattr(job_submission, 'submit_selected_child_jobs', interrupted)
     with pytest.raises(asyncio.CancelledError):
         await client.post('/api/binder-continuation/selected', json=payload)
     await session.rollback()
-    monkeypatch.setattr(jobs, 'submit_selected_child_jobs', original)
+    monkeypatch.setattr(job_submission, 'submit_selected_child_jobs', original)
     root = await session.get(Job, 'root')
     retained = rounds.progress_of(root)['selected_rounds'][0]
     assert len(retained['steps']) == 2

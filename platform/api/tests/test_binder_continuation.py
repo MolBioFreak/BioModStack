@@ -12,6 +12,7 @@ from database import Base, Design, Job, get_session
 from experiment_database import get_experiment_session
 from test_project_workflow_setups import setup_store
 from routers import binder_continuation as route, jobs
+from services import job_submission
 from services import binder_continuation
 from services.binder_continuation import resolve_root, snapshot_selection
 
@@ -25,7 +26,7 @@ PDB = ''.join(
 async def selected(tmp_path, monkeypatch, setup_store):
     # This fixture qualifies queue insertion/recovery, never inference or asset
     # installation. Keep the external checkpoint availability leaf inert.
-    monkeypatch.setattr(jobs, '_validate_protenix_checkpoint_requirements', lambda *args: None)
+    monkeypatch.setattr(job_submission, '_validate_protenix_checkpoint_requirements', lambda *args: None)
     import paths
     monkeypatch.setattr(paths, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(paths, 'get_results_dir', lambda: tmp_path / 'results')
@@ -488,7 +489,7 @@ async def test_fanout_queue_failure_rolls_back_all_jobs_without_changing_primary
     from sqlalchemy import select
     client, session, _, source, _ = selected
     await alternate_document_fixture(selected)
-    original = jobs.create_job
+    original = job_submission.submit_job
     calls = 0
     async def fail_second(request, tasks, session, **kwargs):
         nonlocal calls
@@ -497,7 +498,7 @@ async def test_fanout_queue_failure_rolls_back_all_jobs_without_changing_primary
             from fastapi import HTTPException
             raise HTTPException(422, 'native owner request failed')
         return await original(request, tasks, session, **kwargs)
-    monkeypatch.setattr(jobs, 'create_job', fail_second)
+    monkeypatch.setattr(job_submission, 'submit_job', fail_second)
     source_id = source.id
     before = (await session.get(Design, 'd1')).pdb_path
     response = await client.post('/api/binder-continuation/selected', json={

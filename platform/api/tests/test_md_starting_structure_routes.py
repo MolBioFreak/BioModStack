@@ -1,4 +1,5 @@
 from __future__ import annotations
+from services import job_submission
 
 import asyncio
 import base64
@@ -578,7 +579,7 @@ def test_server_file_resolution_carries_one_pinned_file_through_every_consumer(
         launch_bytes.append(Path(kwargs["_md_input_resolver"](token)).read_bytes())
         return "created"
 
-    monkeypatch.setattr(jobs, "create_job", fake_create_job)
+    monkeypatch.setattr(job_submission, "submit_job", fake_create_job)
     request = starting_structures.MdLaunchRequest.model_validate(
         {
             "schema_version": "bms.md.launch-request.v1",

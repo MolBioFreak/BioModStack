@@ -17,6 +17,7 @@ from fastapi import BackgroundTasks
 
 from database import Job
 from routers import jobs
+from services import job_submission
 from services import binder_continuation
 from services import job_requests
 from test_core_protein_scientific_admission import admission
@@ -74,8 +75,8 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
     monkeypatch.setattr(bsm, 'materialize_source_bytes', materialize)
     async def create(request, background, session):
         request.params['fix_fixed_sidechains'] = sidechains
-        return await jobs._create_job(request, background, session)
-    monkeypatch.setattr(jobs, 'create_job', create)
+        return await job_submission._create_job(request, background, session)
+    monkeypatch.setattr(job_submission, 'submit_job', create)
     selectors = ({'fixed_positions': 'A10,A110'} if selection == 'keep' else
                  {'designable_positions': 'A12,A112'} if selection == 'change' else {})
     request = jobs.ResequenceLaunchRequest(sources=[{'path': str(p)} for p in sources],

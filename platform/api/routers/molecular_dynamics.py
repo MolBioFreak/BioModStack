@@ -816,7 +816,8 @@ def _native_md_job_request(request, preview, resolved, *, md_input_resolver=None
 
 async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession, *, round_step=None,
                                 destination_launch_context_id=None, experiment_session=None):
-    from routers.jobs import create_job, TypedMdProjectLaunch
+    from services.job_submission import submit_job
+    from services.job_submission import TypedMdProjectLaunch
     from services.job_requests import ApprovedExecutionPlan
     from component_runtime import canonical_bytes
 
@@ -841,7 +842,7 @@ async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession,
             # Native preview/source verification precedes the ordinary Project
             # child handoff. The destination is never consumed as MD authority.
             from services.global_experiments.launch_contexts import prepare_child_launch_contexts, resolve_launch_context_for_display
-            from routers.jobs import _create_prepared_child_batch, _reserve_selected_run_group
+            from services.job_submission import _create_prepared_child_batch, _reserve_selected_run_group
             prepared = await prepare_child_launch_contexts(experiment_session,
                 destination_launch_context_id=destination_launch_context_id,
                 job_requests=[job_data],
@@ -866,9 +867,9 @@ async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession,
                 source_params=copy.deepcopy({key: value for key, value in params.items() if key != "md_job_spec"}),
             )
             async with experiment_session_factory() as experiment_session:
-                return await create_job(job_data, BackgroundTasks(), session,
+                return await submit_job(job_data, BackgroundTasks(), session,
                     experiment_session=experiment_session, _typed_md_project_launch=adapter, **kwargs)
-        return await create_job(job_data, BackgroundTasks(), session, **kwargs)
+        return await submit_job(job_data, BackgroundTasks(), session, **kwargs)
     except Exception:
         if destination_launch_context_id is not None and experiment_session is not None:
             await experiment_session.rollback()
@@ -997,7 +998,8 @@ async def launch_typed_md_job(
                 )
             return resolved_runtime_path(resolved)
 
-        from routers.jobs import TypedMdProjectLaunch, create_job
+        from services.job_submission import submit_job
+        from services.job_submission import TypedMdProjectLaunch
 
         source_provenance = {
             **copy.deepcopy(resolved.source_provenance or {}),
@@ -1041,7 +1043,7 @@ async def launch_typed_md_job(
                     'plan': preview.execution_plan, 'admissible': True,
                     'deferred_preparation': [], 'blockers': []}))
         if request.intent.launch_context_id is None:
-            return await create_job(
+            return await submit_job(
                 job_data,
                 BackgroundTasks(),
                 session,
@@ -1057,7 +1059,7 @@ async def launch_typed_md_job(
             source_params=copy.deepcopy({key: value for key, value in params.items() if key != "md_job_spec"}),
         )
         async with experiment_session_factory() as experiment_session:
-            return await create_job(
+            return await submit_job(
                 job_data,
                 BackgroundTasks(),
                 session,
@@ -1226,7 +1228,7 @@ async def reorchestrate_failed_md_run(job_id: str, command: LifecycleCommand,
             raise HTTPException(status_code=409, detail={"code": "MD_REORCHESTRATE_CONTRACT_INVALID", "message": "Only a materialized MD v2 launch can be re-orchestrated."})
         new_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"bms-md-reorchestrate:{job_id}:{command.idempotency_key}"))
         from fastapi import BackgroundTasks
-        from routers.jobs import create_job
+        from services.job_submission import submit_job
         lineage_root = parent.lineage_root_job_id or parent.id
         source_stage_key = parent.stage_mode or parent.child_stage or parent.mode
         input_resolver = _trusted_reorchestration_input_resolver(parent, dict(run.normalized_request or {}))
@@ -1252,7 +1254,7 @@ async def reorchestrate_failed_md_run(job_id: str, command: LifecycleCommand,
                 canonical_bytes({'approval_digest': approved['approval_digest'], 'plan': approved['plan'],
                     'admissible': approved['plan'].get('complete') is True,
                     'deferred_preparation': [], 'blockers': approved['plan'].get('blockers', [])}))
-        created = await create_job(
+        created = await submit_job(
             job_data, BackgroundTasks(), session, _preallocated_job_id=new_id, _commit=False,
             _md_output_creation=output_creation, _md_input_resolver=input_resolver,
             _approved_execution_plan=approved_plan,

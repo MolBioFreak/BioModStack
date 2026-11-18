@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import Job, ShapeCadSource, ShapeDesignGeometry, ShapeDesignRequest, get_session
 from experiment_database import get_experiment_session
 from paths import get_data_root
-from routers import jobs as jobs_router
+from services import job_submission
 from services import job_requests
 from schemas import ExecutionPolicy
 from services.shape_geometry import MAX_MESH_BYTES, ShapeGeometryError
@@ -302,7 +302,7 @@ async def submit_shape_request(
                 _assert_execution_replay(existing_job, submitted)
         reused = existing_job is not None
         if not reused and submitted.execution_target_id and not submitted.execution_plan_approval:
-            jobs_router._require_prepared_remote_review(job_request, {
+            job_submission._require_prepared_remote_review(job_request, {
                 "request_id": staged.request_id,
                 "request_sha256": staged.request_sha256,
                 "client_request_id": submitted.client_request_id,
@@ -314,13 +314,13 @@ async def submit_shape_request(
             # not the raw staged projection. Reuse its public preview and the
             # existing server-only handoff before reservation metadata is added.
             from component_runtime import canonical_bytes
-            preview = await jobs_router.preview_job_execution_plan(
+            preview = await job_submission.preview_submission(
                 job_request, session=session, experiment_session=experiment_session)
             if preview['approval_digest'] != submitted.execution_plan_approval:
                 raise HTTPException(409, 'Execution plan approval is stale; preview and approve the current request')
             approved_plan = job_requests.ApprovedExecutionPlan(
                 canonical_bytes(job_request.model_dump(mode='json')), canonical_bytes(preview))
-        job_response = await jobs_router.create_job(
+        job_response = await job_submission.submit_job(
             job_request, background_tasks, session,
             _preallocated_job_id=None, _commit=True,
             experiment_session=experiment_session,
@@ -357,14 +357,14 @@ async def submit_shape_request(
 
     deterministic_job_id = str(uuid.uuid5(_SHAPE_JOB_NAMESPACE, staged.request_id))
     if submitted.execution_target_id and not submitted.execution_plan_approval:
-        jobs_router._require_prepared_remote_review(job_request, {
+        job_submission._require_prepared_remote_review(job_request, {
             "request_id": staged.request_id,
             "request_sha256": staged.request_sha256,
             "client_request_id": submitted.client_request_id,
             "job_id": deterministic_job_id,
         })
     try:
-        job_response = await jobs_router.create_job(
+        job_response = await job_submission.submit_job(
             job_request,
             background_tasks,
             session,

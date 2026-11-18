@@ -11,6 +11,7 @@ from database import Job, Design, get_session
 from experiment_database import get_experiment_session
 from experiment_models import ExperimentLaunchContext, ExperimentWorkflowPreparation
 from routers import jobs
+from services import job_submission
 from services import job_requests
 from schemas import JobCreate
 from test_project_manager_adapters import stores
@@ -148,7 +149,7 @@ async def test_selected_caller_retains_distinct_project_requests_for_review(setu
         # Real native normalization, Plan persistence, run group and context owner.
         # No successful resource authority is mocked; review does not reserve it.
         with pytest.raises(HTTPException) as raised:
-            await jobs.submit_selected_child_jobs(children, BackgroundTasks(), None, db,
+            await job_submission.submit_selected_child_jobs(children, BackgroundTasks(), None, db,
                 destination_launch_context_id=dest['launch_context_id'], idempotency_key='retained',
                 response_context={'operation': 'predict'})
         assert raised.value.status_code == 409
@@ -159,7 +160,7 @@ async def test_selected_caller_retains_distinct_project_requests_for_review(setu
         assert (await db.get(ExperimentLaunchContext, dest['launch_context_id'])).state == 'issued'
     async with setup_store() as db:
         with pytest.raises(HTTPException) as replay:
-            await jobs.submit_selected_child_jobs(children, BackgroundTasks(), None, db,
+            await job_submission.submit_selected_child_jobs(children, BackgroundTasks(), None, db,
                 destination_launch_context_id=dest['launch_context_id'], idempotency_key='retained',
                 response_context={'operation': 'predict'})
         assert replay.value.detail['job_requests'] == retained

@@ -1,4 +1,5 @@
 """Resequence route mapping through real source acquisition and private stores."""
+from services import job_submission
 from pathlib import Path
 
 import pytest
@@ -106,7 +107,7 @@ async def test_the_local_launch_route_builds_the_same_request_the_prepare_route_
     seen = []
     async def capture(launch, background, session):
         seen.append(launch.model_dump(mode='json', exclude_unset=True))
-    monkeypatch.setattr(jobs, 'create_job', capture)
+    monkeypatch.setattr(job_submission, 'submit_job', capture)
     req = jobs.ResequenceLaunchRequest(sources=[{'path': 'inputs/d.pdb'}], design_chains='A', seq_method='mpnn')
     async with core() as session:
         await jobs.launch_resequence_from_structures(req, BackgroundTasks(), session)

@@ -12,6 +12,7 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy import select
 
+from services import job_submission
 from database import ExecutionTarget, Job, ShapeDesignRequest
 from experiment_models import ExperimentLaunchContext, ExperimentRunAttempt, ExperimentWorkflowPreparation
 from experiment_services import create_run_group, validate_preparation_authority
@@ -190,12 +191,12 @@ async def test_shape_reserved_identity_actual_insertion_and_crash_replay(
         token = jobs.current_launch_context_id.set(bound.launch_context_id)
         try:
             if crash:
-                canonical = jobs.create_job
+                canonical = job_submission.submit_job
                 async def commit_then_crash(*args, **kwargs):
                     await canonical(*args, **kwargs)
                     raise RuntimeError('injected crash after canonical commit before Shape link')
                 with monkeypatch.context() as fault:
-                    fault.setattr(jobs, 'create_job', commit_then_crash)
+                    fault.setattr(job_submission, 'submit_job', commit_then_crash)
                     with pytest.raises(RuntimeError, match='injected crash'):
                         await shape_blueprint.submit_shape_request(bound, BackgroundTasks(), admission, db)
                 await admission.rollback()

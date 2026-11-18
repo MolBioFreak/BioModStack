@@ -40,7 +40,7 @@ def export_admission(monkeypatch):
     monkeypatch.setattr(route, '_require_mutation_owner', authorize)
     monkeypatch.setattr(route, 'project_result_data', source)
     monkeypatch.setattr('services.family_msa.operations.bind_request', bind)
-    monkeypatch.setattr('routers.jobs._create_job', create)
+    monkeypatch.setattr('services.job_submission._create_job', create)
     state['session'] = SimpleNamespace(get=get_receipt)
     state['core'] = SimpleNamespace(get=get_job)
     return state

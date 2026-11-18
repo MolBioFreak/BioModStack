@@ -377,7 +377,7 @@ def test_experimental_region_redesign_uses_protein_local_review_contract() -> No
 def test_protein_local_validator_selection_rejects_unavailable_models() -> None:
     from fastapi import HTTPException
 
-    from routers.jobs import _validate_plr_validator_availability
+    from services.job_submission import _validate_plr_validator_availability
 
     class Registry:
         def get_model(self, model_id: str) -> object | None:

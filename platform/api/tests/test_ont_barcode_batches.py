@@ -13,6 +13,7 @@ from fastapi import BackgroundTasks, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from services import job_submission
 from database import (
     Base,
     Job,
@@ -233,7 +234,7 @@ def canonical_job_spy(monkeypatch: pytest.MonkeyPatch):
         return SimpleNamespace(id=_preallocated_job_id)
 
     monkeypatch.setattr(ont_runs, "_job_create_for_ont_submit", build_job)
-    monkeypatch.setattr(jobs, "create_job", create_job)
+    monkeypatch.setattr(job_submission, "submit_job", create_job)
     def _set_fail_at(value: int | None) -> None:
         nonlocal fail_at
         fail_at = value

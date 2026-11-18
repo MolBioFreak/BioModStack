@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from database import Design, Job
 from model_registry import get_registry
 from routers import jobs, models
+from services import job_submission
 from schemas import BinderRoundRequest
 from services import core_protein_scientific_contract as scientific
 from services.binder_round_inputs import MODES, normalize_request, prediction_request
@@ -90,7 +91,7 @@ async def test_ordinary_esmf_round_request_admission_compiler_and_real_native_wr
     assert child.params['lineage_root_job_id'] == root.id
     assert child.params['iteration_source_job_id'] == owner.id
     assert not {'input_pdb', 'pdb_sequence_path', 'template', 'restraints'} & child.params.keys()
-    response = await jobs._create_job(child, BackgroundTasks(), session)
+    response = await job_submission._create_job(child, BackgroundTasks(), session)
     persisted = await session.get(Job, response.id)
     assert scientific.revision_for_job(persisted) == scientific.REVISION
     assert (persisted.model_id, persisted.mode, persisted.execution_target_id) == ('esmfold2', 'predict', root.execution_target_id)

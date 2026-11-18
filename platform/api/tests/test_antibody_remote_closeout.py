@@ -201,8 +201,9 @@ async def test_real_job_creation_persists_supported_parent_without_science_launc
     from fastapi import BackgroundTasks
     from database import Job
     from routers import jobs
+    from services import job_submission
     tasks = BackgroundTasks()
-    response = await jobs._create_job(JobCreate(name='offline generator', model_id='antibody_denovo',
+    response = await job_submission._create_job(JobCreate(name='offline generator', model_id='antibody_denovo',
         mode=mode, params=deepcopy(settings), execution_target_id=None,
         execution_policy={'remote_result_policy': 'manual'}), tasks, admission)
     admission.expire_all()

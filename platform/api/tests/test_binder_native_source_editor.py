@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from database import Design, Job, JobArtifact
 from routers import jobs
+from services import job_submission
 from schemas import JobCreate
 from services.binder_source_materialization import StructureSourceRequest
 from services.result_ingester import ingest_job_results
@@ -40,7 +41,7 @@ async def test_rejected_native_source_materializes_and_reopens_without_original(
     clone = JobCreate(name='Native source editor', model_id='esmfold2', mode='predict',
                       params={'sequence': 'A', 'pred_method': 'esmfold2'},
                       source_structure=retained, execution_target_id=None)
-    identity = await jobs._prepare_selected_structure(clone, session)
+    identity = await job_submission._prepare_selected_structure(clone, session)
     assert identity['owner_job_id'] == source.id
     assert identity['artifact_id'] == artifact.id
     assert clone.parent_job_id is None and clone.execution_target_id is None

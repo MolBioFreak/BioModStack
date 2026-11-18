@@ -419,7 +419,7 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
     parent.error_message = None
     await session.commit()
 
-    from routers.jobs import create_job
+    from services.job_submission import submit_job
 
     created_ids: list[str] = []
     work_item_dir = parent_root / "orchestration" / "analysis_retry_work_items"
@@ -456,7 +456,7 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
                     pinned_gpu=None,
                     sequence_length=None,
                 )
-            response = await create_job(child_request, BackgroundTasks(), session)
+            response = await submit_job(child_request, BackgroundTasks(), session)
             created_ids.append(str(response.id))
     except Exception as exc:
         await session.rollback()

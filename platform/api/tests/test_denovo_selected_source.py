@@ -7,6 +7,7 @@ import pytest
 
 from database import Job, Design
 from routers import jobs, files
+from services import job_submission
 from services import job_requests
 from schemas import JobCreate
 from services.binder_source_materialization import StructureSourceRequest
@@ -55,14 +56,14 @@ async def test_selected_source_into_different_project_real_insertion(
         payload = JobCreate(name='Independent destination prediction', model_id='esmfold2',
             mode='predict', params={'sequence': 'MQIFVK', 'pred_method': 'esmfold2'},
             source_structure=selection, execution_target_id=None, parent_job_id=None)
-        await jobs._prepare_selected_structure(payload, core)
+        await job_submission._prepare_selected_structure(payload, core)
         retained = payload.source_structure.model_dump(mode='json', exclude_none=True)
         retained_path = paths.resolve_allowed_path(retained['path'])
         retained_bytes = retained_path.read_bytes()
         original.unlink()
         # Reopen the exact retained source after the original producer is offline.
         clone = JobCreate.model_validate(payload.model_dump(mode='json'))
-        identity = await jobs._prepare_selected_structure(clone, core)
+        identity = await job_submission._prepare_selected_structure(clone, core)
         assert identity['owner_job_id'] == 'source'
         assert identity['lineage_root_job_id'] == 'scientific-root'
         assert clone.source_structure == payload.source_structure
@@ -107,7 +108,7 @@ async def test_selected_source_into_different_project_real_insertion(
         reopened = JobCreate(name='Clone retained source', model_id=child.model_id,
             mode=child.mode, params={'sequence': 'MQIFVK', 'pred_method': 'esmfold2'},
             source_structure=detail.source_structure, execution_target_id=None)
-        assert (await jobs._prepare_selected_structure(reopened, core))['owner_job_id'] == 'source'
+        assert (await job_submission._prepare_selected_structure(reopened, core))['owner_job_id'] == 'source'
 
 
 async def source_rows(session, root, native):
@@ -170,18 +171,18 @@ async def test_exact_source_conversion_offline_and_wrong_owner(source_api, nativ
         params={'sequence': 'ACDE', 'boltz_use_msa': False},
         source_structure=prepared['source_structure'], execution_target_id=None)
     before = payload.params.copy()
-    identity = await jobs._prepare_selected_structure(payload, session)
+    identity = await job_submission._prepare_selected_structure(payload, session)
     assert identity['owner_job_id'] == 'source'
     assert identity['lineage_root_job_id'] == 'scientific-root'
     assert payload.params == before and payload.parent_job_id is None
     bad = payload.model_copy(deep=True)
     bad.source_structure.job_id = 'foreign'
     with pytest.raises(Exception, match='requested|belong'):
-        await jobs._prepare_selected_structure(bad, session)
+        await job_submission._prepare_selected_structure(bad, session)
     from paths import resolve_allowed_path
     resolve_allowed_path(prepared['source_structure']['path']).write_bytes(b'changed')
     with pytest.raises(Exception, match='digest'):
-        await jobs._prepare_selected_structure(payload, session)
+        await job_submission._prepare_selected_structure(payload, session)
 
 
 @pytest.mark.asyncio
@@ -299,5 +300,5 @@ async def test_preview_approved_insert_offline_independent_lineage(admission, se
         'source_structure': detail.json()['source_structure'],
         'execution_plan_approval': None, 'execution_target_id': None})
     async with factory() as session:
-        assert (await jobs._prepare_selected_structure(clone, session))['owner_job_id'] == 'source'
+        assert (await job_submission._prepare_selected_structure(clone, session))['owner_job_id'] == 'source'
     assert clone.parent_job_id is None and clone.execution_target_id is None

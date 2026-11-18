@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import BackgroundTasks, HTTPException
 
+from services import job_submission
 from routers import ligandmpnn_interface_context as route
 from services import ligandmpnn_interface_publication as publication
 from services.ligandmpnn_interface_selection import InterfaceContextSelection
@@ -73,9 +74,10 @@ async def test_selected_route_is_reachable_through_actual_asgi_dispatch():
 @pytest.mark.asyncio
 async def test_generic_job_submission_cannot_inject_selected_manifest():
     from routers import jobs
+    from services import job_submission
     from schemas import JobCreate
     with pytest.raises(HTTPException) as denied:
-        await jobs._create_job(JobCreate(name='unowned-selection', model_id='ligandmpnn',
+        await job_submission._create_job(JobCreate(name='unowned-selection', model_id='ligandmpnn',
             mode='interface_context', params={'interface_context_manifest': '/tmp/forged.json'}),
             BackgroundTasks(), None)
     assert denied.value.status_code == 403
@@ -155,7 +157,7 @@ async def test_route_resolves_design_owner_and_binds_typed_request_before_queue(
         assert '--binder_chain' not in invocation.command
         assert '--temperature' not in invocation.command
         return SimpleNamespace(id='child')
-    monkeypatch.setattr(jobs, 'create_job', create_job)
+    monkeypatch.setattr(job_submission, 'submit_job', create_job)
     response = await route.submit_selected(selection(native['candidate_id']), BackgroundTasks(), session)
     assert not selected_submission.get()
     assert response['job'].id == 'child'
@@ -198,7 +200,7 @@ async def test_generic_bc2_cif_derivative_preserves_original_identity(tmp_path, 
         assert binding['sources']['chosen']['sha256'] != identity['sha256']
         assert ' B ' in Path(binding['sources']['chosen']['path']).read_text()
         return SimpleNamespace(id='child')
-    monkeypatch.setattr(jobs, 'create_job', create_job)
+    monkeypatch.setattr(job_submission, 'submit_job', create_job)
     chosen = selection('chosen', 'bc2').model_copy(update={'settings':
         selection('chosen', 'bc2').settings.model_copy(update={'target_patch': ['A3']})})
     await route.submit_selected(chosen, BackgroundTasks(), session)

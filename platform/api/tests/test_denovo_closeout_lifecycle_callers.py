@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 
 from database import Job, get_session
 from routers import jobs
+from services import job_submission
 from services import job_control, nextflow
 from test_local_gate_review_rows import store, _job, _isolate  # noqa: F401
 
@@ -34,7 +35,7 @@ async def test_local_checkpoint_http_keeps_committed_cancel_intent(store, tmp_pa
     monkeypatch.setattr(nextflow, "_local_checkpoint_resume", lambda job: (
         None, {"resources": {}}, runtime, checkpoint, None))
     monkeypatch.setattr(nextflow, "compile_component_checkpoint_continuation", lambda *args: None)
-    monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda *args: None)
+    monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda *args: None)
     app = FastAPI()
     app.include_router(jobs.router, prefix="/api/jobs")
 

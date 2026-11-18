@@ -714,7 +714,7 @@ async def _create_pipeline_job(
     *,
     commit: bool = True,
 ) -> JobResponse:
-    from routers.jobs import create_job  # noqa: PLC0415
+    from services.job_submission import submit_job  # noqa: PLC0415
 
     # Ordinary prepare projects context before review (including explicit None).
     # Preserve legacy internal callers which have not passed through that adapter.
@@ -724,7 +724,7 @@ async def _create_pipeline_job(
             job = job.model_copy(update={"launch_context_id": launch_context_id})
     token, token_digest = alignment_access.issue_alignment_access_token()
     with ont_submission_trust.trusted_ont_job_creation(token_digest):
-        created = await create_job(
+        created = await submit_job(
             job,
             background_tasks,
             session,

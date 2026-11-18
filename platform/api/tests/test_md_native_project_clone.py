@@ -1,4 +1,5 @@
 """Native Project launch through the real two-store owner and public Clone read."""
+from services import job_submission
 import asyncio
 import copy
 import json
@@ -25,7 +26,7 @@ def test_native_project_adapter_rejects_divergent_handoff(project_context_previe
         "schema_version": "bms.md.launch-preview-request.v1", "intent": intent,
     })
     assert preview.status_code == 200, preview.text
-    create_job = jobs.create_job
+    create_job = job_submission.submit_job
     async def divergent(job_data, *args, **kwargs):
         if change == "effective_request":
             job_data.params["md_job_spec"]["stages"][0]["mdp"]["nsteps"] = 7
@@ -34,7 +35,7 @@ def test_native_project_adapter_rejects_divergent_handoff(project_context_previe
         else:
             job_data.execution_target_id = "vast:changed"
         return await create_job(job_data, *args, **kwargs)
-    monkeypatch.setattr(jobs, "create_job", divergent)
+    monkeypatch.setattr(job_submission, "submit_job", divergent)
     response = store["client"].post("/api/molecular-dynamics/launch", json={
         "schema_version": "bms.md.launch-request.v1", "intent": intent,
         "preview_digest": preview.json()["preview_digest"],

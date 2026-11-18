@@ -788,7 +788,7 @@ async def submit_selected_analysis(session, experiment_session, background_tasks
                                    supersedes=None, partition=True, execution_target_supplied=True):
     from component_runtime import partition_ordered
     from experiment_services import new_id, scheduler_job_id_for_attempt
-    from routers.jobs import submit_selected_child_jobs
+    from services.job_submission import submit_selected_child_jobs
     from fastapi import HTTPException
 
     batches = partition_ordered(selections, batching_enabled=requested_settings.batching_enabled,

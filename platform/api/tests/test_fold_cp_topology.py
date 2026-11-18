@@ -13,6 +13,7 @@ from model_registry import ModelRegistry
 from schemas import JobCreate
 from routers.jobs import ResumeJobRequest
 from routers import jobs
+from services import job_submission
 from services import job_requests
 from services import gpu_orchestrator as scheduler
 from services.nextflow import build_nextflow_command, _derive_boltz_cp_gpu_launch_settings
@@ -117,7 +118,7 @@ async def test_saved_clone_and_actual_retry_keep_effective_topology(admission, m
     if topology is None:
         values.pop('cp_topology')
     request = JobCreate(name='saved-topology', model_id='boltz_cp_experimental', mode='design', params=values)
-    created = await jobs._create_job(request, BackgroundTasks(), admission)
+    created = await job_submission._create_job(request, BackgroundTasks(), admission)
     admission.expire_all()
     saved = await admission.get(Job, created.id)
     assert saved.params['cp_topology'] == (topology or '2d')
@@ -126,11 +127,11 @@ async def test_saved_clone_and_actual_retry_keep_effective_topology(admission, m
     clone_params.pop('core_protein_scientific_contract', None)
     clone = JobCreate.model_validate_json(JobCreate(name='clone', model_id=saved.model_id,
                                       mode=saved.mode, params=clone_params).model_dump_json())
-    cloned = await jobs._create_job(clone, BackgroundTasks(), admission)
+    cloned = await job_submission._create_job(clone, BackgroundTasks(), admission)
     assert (await admission.get(Job, cloned.id)).params['cp_topology'] == (topology or '2d')
     saved.status = 'failed'
     await admission.commit()
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *args: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda *args: None)
     resumed = await jobs.resume_job(saved.id, Request({'type': 'http', 'headers': []}), Response(),
                                    request=ResumeJobRequest(param_overrides=overrides), background_tasks=BackgroundTasks(), session=admission)
     admission.expire_all()

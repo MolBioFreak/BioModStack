@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, ExecutionTarget, Job, get_session
 from routers import jobs
+from services import job_submission
 from services import binder_continuation
 from services import job_requests
 from tests.test_msa_bundle_integration import offline_bundle
@@ -76,7 +77,7 @@ def test_remote_typed_project_uses_validated_approval_handoff(remote_project_sto
     from tests.test_md_typed_launch import _Catalog, _intent_payload
     store = remote_project_store
     monkeypatch.setenv('BMS_FEATURE_MOLECULAR_DYNAMICS', '1')
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *_: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda *_: None)
     monkeypatch.setattr(launch_contract, 'get_chemistry_catalog', lambda: _Catalog())
     # Admission authority is independent of installed engine bytes.
     monkeypatch.setattr(launch_contract, '_bound_engine_runtime_identity',
@@ -145,7 +146,7 @@ async def admission(tmp_path, monkeypatch):
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *_: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda *_: None)
     app = FastAPI()
     app.include_router(jobs.router, prefix='/jobs')
     from routers import molecular_dynamics

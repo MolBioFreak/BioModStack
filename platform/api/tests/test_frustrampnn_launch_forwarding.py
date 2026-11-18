@@ -11,6 +11,7 @@ from database import Job, Design, get_session
 from experiment_database import get_experiment_session
 from routers import frustrampnn as routes
 from routers import jobs as shared_jobs
+from services import job_submission
 from services.frustrampnn import jobs
 from test_frustrampnn_child_jobs import child_db, _pdb
 
@@ -29,7 +30,7 @@ async def test_upload_and_reanalysis_forward_destination_independently(child_db,
             children.append(child)
         await session.commit()
         return [SimpleNamespace(id=child.id) for child in children]
-    monkeypatch.setattr(shared_jobs, "submit_selected_child_jobs", submit)
+    monkeypatch.setattr(job_submission, "submit_selected_child_jobs", submit)
     app = FastAPI()
     app.include_router(routes.router)
     async def dependency():
@@ -88,7 +89,7 @@ async def test_selected_designs_explicit_local_does_not_inherit_parent_worker(ch
             session.add(child)
         await session.commit()
         return [SimpleNamespace(id=child.id) for child in children]
-    monkeypatch.setattr(shared_jobs, "submit_selected_child_jobs", submit)
+    monkeypatch.setattr(job_submission, "submit_selected_child_jobs", submit)
     app = FastAPI()
     app.include_router(routes.router)
     async def dependency():

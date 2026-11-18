@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from database import Job
 from schemas import JobCreate
 from routers import jobs
+from services import job_submission
 from services import core_protein_scientific_contract as contract
 from services import nextflow
 from tests.test_core_protein_scientific_admission import admission
@@ -25,7 +26,7 @@ def test_request_authority_cannot_be_forged(key):
 @pytest.mark.asyncio
 async def test_pre_registry_request_retained_in_sqlite_and_command(admission, monkeypatch):
     original = {'sequence':'ACDE', 'esmf_seed':0, 'esmf_msa_remove_insertions':False}
-    result = await jobs._create_job(JobCreate(name='receipt', model_id='esmfold2', mode='predict', params=deepcopy(original)), BackgroundTasks(), admission)
+    result = await job_submission._create_job(JobCreate(name='receipt', model_id='esmfold2', mode='predict', params=deepcopy(original)), BackgroundTasks(), admission)
     admission.expire_all()
     row = await admission.get(Job, result.id)
     assert row.provenance.get(KEY) == original, 'pre-registry request provenance missing'

@@ -25,6 +25,7 @@ from component_runtime import (ComponentRuntime, NativeComponent, NativeInvocati
     SelectedExecutionMetadata, SelectedExecutionPlan, SourceIdentity, canonical_bytes)
 from database import Base, ExecutionTarget, Job, get_session
 from routers import jobs
+from services import job_submission
 from services import nextflow
 from services.remote_execution import executor as ex, targets
 from tools import bms_remote_worker as worker
@@ -187,7 +188,7 @@ async def lane(tmp_path, monkeypatch):
         async with factory() as session:
             yield session
     app.dependency_overrides[get_session] = dependency
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *_: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda *_: None)
     decision = dict(selected_artifacts=[r['relative_path'] for r in opened['checkpoint']['artifacts']
                                       if r['relative_path'].endswith('.pdb')])
     async with AsyncClient(transport=ASGITransport(app), base_url='http://offline') as client:

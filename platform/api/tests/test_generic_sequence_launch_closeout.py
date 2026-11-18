@@ -175,10 +175,11 @@ async def test_real_job_creation_preserves_sequence_request_without_launch(admis
     from fastapi import BackgroundTasks
     from database import Job
     from routers import jobs
+    from services import job_submission
     typed = request(model, mode, tmp_path)
     before = deepcopy(typed.params)
     tasks = BackgroundTasks()
-    response = await jobs._create_job(typed, tasks, admission)
+    response = await job_submission._create_job(typed, tasks, admission)
     admission.expire_all()
     stored = await admission.get(Job, response.id)
     assert (stored.model_id, stored.mode) == (model, mode)
@@ -232,6 +233,7 @@ async def test_unimplemented_multichain_mpnn_is_rejected_before_job_or_queue(adm
     from sqlalchemy import select, func
     from database import Job
     from routers import jobs
+    from services import job_submission
     typed = request('proteinmpnn', 'design', tmp_path)
     source = Path(typed.params['input_pdb'])
     text = source.read_text()
@@ -239,7 +241,7 @@ async def test_unimplemented_multichain_mpnn_is_rejected_before_job_or_queue(adm
     source.write_text(text.replace('END\n', atom[:21] + 'B' + atom[22:] + 'END\n'))
     tasks = BackgroundTasks()
     with pytest.raises(HTTPException) as error:
-        await jobs._create_job(typed, tasks, admission)
+        await job_submission._create_job(typed, tasks, admission)
     assert error.value.status_code == 422 and 'multi-chain' in str(error.value.detail)
     assert await admission.scalar(select(func.count()).select_from(Job)) == 0
     assert not tasks.tasks
@@ -256,6 +258,7 @@ async def test_actual_compiled_command_native_wrapper_and_sqlite_consumer(admiss
     from sqlalchemy import select
     from database import Design, Job
     from routers import jobs
+    from services import job_submission
     from services import job_requests
     from services.result_ingester import ingest_job_results
     spec = importlib.util.spec_from_file_location('sequence_native_transport_fixture',
@@ -287,7 +290,7 @@ async def test_actual_compiled_command_native_wrapper_and_sqlite_consumer(admiss
         typed.params['seqs_per_design'] = 2
         typed.params['fampnn_max_psce' if model == 'fampnn' else 'mpnn_max_score'] = 1.0
         expected_count = 2
-    response = await jobs._create_job(typed, BackgroundTasks(), admission)
+    response = await job_submission._create_job(typed, BackgroundTasks(), admission)
     job = await admission.get(Job, response.id)
     assert job.execution_target_id == typed.execution_target_id
     assert job.params['remote_result_policy'] == typed.execution_policy.remote_result_policy

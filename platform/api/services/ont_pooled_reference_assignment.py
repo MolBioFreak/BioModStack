@@ -807,8 +807,8 @@ async def submit_pooled_reference_assignment(
             execution_plan_approval=request.execution_plan_approval,
         )
         if prepare_only:
-            from routers.jobs import preview_job_execution_plan
-            preview = await preview_job_execution_plan(job_data, session)
+            from services.job_submission import preview_submission
+            preview = await preview_submission(job_data, session)
             await session.rollback()
             return {"request": request.model_copy(update={"reference_set_id": reference_set_id, "execution_plan_approval": None}).model_dump(mode="json", exclude_unset=True),
                     "request_fingerprint": fingerprint, "preview": preview}
@@ -817,9 +817,9 @@ async def submit_pooled_reference_assignment(
             transaction_job_dirs.append(assignment_job_id)
         token, token_digest = alignment_access.issue_alignment_access_token()
         with ont_submission_trust.trusted_ont_job_creation(token_digest):
-            from routers.jobs import create_job  # noqa: PLC0415
+            from services.job_submission import submit_job  # noqa: PLC0415
 
-            created = await create_job(
+            created = await submit_job(
                 job_data,
                 background_tasks,
                 session,
@@ -1716,13 +1716,13 @@ async def _create_release_child(
         }
     )
     if prepare_only:
-        from routers.jobs import preview_job_execution_plan
-        return await preview_job_execution_plan(job_data, session)
+        from services.job_submission import preview_submission
+        return await preview_submission(job_data, session)
     token, token_digest = alignment_access.issue_alignment_access_token()
     with ont_submission_trust.trusted_ont_job_creation(token_digest):
-        from routers.jobs import create_job  # noqa: PLC0415
+        from services.job_submission import submit_job  # noqa: PLC0415
 
-        created = await create_job(
+        created = await submit_job(
             job_data,
             background_tasks,
             session,

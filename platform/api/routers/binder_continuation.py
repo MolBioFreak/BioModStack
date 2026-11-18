@@ -133,7 +133,8 @@ class SelectedOperationRequest(BaseModel):
 async def _launch_selected(request: SelectedOperationRequest, background_tasks: BackgroundTasks,
                           session: AsyncSession = Depends(get_session),
                           experiment_session: AsyncSession = Depends(get_experiment_session)):
-    from routers.jobs import create_job, get_job
+    from routers.jobs import get_job
+    from services.job_submission import submit_job
     if not request.design_ids and not request.native_sources:
         raise HTTPException(422, 'Select at least one Design or native source')
     source, root, designs = await resolve_selection(session, request.source_job_id, request.design_ids)
@@ -202,7 +203,7 @@ async def _launch_selected(request: SelectedOperationRequest, background_tasks: 
         requests = individual_model_requests(job, request.operation, directory)
         response_context = {'source_job_id': source.id, 'root_job_id': root.id,
                             'operation': request.operation, 'selected_design_count': len(designs), 'selected_native_count': len(native)}
-        from routers.jobs import submit_selected_child_jobs
+        from services.job_submission import submit_selected_child_jobs
         launched = await submit_selected_child_jobs(
             requests, background_tasks, session, experiment_session,
             destination_launch_context_id=request.launch_context_id,

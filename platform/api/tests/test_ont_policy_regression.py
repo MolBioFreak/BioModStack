@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from services import job_submission
 from database import Job, NgsPooledAssignmentRelease, NgsPooledAssignmentReleaseTarget
 from routers import jobs, ont_runs
 from services import binder_continuation
@@ -20,13 +21,13 @@ from test_ont_pooled_reference_assignment import (
     pooled_context, _submit_request, _write_assignment_summary,
 )
 
-_REAL_CREATE = jobs.create_job
+_REAL_CREATE = job_submission.submit_job
 
 
 @pytest_asyncio.fixture
 async def policy_context(pooled_context, monkeypatch):
     context = pooled_context
-    monkeypatch.setattr(jobs, "create_job", _REAL_CREATE)
+    monkeypatch.setattr(job_submission, "submit_job", _REAL_CREATE)
     monkeypatch.setattr(jobs, "get_results_dir", lambda: context.results_root)
     monkeypatch.setattr(jobs, "get_inputs_dir", lambda: context.inputs_root)
     monkeypatch.setattr(binder_continuation, "get_inputs_dir", lambda: context.inputs_root)
@@ -96,7 +97,7 @@ async def test_pooled_release_real_job_persistence_and_replay(policy_context, mo
             if count == 2:
                 raise RuntimeError("injected failure after second real child insertion")
             return created
-        monkeypatch.setattr(jobs, "create_job", fail_after_insert)
+        monkeypatch.setattr(job_submission, "submit_job", fail_after_insert)
     payload = {"idempotency_key": "explicit-policy-release", "target_workflow": "ont_plasmid_qc", "target_ids": ["target-a", "target-b"]}
     path = f"/api/jobs/{job_id}/pooled-assignment/release"
     response = await context.client.post(path, json=payload)
@@ -106,7 +107,7 @@ async def test_pooled_release_real_job_persistence_and_replay(policy_context, mo
             assert (await reader.execute(select(Job).where(Job.id != job_id, Job.batch_id.is_not(None)))).scalars().all() == []
             assert (await reader.execute(select(NgsPooledAssignmentRelease))).scalars().all() == []
             assert (await reader.execute(select(NgsPooledAssignmentReleaseTarget))).scalars().all() == []
-        monkeypatch.setattr(jobs, "create_job", _REAL_CREATE)
+        monkeypatch.setattr(job_submission, "submit_job", _REAL_CREATE)
         response = await context.client.post(path, json=payload)
     assert response.status_code == 201, response.text
     replay = await context.client.post(path, json=payload)
@@ -184,14 +185,14 @@ async def test_instrument_handoff_real_owners(policy_context, monkeypatch, tmp_p
                 async def failing_create(*args, **kwargs):
                     await _REAL_CREATE(*args, **kwargs)
                     raise RuntimeError("injected handoff failure after real insertion")
-                monkeypatch.setattr(jobs, "create_job", failing_create)
+                monkeypatch.setattr(job_submission, "submit_job", failing_create)
                 with pytest.raises(RuntimeError, match="injected handoff failure"):
                     await context.client.post(path, json=payload)
                 async with factory() as reader:
                     assert (await reader.execute(select(Job))).scalars().all() == []
                     receipt = await reader.get(MolBioNgsReceipt, context.receipt_ids[0])
                     assert receipt.consumed_at is None and receipt.consumed_job_id is None
-                monkeypatch.setattr(jobs, "create_job", _REAL_CREATE)
+                monkeypatch.setattr(job_submission, "submit_job", _REAL_CREATE)
             response = await context.client.post(path, json=payload)
             assert response.status_code == 201, response.text
             async with factory() as reader:

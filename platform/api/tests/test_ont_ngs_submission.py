@@ -19,6 +19,7 @@ for path in (API_ROOT, ROUTERS_ROOT):
 
 import ont_runs  # noqa: E402
 import routers.jobs as jobs_router  # noqa: E402
+from services import job_submission
 from schemas import JobResponse, JobStatus  # noqa: E402
 
 
@@ -263,7 +264,7 @@ def test_created_ont_job_receives_opaque_alignment_capability(monkeypatch) -> No
     class Session:
         pass
 
-    monkeypatch.setattr(jobs_router, "create_job", fake_create_job)
+    monkeypatch.setattr(job_submission, "submit_job", fake_create_job)
     response = Response()
     request = Request(
         {"type": "http", "method": "POST", "scheme": "https", "path": "/api/ont/ngs/plasmid_qc/submit", "headers": [(b"x-forwarded-proto", b"https")]}
@@ -309,7 +310,7 @@ def test_capability_issuance_failure_occurs_before_ont_job_creation(monkeypatch)
     def fail_issuance():
         raise RuntimeError("injected issuance failure")
 
-    monkeypatch.setattr(jobs_router, "create_job", fake_create_job)
+    monkeypatch.setattr(job_submission, "submit_job", fake_create_job)
     monkeypatch.setattr(alignment_access, "issue_alignment_access_token", fail_issuance)
     request = Request(
         {"type": "http", "method": "POST", "scheme": "https", "path": "/api/ont/ngs/plasmid_qc/submit", "headers": []}
@@ -356,7 +357,7 @@ def test_explicit_deferred_commit_survives_launch_context(monkeypatch) -> None:
         captured["commit"] = kwargs["_commit"]
         return created
 
-    monkeypatch.setattr(jobs_router, "create_job", fake_create_job)
+    monkeypatch.setattr(job_submission, "submit_job", fake_create_job)
     request = Request({
         "type": "http", "method": "POST", "scheme": "https",
         "path": "/api/ont/signal-workbench/external-alignment-jobs", "headers": [],

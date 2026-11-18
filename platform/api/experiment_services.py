@@ -5582,7 +5582,7 @@ class ExistingJobMaterializer:
                 job = existing_job
             else:
                 from fastapi import BackgroundTasks
-                from routers.jobs import _create_job
+                from services.job_submission import _create_job
                 from schemas import JobCreate
 
                 request = JobCreate(

@@ -80,7 +80,7 @@ def round_state(retained):
 
 async def submit_step(session, experiments, step, *, destination, context):
     """One ordinary Job/Project submission boundary for initial and selected rounds."""
-    from routers.jobs import submit_selected_child_jobs
+    from services.job_submission import submit_selected_child_jobs
     tasks = BackgroundTasks()
     try:
         if step['metadata'].get('route') == 'md_native':

@@ -8,6 +8,7 @@ import pytest
 
 from database import Job
 from routers import jobs, models
+from services import job_submission
 from services import binder_continuation
 from services import job_requests
 from schemas import JobCreate
@@ -147,7 +148,7 @@ async def test_remote_preparation_preview_approval_reuses_owned_sources(admissio
     request = JobCreate(name='remote-initial', model_id='ppiflow', mode='protein_binder',
         params=settings('protein_binder', inputs), execution_target_id='vast:fixture')
     with pytest.raises(HTTPException) as response:
-        await jobs._create_job(request, BackgroundTasks(), admission)
+        await job_submission._create_job(request, BackgroundTasks(), admission)
     assert response.value.status_code == 409
     detail = response.value.detail
     assert detail['code'] == 'remote_prepared_job_review_required'
@@ -164,11 +165,11 @@ async def test_remote_preparation_preview_approval_reuses_owned_sources(admissio
     altered.params['self_condition'] = True
     altered.execution_plan_approval = preview['approval_digest']
     with pytest.raises(HTTPException) as changed:
-        await jobs._create_job(altered, BackgroundTasks(), admission)
+        await job_submission._create_job(altered, BackgroundTasks(), admission)
     assert changed.value.status_code in {409, 422}
     assert not list(await admission.scalars(select(Job.id)))
     prepared.execution_plan_approval = preview['approval_digest']
-    result = await jobs._create_job(prepared, BackgroundTasks(), admission)
+    result = await job_submission._create_job(prepared, BackgroundTasks(), admission)
     job = await admission.get(Job, result.id)
     assert job.status == 'queued'
     assert job.execution_target_id == 'vast:fixture'

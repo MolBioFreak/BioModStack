@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from starlette.requests import Request
 
+from services import job_submission
 from database import (
     Base,
     Job,
@@ -149,7 +150,7 @@ async def pooled_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             raise RuntimeError("forced canonical job creation failure")
         return SimpleNamespace(id=_preallocated_job_id)
 
-    monkeypatch.setattr(jobs, "create_job", create_job)
+    monkeypatch.setattr(job_submission, "submit_job", create_job)
     yield SimpleNamespace(
         engine=engine,
         session=session,

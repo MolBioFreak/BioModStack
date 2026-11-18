@@ -139,13 +139,14 @@ def test_runtime_selection_accepts_shared_plan_but_not_executable_preview():
 async def test_full_workflow_preview_post_persists_approval_without_gpu_assignment(admission, tmp_path, monkeypatch):
     from database import Job
     from routers import jobs
+    from services import job_submission
     from services.remote_execution.bundle import verify_approved_native_inputs
     # The existing admission check tests presence, not neural-weight validity.
     # Provide an explicitly fake local prerequisite; inference stays disabled.
     weights = tmp_path / 'fixture-weights'
     (weights / 'checkpoint').mkdir(parents=True)
     (weights / 'checkpoint/protenix-v2.pt').write_bytes(b'offline admission fixture; not model weights')
-    monkeypatch.setattr(jobs, '_resolve_protenix_weights_dir', lambda params: weights)
+    monkeypatch.setattr(job_submission, '_resolve_protenix_weights_dir', lambda params: weights)
     credential = tmp_path / 'neurosnap-offline-fixture'
     credential.write_text('not-a-real-credential-offline-fixture')
     credential.chmod(0o600)

@@ -14,6 +14,7 @@ from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.requests import Request
 
+from services import job_submission
 from database import Base, Job, JobArtifact, MdAttemptSegment, MdReplicaRun, MdRun
 from services.md.state import create_md_run, create_replica_attempt
 import services.md.results as results
@@ -293,7 +294,7 @@ async def test_remote_public_retry_reaches_retained_shared_owner_not_leaf_admiss
     async def forbid(*args, **kwargs):
         raise AssertionError('Standalone analyze root admission is forbidden')
     monkeypatch.setattr(executor, 'retry_component_execution', shared)
-    monkeypatch.setattr(jobs, 'create_job', forbid)
+    monkeypatch.setattr(job_submission, 'submit_job', forbid)
     async with maker() as session:
         reply = await routes.retry_md_analysis('md-job-1', session)
         assert reply['created_child_ids'] == ['retained-replacement']

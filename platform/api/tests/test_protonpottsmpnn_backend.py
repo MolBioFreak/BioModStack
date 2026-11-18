@@ -15,6 +15,7 @@ from sqlalchemy import select
 from database import Design, Job, JobArtifact
 from schemas import JobCreate
 from routers import jobs, binder_continuation, models
+from services import job_submission
 from services import binder_continuation as binder_continuation_service
 from services import job_requests
 from scripts.lib import protonpottsmpnn_contract as contract
@@ -222,7 +223,7 @@ def test_actual_pinned_stage_is_the_complete_remote_image_dependency(tmp_path, m
 
 @pytest.mark.asyncio
 async def test_native_publication_real_artifact_rows_exact_endpoint_shape_no_fake_design(admission, target):
-    response = await jobs._create_job(request(target), BackgroundTasks(), admission)
+    response = await job_submission._create_job(request(target), BackgroundTasks(), admission)
     job = await admission.get(Job, response.id)
     folder = Path(job.output_dir)/native.DIRECTORY
     folder.mkdir(parents=True)

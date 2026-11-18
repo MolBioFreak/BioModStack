@@ -689,7 +689,7 @@ async def _create_one_child(
         **_modkit_params(request),
     }
     prefix = request.name_prefix or str(source["name"]).strip() or f"ONT {request.target_workflow}"
-    from routers.jobs import create_job  # noqa: PLC0415
+    from services.job_submission import submit_job  # noqa: PLC0415
 
     from routers.ont_runs import OntNgsSubmitRequest, _job_create_for_ont_submit  # noqa: PLC0415
 
@@ -731,11 +731,11 @@ async def _create_one_child(
         }
     )
     if prepare_only:
-        from routers.jobs import preview_job_execution_plan
-        return await preview_job_execution_plan(job, session)
+        from services.job_submission import preview_submission
+        return await preview_submission(job, session)
     token, token_digest = alignment_access.issue_alignment_access_token()
     with ont_submission_trust.trusted_ont_job_creation(token_digest):
-        created = await create_job(
+        created = await submit_job(
             job,
             background_tasks,
             session,

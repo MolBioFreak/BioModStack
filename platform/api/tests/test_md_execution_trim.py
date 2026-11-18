@@ -17,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from component_runtime import SourceIdentity
 from database import Base, Job, MdRun
 from routers import jobs
+from services import job_submission
 from services import job_requests
 from schemas import JobCreate
 from services import gpu_orchestrator as gpu, nextflow
@@ -77,7 +78,7 @@ async def test_real_create_job_v2_reserves_descendants_and_initializes(store, tm
     monkeypatch.setattr(launch_contract, '_bound_engine_runtime_identity',
         lambda: {'image_name': 'gromacs.sif', 'sif_sha256': 'a' * 64})
     monkeypatch.setattr(jobs, 'require_molecular_dynamics_feature', lambda _: None)
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda _: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda _: None)
     monkeypatch.setattr(jobs, 'get_registry', _AcceptingRegistry)
     monkeypatch.setattr(job_requests, 'get_registry', _AcceptingRegistry)
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
@@ -107,7 +108,7 @@ async def test_accepted_v1_caller_hands_unchanged_normalized_request_to_existing
     request['schema'] = 'bms.md.job.v1'
     request.pop('chemistry')
     monkeypatch.setattr(jobs, 'require_molecular_dynamics_feature', lambda _: None)
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda _: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda _: None)
     monkeypatch.setattr(jobs, 'get_registry', _AcceptingRegistry)
     monkeypatch.setattr(job_requests, 'get_registry', _AcceptingRegistry)
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')

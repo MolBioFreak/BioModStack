@@ -15,6 +15,7 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
+from services import job_submission
 from database import Base, Job, JobArtifact, MdEvent, MdReplicaRun, MdRun
 from routers import jobs, molecular_dynamics
 from routers.molecular_dynamics import FailedLaunchDeleteCommand, LifecycleCommand
@@ -184,7 +185,7 @@ async def test_reorchestrate_is_versioned_idempotent_and_preserves_lineage(sessi
         db.add(created); await db.flush()
         await create_md_run(db, job=created, normalized_request=contract)
         return SimpleNamespace(id=created.id)
-    monkeypatch.setattr(jobs, "create_job", fake_create_job)
+    monkeypatch.setattr(job_submission, "submit_job", fake_create_job)
     command = LifecycleCommand(expected_state_version=run.state_version, idempotency_key="replay-key")
     first = await molecular_dynamics.reorchestrate_failed_md_run(parent.id, command, session)
     expected = str(molecular_dynamics.uuid.uuid5(molecular_dynamics.uuid.NAMESPACE_URL, f"bms-md-reorchestrate:{parent.id}:replay-key"))

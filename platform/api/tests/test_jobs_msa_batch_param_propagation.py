@@ -11,12 +11,13 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 import routers.jobs as jobs
+from services import job_submission
 from services import nextflow as nextflow_service
 
 
 def test_build_msa_batch_child_params_preserves_local_runtime_contract() -> None:
     sequences_for_msa = [{"name": "reference_msa", "sequence": "ACDEFGHIK"}]
-    child_params = jobs._build_msa_batch_child_params(
+    child_params = job_submission._build_msa_batch_child_params(
         source_params={
             "msa_reference_sequence": "ACDEFGHIK",
             "msa_force_refresh": True,
@@ -91,7 +92,7 @@ def test_build_msa_batch_child_params_preserves_local_runtime_contract() -> None
 
 def test_msa_child_params_drop_retired_scoring_ownership_metadata() -> None:
     owner_key = "_frustrampnn_execution_" + "owner_v1"
-    params = jobs._build_msa_batch_child_params(
+    params = job_submission._build_msa_batch_child_params(
         source_params={
             "run_frustrampnn": True,
             owner_key: {"schema_name": "frustrampnn_execution_owner"},

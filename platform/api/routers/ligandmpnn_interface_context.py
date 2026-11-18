@@ -33,7 +33,7 @@ async def submit_selected(selection: ProjectInterfaceContextSelection, backgroun
         selection.model_dump(exclude={'launch_context_id', 'execution_target_id'}))
     if MODEL_MODE_WORKFLOW_ENTRYPOINTS.get(('ligandmpnn', 'interface_context')) != 'workflows/ligandmpnn_interface_context.nf':
         raise HTTPException(503, 'Selected interface-context workflow is not registered')
-    from routers.jobs import create_job
+    from services.job_submission import submit_job
     source = await session.get(Job, selection.source_job_id)
     if source is None:
         raise HTTPException(404, 'Source Job not found')
@@ -91,13 +91,13 @@ async def submit_selected(selection: ProjectInterfaceContextSelection, backgroun
     token = selected_submission.set(True)
     try:
         if destination or execution_target_id:
-            from routers.jobs import submit_selected_child_jobs
+            from services.job_submission import submit_selected_child_jobs
             children = await submit_selected_child_jobs([request], background_tasks, session, experiment_session,
                 destination_launch_context_id=destination, idempotency_key=str(binding["manifest"]),
                 response_context={"source_job_id": source.id, "operation": "interface_context", "selection": selection.model_dump()})
             response = children[0]
         else:
-            response = await create_job(request, background_tasks, session)
+            response = await submit_job(request, background_tasks, session)
     finally:
         selected_submission.reset(token)
     return {'job': response, 'selection': selection.model_dump()}

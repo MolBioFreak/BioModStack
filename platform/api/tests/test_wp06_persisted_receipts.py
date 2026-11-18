@@ -18,6 +18,7 @@ from sqlalchemy import select
 from database import Design, Job, get_session
 from schemas import JobCreate
 from routers import jobs
+from services import job_submission
 from services import core_protein_scientific_contract as contract
 from services.nextflow import build_job_nextflow_command
 from services.result_ingester import ingest_esmfold2_results
@@ -33,7 +34,7 @@ async def test_receipt_from_executed_argv_to_persisted_api(admission, monkeypatc
     msa = tmp_path / 'query.a3m'
     msa.write_text('>q\nACDE\n')
     raw = {'sequence':'ACDE', 'esmf_seed':0, 'esmf_msa_remove_insertions':False, 'esmf_msa_path':str(msa)}
-    created = await jobs._create_job(JobCreate(name='receipt',model_id='esmfold2',mode='predict',params=raw), BackgroundTasks(), admission)
+    created = await job_submission._create_job(JobCreate(name='receipt',model_id='esmfold2',mode='predict',params=raw), BackgroundTasks(), admission)
     current = await admission.get(Job, created.id)
     output = Path(current.output_dir)
     command = build_job_nextflow_command(current, current.params, str(output))
