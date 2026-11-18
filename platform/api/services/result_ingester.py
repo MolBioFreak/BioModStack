@@ -4504,6 +4504,36 @@ async def _ingest_public_sequence_results(job: Job, output_path: Path, session: 
     return created
 
 
+async def _publish_primary_results(
+    job_id: str,
+    job: Optional[Job],
+    output_dir: str,
+    session: AsyncSession,
+    epitope_residues: Optional[list],
+    closeout: Optional[dict],
+) -> int:
+    """Primary import, Protenix binding, flush, then the antibody closeout stamp.
+
+    The caller reads the closeout and owns commit, savepoint and rollback.
+    """
+    model_id = str(job.model_id or "").strip().lower() if job else ""
+    # Native primary owners publish full scientific projections first. Component
+    # results attach to those rows; they must never replace primary ingestion.
+    count = 0 if model_id == "frustrampnn" else await _ingest_job_results(
+        job_id, output_dir, session, epitope_residues,
+    )
+    if model_id == "protenix" and job is not None:
+        output_path = Path(output_dir)
+        output_path = (resolve_runtime_data_path(output_path) if output_path.is_absolute()
+                       else get_data_root() / output_dir)
+        await _ingest_protenix_primary_publications(job, output_path, session)
+    await session.flush()
+    if closeout is not None and job is not None:
+        job.provenance = {**(job.provenance or {}),
+                          "antibody_pipeline_result": closeout}
+    return count
+
+
 async def ingest_job_results(
     job_id: str,
     output_dir: str,
@@ -4534,20 +4564,12 @@ async def ingest_job_results(
             native_root = (resolve_runtime_data_path(native_root) if native_root.is_absolute()
                            else get_data_root() / output_dir)
             closeout = antibody_pipeline_closeout(current_job, native_root)
-        # Native primary owners publish full scientific projections first. Component
-        # results attach to those rows; they must never replace primary ingestion.
-        count = 0 if model_id == "frustrampnn" else await _ingest_job_results(
-            job_id, output_dir, session, epitope_residues,
+        count = await _publish_primary_results(
+            job_id, current_job, output_dir, session, epitope_residues, closeout,
         )
         output_path = Path(output_dir)
         output_path = (resolve_runtime_data_path(output_path) if output_path.is_absolute()
                        else get_data_root() / output_dir)
-        if model_id == "protenix" and current_job is not None:
-            await _ingest_protenix_primary_publications(current_job, output_path, session)
-        await session.flush()
-        if closeout is not None and current_job is not None:
-            current_job.provenance = {**(current_job.provenance or {}),
-                                      "antibody_pipeline_result": closeout}
         # The primary owner has finished verification and publication. Commit
         # before the optional component only when it was selected: its native
         # validation may fail without revoking an already verified generator.
