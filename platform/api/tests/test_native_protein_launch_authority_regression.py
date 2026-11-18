@@ -379,13 +379,17 @@ async def test_native_terminal_state_is_not_gated_on_missing_accounting(
         assert again.state == status and again.generation == generation
 
 @pytest.mark.asyncio
-async def test_edited_setup_launch_keeps_both_job_settings(native_http, native_core_store, setup_store):
+async def test_edited_setup_launch_keeps_both_job_settings(native_http, native_core_store, setup_store, monkeypatch):
     from fastapi import BackgroundTasks
     from sqlalchemy import select
     from database import Job, current_launch_context_id
     from schemas import JobCreate
     from services.job_submission import submit_job
 
+    from biomodstack_local_resources import LocalCapacity
+    from services import ngs_molbio_n5
+    # Both offline Jobs remain reserved; give the fixture room for both.
+    monkeypatch.setattr(ngs_molbio_n5, 'applied_local_policy', lambda: LocalCapacity(8, 32 * 1024**3))
     client = native_http
     project, setup, prepared, domain_path = await prepared_setup(client, 'esmfold2')
     path = f"/api/projects/{project}/workflow-setups/{setup['setup_context_id']}"
@@ -417,16 +421,6 @@ async def test_edited_setup_launch_keeps_both_job_settings(native_http, native_c
             ids.append(response.id)
         finally:
             current_launch_context_id.reset(token)
-        if generation == 1:
-            from experiment_models import ExperimentRunGroup
-            group_id = group.json()['run_group_id']
-            async with setup_store() as db:
-                current = await db.get(ExperimentRunGroup, group_id)
-                revision = current.generation
-            cancelled = await client.post(domain_path + f'/run-groups/{group_id}/cancel',
-                json={'expected_run_group_generation': revision, 'reason': 'End first fixture run'},
-                headers={'Idempotency-Key': 'end-first'})
-            assert cancelled.status_code == 200, cancelled.text
     assert ids[0] != ids[1]
     async with native_core_store() as core:
         assert {job.id: job.params['sequence'] for job in await core.scalars(select(Job))} == dict(zip(ids, ('MQIFVK','MQIFV'), strict=True))
