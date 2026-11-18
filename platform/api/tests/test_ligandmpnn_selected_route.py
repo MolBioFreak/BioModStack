@@ -54,9 +54,7 @@ def test_selected_mode_and_mounted_route_share_server_owned_selection_contract()
     assert selected_mode.selected_only
     assert registry.validate_job_params('ligandmpnn', 'interface_context',
                                         {'interface_context_manifest': '/managed/selection.json'})
-    assert any(inner.path == '/api/ligandmpnn/interface-context/selected'
-               for included in app.routes
-               for inner in getattr(getattr(included, 'original_router', None), 'routes', ()))
+    assert 'post' in app.openapi()['paths']['/api/ligandmpnn/interface-context/selected']
 
 
 @pytest.mark.asyncio

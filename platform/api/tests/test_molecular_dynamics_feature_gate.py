@@ -78,8 +78,10 @@ def test_standalone_md_cli_uses_same_default_off_gate(
 def test_public_ingress_calls_gate_before_db_or_command_side_effects() -> None:
     jobs_source = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
     public_source = jobs_source[jobs_source.index("async def create_job(") :]
-    assert "await _create_job(" in public_source
-    create_job_source = jobs_source[jobs_source.index("async def _create_job(") :]
+    assert "await submit_job(" in public_source
+    submission = (API_ROOT / "services" / "job_submission.py").read_text(encoding="utf-8")
+    assert "await _create_job(" in submission[submission.index("async def submit_job(") :]
+    create_job_source = submission[submission.index("async def _create_job(") :]
     assert create_job_source.index("require_molecular_dynamics_feature") < create_job_source.index(
         "_raise_if_workflow_launches_disabled"
     )

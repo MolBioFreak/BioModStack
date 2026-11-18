@@ -104,7 +104,7 @@ async def test_approved_create_preserves_native_binding_through_bundle(admission
     import shutil
     from sqlalchemy import select
     from database import Job
-    from routers import jobs
+    from services import job_submission
     import paths
     from services import nextflow
     from services.remote_execution import bundle
@@ -119,8 +119,8 @@ async def test_approved_create_preserves_native_binding_through_bundle(admission
                       ('get_container_dir', 'containers')]:
         monkeypatch.setattr(paths, name, lambda key=key: roots[key])
         monkeypatch.setattr(bundle, name, lambda key=key: roots[key])
-        if hasattr(jobs, name):
-            monkeypatch.setattr(jobs, name, lambda key=key: roots[key])
+        if hasattr(job_submission, name):
+            monkeypatch.setattr(job_submission, name, lambda key=key: roots[key])
     payload = request().model_dump(mode='json')
     payload['execution_target_id'] = 'vast:one'
     rejected = await client.post('/jobs', json=payload)

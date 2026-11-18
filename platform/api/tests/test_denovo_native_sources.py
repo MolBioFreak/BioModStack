@@ -37,7 +37,7 @@ async def test_preview_insert_replay_clone_real_stores(isolated_core, setup_stor
         isolate_applied_local_policy, tmp_path, monkeypatch, model, source_kind, experimental):
     import paths
     roots = {'inputs': tmp_path / 'owned/inputs', 'bms_results': tmp_path / 'owned/results'}
-    for module in (paths, jobs, job_requests, files):
+    for module in (paths, job_submission, job_requests, files):
         monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
     original = roots['inputs'] / 'selected.cif.gz'
     original.write_bytes(gzip.compress(cif(models=(3, 7)).encode()))

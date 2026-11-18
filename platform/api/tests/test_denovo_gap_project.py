@@ -17,10 +17,10 @@ from test_binder_continuation import PDB
 
 def authored(case, tmp, monkeypatch):
     from routers import jobs, files
-    from services import job_requests
+    from services import job_requests, job_submission
     import paths
     roots={'inputs':tmp/'owned/inputs','bms_results':tmp/'owned/results'}
-    for module in (paths,jobs,job_requests,files): monkeypatch.setattr(module,'get_allowed_roots',lambda:roots)
+    for module in (paths,job_submission,job_requests,files): monkeypatch.setattr(module,'get_allowed_roots',lambda:roots)
     source=roots['inputs']/'source.pdb'; source.write_text('MODEL        2\n'+PDB.replace('END\n','ENDMDL\nEND\n'))
     request={'name':case,'model_id':'protein_modification_experimental','mode':'de_novo_design',
         'execution_target_id':None,'execution_policy':{'remote_result_policy':'manual'},'params':{}}

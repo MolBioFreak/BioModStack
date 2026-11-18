@@ -27,9 +27,9 @@ def _load_checker():
 
 
 def test_operator_stage_label_describes_analysis_not_redesign() -> None:
-    jobs_router = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
-    assert '"frustrampnn": "Frustration analysis"' in jobs_router
-    assert "FrustraMPNN redesign" not in jobs_router
+    continuation_source = (API_ROOT / "services" / "binder_continuation.py").read_text(encoding="utf-8")
+    assert '"frustrampnn": "Frustration analysis"' in continuation_source
+    assert "FrustraMPNN redesign" not in continuation_source
 
 
 def test_checker_reports_path_line_and_rule_for_each_forbidden_family(tmp_path: Path) -> None:

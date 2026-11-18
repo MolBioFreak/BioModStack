@@ -139,9 +139,9 @@ async def test_analysis_child_is_validated_persisted_cpu_only_and_launched_witho
 
     monkeypatch.setattr(job_submission, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
-    monkeypatch.setattr(jobs_router, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_submission, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
-    monkeypatch.setattr(jobs_router, "get_results_dir", lambda: tmp_path / "results")
+    monkeypatch.setattr(job_submission, "get_results_dir", lambda: tmp_path / "results")
 
     async with sessions() as session:
         response = await jobs_router.create_job(
@@ -193,7 +193,7 @@ async def test_analysis_child_rejects_any_requested_gpu_before_persistence(
 ) -> None:
     monkeypatch.setattr(job_submission, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
-    monkeypatch.setattr(jobs_router, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_submission, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'rejected-analysis.db'}")
     async with engine.begin() as connection:

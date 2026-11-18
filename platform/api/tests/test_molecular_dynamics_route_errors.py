@@ -148,12 +148,14 @@ def test_md_launch_error_mapper_maps_transient_service_errors_to_safe_503(exc: E
 
 def test_preview_and_final_materialization_calls_are_both_wired_to_typed_mapper() -> None:
     functions = {node.name: node
-                 for path in (JOBS_PATH, API_ROOT / "services" / "job_requests.py")
+                 for path in (JOBS_PATH, API_ROOT / "services" / "job_submission.py", API_ROOT / "services" / "job_requests.py")
                  for node in ast.parse(path.read_text(encoding="utf-8")).body
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     public_calls = {call.func.id for call in ast.walk(functions["create_job"])
                     if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)}
-    assert "_create_job" in public_calls
+    assert "submit_job" in public_calls
+    assert any(isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "_create_job"
+               for call in ast.walk(functions["submit_job"]))
     receiving_calls = {call.func.id for call in ast.walk(functions["_create_job"])
                        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)}
     assert "normalize_job_request" in receiving_calls
@@ -229,18 +231,19 @@ def _install_md_route_stubs(
     results_root: Path,
 ) -> Any:
     jobs = _jobs_module()
-    monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
-    monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _action: None)
+    submission = importlib.import_module("services.job_submission")
+    monkeypatch.setattr(submission, "require_molecular_dynamics_feature", lambda _model_id: None)
+    monkeypatch.setattr(submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
     job_requests = importlib.import_module("services.job_requests")
-    monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(submission, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(
         job_requests,
         "normalize_md_job_spec",
         lambda *, params, **_kwargs: dict(params["md_job_spec"]),
     )
-    monkeypatch.setattr(jobs, "get_results_dir", lambda: results_root)
-    monkeypatch.setattr(jobs, "datetime", _FixedDatetime)
+    monkeypatch.setattr(submission, "get_results_dir", lambda: results_root)
+    monkeypatch.setattr(submission, "datetime", _FixedDatetime)
     return jobs
 
 
@@ -352,7 +355,7 @@ async def test_md_route_final_materialization_failure_removes_call_owned_empty_t
         (output_dir / "inputs").mkdir(parents=True, exist_ok=True)
         raise OSError("final persistence failed at /home/private/results")
 
-    monkeypatch.setattr(jobs, "materialize_md_job_spec", fail_materialization)
+    monkeypatch.setattr(importlib.import_module("services.job_submission"), "materialize_md_job_spec", fail_materialization)
     gpu = importlib.import_module("services.gpu_orchestrator")
     monkeypatch.setattr(gpu, "estimate_vram", lambda *_args, **_kwargs: 0)
 
@@ -390,7 +393,7 @@ async def test_md_route_failure_preserves_preexisting_output_directory_and_artif
         (output_dir / "inputs").mkdir(parents=True, exist_ok=True)
         raise OSError("final persistence failed")
 
-    monkeypatch.setattr(jobs, "materialize_md_job_spec", fail_materialization)
+    monkeypatch.setattr(importlib.import_module("services.job_submission"), "materialize_md_job_spec", fail_materialization)
     gpu = importlib.import_module("services.gpu_orchestrator")
     monkeypatch.setattr(gpu, "estimate_vram", lambda *_args, **_kwargs: 0)
 

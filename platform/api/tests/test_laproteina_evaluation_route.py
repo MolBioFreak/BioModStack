@@ -8,7 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from database import get_session
 from experiment_database import get_experiment_session
 from routers import jobs, files, models
-from services import job_requests
+from services import job_requests, job_submission
 from test_project_workflow_setups import setup_store
 from test_project_generation_bound_jobs import isolated_core
 from test_project_setup_job_preparation import isolate_applied_local_policy
@@ -27,7 +27,7 @@ def payload():
 async def test_http_normalize_prepare_portable(isolated_core, setup_store, isolate_applied_local_policy, tmp_path, monkeypatch, native_exit):
     import paths
     roots = {'inputs': tmp_path/'owned/inputs', 'bms_results': tmp_path/'owned/results'}
-    for module in (paths, jobs, job_requests, files):
+    for module in (paths, job_submission, job_requests, files):
         monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
     samples = roots['inputs']/'native'; samples.mkdir()
     (samples/'motif_info.csv').write_text('name,ancestry\noriginal,retained\n')
