@@ -61,7 +61,7 @@ def normalize_request(request, registry=None):
 
 def design_request(root, owner, design, request):
     from services.binder_continuation import snapshot_selection, model_request, individual_model_requests
-    from routers.jobs import _materialize_protein_local_selection
+    from services.binder_continuation import _materialize_protein_local_selection
     params = deepcopy(request.params)
     if request.model_id == 'caliby_experimental':
         # Native Caliby accepts CIF directly; never force PDB conversion here.

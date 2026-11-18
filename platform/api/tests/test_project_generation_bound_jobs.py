@@ -13,6 +13,7 @@ from database import Base, Job
 from experiment_models import ExperimentLaunchContext, ExperimentRunAttempt
 from schemas import JobCreate
 from routers import jobs
+from services import binder_continuation
 from services import job_requests
 from services.global_experiments.launch_contexts import validate_bound_job
 from test_project_workflow_setups import setup_store
@@ -34,6 +35,7 @@ async def isolated_core(tmp_path, monkeypatch):
     monkeypatch.setenv("BMS_RESULTS_DIR", str(results))
     monkeypatch.setattr(jobs, "get_results_dir", lambda: results)
     monkeypatch.setattr(jobs, "get_inputs_dir", lambda: inputs)
+    monkeypatch.setattr(binder_continuation, "get_inputs_dir", lambda: inputs)
     monkeypatch.setattr(paths, "get_results_dir", lambda: results)
     monkeypatch.setattr(paths, "get_inputs_dir", lambda: inputs)
     monkeypatch.setattr(paths, "get_data_root", lambda: root)

@@ -1764,11 +1764,8 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
             return
 
         from fastapi import BackgroundTasks
-        from routers.jobs import (
-            _materialize_seed_selection_from_completed_designs,
-            _build_antibody_iteration_job,
-            create_job,
-        )
+        from routers.jobs import create_job
+        from services.binder_continuation import _materialize_seed_selection_from_completed_designs, _build_antibody_iteration_job
 
         # The batch claim and canonical follow-on insertion commit together.
         # A competing finalizer loses the CAS; a crash rolls it back. UUID5
@@ -4710,7 +4707,7 @@ def compile_workflow_provision_request(request):
     request_id = digest(typed.model_dump(mode='json'))
     output = get_results_dir() / '.provision-preview' / request_id
     if typed.model_id == 'bindcraft2' and typed.mode != 'campaign' and params.get('bc2_compilation'):
-        from routers.jobs import _bc2_prepared_action_output
+        from services.bindcraft2_launch import _bc2_prepared_action_output
         _, output = _bc2_prepared_action_output(params, typed.mode)
     snapshot = SimpleNamespace(
         id='provision-' + request_id[:32], model_id=typed.model_id, mode=typed.mode,
@@ -5247,7 +5244,7 @@ def compile_component_checkpoint_continuation(context, checkpoint, decision):
     from dataclasses import replace
     from types import SimpleNamespace
     from component_runtime import GeneratedInput, ResultReference, SourceIdentity, canonical_bytes
-    from routers.jobs import _native_gate_resume_params
+    from services.binder_continuation import _native_gate_resume_params
 
     if set(decision) != {"selected_artifacts"}:
         raise ValueError("Checkpoint decision requires only explicit selected_artifacts; scientific overrides use native admission")
@@ -5299,7 +5296,7 @@ def compile_component_checkpoint_continuation(context, checkpoint, decision):
         "awaiting_stage": stage, "awaiting_payload": {"candidate_dir": str(root / directory)},
         "output_dir": str(root)})
     if stage in {'post_boltzgen', 'post_ppiflow_generator'}:
-        from routers.jobs import _native_checkpoint_domain_follow_on
+        from services.binder_continuation import _native_checkpoint_domain_follow_on
         request, manifest_path, manifest = _native_checkpoint_domain_follow_on(
             parent, stage, root / directory, [refs[relative] for relative in selected])
         inputs.append(GeneratedInput(manifest_path.relative_to(root).as_posix(), canonical_bytes(manifest)))

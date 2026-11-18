@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import select
 from database import Job, Design
 from routers import jobs
+from services import binder_continuation
 from services import nextflow
 from services.declared_job_expansion import KEY
 from tests.test_remote_rectify_admission import admission
@@ -26,6 +27,7 @@ async def seed_request(admission, monkeypatch, target_kind=None):
     target = inputs / 'target-reference.pdb'
     target.write_bytes(pdb.read_bytes())
     monkeypatch.setattr(jobs, '_resolve_design_structure_path', lambda value: Path(value))
+    monkeypatch.setattr(binder_continuation, '_resolve_design_structure_path', lambda value: Path(value))
     # Scientific numbering double: no ANARCI/model run is permitted here.
     monkeypatch.setattr(jobs, '_resolve_loop_region_map', lambda _: {'H1': (1, 2)})
     monkeypatch.setattr(jobs, '_resolve_loop_target_chain', lambda *args: 'A')

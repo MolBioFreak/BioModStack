@@ -11,7 +11,7 @@ from database import UserTemplate
 from model_registry import get_registry
 from services.job_requests import normalize_job_request
 from schemas import JobCreate
-from routers.jobs import _resolve_antibody_root_job, _validate_selected_design_owners
+from services.binder_continuation import _resolve_antibody_root_job, _validate_selected_design_owners
 
 
 class Session:

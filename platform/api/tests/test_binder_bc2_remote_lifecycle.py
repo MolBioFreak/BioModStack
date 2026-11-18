@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from component_runtime import SourceIdentity
 from database import Base, ExecutionTarget, Job, get_session
 from routers import jobs
+from services import bindcraft2_launch
 from services import bindcraft2_launch as launch, nextflow
 from services.remote_execution import bundle, executor
 from test_bindcraft2_lifecycle import setup
@@ -36,6 +37,9 @@ async def remote_action(tmp_path, monkeypatch):
         monkeypatch.setattr(owner, 'get_results_dir', lambda: tmp_path)
         monkeypatch.setattr(owner, 'get_data_root', lambda: tmp_path)
         monkeypatch.setattr(owner, 'get_inputs_dir', lambda: tmp_path)
+    from services import binder_continuation
+    monkeypatch.setattr(binder_continuation, 'get_data_root', lambda: tmp_path)
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: tmp_path)
     from services import job_readback
     monkeypatch.setattr(job_readback, 'get_data_root', lambda: tmp_path)
     identity = SourceIdentity('a' * 40, 'b' * 40)
@@ -110,7 +114,7 @@ async def test_remote_prepares_once_reviews_and_submits_exact_snapshot(remote_ac
     client, sessions, root, calls = remote_action
     original = tree_bytes(root / 'parent')
     request = await prepare(client, action_request(mode))
-    job_id, output = jobs._bc2_prepared_action_output(request['params'], mode)
+    job_id, output = bindcraft2_launch._bc2_prepared_action_output(request['params'], mode)
     assert request['parent_job_id'] is None
     assert request['params']['lineage_root_job_id'] == 'scientific-root'
     snapshot = tree_bytes(output)
@@ -170,7 +174,7 @@ async def test_remote_prepares_once_reviews_and_submits_exact_snapshot(remote_ac
 async def test_prepared_paths_settings_and_approval_cannot_be_repurposed(remote_action):
     client, sessions, root, calls = remote_action
     request = await prepare(client)
-    _, output = jobs._bc2_prepared_action_output(request['params'], 'rank')
+    _, output = bindcraft2_launch._bc2_prepared_action_output(request['params'], 'rank')
     snapshot, parent = tree_bytes(output), tree_bytes(root / 'parent')
     for edits in (
         {'bc2_compilation': str(root / 'parent/bindcraft2/compilation.json')},

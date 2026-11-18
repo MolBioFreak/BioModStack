@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from database import Job, Design, get_session
 from routers import jobs
+from services import binder_continuation
 from services import bindcraft2_publication as bc, boltzgen_candidate_publication as bg, ppiflow_generation as pp
 from services.core_protein_result_contract import native_record_index
 from test_project_manager_adapters import stores
@@ -181,7 +182,7 @@ async def test_bc2_selected_custody_ignores_unrelated_campaign_bytes(stores):
         selected = {s['logical_path'].removeprefix('bindcraft2/native/') for s in receipt['candidates'][0]['structures']}
         unrelated = next(name for name in receipt['files'] if name not in selected)
         (output / unrelated).unlink()
-        await jobs._validate_selected_design_owners(db, job, None, [design])
+        await binder_continuation._validate_selected_design_owners(db, job, None, [design])
         from services.binder_continuation import resolve_selection, snapshot_selection, model_request, individual_model_requests
         source, lineage, selected_designs = await resolve_selection(db, job.id, [design.id])
         retained = snapshot_selection(source, lineage, selected_designs)
@@ -199,11 +200,11 @@ async def test_bc2_selected_custody_ignores_unrelated_campaign_bytes(stores):
             await bc.read_published_native_results(job, db)
         job.retry_count = 1
         with pytest.raises(ValueError, match='attempt'):
-            await jobs._validate_selected_design_owners(db, job, None, [design])
+            await binder_continuation._validate_selected_design_owners(db, job, None, [design])
         job.retry_count = 0
         (output / primary['logical_path'].removeprefix('bindcraft2/native/')).write_text('bad selected bytes')
         with pytest.raises(ValueError, match='bytes'):
-            await jobs._validate_selected_design_owners(db, job, None, [design])
+            await binder_continuation._validate_selected_design_owners(db, job, None, [design])
 
 
 @pytest.mark.asyncio

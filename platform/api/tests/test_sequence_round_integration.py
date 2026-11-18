@@ -121,7 +121,9 @@ async def test_caliby_native_cif_conformer_constraints_and_falsey_settings(selec
     design.pdb_path = str(cif)
     def no_conversion(*args):
         raise AssertionError('Native Caliby must not require a PDB derivative')
-    monkeypatch.setattr(jobs, '_cif_selection_pdb', no_conversion)
+    from services import binder_continuation, binder_source_materialization
+    monkeypatch.setattr(binder_source_materialization, '_cif_selection_pdb', no_conversion)
+    monkeypatch.setattr(binder_continuation, '_cif_selection_pdb', no_conversion)
     settings = {'fixed_pos_seq': 'A1', 'fixed_pos_scn': '', 'fixed_pos_override_seq': '',
                 'pos_restrict_aatype': '', 'symmetry_pos': ''}
     root.provenance = {REQUEST: envelope('caliby_experimental', input_settings=settings,

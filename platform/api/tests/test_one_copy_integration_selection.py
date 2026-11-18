@@ -8,6 +8,7 @@ import pytest
 
 from database import Design, Job
 from routers import jobs
+from services import binder_continuation
 
 
 @pytest.mark.parametrize('suffix', ['.cif', '.pdb'])
@@ -28,7 +29,7 @@ def test_sidecars_exclude_resolved_primary_and_keep_distinct_evidence(tmp_path, 
         path.write_bytes(extension.encode())
         sidecars.append(path.resolve())
     design = Design(id='selected-design', job_id='source', name='selected', pdb_path=str(primary))
-    actual = jobs._candidate_sidecar_paths(design, primary)
+    actual = binder_continuation._candidate_sidecar_paths(design, primary)
     assert actual == sidecars
     assert primary.resolve() not in actual
 
@@ -43,6 +44,7 @@ def test_selection_materializes_cif_once_preserving_manifest_and_mutable_source_
     selection = tmp_path / 'selection'
     selection.mkdir()
     monkeypatch.setattr(jobs, '_create_generic_selection_dir', lambda *_: selection)
+    monkeypatch.setattr(binder_continuation, '_create_generic_selection_dir', lambda *_: selection)
     root = Job(id='root', name='root', model_id='protein_local_redesign', mode='redesign')
     producer = Job(id='source', name='source', model_id='protein_local_redesign', mode='redesign')
     design = Design(id='selected-design', job_id='source', name='selected', pdb_path=str(primary))
@@ -54,7 +56,7 @@ def test_selection_materializes_cif_once_preserving_manifest_and_mutable_source_
         return original_copy(src, dst, *args, **kwargs)
 
     monkeypatch.setattr(jobs.shutil, 'copyfile', counted_copy)
-    actual = jobs._materialize_protein_local_selection(root, producer, [design], 'redesign')
+    actual = binder_continuation._materialize_protein_local_selection(root, producer, [design], 'redesign')
     assert actual == selection
     assert [src for src, _ in copied].count(primary.resolve()) == 1
     assert {p.name for p in selection.iterdir()} == {

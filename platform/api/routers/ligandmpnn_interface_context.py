@@ -69,7 +69,7 @@ async def submit_selected(selection: ProjectInterfaceContextSelection, backgroun
                                      'format': path.suffix.lower(), **metadata}
             originals[candidate] = original
             if path.suffix.lower() in {'.cif', '.mmcif'}:
-                from routers.jobs import _cif_selection_pdb
+                from services.binder_source_materialization import _cif_selection_pdb
                 import tempfile
                 with tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR')) as scratch:
                     converted = Path(scratch) / 'selected.pdb'

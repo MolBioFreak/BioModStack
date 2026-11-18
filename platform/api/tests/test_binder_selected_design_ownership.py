@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 
-from routers.jobs import _validate_selected_design_owners
+from services.binder_continuation import _validate_selected_design_owners
 
 
 def job(job_id: str, parent: str | None = None):

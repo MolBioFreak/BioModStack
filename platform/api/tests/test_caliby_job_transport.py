@@ -10,6 +10,7 @@ from sqlalchemy import select
 from component_runtime import SourceIdentity
 from database import ExecutionTarget, Job
 from routers import jobs
+from services import binder_continuation
 from services import job_requests
 from schemas import JobCreate
 from services.caliby_native import read_prepared_request
@@ -66,6 +67,7 @@ async def test_local_job_persists_prepared_science_and_compiles_offline(admissio
 async def test_remote_review_reuses_exact_retained_tree_after_source_removed(
         admission, target, mode, monkeypatch):
     monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: target.parent)
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: target.parent)
     selected = ExecutionTarget(id='vast:caliby-fixture', provider='vast', provider_instance_id='caliby-fixture',
         active=True, state='ready', capabilities={
             'gpu_count': 1,

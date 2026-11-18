@@ -16,6 +16,7 @@ from database import Job, ExecutionTarget
 from component_runtime import SourceIdentity
 
 import routers.jobs as jobs
+from services import binder_continuation
 from services import job_requests
 from schemas import JobCreate
 from services.nextflow import compile_job_nextflow_invocation
@@ -40,6 +41,7 @@ async def test_approved_prepared_directory_reaches_real_bundle(
     session, tasks = admission, BackgroundTasks()
     roots = {'inputs': target.parent, 'results': tmp_path / 'results'}
     monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: roots['inputs'])
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: roots['inputs'])
     capabilities = {
         'critical_runtime_binding': {'paths': {'python': '/fixture/runtime/python/bin/python',
             'nextflow': '/fixture/runtime/bin/nextflow'}, 'environment': {}},

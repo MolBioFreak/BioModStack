@@ -364,7 +364,7 @@ def test_experimental_region_redesign_uses_protein_local_review_contract() -> No
     from types import SimpleNamespace
     from typing import Any, cast
 
-    from routers.jobs import _is_protein_local_redesign_job
+    from services.binder_continuation import _is_protein_local_redesign_job
 
     assert _is_protein_local_redesign_job(
         cast(Any, SimpleNamespace(model_id="protein_modification_experimental", mode="region_redesign"))

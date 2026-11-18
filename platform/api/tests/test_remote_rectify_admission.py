@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, ExecutionTarget, Job, get_session
 from routers import jobs
+from services import binder_continuation
 from services import job_requests
 from tests.test_msa_bundle_integration import offline_bundle
 
@@ -182,8 +183,10 @@ async def test_custom_actions_prepare_once_before_review(admission, tmp_path, mo
     pdb = inputs / 'source.pdb'
     pdb.write_bytes((Path(__file__).parent / 'fixtures/md/1AKI.pdb').read_bytes())
     monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: inputs)
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: inputs)
     monkeypatch.setattr('paths.get_inputs_dir', lambda: inputs)
     monkeypatch.setattr(jobs, '_resolve_design_structure_path', lambda value: Path(value))
+    monkeypatch.setattr(binder_continuation, '_resolve_design_structure_path', lambda value: Path(value))
     async with factory() as session:
         session.add(Job(id='source', name='antibody source', model_id='boltzgen', mode='antibody',
             status='awaiting_input', queue_status='awaiting_input', awaiting_input=True,

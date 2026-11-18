@@ -678,7 +678,7 @@ def structural_selection(row, root_id):
             selected = Path(item['selection_pdb_path'])
             if hashlib.sha256(selected.read_bytes()).hexdigest() != item['selection_structure_sha256']:
                 raise ValueError('Retained selected-model bytes changed')
-            from routers.jobs import _cif_selection_pdb
+            from services.binder_source_materialization import _cif_selection_pdb
             consumed = _cif_selection_pdb(selected, destination / 'derived.pdb')
             item['native_source_structure_path'] = str(original)
             item['native_source_structure_sha256'] = expected

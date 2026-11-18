@@ -380,7 +380,6 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
             'declared_chemistry': ledger['declared_chemistry']}
     selected_path, selected_bytes = consumed, consumed_bytes
     if output_format == 'pdb' and native_format != 'pdb':
-        from routers.jobs import _cif_selection_pdb
         try:
             consumed = _cif_selection_pdb(decoded if consumed_format == 'bcif' else consumed, destination / 'derived.pdb')
         except (PDBConstructionException, PDBIOException) as exc:
@@ -756,3 +755,37 @@ async def resolve_structure_source(request: StructureSourceRequest, session):
         # the historical output tree. Consumed derivatives remain model inputs.
         path = resolve_allowed_path(request.path)
     return path, identity
+
+
+def _cif_selection_pdb(source: Path, destination: Path) -> Path:
+    """Materialize only representable CIF coordinates for a PDB-only consumer."""
+    from Bio.PDB import PDBIO
+    from Bio.PDB.PDBParser import PDBParser
+    from services.md.starting_structures import _parse_mmcif_structure
+    structure = _parse_mmcif_structure(source.read_bytes())
+    def identity(model):
+        return [(chain.id, residue.id, residue.resname,
+                 tuple((atom.id, atom.coord.tolist()) for atom in residue))
+                for chain in model for residue in chain]
+    models = list(structure)
+    if len(models) != 1:
+        raise ValueError('Selected CIF has no single PDB-representable model')
+    original = identity(models[0])
+    if not original or any(len(chain) != 1 or not (-999 <= residue_id[1] <= 9999)
+                           or len(residue_id[2]) > 1
+                           for chain, residue_id, _, _ in original):
+        raise ValueError('Selected CIF chain/residue identifiers cannot be represented in PDB')
+    io = PDBIO()
+    io.set_structure(structure)
+    io.save(str(destination))
+    converted = PDBParser(QUIET=True).get_structure('selected', str(destination))
+    after = identity(next(iter(converted)))
+    if len(after) != len(original) or any(
+            (a[0], a[1], a[2], [atom[0] for atom in a[3]]) !=
+            (b[0], b[1], b[2], [atom[0] for atom in b[3]]) or
+            any(any(abs(x - y) > 0.0011 for x, y in zip(atom_a[1], atom_b[1]))
+                for atom_a, atom_b in zip(a[3], b[3]))
+            for a, b in zip(original, after)):
+        destination.unlink(missing_ok=True)
+        raise ValueError('Selected CIF to PDB conversion lost chain, residue or atom mapping')
+    return destination

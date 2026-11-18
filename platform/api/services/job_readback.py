@@ -12,6 +12,8 @@ from schemas import BinderNavigationJob
 from services.binder_navigation_jobs import navigation_columns, navigation_job
 from services.stage_review import REVIEWABLE_STAGES, infer_antibody_stage_state, refresh_gate_payload
 from services.job_requests import _coerce_positive_int, _dedupe_preserve_order, _to_bool
+from pydantic import BaseModel, Field
+from schemas import CandidateRef
 
 
 def _resolve_requested_design_count(job: Job) -> Optional[int]:
@@ -598,3 +600,18 @@ async def read_job(
         ),
         conformational_mapping_request_id=conformational_mapping_request_id,
     )
+
+
+class SavedReviewFilterSet(BaseModel):
+    """Saved review dataset stored in awaiting_payload."""
+    id: str
+    name: str
+    created_at: str
+    visible_count: Optional[int] = None
+    source_total_count: Optional[int] = None
+    design_ids: List[str] = Field(default_factory=list)
+    filter_state: Dict[str, Any] = Field(default_factory=dict)
+    candidate_refs: list[CandidateRef] = Field(default_factory=list)
+    revision: int = Field(default=1, ge=1)
+    ranking: Dict[str, Any] = Field(default_factory=dict)
+    final_designation: Dict[str, Any] | None = None

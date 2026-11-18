@@ -17,6 +17,10 @@ from database import async_session, Job, MdRun
 from schemas import JobStatus
 from services.execution_ownership import release_scheduler_gpu_assignment
 from services.nextflow import cancel_nextflow_job
+from typing import List, Dict, Any
+from pathlib import Path
+from services.job_requests import _coerce_nonempty_text
+from services.job_readback import resolve_output_dir
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +92,6 @@ async def cleanup_permanent_delete_outputs(session: AsyncSession, job: Job) -> N
     """
     from pathlib import Path
     import shutil
-    from routers.jobs import _load_remaining_output_dir_refs, _plan_output_dir_cleanup
     from experiment_operations import _controlled_root
     from services.scientific_artifacts.writer import artifact_root
 
@@ -605,3 +608,86 @@ async def force_launch_job(
         async with async_session() as session:
             return await _force_launch_with_session(session, job_id, gpu_id, allowed_queue_statuses)
     return await _force_launch_with_session(session, job_id, gpu_id, allowed_queue_statuses)
+
+
+def _normalize_output_dir_reference(value: Any) -> Optional[str]:
+    text = _coerce_nonempty_text(value)
+    if not text:
+        return None
+
+    output_path = resolve_output_dir(text)
+    if output_path is None:
+        return None
+
+    try:
+        return str(output_path.expanduser().resolve(strict=False))
+    except TypeError:
+        return str(output_path.expanduser().resolve())
+
+
+async def _load_remaining_output_dir_refs(
+    session: AsyncSession,
+    excluded_job_ids: set[str],
+) -> Dict[str, List[Dict[str, str]]]:
+    rows = (
+        await session.execute(
+            select(Job.id, Job.name, Job.output_dir, Job.child_output_dir, Job.source_selection_manifest_path)
+        )
+    ).all()
+
+    refs: Dict[str, List[Dict[str, str]]] = {}
+    for job_id, job_name, output_dir, child_output_dir, selection_manifest in rows:
+        if str(job_id) in excluded_job_ids:
+            continue
+
+        for field_name, raw_path in (
+            ("output_dir", output_dir),
+            ("child_output_dir", child_output_dir),
+            # Ordinary successors own selected inputs even when those bytes
+            # are retained beneath the deleted producer's old output root.
+            ("source_selection_manifest_path", selection_manifest),
+        ):
+            normalized = _normalize_output_dir_reference(raw_path)
+            if not normalized:
+                continue
+            refs.setdefault(normalized, []).append(
+                {
+                    "job_id": str(job_id),
+                    "job_name": str(job_name or ""),
+                    "field": field_name,
+                }
+            )
+
+    return refs
+
+
+def _plan_output_dir_cleanup(
+    candidate_dirs: List[str | None],
+    remaining_refs: Dict[str, List[Dict[str, str]]],
+) -> tuple[List[str], List[Dict[str, Any]]]:
+    deletable: List[str] = []
+    preserved: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for candidate in candidate_dirs:
+        normalized = _normalize_output_dir_reference(candidate)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+
+        candidate_path = Path(normalized)
+        refs = [ref for raw, owners in remaining_refs.items()
+                if (candidate_path == Path(raw) or candidate_path in Path(raw).parents
+                    or Path(raw) in candidate_path.parents) for ref in owners]
+        if refs:
+            preserved.append(
+                {
+                    "path": normalized,
+                    "referenced_by": refs,
+                }
+            )
+            continue
+
+        deletable.append(normalized)
+
+    return deletable, preserved

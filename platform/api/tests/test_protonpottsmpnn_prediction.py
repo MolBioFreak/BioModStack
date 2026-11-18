@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from database import Base, Design, Job, get_session
 from experiment_database import get_experiment_session
 from routers import jobs, protonpottsmpnn_prediction as route
+from services import binder_continuation
 from services import job_requests
 from schemas import JobCreate
 from services.protonpottsmpnn_prediction import PredictionSelection, prediction_requests, source_components
@@ -108,6 +109,7 @@ def test_retained_structure_uses_existing_sequence_source_parser(tmp_path, suffi
 @pytest_asyncio.fixture
 async def selected(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
     # Submission-only fixture: satisfy the existing checkpoint-presence owner
     # without reading live weights or pretending this is predictor inference.

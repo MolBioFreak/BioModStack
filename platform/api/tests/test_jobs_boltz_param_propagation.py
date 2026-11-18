@@ -11,6 +11,7 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 import routers.jobs as jobs
+from services import binder_continuation
 
 
 def test_manual_mutagenesis_iteration_job_preserves_boltz_runtime_params(monkeypatch) -> None:
@@ -88,8 +89,14 @@ def test_cdr_indel_iteration_job_preserves_boltz_runtime_params(monkeypatch, tmp
 
     monkeypatch.setattr(jobs, "_resolve_loop_region_map", lambda root_job: {"H1": (1, 2)})
     monkeypatch.setattr(jobs, "_resolve_design_structure_path", lambda path: Path(path))
+    monkeypatch.setattr(binder_continuation, "_resolve_design_structure_path", lambda path: Path(path))
     monkeypatch.setattr(
         jobs,
+        "_extract_chain_records_from_pdb",
+        lambda path: {"A": [{"aa": "A"}, {"aa": "C"}, {"aa": "D"}]},
+    )
+    monkeypatch.setattr(
+        binder_continuation,
         "_extract_chain_records_from_pdb",
         lambda path: {"A": [{"aa": "A"}, {"aa": "C"}, {"aa": "D"}]},
     )

@@ -8,6 +8,7 @@ import pytest
 
 from database import Job
 from routers import jobs, models
+from services import binder_continuation
 from services import job_requests
 from schemas import JobCreate
 from services import nextflow
@@ -30,6 +31,7 @@ def inputs(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': results})
     monkeypatch.setattr(job_requests, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': results})
     monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: root)
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: root)
     import paths
     monkeypatch.setattr(paths, 'get_results_dir', lambda: results)
     monkeypatch.setattr(paths, 'get_inputs_dir', lambda: root)

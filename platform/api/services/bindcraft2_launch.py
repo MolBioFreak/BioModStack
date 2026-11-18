@@ -15,6 +15,8 @@ from typing import Callable
 from paths import get_allowed_roots, get_container_dir, get_results_dir, resolve_allowed_path
 from services.bindcraft2_native import PIN, _canonical
 from services.bindcraft2_typed import normalize_new_campaign_request, validate_request
+from typing import Any, Mapping
+import re
 
 SCRIPT = Path(__file__).resolve().parents[3] / 'scripts/compile_bindcraft2_campaign.py'
 COMPILE_TIMEOUT_SECONDS = 120
@@ -265,3 +267,37 @@ def read_campaign_receipt(output_dir: Path) -> dict:
             'request_sha256': compiled['request_sha256'], 'sweep_budget': compiled['sweep_budget'],
             **({'placement': compiled['placement']} if 'placement' in compiled else {}),
             **({'native_action': compiled['native_action']} if 'native_action' in compiled else {})}
+
+
+def _bc2_prepared_action_output(params: Mapping[str, Any], mode: str) -> tuple[str, Path]:
+    """Reopen a controller-allocated native snapshot, never a client output path.
+
+    The existing compilation receipt owns the prepared bytes. No pending Job,
+    process-local token, or separate request store is needed for review/restart.
+    """
+    from services.bindcraft2_launch import read_campaign_receipt
+
+    root = get_results_dir().resolve()
+    path = Path(str(params.get('bc2_compilation') or ''))
+    output = path.parent.parent
+    job_id = output.name
+    if (not re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', job_id)
+            or output != root / job_id
+            or path != output / 'bindcraft2' / 'compilation.json'
+            or path.resolve() != path
+            or params.get('bc2_campaign_dir') != str(output / 'bindcraft2')):
+        raise ValueError('BC2 prepared compilation is not a controller-owned action output')
+    receipt = read_campaign_receipt(output)
+    if receipt.get('native_action') != {
+        'operation': mode, 'options': params.get('bc2_action_options', {}),
+        'source_job_id': params.get('bc2_source_job_id'),
+    }:
+        raise ValueError('BC2 prepared native action changed')
+    expected = {'bindcraft2_settings': receipt['requested_settings'],
+                'bc2_effective_settings': receipt['effective_settings'],
+                'bc2_effective_sha256': receipt['effective_sha256'],
+                'bc2_request_sha256': receipt['request_sha256'],
+                'bc2_sweep_budget': receipt['sweep_budget']}
+    if any(params.get(key) != value for key, value in expected.items()):
+        raise ValueError('BC2 prepared native settings changed')
+    return job_id, output
