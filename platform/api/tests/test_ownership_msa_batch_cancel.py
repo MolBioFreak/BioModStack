@@ -35,7 +35,11 @@ async def test_msa_batch_runner_does_not_overwrite_a_job_cancelled_during_the_ba
     factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     output_dir = tmp_path / "msa_batch"
     output_dir.mkdir()
-    (output_dir / "msa_manifest.json").write_text(json.dumps({"sequences": []}), encoding="utf-8")
+    artifact = output_dir / "fixture.a3m"
+    artifact.write_text(">fixture\nA\n", encoding="utf-8")
+    (output_dir / "msa_manifest.json").write_text(json.dumps({"sequences": [
+        {"success": True, "sequence_hash": "a" * 64, "msa_path": str(artifact)}
+    ]}), encoding="utf-8")
 
     class _BatchProcess:
         returncode = outcome
@@ -63,19 +67,19 @@ async def test_msa_batch_runner_does_not_overwrite_a_job_cancelled_during_the_ba
             session.add(Job(id="msa-job", name="msa", model_id="msa_batch", mode="msa_generation",
                             status="queued", queue_status="queued", params={},
                             output_dir=str(output_dir), created_at=datetime.utcnow()))
-            if cancelled:
-                session.add(Job(id="waiting-child", name="waiting", model_id="boltz2", mode="predict",
-                                parent_job_id="msa-job", status="queued", queue_status="pending_msa", params={}))
+            session.add(Job(id="waiting-child", name="waiting", model_id="boltz2", mode="predict",
+                                parent_job_id="msa-job", status="queued", queue_status="pending_msa", params={"msa_sequence_hash": "a" * 64}))
             await session.commit()
 
         await nextflow.launch_msa_batch_job("msa-job", {}, str(output_dir))
 
         async with factory() as session:
             job = await session.get(Job, "msa-job")
-            if cancelled:
-                child = await session.get(Job, "waiting-child")
-                assert child.queue_status == "pending_msa"
-                assert "msa_path" not in child.params
+            child = await session.get(Job, "waiting-child")
+            if not cancelled and outcome == 0:
+                assert child.queue_status == "queued" and child.params["msa_path"] == str(artifact)
+            else:
+                assert child.queue_status == "pending_msa" and "msa_path" not in child.params
         assert (job.status, job.queue_status) == expected
         assert job.started_at is not None
         if cancelled:

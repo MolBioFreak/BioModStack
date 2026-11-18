@@ -413,6 +413,21 @@ async def test_edited_setup_launch_keeps_both_job_settings(native_http, native_c
         handoff = (await client.get(f'/api/launch-contexts/{context_id}')).json()['pinned_scheduler']
         token = current_launch_context_id.set(context_id)
         try:
+            if generation == 1:
+                from fastapi import HTTPException
+                from services import job_submission
+                from services.global_experiments.launch_contexts import LaunchContextError
+                async def interrupt_binding(*args, **kwargs):
+                    raise LaunchContextError('fixture_binding_interruption', 'Interrupted binding', status_code=409)
+                with monkeypatch.context() as fault:
+                    fault.setattr(job_submission, 'consume_launch_context', interrupt_binding)
+                    async with native_core_store() as core, setup_store() as db:
+                        with pytest.raises(HTTPException) as failed:
+                            await submit_job(JobCreate.model_validate({**handoff, 'launch_context_id': context_id}),
+                                             BackgroundTasks(), core, experiment_session=db)
+                        assert failed.value.detail['code'] == 'fixture_binding_interruption'
+                async with native_core_store() as core:
+                    assert list(await core.scalars(select(Job.id))) == [group.json()['runs'][0]['attempts'][0]['canonical_job_id']]
             for _ in range(2):  # Replay the exact submitted request, not an edited retry.
                 async with native_core_store() as core, setup_store() as db:
                     response = await submit_job(JobCreate.model_validate({**handoff, 'launch_context_id': context_id}),
