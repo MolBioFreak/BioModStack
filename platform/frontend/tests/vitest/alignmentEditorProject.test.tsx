@@ -22,6 +22,20 @@ it.each([undefined, null, 'custom HMM\n'])('preserves a saved nucleotide HMM cho
  } finally { await act(async()=>root.unmount()); mocked.setup=original; vi.clearAllMocks(); }
 });
 describe('Project alignment editor',()=>{
+ it('keeps an empty draft editable and stops before preparing or submitting a run', async()=>{
+  vi.clearAllMocks(); mocked.active=true;
+  const original=mocked.setup;
+  mocked.setup={...original,draft:{...original.draft,fasta:''}};
+  const div=document.createElement('div'), root=createRoot(div);
+  try {
+   await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
+   const start=[...div.querySelectorAll('button')].find(button=>button.textContent==='Start run')!;
+   await act(async()=>start.click());
+   expect(div.querySelector('[role="alert"]')?.textContent).toContain('Add at least two sequences');
+   expect(mocked.start).not.toHaveBeenCalled();
+   expect(mocked.submit).not.toHaveBeenCalled();
+  } finally { await act(async()=>root.unmount()); mocked.setup=original; }
+ });
  it('reopens flattened state and submits the pinned Project scheduler',async()=>{
   const div=document.createElement('div'), root=createRoot(div);
   mocked.save.mockResolvedValue({}); mocked.start.mockResolvedValue({launch_context_id:'ctx'});
@@ -78,7 +92,7 @@ describe('alignment handoff recovery', () => {
   const div=document.createElement('div'), root=createRoot(div);
   await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
   await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Start run')!.click()});
-  expect(div.querySelector('a[href="/alignments/jobs/job"]')).not.toBeNull(); expect(div.querySelector('[title="Launch context ctx"]')).not.toBeNull();
+  expect(div.querySelector('a[href="/alignments/jobs/job?project_id=p"]')).not.toBeNull(); expect(div.querySelector('[title="Launch context ctx"]')).not.toBeNull();
   expect(div.textContent).toContain('response lost');
   await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Link to project again')!.click()});
   expect(mocked.submit).toHaveBeenCalledTimes(1); expect(mocked.post).toHaveBeenCalledTimes(2);
@@ -87,7 +101,7 @@ describe('alignment handoff recovery', () => {
   mocked.context.mockResolvedValue({canonical_job_id:'job'});
   const root2=createRoot(div);
   await act(async()=>root2.render(<MemoryRouter initialEntries={['/?launch_context_id=ctx']}><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
-  expect(div.querySelector('a[href="/alignments/jobs/job"]')).not.toBeNull();
+  expect(div.querySelector('a[href="/alignments/jobs/job?project_id=p"]')).not.toBeNull();
   await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Link to project again')!.click()});
   expect(mocked.submit).toHaveBeenCalledTimes(1);
   await act(async()=>root2.unmount());
@@ -101,7 +115,7 @@ describe('alignment handoff recovery', () => {
   const div=document.createElement('div'), root=createRoot(div);
   await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
   await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Start run')!.click(); await Promise.resolve();});
-  expect(div.querySelector('a[href="/alignments/jobs/job"]')).not.toBeNull(); expect(div.querySelector('[title="Launch context ctx"]')).not.toBeNull();
+  expect(div.querySelector('a[href="/alignments/jobs/job?project_id=p"]')).not.toBeNull(); expect(div.querySelector('[title="Launch context ctx"]')).not.toBeNull();
   await act(async()=>finish({data:{return_uri:'/projects/p'}}));
   await act(async()=>root.unmount());
  });

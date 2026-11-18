@@ -87,15 +87,21 @@ function domainExperimentForNode(summary: ProjectManagerReadModel, nodeKey: stri
     return null;
 }
 
+function sequenceWorkspaceNodes(summary: ProjectManagerReadModel) {
+    const alignmentDomains = new Set((summary.tasks ?? [])
+        .filter(task => task.reopen_route.split('?')[0] === '/alignments')
+        .map(task => task.domain_experiment_id));
+    return summary.tree.nodes.filter(node => node.node_type === 'domain_experiment'
+        && node.subject_id && node.lifecycle_state !== 'archived' && !alignmentDomains.has(node.subject_id));
+}
+
 function nativeProjectContext(summary: ProjectManagerReadModel): { globalExperimentId: string; domainExperimentId: string } | null {
     const selectedDomainId = domainExperimentForNode(summary, summary.selection.node_key);
-    const domainNodes = summary.tree.nodes.filter((node) => node.node_type === 'domain_experiment');
+    const domainNodes = sequenceWorkspaceNodes(summary);
     const focusedDomains = domainNodes.filter((node) => node.parent_node_key === summary.map.focus_node_key);
-    const domain = selectedDomainId
-        ? domainNodes.find((node) => node.subject_id === selectedDomainId)
-        : focusedDomains.length === 1
-            ? focusedDomains[0]
-            : domainNodes.length === 1 ? domainNodes[0] : undefined;
+    const domain = domainNodes.find((node) => node.subject_id === selectedDomainId)
+        ?? (focusedDomains.length === 1 ? focusedDomains[0] : undefined)
+        ?? (domainNodes.length === 1 ? domainNodes[0] : undefined);
     if (!domain?.subject_id || !domain.parent_node_key) return null;
     const globalExperiment = summary.tree.nodes.find((node) => node.node_key === domain.parent_node_key && node.node_type === 'global_experiment');
     if (!globalExperiment?.subject_id) return null;
@@ -120,25 +126,17 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onSelectNode,
     onSelectNode: (nodeKey: string, nodeType: string, subjectId: string | null) => void;
 }) {
     const context = useMemo(() => nativeProjectContext(summary), [summary]);
-    const selectedPayload = summary.selection.summary?.domain_payload;
-    // Only alignment workflow domains skip the DNA workspace. Older v1 NGS/MolBio
-    // domains are still DNA workspaces; an alignment one is recognised by its
-    // Project setup task, which reopens under /alignments.
-    const alignmentSetupDomain = summary.selection.node_type === 'domain_experiment'
-        && selectedPayload !== null && typeof selectedPayload === 'object' && !Array.isArray(selectedPayload)
-        && selectedPayload.schema === 'bms.ngs-molbio-experiment.v1'
-        && (summary.tasks ?? []).some(task => task.global_experiment_id === context?.globalExperimentId && task.reopen_route.startsWith('/alignments'));
-    const nonNativeDomain = alignmentSetupDomain
-        || ['bms.family-msa.family_msa_protein.adapter.v1', 'bms.family-msa.family_msa_nucleic.adapter.v1'].includes(String(summary.selection.summary?.adapter_id));
-    const isNativeProject = true;
+    const workspaces = sequenceWorkspaceNodes(summary);
     const stateQuery = useQuery({
         queryKey: ['project-manager', 'native-domain-state', context?.domainExperimentId ?? null],
         queryFn: () => fetchMolBioNgsDomainState(context?.domainExperimentId as string),
-        enabled: isNativeProject && context !== null && !nonNativeDomain,
+        enabled: context !== null,
         retry: (count, error) => count < 5 && (error as { status?: number }).status === 404,
         retryDelay: 1000,
     });
-    const selectedStateRevisionId = stateRevisionId ?? stateQuery.data?.current_state_revision_id ?? null;
+    const selectedDomainId = domainExperimentForNode(summary, summary.selection.node_key);
+    const selectedStateRevisionId = (selectedDomainId && selectedDomainId !== context?.domainExperimentId ? null : stateRevisionId)
+        ?? stateQuery.data?.current_state_revision_id ?? null;
     const projectHubQuery = useQuery({
         queryKey: ['project-manager', 'native-project-hub', summary.project.id, context?.globalExperimentId ?? null, context?.domainExperimentId ?? null, selectedStateRevisionId],
         queryFn: ({ signal }) => fetchProjectHub(
@@ -148,14 +146,14 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onSelectNode,
             selectedStateRevisionId as string,
             signal,
         ),
-        enabled: isNativeProject && context !== null && selectedStateRevisionId !== null && !nonNativeDomain,
+        enabled: context !== null && selectedStateRevisionId !== null,
         retry: false,
     });
 
-    if (!isNativeProject) return null;
-    if (nonNativeDomain) return <section aria-label="Workflow results" className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-5"><h2 className="font-semibold text-content">Workflow results</h2><p className="mt-2 text-sm text-content-secondary">Alignment results are listed below.</p></section>;
     if (!context) {
-        const workspaces = summary.tree.nodes.filter((node) => node.node_type === 'domain_experiment');
+        if (!workspaces.length && (summary.tasks ?? []).some(task => task.reopen_route.split('?')[0] === '/alignments')) {
+            return <section aria-label="Workflow results" className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-5"><h2 className="font-semibold text-content">Workflow results</h2><p className="mt-2 text-sm text-content-secondary">Saved results are in Alignments.</p></section>;
+        }
         return (
             <section className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-5" aria-label="Project workspace setup">
                 <h2 className="text-base font-semibold text-content">{workspaces.length ? 'Choose a workspace' : 'DNA sequences'}</h2>
@@ -168,7 +166,7 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onSelectNode,
             </section>
         );
     }
-    if (stateQuery.isSuccess && stateQuery.data.current_state_revision_id === null) {
+    if (stateQuery.isSuccess && selectedStateRevisionId === null) {
         const params = new URLSearchParams({ workspace_id: summary.project.id, global_experiment_id: context!.globalExperimentId, domain_experiment_id: context!.domainExperimentId, action: 'add-plasmid' });
         return <section className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-5" aria-label="Empty DNA sequence workspace"><h2 className="font-semibold text-content">No DNA sequences attached yet</h2><p className="mt-2 text-sm text-content-secondary">Import or save a DNA sequence in MolBio, then use Add to Project. You can also attach a saved sequence with Attach existing record above.</p><Link to={`/designer?${params}`} className="mt-3 inline-block rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white">Open MolBio to add DNA sequences</Link></section>;
     }
@@ -176,7 +174,7 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onSelectNode,
         return <section aria-busy="true" className="border-b border-border-primary bg-surface-secondary px-4 py-3 text-xs text-content-secondary">Loading Project DNA sequences…</section>;
     }
     if (stateQuery.isError || projectHubQuery.isError || !projectHubQuery.data) {
-        return <section role="alert" className="border-b border-error/40 bg-error/10 px-4 py-3 text-xs text-content-secondary"><span className="font-semibold text-error">Project DNA sequences could not be loaded.</span> Retry after the NGS/MolBio workspace is available.</section>;
+        return <section role="alert" className="border-b border-error/40 bg-error/10 px-4 py-3 text-xs text-content-secondary"><span className="font-semibold text-error">Project DNA sequences could not be loaded.</span> <button type="button" className="underline" onClick={() => void (stateQuery.isError ? stateQuery.refetch() : projectHubQuery.refetch())}>Retry</button></section>;
     }
 
     const model = projectHubQuery.data;

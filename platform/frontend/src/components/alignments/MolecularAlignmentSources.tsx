@@ -16,7 +16,7 @@ export async function currentRevisionId(sequenceId: string): Promise<string | un
 }
 
 /** Pin saved records before leaving the shelf; URLs contain identities, never sequence bytes. */
-export async function molecularAlignmentHref(sequences: NucleotideSequenceListItem[]): Promise<string> {
+export async function molecularAlignmentHref(sequences: NucleotideSequenceListItem[], projectId?: string): Promise<string> {
     if (sequences.length < 2) throw new Error('Select at least two saved sequences.');
     if (sequences.length > 200) throw new Error('Select up to 200 sequences at a time.');
     const molecule = sequences[0].sequence_type;
@@ -27,6 +27,7 @@ export async function molecularAlignmentHref(sequences: NucleotideSequenceListIt
         return JSON.stringify([sequence.id, revisionId]);
     }));
     const query = new URLSearchParams({model: 'family_msa_nucleic', molecule});
+    if (projectId) query.set('project_id', projectId);
     sources.forEach(source => query.append(MOLECULAR_ALIGNMENT_PARAM, source));
     return `/alignments/new?${query}`;
 }

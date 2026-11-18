@@ -38,7 +38,7 @@ describe('standalone NGS/MolBio Projects', () => {
     it('does not request a Molecular Tools workspace for a v1 alignment domain', async () => {
         const value = summary([project, experiment, workspace('d')], workspace('d'));
         value.selection.summary = { domain_payload: { schema: 'bms.ngs-molbio-experiment.v1' } };
-        (value as unknown as { tasks: unknown[] }).tasks = [{ global_experiment_id: 'e', reopen_route: '/alignments?model=family_msa_nucleic&mode=family_msa&setup_context_id=s' }];
+        (value as unknown as { tasks: unknown[] }).tasks = [{ global_experiment_id: 'e', domain_experiment_id: 'd', reopen_route: '/alignments?model=family_msa_nucleic&mode=family_msa&setup_context_id=s' }];
         await render(value);
         await settle();
         expect(host.textContent).toContain('Workflow results');
@@ -54,14 +54,30 @@ describe('standalone NGS/MolBio Projects', () => {
         expect(host.textContent).not.toContain('Workflow results');
         expect(api.fetchMolBioNgsDomainState).toHaveBeenCalledWith('d');
     });
-    it('does not request a DNA workspace when reopening a canonical alignment run', async () => {
-        const value = summary([project, experiment, workspace('d')]);
+    it('keeps the project sequence workspace visible when reopening a canonical alignment run', async () => {
+        const value = summary([project, experiment, workspace('alignment'), workspace('plasmids')]);
         value.selection.node_type = 'workflow_run';
         value.selection.summary = { adapter_id: 'bms.family-msa.family_msa_nucleic.adapter.v1' };
+        value.tasks = [{ domain_experiment_id: 'alignment', reopen_route: '/alignments?model=family_msa_nucleic' }] as ProjectManagerReadModel['tasks'];
+        api.fetchMolBioNgsDomainState.mockResolvedValue({ current_state_revision_id: 'state-current' });
+        api.fetchProjectHub.mockResolvedValue({ label: 'Project DNA sequences' });
         await render(value);
-        await settle();
-        expect(host.textContent).toContain('Workflow results');
-        expect(api.fetchMolBioNgsDomainState).not.toHaveBeenCalled();
+        await settle(); await settle();
+        expect(host.textContent).toContain('Project DNA sequences');
+        expect(api.fetchMolBioNgsDomainState).toHaveBeenCalledExactlyOnceWith('plasmids');
+    });
+    it('finds the sequence workspace when the project opens on a separate alignment experiment', async () => {
+        const alignmentExperiment = { ...experiment, node_key: 'global_experiment:a', subject_id: 'a' };
+        const alignment = { ...workspace('alignment'), parent_node_key: alignmentExperiment.node_key };
+        const value = summary([project, experiment, workspace('plasmids'), alignmentExperiment, alignment], alignmentExperiment);
+        value.map.focus_node_key = alignmentExperiment.node_key;
+        value.tasks = [{ domain_experiment_id: 'alignment', reopen_route: '/alignments?model=family_msa_nucleic' }] as ProjectManagerReadModel['tasks'];
+        api.fetchMolBioNgsDomainState.mockResolvedValue({ current_state_revision_id: 'state-current' });
+        api.fetchProjectHub.mockResolvedValue({ label: 'Project DNA sequences' });
+        await render(value);
+        await settle(); await settle();
+        expect(host.textContent).toContain('Project DNA sequences');
+        expect(api.fetchMolBioNgsDomainState).toHaveBeenCalledExactlyOnceWith('plasmids');
     });
     it('shows sequence intake guidance without requiring generic experiment setup', async () => {
         await render(summary([project]));

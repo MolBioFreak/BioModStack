@@ -6,13 +6,16 @@ from bms_alignment import AlignmentRequest, parse
 from services.family_msa.execution import compile_command
 from services.family_msa.requests import MODE, prepare_request, request_schema
 
+def rows(sequence='ACGT'):
+    return [{'row_id': f'row_{i}', 'header': f'Sequence {i}', 'sequence': sequence} for i in (1, 2)]
+
 
 @pytest.mark.parametrize(('molecule', 'model'), [
     ('protein', 'family_msa_protein'), ('dna', 'family_msa_nucleic'),
     ('rna', 'family_msa_nucleic'),
 ])
 def test_contract_projection(molecule, model):
-    request = {'roster': {'molecule': molecule, 'rows': []}, 'settings': {}}
+    request = {'roster': {'molecule': molecule, 'rows': rows()}, 'settings': {}}
     selected, effective = prepare_request(request)
     assert (selected, MODE) == (model, 'family_msa')
     assert effective['_family_msa_requested'] == request
@@ -33,7 +36,7 @@ def test_native_compiled_command(tmp_path, molecule, sequence):
         pytest.skip('BMS_TEST_MAFFT not configured')
     source = tmp_path / 'input with space.fa'
     source.write_text(f'>row_1\n{sequence}\n>row_2\n{sequence}\n')
-    payload = {'roster': {'molecule': molecule, 'rows': []},
+    payload = {'roster': {'molecule': molecule, 'rows': rows(sequence)},
                'settings': {'threads': 2}}
     _, effective = prepare_request(payload)
     proc = subprocess.run(compile_command(effective, binary, str(source)),
@@ -44,7 +47,7 @@ def test_native_compiled_command(tmp_path, molecule, sequence):
 
 def test_source_evidence_survives_request_projection():
     evidence = [{'selection': {'project_id': 'p', 'revision_sha256': 'digest', 'members': [{'ordinal': 3, 'member_sha256': 'member'}]}, 'included': False, 'resolution': {'status': 'unavailable', 'reason': 'missing'}}]
-    request = {'roster': {'molecule': 'dna', 'rows': [], 'source_evidence': evidence}, 'settings': {}}
+    request = {'roster': {'molecule': 'dna', 'rows': rows(), 'source_evidence': evidence}, 'settings': {}}
     _, effective = prepare_request(request)
     assert effective['roster']['source_evidence'] == evidence
     assert effective['_family_msa_requested']['roster']['source_evidence'] == evidence
@@ -52,9 +55,18 @@ def test_source_evidence_survives_request_projection():
 
 
 def test_muscle_align_and_super5_are_both_accepted():
-    payload = {'roster': {'molecule': 'dna', 'rows': [
-        {'row_id': 'r1', 'header': 'toy', 'sequence': 'ACGT'}]},
+    payload = {'roster': {'molecule': 'dna', 'rows': rows()},
         'settings': {'engine': 'muscle', 'mode': 'align'}}
     assert prepare_request(payload)[1]['settings']['mode'] == 'align'
     payload['settings']['mode'] = 'super5'
     assert prepare_request(payload)[1]['settings']['mode'] == 'super5'
+
+
+@pytest.mark.parametrize(('roster_rows', 'message'), [
+    ([], 'at least two sequences'),
+    (rows()[:1], 'at least two sequences'),
+    (rows(''), 'Every input row needs a sequence'),
+])
+def test_run_admission_rejects_incomplete_input(roster_rows, message):
+    with pytest.raises(ValueError, match=message):
+        prepare_request({'roster': {'molecule': 'dna', 'rows': roster_rows}, 'settings': {}})

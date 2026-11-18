@@ -1872,7 +1872,7 @@ export function MolBioToolkitV2() {
         requestWorkspaceTransition('open Alignments', () => {
             const generation = ++alignmentTransferGeneration.current;
             setAlignmentBusy(true); setAlignmentError('');
-            void molecularAlignmentHref(selected).then(href => {
+            void molecularAlignmentHref(selected, !showAllConstructs ? workspaceId ?? undefined : undefined).then(href => {
                 if (generation === alignmentTransferGeneration.current) navigate(href);
             }).catch(error => {
                 if (generation === alignmentTransferGeneration.current) setAlignmentError(error instanceof Error ? error.message : 'Could not prepare the selected sequences.');

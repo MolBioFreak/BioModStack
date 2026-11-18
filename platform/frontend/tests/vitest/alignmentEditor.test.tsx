@@ -33,6 +33,12 @@ it.each(['dna', 'rna'] as const)('uses explicit identity scoring for new %s MUSC
  const div = document.createElement('div'), root = createRoot(div), client = new QueryClient();
  await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><AlignmentEditor model="family_msa_nucleic" initialMolecule={molecule}/></MemoryRouter></QueryClientProvider>));
  try {
+  const roster = div.querySelector('[aria-label="FASTA roster"]') as HTMLTextAreaElement;
+  const sequence = molecule === 'rna' ? 'ACGU' : 'ACGT';
+  await act(async () => {
+   Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(roster, `>a\n${sequence}\n>b\n${sequence}`);
+   roster.dispatchEvent(new Event('input', {bubbles:true}));
+  });
   const engine = div.querySelector('[aria-label="Engine"]') as HTMLSelectElement;
   await act(async () => { engine.value='muscle'; engine.dispatchEvent(new Event('change', {bubbles:true})); });
   const mode = div.querySelector('[data-setting="mode"] select') as HTMLSelectElement;

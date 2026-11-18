@@ -125,3 +125,21 @@ async def test_native_subsetting_requires_explicit_setting_and_retains_exact_row
 
     projected = await document([{'id': 'alignment', 'role': 'alignment'}, {'id': 'receipt', 'role': 'receipt'}], read, 'alignment')
     assert [(row['row_id'], row['aligned']) for row in projected['rows']] == [('a', 'ACG')]
+
+
+@pytest.mark.asyncio
+async def test_historical_empty_alignment_explains_why_it_cannot_open():
+    from fastapi import HTTPException
+    from routers.family_msa_results import document
+
+    entries = [{'id': 'alignment', 'role': 'alignment'}, {'id': 'receipt', 'role': 'receipt'}]
+    receipt = {'requested': {'roster': {'molecule': 'dna', 'rows': []}, 'settings': {'engine': 'mafft'}}}
+    blobs = {'alignment': b'', 'receipt': json.dumps(receipt).encode()}
+
+    async def read(key):
+        return blobs[key]
+
+    with pytest.raises(HTTPException) as error:
+        await document(entries, read, 'alignment')
+    assert error.value.status_code == 409
+    assert 'no input sequences' in error.value.detail

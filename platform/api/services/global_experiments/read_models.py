@@ -2001,6 +2001,7 @@ async def build_project_manager_read_model(
             {
                 "setup_context_id": setup.setup_context_id,
                 "global_experiment_id": setup.global_experiment_id,
+                "domain_experiment_id": setup.domain_experiment_id,
                 "experiment_name": global_head.display_name,
                 "workflow_id": setup.workflow_id,
                 "workflow_name": workflow_head.display_name,

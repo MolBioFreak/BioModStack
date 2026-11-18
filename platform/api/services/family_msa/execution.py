@@ -12,6 +12,7 @@ from pathlib import Path
 
 from bms_alignment import AlignmentRequest
 from bms_alignment.native import compile_mafft, prepare_mafft_inputs
+from services.family_msa.requests import validate_run_roster
 
 
 def compile_command(payload: dict, executable: str, input_path: str) -> list[str]:
@@ -64,6 +65,7 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
             runtime = {'kind': 'owned-python-operation'}
         else:
             request = AlignmentRequest.model_validate({key: payload[key] for key in ('roster', 'settings')})
+            validate_run_roster(request.roster)
             if request.settings.engine == 'mafft':
                 input_file, native_roster, focus_report = prepare_mafft_inputs(request, work)
             else:

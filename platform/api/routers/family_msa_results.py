@@ -340,6 +340,8 @@ async def document(entries, read, artifact_id):
         requested = receipt['requested']
         roster = requested['roster']['rows']
         fasta = (await read(artifact_id)).decode('utf-8')
+        if roster == [] and not fasta.strip():
+            raise HTTPException(409, detail='This run had no input sequences. Select at least two sequences and start a new alignment.')
         from pathlib import PurePosixPath
         parent = PurePosixPath(selected.get('logical_path') or '').parent
         maps = [x for x in entries if x['role'] == 'row_map' and PurePosixPath(x.get('logical_path') or '').parent == parent]

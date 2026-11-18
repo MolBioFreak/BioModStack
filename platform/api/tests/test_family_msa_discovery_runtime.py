@@ -17,7 +17,8 @@ async def test_model_discovery_and_schema():
         assert detail['modes'][0]['parameter_schema'] == modes['modes'][0]['parameter_schema'] == request_schema()
         assert molecule in detail['capabilities']['molecules']
         assert model_runtime_dependencies(model)[0].relative_path == 'msa_engines.sif'
-        payload = {'roster': {'molecule': molecule, 'rows': []}, 'settings': {'threads': 2}}
+        rows = [{'row_id': f'row_{i}', 'header': f'Sequence {i}', 'sequence': 'ACGT'} for i in (1, 2)]
+        payload = {'roster': {'molecule': molecule, 'rows': rows}, 'settings': {'threads': 2}}
         _, effective = prepare_request(payload)
         assert effective['_family_msa_requested'] == payload
         assert effective['settings']['threads'] == 2

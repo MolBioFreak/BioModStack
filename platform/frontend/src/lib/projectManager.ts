@@ -544,6 +544,7 @@ export interface BoundedPage<T> {
 export interface ProjectWorkflowTask {
     setup_context_id: string;
     global_experiment_id: string;
+    domain_experiment_id?: string;
     experiment_name: string;
     workflow_id: string;
     workflow_name: string;
@@ -1420,12 +1421,14 @@ function parseProjectWorkflowTask(value: unknown, label: string): ProjectWorkflo
         'setup_context_id', 'global_experiment_id', 'experiment_name', 'workflow_id', 'workflow_name',
         'relationship_kind', 'workflow_label', 'setup_state', 'validation_state', 'latest_run_state',
         'result_count', 'reopen_route', 'allowed_actions',
-    ]);
+    ], ['domain_experiment_id']);
     const reopenRoute = requireString(task.reopen_route, `${label}.reopen_route`);
     if (!reopenRoute.startsWith('/') || reopenRoute.startsWith('//')) throw new Error(`${label}.reopen_route must be a safe local route.`);
     return {
         setup_context_id: requireString(task.setup_context_id, `${label}.setup_context_id`),
         global_experiment_id: requireString(task.global_experiment_id, `${label}.global_experiment_id`),
+        domain_experiment_id: task.domain_experiment_id === undefined
+            ? undefined : requireString(task.domain_experiment_id, `${label}.domain_experiment_id`),
         experiment_name: requireString(task.experiment_name, `${label}.experiment_name`),
         workflow_id: requireString(task.workflow_id, `${label}.workflow_id`),
         workflow_name: requireString(task.workflow_name, `${label}.workflow_name`),

@@ -96,6 +96,7 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
     const setup = useProjectWorkflowSetup();
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
+    const projectId = setup.setup?.project_id ?? searchParams.get('project_id');
     const urlContext = searchParams.get('launch_context_id');
     const urlJob = searchParams.get('alignment_job_id');
     const [molecule,setMolecule] = useState<Molecule>(initialMolecule ?? (model === 'family_msa_nucleic' ? 'dna' : 'protein'));
@@ -160,7 +161,7 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
     }, [setup.setup]);
     const settings = drafts[engine];
     const update = (key:string,value:Value) => setDrafts(previous=>({...previous,[engine]:{...previous[engine],[key]:value}}));
-    const request = () => {
+    const request = (launch = false) => {
         if (molecularBlocked) throw new Error('Selected saved sequences must load and match the selected molecule before starting.');
         const roster = fastaRoster(fasta,molecule);
         const source_evidence = datasetRows.map(x => {
@@ -183,11 +184,13 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
             transformation_provenance:JSON.stringify({source_identity:x.resolved.source_identity,source_digest:x.resolved.source_digest,chain:x.resolved.chain,start:x.resolved.start,end:x.resolved.end,structure_residue_map:x.resolved.structure_residue_map ?? null,operation:'forward_slice'})
         }))];
         rows.push(...molecularRows.map(item => item.row));
+        if (launch && rows.length < 2) throw new Error('Add at least two sequences before starting an alignment.');
+        if (launch && rows.some(row => !row.sequence.trim())) throw new Error('Every input row needs a sequence before starting an alignment.');
         return {name:'Family alignment',model_id:model,mode:'family_msa',params:{roster:{...roster,rows,source_evidence:[...source_evidence,...molecularRows.map(item => item.evidence)],source_text:rows.length === roster.rows.length ? roster.source_text : null},settings}};
     };
     const draft = (allowIncomplete = false) => {
         const editor_state = {molecule,engine,drafts,fasta,datasetRows,molecularSources};
-        try { return {native_job_request:request(),editor_state} as unknown as JsonObject; }
+        try { return {native_job_request:request(!allowIncomplete),editor_state} as unknown as JsonObject; }
         catch (error) { if (!allowIncomplete) throw error; return {editor_state} as unknown as JsonObject; }
     };
     const bind = async (context: string, id: string) => {
@@ -218,12 +221,23 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
         finally { setBusy(false); }
     };
     const run = async (action:'save'|'launch') => {
+        let launchDraft: ReturnType<typeof draft> | undefined;
+        let launchRequest: ReturnType<typeof request> | undefined;
+        if (action === 'launch') {
+            try {
+                if (setup.active) launchDraft = draft();
+                else launchRequest = request(true);
+            } catch (e) {
+                setError(errorText(e));
+                return;
+            }
+        }
         setBusy(true); setError('');
         try {
             if (setup.active) {
                 if (action === 'save') await setup.saveDraft(draft(true));
-                else {
-                    const prepared = await setup.startRun(draft(), {stayInEditor:true});
+                else if (launchDraft) {
+                    const prepared = await setup.startRun(launchDraft, {stayInEditor:true});
                     const contextId = prepared.launch_context_id;
                     if (!contextId) throw new Error('The Project workflow did not return a launch context.');
                     remember(contextId, '');
@@ -237,8 +251,8 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
                     await bind(contextId, id);
                 }
             }
-            else if (action === 'launch') {
-                const response = await submitJob({...request(), ...(urlContext ? {launch_context_id:urlContext} : {})}); const id = response.data?.id;
+            else if (launchRequest) {
+                const response = await submitJob({...launchRequest, ...(urlContext ? {launch_context_id:urlContext} : {})}); const id = response.data?.id;
                 if (typeof id !== 'string') throw new Error('Job API returned no Job ID');
                 if (urlContext) { remember(urlContext, id); await bind(urlContext, id); }
                 else setJob(id);
@@ -298,6 +312,7 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
             <MolecularAlignmentSourceList sources={molecularSources} query={molecularQuery}
                 onRemove={source => { setMolecularSources(previous => previous.filter(value => value !== source)); dropMolecularParam(source); }}
                 onClear={() => { setMolecularSources([]); dropMolecularParam(); }} />
+            {projectId && !molecularSources.length && <p className="alignment-hint"><Link to={`/projects/${encodeURIComponent(projectId)}`}>Open Project</Link>, then open Molecular Tools to select saved sequences.</p>}
             {molecularMismatch && <p role="alert">The selected saved sequences do not match the molecule setting. Choose the matching molecule or remove those sequences.</p>}
             {setup.active && setup.setup && <ProjectDatasetPicker key={`${setup.setup.project_id}:${setup.setup.setup_context_id}`} projectId={setup.setup.project_id} globalId={setup.setup.global_experiment_id} domainId={setup.setup.domain_experiment_id} rows={datasetRows} onChange={setDatasetRows}/>}
             {requestIdentityWarning(datasetRows) && <p role="status">Some selected sequences changed since you picked them.</p>}
@@ -323,7 +338,7 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
                 {setup.active && <button type="button" onClick={()=>void run('save')} className={inputClass}>Save Project draft</button>}
             </div>
         </fieldset>
-        {error && <p role="alert">{error}</p>}{contextId && !job && <div title={`Launch context ${contextId}`}><p>Waiting for the run to start.</p><button type="button" disabled={busy} onClick={()=>void recover()} className={inputClass}>Find my run</button></div>}{job && <div role="status"><p>Run submitted. <Link to={`/alignments/jobs/${encodeURIComponent(job)}`} title={job}>Open run</Link></p>
+        {error && <p role="alert">{error}</p>}{contextId && !job && <div title={`Launch context ${contextId}`}><p>Waiting for the run to start.</p><button type="button" disabled={busy} onClick={()=>void recover()} className={inputClass}>Find my run</button></div>}{job && <div role="status"><p>Run submitted. <Link to={{pathname: `/alignments/jobs/${encodeURIComponent(job)}`, search: projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}} title={job}>Open run</Link></p>
             {contextId && <><button type="button" disabled={busy} onClick={()=>void retryBinding()} className={inputClass} title={`Launch context ${contextId}`}>Link to project again</button>{returnUri && <> <Link to={returnUri}>Return to Project</Link></>}</>}
         </div>}
     </section>;
