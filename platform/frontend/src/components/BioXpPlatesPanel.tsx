@@ -8,7 +8,12 @@ type Depth = { tip_type: number | null; location: string | null; offset_mm: numb
 type Grip = { z_low_offset_steps: number; source?: string; saved_at?: string };
 type Profiles = { plates: Record<string, { name: string; gripper: Record<string, Grip | null>; depth_offsets: Depth[] }>;
     loaded: Record<string, string>; stations: Record<string, string>; station_depth_offsets: Depth[] };
-type LibraryPlate = { id: string; name: string; short_name?: string; vessel_geometry?: { max_volume_ul?: number | null } };
+type Geometry = { max_volume_ul?: number | null; working_volume_ul?: number | null; well_depth_mm?: number | null; [k: string]: unknown };
+type LibraryPlate = { id: string; name: string; short_name?: string; catalog_numbers?: string[]; dead_volume_ul?: number | null;
+    vessel_geometry?: Geometry; saved_record_id?: string; [k: string]: unknown };
+type PlateForm = { id: string; isNew: boolean; short_name: string; name: string; catalog: string; max: string; working: string; dead: string; depth: string };
+const num = (v: string) => v.trim() === '' ? null : Number(v);
+const slug = (v: string) => v.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 type DepthTable = { standard: { offset_mm: number; label: string; source: string }[]; max_mm: number };
 
 // Plate (gripper) stations the robot applies a plate's saved height at.
@@ -53,6 +58,7 @@ export function BioXpPlatesPanel({ generation, connected, visible = true }: { ge
     const [plateDepth, setPlateDepth] = useState({ tip: '10', location: 'LOC_MS', value: '' });
     const [stationDepth, setStationDepth] = useState({ tip: '10', location: 'LOC_OC', value: '' });
     const [error, setError] = useState<string | null>(null);
+    const [form, setForm] = useState<PlateForm | null>(null);
 
     const data = profiles.data;
     const lib = library.data ?? [];
@@ -86,6 +92,42 @@ export function BioXpPlatesPanel({ generation, connected, visible = true }: { ge
         if (entry.value.trim() === '' || !Number.isFinite(value) || Math.abs(value) > maxMm) { setError(`Depth must be between -${maxMm} and ${maxMm} mm.`); return false; }
         return send('put', '/api/bioxp/depth-offsets', { tip_type: entry.tip === '' ? null : Number(entry.tip), location: entry.location,
             plate_type: plateType, offset_mm: value, source: today() });
+    }
+    function openForm(id: string | null) {
+        const p = lib.find(x => x.id === id);
+        const g = p?.vessel_geometry ?? {};
+        const s = (v: unknown) => v === null || v === undefined ? '' : String(v);
+        setForm(p ? { id: p.id, isNew: false, short_name: s(p.short_name), name: p.name, catalog: (p.catalog_numbers ?? []).join(', '),
+            max: s(g.max_volume_ul), working: s(g.working_volume_ul), dead: s(p.dead_volume_ul), depth: s(g.well_depth_mm) }
+            : { id: '', isNew: true, short_name: '', name: '', catalog: '', max: '', working: '', dead: '', depth: '' });
+    }
+    async function savePlate() {
+        if (!form) return;
+        const id = form.isNew ? slug(form.short_name || form.name) : form.id;
+        if (!id || !(form.short_name || form.name).trim()) { setError('Give the plate a name.'); return; }
+        if (form.isNew && lib.some(p => p.id === id)) { setError(`A plate with id ${id} already exists.`); return; }
+        const values = [form.max, form.working, form.dead, form.depth].map(num);
+        if (values.some(v => v !== null && (!Number.isFinite(v) || v < 0))) { setError('Volumes and depth must be positive numbers.'); return; }
+        // New plates start from the selected plate's geometry (format, footprint, well layout); edit the rest after measuring.
+        const base = (lib.find(p => p.id === (form.isNew ? current : id)) ?? {}) as LibraryPlate;
+        const { saved_record_id: recordId, ...rest } = base;
+        const profile = { ...rest, id, name: form.name.trim() || form.short_name.trim(), short_name: form.short_name.trim() || undefined,
+            catalog_numbers: form.catalog.split(/[,\s]+/).filter(Boolean), dead_volume_ul: values[2],
+            vessel_geometry: { ...(rest.vessel_geometry ?? {}), max_volume_ul: values[0], working_volume_ul: values[1], well_depth_mm: values[3] },
+            ...(form.isNew ? { revision: 1, source: `Added in BMS ${new Date().toISOString().slice(0, 10)}; geometry copied from ${base.id ?? 'none'}`, qualification: 'not BioXP-qualified' } : {}) };
+        const method = { schema: 'bms.bioxp-plate-profile.v1', name: profile.name, profile };
+        setError(null);
+        try {
+            if (!form.isNew && recordId) {
+                const record = (await api.get<{ revision: number }>(`/api/bioxp/methods/plate-profiles/${recordId}`)).data;
+                await api.put(`/api/bioxp/methods/plate-profiles/${recordId}`, { method, name: profile.name, expected_base_revision: record.revision });
+            } else {
+                await api.post('/api/bioxp/methods/plate-profiles', { method, name: profile.name });
+            }
+            await client.invalidateQueries({ queryKey: ['bioxp', 'plate-library-list'] });
+            await client.invalidateQueries({ queryKey: ['bioxp', 'methods', 'plates'] });
+            setSelected(id); setForm(null);
+        } catch (cause) { setError(bioXpErrorText(cause)); }
     }
     const removeDepth = (row: Depth, plateType: string | null) =>
         send('post', '/api/bioxp/depth-offsets/remove', { tip_type: row.tip_type, location: row.location, plate_type: plateType });
@@ -129,8 +171,25 @@ export function BioXpPlatesPanel({ generation, connected, visible = true }: { ge
                                 {id === loadedId && <span className="ml-1.5 rounded bg-[#1f3a33] px-1.5 py-px align-[1px] text-[10.5px] text-[var(--success)]">loaded</span>}</div>
                             <div className="text-[11.5px] text-[var(--text-muted)]">{[catalog(id), v ? `${v} µL` : null, grips ? `${grips} gripper height${grips > 1 ? 's' : ''}` : 'OEM heights'].filter(Boolean).join(' · ')}</div>
                         </button>; })}
+                    <button type="button" className={`${ghost} text-left`} disabled={!library.data} onClick={() => openForm(null)}>+ Add plate</button>
                 </div>
                 {current && <div className="min-w-0">
+                    {form ? <div aria-label="Plate details" className="mb-4 rounded-lg border border-dashed border-[var(--border-secondary)] p-3">
+                        <div className={`${label} mb-2`}>{form.isNew ? 'New plate · geometry copied from the selected plate' : 'Plate details'}</div>
+                        <div className="grid grid-cols-4 gap-2 text-xs">
+                            {([['short_name', 'Short name'], ['name', 'Full name'], ['catalog', 'Catalog numbers'], ['max', 'Max per well (µL)'],
+                                ['working', 'Working (µL)'], ['dead', 'Dead volume (µL)'], ['depth', 'Well depth (mm)']] as [keyof PlateForm, string][]).map(([k, n]) =>
+                                <label key={k} className={`flex flex-col gap-1 ${k === 'name' ? 'col-span-2' : ''}`}><span className={muted}>{n}</span>
+                                    <input aria-label={`Plate ${n}`} className={field} value={String(form[k])} onChange={e => setForm({ ...form, [k]: e.target.value })} /></label>)}
+                        </div>
+                        <div className="mt-2.5 flex gap-2"><button type="button" className={primary} onClick={() => void savePlate()}>Save plate</button>
+                            <button type="button" className={ghost} onClick={() => setForm(null)}>Cancel</button></div>
+                    </div> : <div className="mb-3 flex items-center gap-3 text-xs text-[var(--text-secondary)]" data-testid="plate-details">
+                        <span>{(() => { const p = lib.find(x => x.id === current); const g = p?.vessel_geometry ?? {};
+                            return [g.max_volume_ul ? `${g.max_volume_ul} µL max` : null, g.working_volume_ul ? `${g.working_volume_ul} µL working` : null,
+                                p?.dead_volume_ul ? `${p.dead_volume_ul} µL dead` : null, g.well_depth_mm ? `${g.well_depth_mm} mm deep` : 'well depth not measured'].filter(Boolean).join(' · '); })()}</span>
+                        <button type="button" className={btn} disabled={!lib.some(x => x.id === current)} onClick={() => openForm(current)}>Edit details</button>
+                    </div>}
                     <div className={`${label} mb-2 mt-1`}>Gripper height · pick up and set down</div>
                     <div className="mb-4 grid grid-cols-3 gap-2.5">
                         {GRIP_STATIONS.map(([location, name]) => { const entry = plate?.gripper?.[location] ?? null; const base = zLow(location);

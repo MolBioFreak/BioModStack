@@ -12,7 +12,7 @@ const profiles = { plates: { [FAST]: { name: 'MicroAmp EnduraPlate Optical 96-We
     gripper: { LOC_P_MS: { z_low_offset_steps: -10236, source: 'titrated' } }, depth_offsets: [] } },
     loaded: { OUTPUT_PLATE: FAST }, stations: { LOC_MS: FAST },
     station_depth_offsets: [{ tip_type: 10, location: 'LOC_RC', offset_mm: 5.4, source: 'creep' }, { tip_type: 10, location: 'LOC_STRIP1', offset_mm: 1 }] };
-const library = { profiles: [{ id: FAST, short_name: 'EnduraPlate Fast 96', name: 'MicroAmp EnduraPlate Optical 96-Well Fast Clear Reaction Plate with Barcode (4483485)', vessel_geometry: { max_volume_ul: 200 } }] };
+const library = { profiles: [{ id: FAST, short_name: 'EnduraPlate Fast 96', name: 'MicroAmp EnduraPlate Optical 96-Well Fast Clear Reaction Plate with Barcode (4483485)', vessel_geometry: { max_volume_ul: 200, format: 'SBS 96' } }] };
 const calibration = { active_positions: [{ name: 'LOC_P_MS', zLow: 143882 }, { name: 'LOC_P_TC', zLow: 129851 }, { name: 'LOC_P_OC', zLow: 153750 }] };
 const depth = { max_mm: 15, entries: [], standard: [{ offset_mm: 0, label: 'None', source: 'x' }, { offset_mm: 5, label: '+5 mm', source: 'RC bottom' }] };
 async function tick() { await act(async () => { await new Promise(r => setTimeout(r, 20)); }); }
@@ -37,6 +37,7 @@ beforeEach(async () => {
         const ok = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config });
         if (config.url?.startsWith('/api/bioxp/plate-profiles')) return ok(profiles);
         if (config.url === '/api/bioxp/methods/plates') return ok(library);
+        if (config.url?.startsWith('/api/bioxp/methods/plate-profiles')) return ok({ id: 'rec-1', revision: 2 });
         if (config.url === '/api/bioxp/calibration-settings') return ok(calibration);
         if (config.url?.startsWith('/api/bioxp/depth-offsets')) return ok(depth);
         throw new Error(`unexpected ${config.method} ${config.url}`);
@@ -76,4 +77,19 @@ it('records gripper height, plate depth and station default without moving anyth
     expect(calls.filter(c => c.method === 'put' && c.url === '/api/bioxp/depth-offsets').at(-1)!.body)
         .toMatchObject({ location: 'LOC_OC', plate_type: null, offset_mm: 1.5 });
     expect(calls.some(c => /protocols|operator-controls|motion/.test(c.url))).toBe(false);
+});
+
+it('edits plate details and adds a plate through the plate library, without touching the robot', async () => {
+    await click(buttonIn(q('[data-testid="plate-details"]'), 'Edit details'));
+    expect((q('[aria-label="Plate Max per well (µL)"]') as HTMLInputElement).value).toBe('200');
+    await change('Plate Working (µL)', '100');
+    await click(buttonIn(q('[aria-label="Plate details"]'), 'Save plate'));
+    const saved = calls.find(c => c.method === 'post' && c.url === '/api/bioxp/methods/plate-profiles')!;
+    expect(saved.body.method.profile).toMatchObject({ id: FAST, vessel_geometry: { max_volume_ul: 200, working_volume_ul: 100 } });
+    await click(buttonIn(q('[aria-label="Plates"] [role="listbox"]'), '+ Add plate'));
+    await change('Plate Short name', 'Skirted PCR 96'); await change('Plate Max per well (µL)', '200');
+    await click(buttonIn(q('[aria-label="Plate details"]'), 'Save plate'));
+    const added = calls.filter(c => c.method === 'post' && c.url === '/api/bioxp/methods/plate-profiles').at(-1)!;
+    expect(added.body.method.profile).toMatchObject({ id: 'skirted-pcr-96', short_name: 'Skirted PCR 96', vessel_geometry: { max_volume_ul: 200, format: 'SBS 96' } });
+    expect(calls.some(c => /plate-profiles\/(gripper|station|loaded)|protocols|operator-controls/.test(c.url) && c.method !== 'get')).toBe(false);
 });
