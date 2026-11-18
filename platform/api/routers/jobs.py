@@ -5046,7 +5046,7 @@ async def submit_selected_child_jobs(
 @_guard_resequence_submission
 async def _create_prepared_child_batch(requests, background_tasks, session, experiment_session, *, native_job_kwargs=None):
     from services.global_experiments.launch_contexts import validate_prepared_child_job_request
-    from routers.project_manager import _project_bound_job
+    from services.global_experiments.launch_contexts import _project_bound_job
     pending = []
     # The incoming header describes the destination, not any child. Explicit
     # server-owned provenance below replaces that transport-only inheritance;
@@ -5247,7 +5247,7 @@ async def create_job(
                 if existing_job is not None:
                     await validate_bound_job(experiment_session, context, existing_job)
                     binding = json.loads(context.binding_receipt_json or "{}")
-                    from routers.project_manager import _project_bound_job
+                    from services.global_experiments.launch_contexts import _project_bound_job
                     await _project_bound_job(experiment_session, session, context, existing_job, binding)
                     await experiment_session.commit()
                     try:
@@ -5282,7 +5282,7 @@ async def create_job(
                     canonical_job_id=existing_job.id,
                     canonical_batch_id=None,
                 )
-                from routers.project_manager import _project_bound_job
+                from services.global_experiments.launch_contexts import _project_bound_job
                 await _project_bound_job(experiment_session, session, context, existing_job, binding)
                 await experiment_session.commit()
                 try:
@@ -5347,7 +5347,7 @@ async def create_job(
             canonical_job_id=str(response.id),
             canonical_batch_id=response.batch_id,
         )
-        from routers.project_manager import _project_bound_job
+        from services.global_experiments.launch_contexts import _project_bound_job
         created_job = await session.get(Job, str(response.id))
         if created_job is None:
             raise LaunchContextError("launch_context_job_unavailable", "Created Job cannot be projected.", status_code=409)

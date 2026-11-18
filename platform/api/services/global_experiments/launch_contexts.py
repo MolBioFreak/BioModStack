@@ -2076,3 +2076,180 @@ __all__ = [
     "validate_prepared_child_job_request",
     "workflow_pinned_gpu",
 ]
+
+
+def _bound_id(kind: str, launch_context_id: str) -> str:
+    return f"{kind}-{uuid.uuid5(uuid.UUID('ef4f2c67-07d4-4b70-8a1f-e6339288dbd0'), kind + ':' + launch_context_id)}"
+
+
+async def _project_bound_job(
+    session: AsyncSession,
+    core_session: AsyncSession,
+    context: ExperimentLaunchContext,
+    job: Job,
+    binding: dict[str, object],
+) -> dict[str, str]:
+    from database import Job
+    from experiment_models import (
+        ExperimentLineageEdge,
+        ExperimentRunGroupPreparation,
+        ExperimentWorkflowRevisionNode,
+    )
+    from experiment_services import ValidationFailure, derive_run_group_state, validate_preparation_authority
+    from services.global_experiments.workflow_setups import mark_workflow_setup_submitted
+    from services.ngs_molbio_run_control import require_launch_not_fenced
+    if context.contract_version != "2":
+        raise LaunchContextError(
+            "launch_context_version_read_only",
+            "Historical v1 launch contexts are display-only and cannot be projected.",
+            status_code=409,
+        )
+    if context.workflow_id is not None:
+        await mark_workflow_setup_submitted(
+            session, project_id=context.project_id, workflow_id=context.workflow_id
+        )
+    if context.contract_version == "2" and context.run_attempt_id:
+        attempt = await session.get(ExperimentRunAttempt, context.run_attempt_id)
+        run = await session.get(ExperimentWorkflowRun, attempt.workflow_run_id if attempt else "")
+        preparation = await session.get(
+            ExperimentWorkflowPreparation, attempt.preparation_id if attempt else ""
+        )
+        if (
+            attempt is None
+            or run is None
+            or preparation is None
+            or attempt.scheduler_job_id != job.id
+            or run.preparation_id != attempt.preparation_id
+            or context.preparation_id != attempt.preparation_id
+            or preparation.workspace_id != context.project_id
+            or preparation.workflow_revision_id != context.workflow_revision_id
+            or preparation.normalized_request_sha256 != context.normalized_request_sha256
+            or preparation.validation_status != "valid"
+        ):
+            raise ValidationFailure("prepared launch context does not bind this canonical Job")
+        await validate_preparation_authority(
+            session, preparation, core_session=core_session
+        )
+        attempt.external_binding_receipt_json = json.dumps(binding, sort_keys=True, separators=(",", ":"))
+        attempt.state = "dispatched"
+        run.state = "dispatched"
+        group = await session.get(ExperimentRunGroup, run.run_group_id)
+        if group is not None:
+            await require_launch_not_fenced(session, group.resource_id)
+            await session.flush()
+            group.state = await derive_run_group_state(session, run.run_group_id)
+            group.generation += 1
+            group.updated_at = datetime.now(timezone.utc).isoformat()
+        return {"workflow_run_id": run.resource_id, "run_group_id": run.run_group_id}
+    run_id = _bound_id("workflow-run", context.launch_context_id)
+    workflow_id = context.workflow_id or _bound_id("workflow", context.launch_context_id)
+    revision_id = context.workflow_revision_id or _bound_id("revision", context.launch_context_id)
+    is_native_rfd3 = job.model_id == "protein_local_redesign" and job.mode == "local_redesign"
+    native_preparation = None
+    if is_native_rfd3:
+        if not context.preparation_id:
+            raise ValidationFailure("native RFD3 launch context has no immutable preparation")
+        native_preparation = await session.get(
+            ExperimentWorkflowPreparation, context.preparation_id
+        )
+        if (
+            native_preparation is None
+            or native_preparation.workspace_id != context.project_id
+            or native_preparation.workflow_revision_id != context.workflow_revision_id
+            or native_preparation.normalized_request_sha256 != context.normalized_request_sha256
+            or native_preparation.validation_status != "valid"
+        ):
+            raise ValidationFailure("native RFD3 launch context preparation authority is invalid")
+        await validate_preparation_authority(
+            session, native_preparation, core_session=core_session
+        )
+    existing = await session.get(ExperimentWorkflowRun, run_id)
+    if existing is not None:
+        return {"workflow_run_id": existing.resource_id, "run_group_id": existing.run_group_id}
+    timestamp = datetime.now(timezone.utc).isoformat()
+    adapter_id = f"bms.core-job.{job.model_id}.adapter.v1"
+    if context.workflow_id is None:
+        projected_params = {**(job.params or {}), "workflow_adapter": adapter_id}
+        scheduler: dict[str, object] = {
+            "name": job.name,
+            "model_id": job.model_id,
+            "mode": job.mode,
+            "params": projected_params,
+        }
+        if job.model_id == "protein_local_redesign" and job.pinned_gpu is not None:
+            scheduler["resources"] = {"pinned_gpu": job.pinned_gpu}
+        payload = {"schema": "bms.workflow.generic.v1", "workflow_family": "typed_core_job", "contract_version": "1", "adapter_id": adapter_id, "nodes": [{"id": "bound-job", "kind": "bound_core_job", "required": True}], "edges": [], "parameters": {"canonical_job_id": job.id, "params_sha256": hashlib.sha256(json.dumps(projected_params, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}, "scheduler": scheduler}
+        canonical_payload = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        session.add_all([
+            ExperimentResource(id=workflow_id, kind="workflow", workspace_id=context.project_id, lifecycle_owner_id=context.domain_experiment_id, created_at=timestamp),
+            ExperimentResource(id=revision_id, kind="revision", workspace_id=context.project_id, lifecycle_owner_id=workflow_id, created_at=timestamp),
+            ExperimentRevision(resource_id=revision_id, subject_id=workflow_id, revision_number=1, schema_name=payload["schema"], schema_version="1", canonical_payload=canonical_payload, payload_sha256=hashlib.sha256(canonical_payload.encode()).hexdigest(), dependency_graph_sha256=hashlib.sha256(b"[]").hexdigest(), provenance_json=json.dumps({"source": "launch_context_binding"}), created_at=timestamp),
+        ])
+        await session.flush()
+        session.add_all([
+            ExperimentAggregateHead(aggregate_id=workflow_id, aggregate_kind="workflow", workspace_id=context.project_id, parent_id=context.domain_experiment_id, current_revision_id=revision_id, head_generation=1, lifecycle_state="active", display_name=f"{job.name} plan", description="Server-projected typed Job plan", created_at=timestamp, updated_at=timestamp),
+            ExperimentWorkflowRevisionNode(revision_id=revision_id, ordinal=0, node_id="bound-job", node_kind="bound_core_job", node_json=json.dumps(payload["nodes"][0], sort_keys=True, separators=(",", ":"))),
+            ExperimentLineageEdge(id=_bound_id("lineage", context.launch_context_id), workspace_id=context.project_id, source_resource_id=context.domain_experiment_id, target_resource_id=workflow_id, edge_mode="owns", edge_key=f"owns:{context.domain_experiment_id}:{workflow_id}", metadata_json="{}", created_at=timestamp),
+        ])
+    preparation_id = (
+        native_preparation.resource_id
+        if native_preparation is not None
+        else _bound_id("preparation", context.launch_context_id)
+    )
+    run_group_id = _bound_id("run-group", context.launch_context_id)
+    attempt_id = _bound_id("attempt", context.launch_context_id)
+    projected_resources = [
+        (run_group_id, "run_group", workflow_id),
+        (run_id, "workflow_run", workflow_id),
+        (attempt_id, "run_attempt", run_id),
+    ]
+    if native_preparation is None:
+        projected_resources.insert(0, (preparation_id, "workflow_preparation", workflow_id))
+    for resource_id, kind, owner in projected_resources:
+        session.add(ExperimentResource(id=resource_id, kind=kind, workspace_id=context.project_id, lifecycle_owner_id=owner, created_at=timestamp))
+    await session.flush()
+    status_value = str(job.status).lower()
+    run_state = "completed" if status_value in {"completed", "succeeded"} else "failed" if status_value == "failed" else "cancelled" if status_value in {"cancelled", "canceled"} else "running" if status_value == "running" else "dispatched"
+    request_payload = {
+        "canonical_job_id": job.id,
+        "model_id": job.model_id,
+        "mode": job.mode,
+        "params_sha256": hashlib.sha256(
+            json.dumps(job.params or {}, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }
+    if job.model_id == "protein_local_redesign":
+        request_payload["pinned_gpu"] = job.pinned_gpu
+    request_json = json.dumps(request_payload, sort_keys=True, separators=(",", ":"))
+    request_sha256 = (
+        native_preparation.normalized_request_sha256
+        if native_preparation is not None
+        else hashlib.sha256(request_json.encode()).hexdigest()
+    )
+    if native_preparation is None:
+        session.add(
+            ExperimentWorkflowPreparation(resource_id=preparation_id, workspace_id=context.project_id, workflow_revision_id=revision_id, normalized_request_json=request_json, normalized_request_sha256=request_sha256, scheduler_payload_json=request_json, validation_status="valid", validation_receipt_json=json.dumps({"schema": "bms.bound-job-preparation.v1", "verified": True}), expected_cardinality=1, created_at=timestamp, prepared_at=timestamp)
+        )
+    session.add(
+        ExperimentRunGroup(resource_id=run_group_id, workspace_id=context.project_id, launch_idempotency_key=f"launch-context:{context.launch_context_id}", request_sha256=request_sha256, state=run_state, generation=1, created_at=timestamp, updated_at=timestamp)
+    )
+    await session.flush()
+    session.add_all([
+        ExperimentRunGroupPreparation(run_group_id=run_group_id, preparation_id=preparation_id, ordinal=0),
+        ExperimentWorkflowRun(resource_id=run_id, workspace_id=context.project_id, run_group_id=run_group_id, preparation_id=preparation_id, node_id="bound-job", requiredness="required", state=run_state, generation=1, created_at=timestamp),
+    ])
+    await session.flush()
+    runtime_identity = {
+        "canonical_job_id": job.id,
+        "model_id": job.model_id,
+        "mode": job.mode,
+    }
+    if job.model_id == "protein_local_redesign":
+        runtime_identity["pinned_gpu"] = job.pinned_gpu
+    session.add_all([
+        ExperimentRunAttempt(resource_id=attempt_id, workspace_id=context.project_id, workflow_run_id=run_id, preparation_id=preparation_id, attempt_number=1, scheduler_job_id=job.id, state=run_state, external_binding_receipt_json=json.dumps(binding, sort_keys=True, separators=(",", ":")), runtime_identity_json=json.dumps(runtime_identity, sort_keys=True, separators=(",", ":")), created_at=timestamp),
+        ExperimentLineageEdge(id=_bound_id("launched", context.launch_context_id), workspace_id=context.project_id, source_resource_id=workflow_id, target_resource_id=run_id, edge_mode="produces", edge_key=f"produces:{workflow_id}:{run_id}", metadata_json=json.dumps({"canonical_job_id": job.id}), created_at=timestamp),
+        ExperimentAuditEvent(id=_bound_id("audit", context.launch_context_id), workspace_id=context.project_id, resource_id=run_id, event_type="launch_context_job_bound", generation=1, payload_json=json.dumps({"canonical_job_id": job.id, "launch_context_id": context.launch_context_id}), created_at=timestamp),
+    ])
+    await session.flush()
+    return {"workflow_run_id": run_id, "run_group_id": run_group_id}

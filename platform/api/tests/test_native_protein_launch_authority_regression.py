@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from experiment_models import ExperimentWorkflowPreparation, ExperimentLaunchContext
 from experiment_services import validate_preparation_authority, ValidationFailure
 from routers import project_manager as pm
+from services.global_experiments import launch_contexts
 from services.global_experiments.launch_contexts import validate_bound_job_request
 from test_project_workflow_setups import setup_store, _project_payload
 
@@ -358,7 +359,7 @@ async def test_native_terminal_state_is_not_gated_on_missing_accounting(
         context, binding = await consume_launch_context(session,
             launch_context_id=context.launch_context_id, claim_token=token,
             canonical_job_id=job.id, canonical_batch_id=None)
-        await pm._project_bound_job(session, core, context, job, binding)
+        await launch_contexts._project_bound_job(session, core, context, job, binding)
         group = await reconcile_run_group(session, core, project_id, group_doc['run_group_id'])
         attempt = await session.get(ExperimentRunAttempt, attempt_doc['attempt_id'])
         assert group.state == attempt.state == status
