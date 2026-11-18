@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, ExecutionTarget, Job, get_session
-from routers import jobs
+from routers import job_results, jobs
 from services import job_submission
 from services import job_readback
 from services.remote_execution import bundle
@@ -27,7 +27,7 @@ async def store(tmp_path, monkeypatch):
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
+    monkeypatch.setattr(job_submission, 'get_results_dir', lambda: tmp_path / 'results')
     monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda *_: None)
     monkeypatch.setattr(bundle, 'current_source_identity', lambda: ('a' * 40, 'b' * 40))
     app = FastAPI()
@@ -170,7 +170,7 @@ async def test_explicit_review_retrieval_uses_only_checkpoint_files(store, monke
         target.parent.mkdir(parents=True)
         target.write_bytes(data)
     monkeypatch.setattr(executor, 'rsync_selected_from_remote', transfer)
-    monkeypatch.setattr(jobs, 'to_allowed_relative', lambda path: str(path))
+    monkeypatch.setattr(job_results, 'to_allowed_relative', lambda path: str(path))
     monkeypatch.setattr(job_readback, 'to_allowed_relative', lambda path: str(path))
     assert (await client.get('/jobs/source/structure-files')).status_code == 200
     assert not copied
