@@ -479,7 +479,7 @@ def test_structure_validation_consumes_exact_hashed_bytes(tmp_path, monkeypatch)
 
 
 def test_current_producer_empty_declaration_is_discovered(tmp_path):
-    from services.result_ingester import _resolve_esmfold2_final_root
+    from services.esmfold2_scientific_consumer import _resolve_esmfold2_final_root
     root = artifacts(tmp_path, ids=())
     assert _resolve_esmfold2_final_root(tmp_path) == root
 

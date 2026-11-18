@@ -1766,39 +1766,6 @@ def _resolve_existing_child_path(root: Path, raw_path: Any) -> Optional[Path]:
     return candidate if candidate.exists() else None
 
 
-def _resolve_esmfold2_final_root(output_path: Path) -> Optional[Path]:
-    esmfold2_root = output_path / "final" / "esmfold2"
-    # The workflow publishes single-sequence jobs under
-    # final/esmfold2/<sequence_name>/esmfold2_results. Keep the older aggregate
-    # directory candidates for backward compatibility, but discover only the
-    # bounded one-level sequence namespace rather than recursively scanning the
-    # job root.
-    sequence_roots = (
-        sorted(esmfold2_root.glob("*/esmfold2_results"))
-        if esmfold2_root.is_dir()
-        else []
-    )
-    candidates = [
-        esmfold2_root / "esmfold2_results",
-        *sequence_roots,
-        esmfold2_root,
-        output_path / "esmfold2_results",
-        output_path / "pdb_files" / "esmfold2_results",
-        output_path,
-    ]
-    for candidate in candidates:
-        if not candidate.exists():
-            continue
-        manifest = _load_json_any(candidate / "manifest.json")
-        if isinstance(manifest, dict) and str(manifest.get("workflow") or "").strip().lower() in {"esmfold2", "esmfold2_experimental"}:
-            return candidate
-        if any(candidate.glob("*.metrics.json")) and (
-            any(candidate.glob("*.cif")) or any(candidate.glob("*.mmcif")) or any(candidate.glob("*.pdb"))
-        ):
-            return candidate
-    return None
-
-
 def _esmfold2_sample_entries(final_root: Path, manifest_payload: Any) -> List[Dict[str, Any]]:
     if isinstance(manifest_payload, dict) and isinstance(manifest_payload.get("samples"), list):
         return [entry for entry in manifest_payload["samples"] if isinstance(entry, dict)]
@@ -1872,6 +1839,7 @@ async def ingest_esmfold2_results(
     with session.no_autoflush:
         persisted_job = await session.get(Job, job_id)
     strict = revision_for_job(persisted_job) == 1
+    from services.esmfold2_scientific_consumer import _resolve_esmfold2_final_root
     final_root = _resolve_esmfold2_final_root(output_path)
     if final_root is None:
         if strict:

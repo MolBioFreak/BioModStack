@@ -65,7 +65,7 @@ def _write_minimal_esmfold2_cif(path: Path) -> None:
 
 
 def test_esmfold2_result_root_resolves_sequence_scoped_publish_dir(tmp_path: Path) -> None:
-    from services.result_ingester import _resolve_esmfold2_final_root
+    from services.esmfold2_scientific_consumer import _resolve_esmfold2_final_root
 
     output_root = tmp_path / "structure-job"
     final_root = output_root / "final" / "esmfold2" / "1UBQ" / "esmfold2_results"

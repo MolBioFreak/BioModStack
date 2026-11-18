@@ -45,6 +45,42 @@ def canonical_bytes(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
 
 
+def _resolve_esmfold2_final_root(output_path):
+    esmfold2_root = output_path / "final" / "esmfold2"
+    # The workflow publishes single-sequence jobs under
+    # final/esmfold2/<sequence_name>/esmfold2_results. Keep the older aggregate
+    # directory candidates for backward compatibility, but discover only the
+    # bounded one-level sequence namespace rather than recursively scanning the
+    # job root.
+    sequence_roots = (
+        sorted(esmfold2_root.glob("*/esmfold2_results"))
+        if esmfold2_root.is_dir()
+        else []
+    )
+    candidates = [
+        esmfold2_root / "esmfold2_results",
+        *sequence_roots,
+        esmfold2_root,
+        output_path / "esmfold2_results",
+        output_path / "pdb_files" / "esmfold2_results",
+        output_path,
+    ]
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            manifest = json.loads((candidate / "manifest.json").read_text())
+        except Exception:
+            manifest = None
+        if isinstance(manifest, dict) and str(manifest.get("workflow") or "").strip().lower() in {"esmfold2", "esmfold2_experimental"}:
+            return candidate
+        if any(candidate.glob("*.metrics.json")) and (
+            any(candidate.glob("*.cif")) or any(candidate.glob("*.mmcif")) or any(candidate.glob("*.pdb"))
+        ):
+            return candidate
+    return None
+
+
 async def _verified_publication(job_id, session):
     """Verify one Job's whole publication once; callers select from it."""
     from paths import get_data_root, resolve_runtime_data_path
@@ -57,7 +93,6 @@ async def _verified_publication(job_id, session):
             raise ValueError('missing_producer_publication_root')
         root = Path(job.output_dir)
         root = resolve_runtime_data_path(root) if root.is_absolute() else get_data_root() / root
-        from services.result_ingester import _resolve_esmfold2_final_root
         root = _resolve_esmfold2_final_root(root)
         if root is None:
             raise ValueError('missing_producer_publication_root')
