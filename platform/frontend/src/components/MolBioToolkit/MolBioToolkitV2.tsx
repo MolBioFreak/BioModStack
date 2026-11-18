@@ -26,7 +26,6 @@ import {
     type RestrictionSource,
 } from '../../lib/restrictionAnalysis';
 import { SequenceViewer, type ColorPaletteName } from './SequenceViewer';
-import { DEFAULT_MAPPED_ENZYMES } from './utils/restrictionLabels';
 import { DEFAULT_VISIBILITY } from './sequenceViewerConstants';
 import { ProjectAttachmentDialog, type ProjectAttachmentSource } from '../project-manager/ProjectAttachmentDialog';
 import { MOLECULAR_MEMBER_ADAPTER } from '../../lib/molecularProjectMembership';
@@ -41,6 +40,7 @@ import {
 import { VisibilityPanel } from './VisibilityPanel';
 import { createHistoryState, reconcileSavedHistory, useSequenceHistory, type HistoryState } from './hooks/useSequenceHistory';
 import { useSequenceOperations } from './hooks/useSequenceOperations';
+import { useRestrictionDisplay } from './hooks/useRestrictionDisplay';
 import { FragmentChooser, fragmentFromRevision, loadChooserFragment } from './FragmentChooser';
 import { fetchCurrentRevisionRef, type CurrentRevisionRef } from './utils/currentRevision';
 import { AlignmentPanel, AssemblyPanel, DigestPanel, HistoryPanel, PCRPanel, PrimerPanel, RnaStructurePanel, FeaturePanel, EditPanel, SearchPanel } from './panels';
@@ -722,7 +722,7 @@ export function MolBioToolkitV2() {
         setShowInputModal(true);
         updateQueryParams({ action: null }, { replace: true });
     }, [queryParams, updateQueryParams]);
-    const [visibility, setVisibility] = useState<VisibilityState>(DEFAULT_VISIBILITY);
+    const [annotationVisibility, setAnnotationVisibility] = useState<VisibilityState>(DEFAULT_VISIBILITY);
     const [activePanel, setActivePanel] = useState<ActivePanel>('view');
     const [selection, setSelection] = useState<SelectionInfo | null>(null);
     const [quickAddMenu, setQuickAddMenu] = useState<QuickAddMenuState | null>(null);
@@ -749,10 +749,6 @@ export function MolBioToolkitV2() {
     const [demoLoading, setDemoLoading] = useState(true);
     const [demoRequested, setDemoRequested] = useState(false);
     const requestDemos = useCallback(() => setDemoRequested(true), []);
-    // Enzymes currently displayed on the viewer - controlled by DigestPanel
-    const [selectedEnzymes, setSelectedEnzymes] = useState<string[]>([...DEFAULT_MAPPED_ENZYMES]);
-    const [groupSameSiteLabels, setGroupSameSiteLabels] = useState(true);
-
     // History hook for undo/redo
     const {
         sequenceData,
@@ -782,6 +778,15 @@ export function MolBioToolkitV2() {
         () => workspaceTabs.find((tab) => tab.id === activeWorkspaceId) ?? null,
         [activeWorkspaceId, workspaceTabs],
     );
+    const { display: restrictionDisplay, updateDisplay: updateRestrictionDisplay, retainDraftDisplay } =
+        useRestrictionDisplay(activeWorkspaceId, activeWorkspace?.sequenceId ?? null);
+    const { selectedEnzymes, cutSitesVisible, groupSameSiteLabels } = restrictionDisplay;
+    const visibility = useMemo(() => ({ ...annotationVisibility, cutsites: cutSitesVisible }),
+        [annotationVisibility, cutSitesVisible]);
+    const setSelectedEnzymes = useCallback((ids: string[]) => updateRestrictionDisplay({ selectedEnzymes: ids }),
+        [updateRestrictionDisplay]);
+    const setGroupSameSiteLabels = useCallback((group: boolean) => updateRestrictionDisplay({ groupSameSiteLabels: group }),
+        [updateRestrictionDisplay]);
     const workspaceStateRef = useRef({ activeWorkspaceId, historyState, workspaceTabs });
     workspaceStateRef.current = { activeWorkspaceId, historyState, workspaceTabs };
     const captureEditableOwner = useCallback(() => {
@@ -1773,6 +1778,7 @@ export function MolBioToolkitV2() {
         // Preserve edits made after submission. The response advances only saved identity.
         const savedHistory = reconcileSavedHistory(targetHistory, latestHistory, savedData);
         const stableWorkspaceId = molecularWorkspaceId(savedRecord.id);
+        if (!latestTab.sequenceId) retainDraftDisplay(workspaceId, savedRecord.id);
         setWorkspaceTabs((current) => current.map((tab) => tab.id === workspaceId
             ? { ...tab, id: stableWorkspaceId, sequenceId: savedRecord.id,
                 title: savedHistory.present.name || tab.title, dirty: !unchanged,
@@ -1787,7 +1793,7 @@ export function MolBioToolkitV2() {
         void loadLibrary();
         // A transition must not discard edits which were not part of this save.
         return unchanged;
-    }, [activeWorkspaceId, createSequence, historyState, hydrate, loadLibrary, sequenceData, updateSequence, workspaceTabs]);
+    }, [activeWorkspaceId, createSequence, historyState, hydrate, loadLibrary, retainDraftDisplay, sequenceData, updateSequence, workspaceTabs]);
 
     useEffect(() => {
         projectAttachmentRequestRef.current += 1;
@@ -2026,14 +2032,16 @@ export function MolBioToolkitV2() {
 
     // Visibility toggle handler
     const handleVisibilityChange = useCallback((key: keyof VisibilityState) => {
-        setVisibility(prev => ({ ...prev, [key]: !prev[key] }));
-    }, []);
+        if (key === 'cutsites') {
+            updateRestrictionDisplay({ cutSitesVisible: !cutSitesVisible });
+            return;
+        }
+        setAnnotationVisibility(prev => ({ ...prev, [key]: !prev[key] }));
+    }, [cutSitesVisible, updateRestrictionDisplay]);
 
     const ensureCutSitesVisible = useCallback(() => {
-        setVisibility((previous) => (
-            previous.cutsites ? previous : { ...previous, cutsites: true }
-        ));
-    }, []);
+        updateRestrictionDisplay({ cutSitesVisible: true });
+    }, [updateRestrictionDisplay]);
 
     // SequenceViewer emits one finalized value per pointer gesture.
     const handleSelection = useCallback((sel: SelectionInfo) => {
@@ -3390,6 +3398,7 @@ export function MolBioToolkitV2() {
                 )}
                 digest={(
                     <DigestPanel
+                        key={activeWorkspaceId}
                         onUseInAssembly={fragments => { setDigestAssemblyFragments(fragments); setActivePanel('assembly'); }}
                         mobile
                         compactLandscape={viewportWidth > viewportHeight && viewportHeight <= 500}
@@ -3944,6 +3953,7 @@ export function MolBioToolkitV2() {
                         )}
                         {activePanel === 'digest' && (
                             <DigestPanel
+                                key={activeWorkspaceId}
                                 onUseInAssembly={fragments => { setDigestAssemblyFragments(fragments); setActivePanel('assembly'); }}
                                 sequenceData={sequenceData}
                                 sequenceId={selectedSequenceId}
