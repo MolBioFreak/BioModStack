@@ -30,7 +30,7 @@ async def selected(tmp_path, monkeypatch, setup_store):
     import paths
     monkeypatch.setattr(paths, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(paths, 'get_results_dir', lambda: tmp_path / 'results')
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
     monkeypatch.setattr(jobs, '_resolve_design_structure_path', lambda path: Path(path))
@@ -238,7 +238,7 @@ def test_cif_snapshot_preserves_native_and_representable_insertion(tmp_path, mon
     writer = MMCIFIO()
     writer.set_structure(PDBParser(QUIET=True).get_structure('test', pdb))
     writer.save(str(cif))
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(jobs, '_resolve_design_structure_path', lambda path: Path(path))
     monkeypatch.setattr(binder_continuation, '_resolve_design_structure_path', lambda path: Path(path))

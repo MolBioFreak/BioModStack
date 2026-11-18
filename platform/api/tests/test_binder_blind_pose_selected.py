@@ -46,10 +46,10 @@ async def test_selected_remote_route_review_and_approved_insertion(admission, tm
     candidate, _ = example(tmp_path)
     target = tmp_path / 'target.pdb'
     target.write_text(pdb('A', ['ALA', 'GLY']))
-    for owner in (paths, jobs, job_requests, selected, interface):
+    for owner in (paths, job_submission, job_requests, selected, interface):
         monkeypatch.setattr(owner, 'get_allowed_roots', lambda: {'inputs': tmp_path})
     from services import binder_continuation
-    for owner in (paths, jobs, binder_continuation, selected, route, publication):
+    for owner in (paths, job_submission, binder_continuation, selected, route, publication):
         monkeypatch.setattr(owner, 'get_inputs_dir', lambda: tmp_path)
     monkeypatch.setattr(paths, 'get_results_dir', lambda: tmp_path / 'results')
     parent = Job(id='source', name='source', model_id='proteinmpnn', mode='default',

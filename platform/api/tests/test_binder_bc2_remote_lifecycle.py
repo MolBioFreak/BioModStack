@@ -33,7 +33,8 @@ async def remote_action(tmp_path, monkeypatch):
         pytest.skip('installed pinned BC2 settings compiler image unavailable')
     setup(tmp_path, monkeypatch, launch._native_compile)
     import paths
-    for owner in (paths, jobs):
+    from services import job_submission
+    for owner in (paths, job_submission):
         monkeypatch.setattr(owner, 'get_results_dir', lambda: tmp_path)
         monkeypatch.setattr(owner, 'get_data_root', lambda: tmp_path)
         monkeypatch.setattr(owner, 'get_inputs_dir', lambda: tmp_path)

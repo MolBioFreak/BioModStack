@@ -175,7 +175,7 @@ def native_client(native_files, tmp_path, monkeypatch):
     import paths
     roots = {"inputs": native_files, "bms_results": tmp_path / "results"}
     monkeypatch.setattr(paths, "get_allowed_roots", lambda: roots)
-    monkeypatch.setattr(jobs, "get_allowed_roots", lambda: roots, raising=False)
+    monkeypatch.setattr(job_submission, "get_allowed_roots", lambda: roots, raising=False)
     monkeypatch.setattr(job_requests, "get_allowed_roots", lambda: roots, raising=False)
     app = FastAPI()
     app.include_router(molecular_dynamics.router)
@@ -249,7 +249,7 @@ async def test_native_launch_reaches_real_job_create_and_scratch_persistence(nat
     results.mkdir()
     roots = {"inputs": native_files, "bms_results": results}
     monkeypatch.setattr(paths, "get_allowed_roots", lambda: roots)
-    monkeypatch.setattr(jobs, "get_allowed_roots", lambda: roots, raising=False)
+    monkeypatch.setattr(job_submission, "get_allowed_roots", lambda: roots, raising=False)
     monkeypatch.setattr(job_requests, "get_allowed_roots", lambda: roots, raising=False)
     monkeypatch.setattr(jobs, "get_results_dir", lambda: results)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())

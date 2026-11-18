@@ -13,6 +13,7 @@ from sqlalchemy import select
 from database import Job, Design, ExecutionTarget, get_session
 from experiment_database import get_experiment_session
 from routers import jobs, files
+from services import job_submission
 from services import binder_continuation
 from services import job_control
 from services import job_requests
@@ -30,9 +31,9 @@ async def api(stores, monkeypatch):
     roots = {'inputs': root / 'inputs', 'bms_results': root / 'results'}
     monkeypatch.setattr(paths, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: roots)
-    monkeypatch.setattr(jobs, 'get_allowed_roots', lambda: roots)
+    monkeypatch.setattr(job_submission, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(job_requests, 'get_allowed_roots', lambda: roots)
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: root / 'inputs')
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: root / 'inputs')
     monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: root / 'inputs')
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: root / 'results')
     app = FastAPI()

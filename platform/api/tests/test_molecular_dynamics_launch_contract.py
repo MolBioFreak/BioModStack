@@ -37,9 +37,10 @@ def _install_allowed_roots(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
         allowed_root.mkdir(parents=True, exist_ok=True)
     paths_module = importlib.import_module("paths")
     jobs_module = importlib.import_module("routers.jobs")
+    from services import job_submission
     from services import job_requests
     monkeypatch.setattr(paths_module, "get_allowed_roots", lambda: roots)
-    monkeypatch.setattr(jobs_module, "get_allowed_roots", lambda: roots, raising=False)
+    monkeypatch.setattr(job_submission, "get_allowed_roots", lambda: roots, raising=False)
     monkeypatch.setattr(job_requests, "get_allowed_roots", lambda: roots, raising=False)
 
 

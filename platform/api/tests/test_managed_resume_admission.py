@@ -17,7 +17,7 @@ def resume_paths(tmp_path, monkeypatch):
     retained = root / 'retained'
     retained.mkdir()
     (retained / 'result.txt').write_text('retained evidence')
-    monkeypatch.setattr(jobs, 'get_results_dir', lambda: root)
+    monkeypatch.setattr(job_submission, 'get_results_dir', lambda: root)
     return root, retained
 
 

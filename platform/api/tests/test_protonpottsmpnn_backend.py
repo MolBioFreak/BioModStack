@@ -85,7 +85,7 @@ async def test_discovery_returns_canonical_nested_schema():
 
 @pytest.mark.asyncio
 async def test_selected_non_antibody_route_actual_child_insertion_explicit_local(admission, target, monkeypatch):
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: target.parent)
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: target.parent)
     monkeypatch.setattr(binder_continuation_service, 'get_inputs_dir', lambda: target.parent)
     parent = Job(id='generic-source', name='generic source', model_id='proteinmpnn', mode='design', status='completed',
         execution_target_id='archived-worker', params={}, provenance={})

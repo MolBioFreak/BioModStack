@@ -29,9 +29,9 @@ def inputs(tmp_path, monkeypatch):
     target.write_text('REMARK non-science transport target\nEND\n')
     framework.write_text('REMARK non-science transport framework\nEND\n')
     results = tmp_path / 'results'
-    monkeypatch.setattr(jobs, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': results})
+    monkeypatch.setattr(job_submission, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': results})
     monkeypatch.setattr(job_requests, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': results})
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: root)
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: root)
     monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: root)
     import paths
     monkeypatch.setattr(paths, 'get_results_dir', lambda: results)

@@ -183,7 +183,7 @@ async def test_custom_actions_prepare_once_before_review(admission, tmp_path, mo
     inputs.mkdir()
     pdb = inputs / 'source.pdb'
     pdb.write_bytes((Path(__file__).parent / 'fixtures/md/1AKI.pdb').read_bytes())
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: inputs)
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: inputs)
     monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: inputs)
     monkeypatch.setattr('paths.get_inputs_dir', lambda: inputs)
     monkeypatch.setattr(jobs, '_resolve_design_structure_path', lambda value: Path(value))

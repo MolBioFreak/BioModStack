@@ -41,7 +41,7 @@ async def test_approved_prepared_directory_reaches_real_bundle(
     monkeypatch.setattr("services.remote_execution.critical_runtime.selected_support_root", lambda: receipt_payload)
     session, tasks = admission, BackgroundTasks()
     roots = {'inputs': target.parent, 'results': tmp_path / 'results'}
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: roots['inputs'])
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: roots['inputs'])
     monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: roots['inputs'])
     capabilities = {
         'critical_runtime_binding': {'paths': {'python': '/fixture/runtime/python/bin/python',

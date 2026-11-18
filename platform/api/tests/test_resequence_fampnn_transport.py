@@ -49,7 +49,7 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
     roots = {'inputs': inputs, 'bms_results': tmp_path / 'results'}
     for module in (paths, files, jobs, job_requests):
         monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: inputs)
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: inputs)
     monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: inputs)
     selected = inputs / 'design_selections' / 'protein_local_redesign' / 'selection'; selected.mkdir(parents=True)
     sources = []

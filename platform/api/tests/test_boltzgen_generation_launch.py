@@ -25,7 +25,7 @@ def target(tmp_path, monkeypatch):
     root.mkdir()
     path = root / 'target.pdb'
     _write_pdb(path, 'A', [1, 2, 3])
-    monkeypatch.setattr(jobs, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': tmp_path / 'results'})
+    monkeypatch.setattr(job_submission, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': tmp_path / 'results'})
     monkeypatch.setattr(job_requests, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': tmp_path / 'results'})
     import paths
     monkeypatch.setattr(paths, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': tmp_path / 'results'})

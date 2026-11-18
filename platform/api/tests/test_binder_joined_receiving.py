@@ -145,7 +145,7 @@ async def test_actual_join_offline_retry_sources(store, tmp_path, monkeypatch, m
     monkeypatch.setattr('services.nextflow.launch_nextflow_job', forbidden)
     monkeypatch.setattr('services.result_state_integrity.finalize_successful_job', forbidden)
     monkeypatch.setattr(materializer, 'to_allowed_relative', str)
-    monkeypatch.setattr('routers.jobs.get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr('services.job_submission.get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr('services.binder_continuation.get_inputs_dir', lambda: tmp_path / 'inputs')
 
     # The old unjoined helper rejects this actual archive before any publication.

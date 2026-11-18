@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Design, Job
 from routers import jobs
+from services import job_submission
 from services import binder_continuation
 from services.binder_continuation import resolve_selection, snapshot_selection
 from services.result_state_integrity import finalize_successful_job
@@ -31,7 +32,7 @@ def script(name):
 
 @pytest_asyncio.fixture
 async def store(tmp_path, monkeypatch):
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
     monkeypatch.setattr(jobs, '_resolve_design_structure_path', lambda path: Path(path))

@@ -77,13 +77,13 @@ async def test_real_create_job_v2_reserves_descendants_and_initializes(store, tm
     from services.md import launch_contract
     monkeypatch.setattr(launch_contract, '_bound_engine_runtime_identity',
         lambda: {'image_name': 'gromacs.sif', 'sif_sha256': 'a' * 64})
-    monkeypatch.setattr(jobs, 'require_molecular_dynamics_feature', lambda _: None)
+    monkeypatch.setattr(job_submission, 'require_molecular_dynamics_feature', lambda _: None)
     monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda _: None)
     monkeypatch.setattr(jobs, 'get_registry', _AcceptingRegistry)
     monkeypatch.setattr(job_requests, 'get_registry', _AcceptingRegistry)
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
     monkeypatch.setattr(job_requests, 'normalize_md_job_spec', lambda **kw: normalize_md_job_spec(**kw, chemistry_catalog=catalog))
-    monkeypatch.setattr(jobs, 'materialize_md_job_spec', lambda **kw: materialize_md_job_spec(**kw, chemistry_catalog=catalog))
+    monkeypatch.setattr(job_submission, 'materialize_md_job_spec', lambda **kw: materialize_md_job_spec(**kw, chemistry_catalog=catalog))
     request = spec()
     async with store() as session:
         response = await jobs.create_job(JobCreate(name='md-resource-root', model_id='molecular_dynamics',
@@ -107,15 +107,15 @@ async def test_accepted_v1_caller_hands_unchanged_normalized_request_to_existing
     request = spec()
     request['schema'] = 'bms.md.job.v1'
     request.pop('chemistry')
-    monkeypatch.setattr(jobs, 'require_molecular_dynamics_feature', lambda _: None)
+    monkeypatch.setattr(job_submission, 'require_molecular_dynamics_feature', lambda _: None)
     monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda _: None)
     monkeypatch.setattr(jobs, 'get_registry', _AcceptingRegistry)
     monkeypatch.setattr(job_requests, 'get_registry', _AcceptingRegistry)
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
     monkeypatch.setattr(job_requests, 'normalize_md_job_spec', lambda **kw: kw['params']['md_job_spec'])
-    monkeypatch.setattr(jobs, 'materialize_md_job_spec', lambda **kw: dict(kw['params']))
+    monkeypatch.setattr(job_submission, 'materialize_md_job_spec', lambda **kw: dict(kw['params']))
     initialize = AsyncMock()
-    monkeypatch.setattr(jobs, 'create_md_run', initialize)
+    monkeypatch.setattr(job_submission, 'create_md_run', initialize)
     async with store() as session:
         await jobs.create_job(JobCreate(name='accepted-legacy-caller', model_id='molecular_dynamics',
             mode='simulate', params={'md_job_spec': request}), BackgroundTasks(), session, experiment_session=None)

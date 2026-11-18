@@ -1325,15 +1325,15 @@ async def test_canonical_job_wrapper_binds_trusted_md_seams_by_behavior(
         calls.append("materialize")
         raise _BindingProbe("trusted MD seams reached materialization")
 
-    monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
+    monkeypatch.setattr(job_submission, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: results_root)
-    monkeypatch.setattr(jobs, "_resolve_md_input_path_for_runtime", generic_resolver)
+    monkeypatch.setattr(job_submission, "_resolve_md_input_path_for_runtime", generic_resolver)
     monkeypatch.setattr(job_requests, "_resolve_md_input_path_for_runtime", generic_resolver)
     monkeypatch.setattr(job_requests, "normalize_md_job_spec", normalize)
-    monkeypatch.setattr(jobs, "materialize_md_job_spec", materialize)
+    monkeypatch.setattr(job_submission, "materialize_md_job_spec", materialize)
     monkeypatch.setattr(gpu_orchestrator, "estimate_vram", lambda *_args, **_kwargs: 0)
 
     with pytest.raises(_BindingProbe, match="trusted MD seams"):
@@ -1397,15 +1397,15 @@ async def test_canonical_job_wrapper_keeps_generic_md_defaults_without_internal_
         calls.append("materialize")
         raise _BindingProbe("generic MD defaults reached materialization")
 
-    monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
+    monkeypatch.setattr(job_submission, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: results_root)
-    monkeypatch.setattr(jobs, "_resolve_md_input_path_for_runtime", generic_resolver)
+    monkeypatch.setattr(job_submission, "_resolve_md_input_path_for_runtime", generic_resolver)
     monkeypatch.setattr(job_requests, "_resolve_md_input_path_for_runtime", generic_resolver)
     monkeypatch.setattr(job_requests, "normalize_md_job_spec", normalize)
-    monkeypatch.setattr(jobs, "materialize_md_job_spec", materialize)
+    monkeypatch.setattr(job_submission, "materialize_md_job_spec", materialize)
     monkeypatch.setattr(gpu_orchestrator, "estimate_vram", lambda *_args, **_kwargs: 0)
 
     with pytest.raises(_BindingProbe, match="generic MD defaults"):
@@ -1587,13 +1587,13 @@ def test_project_v2_typed_md_launch_reaches_canonical_job_and_consumes_context(
         leaf_calls.append(f"materialize:{job_id}")
         return {**params, "md_job_spec": compiled}
 
-    monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
+    monkeypatch.setattr(job_submission, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: store["results_root"])
     monkeypatch.setattr(job_requests, "normalize_md_job_spec", normalize)
-    monkeypatch.setattr(jobs, "materialize_md_job_spec", materialize)
+    monkeypatch.setattr(job_submission, "materialize_md_job_spec", materialize)
     monkeypatch.setattr(gpu_orchestrator, "estimate_vram", lambda *_args, **_kwargs: 0)
 
     response = store["client"].post(
@@ -1822,7 +1822,7 @@ def test_ordinary_no_context_jobs_endpoint_remains_canonical(
     from sqlalchemy import func, select
 
     store = project_context_preview_store
-    monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
+    monkeypatch.setattr(job_submission, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
@@ -1901,7 +1901,7 @@ def test_design_typed_launch_persists_scientific_lineage_and_exact_snapshot(
     assert digest != profile["launch_constraints"]["structure_sha256"]
     monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: catalog)
     monkeypatch.setattr(launch_contract, "get_chemistry_catalog", lambda: catalog)
-    monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _: None)
+    monkeypatch.setattr(job_submission, "require_molecular_dynamics_feature", lambda _: None)
     monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())

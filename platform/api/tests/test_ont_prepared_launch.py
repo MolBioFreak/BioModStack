@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job, MolBioNgsReceipt, NgsComparisonPanelReceipt
 from routers import ont_runs, jobs
+from services import job_submission
 from services import binder_continuation
 from services import job_readback
 from services import job_requests
@@ -39,7 +40,7 @@ async def launch(tmp_path, monkeypatch):
     monkeypatch.setenv("BMS_RESULTS_DIR", str(results))
     monkeypatch.setenv("BMS_MOLBIO_NGS_REFERENCE_ROOT", str(data / "references"))
     from services import molbio_ngs_references as references
-    for owner in (paths, jobs, binder_continuation, receipts, panels, custody, references):
+    for owner in (paths, job_submission, binder_continuation, receipts, panels, custody, references):
         monkeypatch.setattr(owner, "get_inputs_dir", lambda: inputs)
     monkeypatch.setattr(paths, "get_data_root", lambda: data)
     monkeypatch.setattr(jobs, "get_data_root", lambda: data)
@@ -48,7 +49,7 @@ async def launch(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "get_results_dir", lambda: results)
     monkeypatch.setattr(result_roots, "get_results_dir", lambda: results)
     monkeypatch.setattr(ont_runs, "get_allowed_roots", lambda: {"inputs": inputs, "results": results})
-    monkeypatch.setattr(jobs, "get_allowed_roots", lambda: {"inputs": inputs, "results": results})
+    monkeypatch.setattr(job_submission, "get_allowed_roots", lambda: {"inputs": inputs, "results": results})
     monkeypatch.setattr(job_requests, "get_allowed_roots", lambda: {"inputs": inputs, "results": results})
     monkeypatch.setattr(paths, "get_allowed_roots", lambda: {"inputs": inputs, "results": results})
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core.db'}")

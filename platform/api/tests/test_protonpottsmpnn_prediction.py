@@ -109,7 +109,7 @@ def test_retained_structure_uses_existing_sequence_source_parser(tmp_path, suffi
 
 @pytest_asyncio.fixture
 async def selected(tmp_path, monkeypatch):
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
     # Submission-only fixture: satisfy the existing checkpoint-presence owner

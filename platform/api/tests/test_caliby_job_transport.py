@@ -67,7 +67,7 @@ async def test_local_job_persists_prepared_science_and_compiles_offline(admissio
 @pytest.mark.parametrize('mode', ['ensemble_design', 'sidechain_pack'])
 async def test_remote_review_reuses_exact_retained_tree_after_source_removed(
         admission, target, mode, monkeypatch):
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: target.parent)
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: target.parent)
     monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: target.parent)
     selected = ExecutionTarget(id='vast:caliby-fixture', provider='vast', provider_instance_id='caliby-fixture',
         active=True, state='ready', capabilities={

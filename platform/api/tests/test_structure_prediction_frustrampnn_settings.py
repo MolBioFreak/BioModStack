@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job
 from routers import jobs as jobs_router
+from services import job_submission
 from services import job_requests
 from schemas import JobCreate
 from services.frustrampnn.settings import FrustraMPNNRequestedSettings, default_settings
@@ -32,7 +33,7 @@ async def job_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     results = tmp_path / "results"
     results.mkdir()
     monkeypatch.setattr(jobs_router, "get_results_dir", lambda: results)
-    monkeypatch.setattr(jobs_router, "workflow_launches_allowed", lambda: True)
+    monkeypatch.setattr(job_submission, "workflow_launches_allowed", lambda: True)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)

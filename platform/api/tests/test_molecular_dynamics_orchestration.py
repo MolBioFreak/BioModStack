@@ -137,7 +137,7 @@ async def test_analysis_child_is_validated_persisted_cpu_only_and_launched_witho
         )
         await session.commit()
 
-    monkeypatch.setattr(jobs_router, "require_molecular_dynamics_feature", lambda _model_id: None)
+    monkeypatch.setattr(job_submission, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs_router, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
@@ -191,7 +191,7 @@ async def test_analysis_child_rejects_any_requested_gpu_before_persistence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(jobs_router, "require_molecular_dynamics_feature", lambda _model_id: None)
+    monkeypatch.setattr(job_submission, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs_router, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
