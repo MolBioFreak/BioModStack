@@ -68,7 +68,11 @@ type DepthEntry = { tip_type: number | null; location: string | null; plate_type
 type DepthTable = { entries: DepthEntry[]; standard: { offset_mm: number; label: string; source: string }[]; max_mm: number };
 const DEPTH_STATIONS: [string, string][] = [['LOC_RC', 'Reagent chiller (RC)'], ['LOC_OC', 'Output chiller (OC)'], ['LOC_TC', 'Thermal cycler'],
     ['LOC_STRIP1', 'Strip 1'], ['LOC_STRIP2', 'Strip 2'], ['LOC_STRIP3', 'Strip 3'], ['LOC_STRIP4', 'Strip 4'], ['LOC_TROUGH', 'Bulk reagent holder'], ['LOC_MS', 'Magnet station']];
-const PLATE_SUGGESTIONS = ['thermo-4483485-enduraplate-fast', 'thermo-4483354-enduraplate', 'ont-barcode-96'];
+type LibraryPlate = { id: string; name: string };
+function useLibraryPlates() {
+    return useQuery({ queryKey: ['bioxp', 'plate-library-list'], retry: false,
+        queryFn: async () => (await api.get<{ profiles: LibraryPlate[] }>('/api/bioxp/methods/plates')).data.profiles ?? [] });
+}
 const stationName = (id: string | null) => id === null ? 'Any station' : (DEPTH_STATIONS.find(([v]) => v === id)?.[1] ?? id);
 
 /** Extra depth per tip type, station and plate type; no entry means no offset. */
@@ -81,6 +85,8 @@ export function BioXpDepthOffsets({ generation, connected, visible = true }: { g
     const [station, setStation] = useState('LOC_RC');
     const [plate, setPlate] = useState('');
     const [mm, setMm] = useState('');
+    const library = useLibraryPlates().data ?? [];
+    const plateName = (id: string | null) => id === null ? 'Any plate (station default)' : (library.find(p => p.id === id)?.name ?? id);
     const [error, setError] = useState<string | null>(null);
     const data = query.data;
     async function call(method: 'put' | 'post', url: string, body: Record<string, unknown>) {
@@ -99,15 +105,14 @@ export function BioXpDepthOffsets({ generation, connected, visible = true }: { g
     }
     return <section aria-label="Depth offsets" className="rounded border border-slate-700 p-3">
         <h4 className="font-semibold">Depth offsets</h4>
-        <p className="text-xs text-slate-400">Extra depth below a station&apos;s calibrated bottom, for reaching the last liquid in a well. With no matching row the robot uses no offset. The most specific row wins: plate type, then station, then tip size. Tip racks never use one. Saving only records it.</p>
-        <p className="text-xs text-slate-400">Plate type is the plate profile ID a workflow&apos;s source labware uses (for example thermo-4483485-enduraplate-fast). Workflow transfers with liquid detection send it to the robot.</p>
+        <p className="text-xs text-slate-400">Extra depth below a station&apos;s calibrated bottom, for reaching the last liquid in a well. Each plate keeps its own offsets by tip size and station; a row for any plate is that station&apos;s default. The plate used is the one the workflow names, else the plate recorded at that station (Plate profiles below). With no matching row the robot uses no offset. Tip racks never use one. Saving only records it.</p>
         {query.error && <p role="alert">Depth offsets unavailable: {bioXpErrorText(query.error)}</p>}
         {data && <table aria-label="Saved depth offsets" className="mt-2 w-full text-left text-xs [&_td]:px-2 [&_td]:py-1 [&_th]:px-2">
             <thead className="text-slate-400"><tr><th>Tip</th><th>Station</th><th>Plate type</th><th>Offset</th><th>Source</th><th /></tr></thead>
             <tbody>{data.entries.length === 0 ? <tr><td colSpan={6} className="text-slate-500">None saved: every move uses the calibrated height.</td></tr>
                 : data.entries.map(row => { const id = `${row.tip_type ?? 'any'}:${row.location ?? 'any'}:${row.plate_type ?? 'any'}`;
                     return <tr key={id} data-depth-row={id}><td>{row.tip_type === null ? 'Any' : `${row.tip_type} µL`}</td><td>{stationName(row.location)}</td>
-                        <td>{row.plate_type ?? 'Any'}</td><td>{row.offset_mm > 0 ? '+' : ''}{row.offset_mm} mm</td><td>{row.source}</td>
+                        <td>{plateName(row.plate_type)}</td><td>{row.offset_mm > 0 ? '+' : ''}{row.offset_mm} mm</td><td>{row.source}</td>
                         <td><button type="button" disabled={!connected} aria-label={`Remove offset ${id}`}
                             onClick={() => void call('post', '/api/bioxp/depth-offsets/remove', { tip_type: row.tip_type, location: row.location, plate_type: row.plate_type })}>Remove</button></td></tr>; })}</tbody>
         </table>}
@@ -116,13 +121,81 @@ export function BioXpDepthOffsets({ generation, connected, visible = true }: { g
                 <option value="10">10 µL</option><option value="50">50 µL</option><option value="200">200 µL</option><option value="">Any</option></select></label>
             <label>Station<select aria-label="Offset station" className="ml-1" value={station} onChange={e => setStation(e.target.value)}>
                 {DEPTH_STATIONS.map(([v, n]) => <option key={v} value={v}>{n}</option>)}<option value="">Any</option></select></label>
-            <label>Plate type<input aria-label="Offset plate type" list="bioxp-depth-plates" className="ml-1 w-36" value={plate} placeholder="Any" onChange={e => setPlate(e.target.value)} /></label>
-            <datalist id="bioxp-depth-plates">{PLATE_SUGGESTIONS.map(p => <option key={p} value={p} />)}</datalist>
+            <label>Plate<select aria-label="Offset plate type" className="ml-1 max-w-64" value={plate} onChange={e => setPlate(e.target.value)}>
+                <option value="">Any plate (station default)</option>{library.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
             <label>Offset (mm)<input aria-label="Offset mm" type="number" step="0.1" className="ml-1 w-20" value={mm} onChange={e => setMm(e.target.value)} /></label>
             <button type="button" disabled={!connected || mm === ''} onClick={() => void save()}>Save offset</button>
         </div>
         {data && <p className="mt-1 text-xs text-slate-400">Measured values: {data.standard.filter(s => s.offset_mm !== 0).map(s =>
             <button key={s.label} type="button" className="mr-2 underline" title={s.source} onClick={() => setMm(String(s.offset_mm))}>{s.label}</button>)}</p>}
+        {error && <p role="alert">{error}</p>}
+    </section>;
+}
+
+type GripEntry = { z_low_offset_steps: number; z_steps?: number; source?: string; saved_at?: string } | null;
+type PlateProfiles = { plates: Record<string, { name: string; gripper: Record<string, GripEntry>; depth_offsets: DepthEntry[] }>;
+    loaded: Record<string, string>; stations: Record<string, string>; gripper_stations: string[]; oem_magnet_block_output_plate_z_offset: number };
+const GRIP_STATIONS: [string, string][] = [['LOC_P_MS', 'Magnet station'], ['LOC_P_TC', 'Thermal cycler'], ['LOC_P_OC', 'Output chiller'], ['LOC_P_RC', 'Reagent chiller']];
+
+/** One record per plate: gripper heights by station, and where each plate sits. Depth offsets are above. */
+export function BioXpPlateProfiles({ generation, connected, visible = true }: { generation: number; connected: boolean; visible?: boolean }) {
+    const client = useQueryClient();
+    const key = ['bioxp', 'plate-profiles', generation];
+    const query = useQuery({ queryKey: key, enabled: connected && visible, retry: false,
+        queryFn: async () => (await api.get<PlateProfiles>('/api/bioxp/plate-profiles', { params: { expected_connection_generation: generation } })).data });
+    const library = useLibraryPlates().data ?? [];
+    const [edits, setEdits] = useState<Record<string, string>>({});
+    const [error, setError] = useState<string | null>(null);
+    const data = query.data;
+    const ids = [...new Set([...library.map(p => p.id), ...Object.keys(data?.plates ?? {})])];
+    const name = (id: string) => library.find(p => p.id === id)?.name ?? data?.plates[id]?.name ?? id;
+    async function put(url: string, body: Record<string, unknown>) {
+        setError(null);
+        try {
+            await api.put(url, { expected_connection_generation: generation, ...body });
+            await client.invalidateQueries({ queryKey: key });
+            await client.invalidateQueries({ queryKey: ['bioxp', 'depth-offsets', generation] });
+            return true;
+        } catch (cause) { setError(bioXpErrorText(cause)); return false; }
+    }
+    async function saveGrip(id: string, location: string) {
+        const raw = edits[`${id}:${location}`];
+        const value = raw === undefined || raw.trim() === '' ? null : Number(raw);
+        if (value !== null && !Number.isInteger(value)) { setError('Gripper offset must be a whole number of steps.'); return; }
+        if (await put('/api/bioxp/plate-profiles/gripper', { plate_id: id, location, z_low_offset_steps: value,
+            source: `Operator ${new Date().toISOString().slice(0, 10)}` })) setEdits(x => { const y = { ...x }; delete y[`${id}:${location}`]; return y; });
+    }
+    return <section aria-label="Plate profiles" className="rounded border border-slate-700 p-3">
+        <h4 className="font-semibold">Plate profiles</h4>
+        <p className="text-xs text-slate-400">Each plate keeps its own gripper height per station, as steps added to the station&apos;s calibrated plate height (negative is higher). A plate with no entry uses the OEM height. The same height is used to pick the plate up and to set it down. Saving only records it.</p>
+        {query.error && <p role="alert">Plate profiles unavailable: {bioXpErrorText(query.error)}</p>}
+        {data && <>
+            <div className="mt-2 flex flex-wrap items-end gap-3 text-xs">
+                <label>Output plate loaded<select aria-label="Loaded output plate" className="ml-1 max-w-72" value={data.loaded.OUTPUT_PLATE ?? ''}
+                    disabled={!connected} onChange={e => void put('/api/bioxp/plate-profiles/loaded', { movable_object: 'OUTPUT_PLATE', plate_id: e.target.value })}>
+                    {ids.map(id => <option key={id} value={id}>{name(id)}</option>)}</select></label>
+            </div>
+            <table aria-label="Plate gripper heights" className="mt-2 w-full text-left text-xs [&_td]:px-2 [&_td]:py-1 [&_th]:px-2">
+                <thead className="text-slate-400"><tr><th>Plate</th>{GRIP_STATIONS.map(([, n]) => <th key={n}>{n}</th>)}</tr></thead>
+                <tbody>{ids.map(id => <tr key={id} data-plate-row={id}><td>{name(id)}</td>
+                    {GRIP_STATIONS.map(([loc]) => { const entry = data.plates[id]?.gripper?.[loc]; const k = `${id}:${loc}`;
+                        return <td key={loc} data-grip-cell={k}>
+                            <div>{entry ? `${entry.z_low_offset_steps} steps` : 'OEM height'}</div>
+                            <input aria-label={`Gripper offset ${k}`} type="number" step="1" className="w-24" value={edits[k] ?? ''}
+                                placeholder={entry ? String(entry.z_low_offset_steps) : 'OEM'} onChange={e => setEdits(x => ({ ...x, [k]: e.target.value }))} />
+                            <button type="button" disabled={!connected || edits[k] === undefined} onClick={() => void saveGrip(id, loc)}>Save</button>
+                            {entry && <button type="button" disabled={!connected} aria-label={`Use OEM height ${k}`}
+                                onClick={() => { setEdits(x => ({ ...x, [k]: '' })); void put('/api/bioxp/plate-profiles/gripper', { plate_id: id, location: loc, z_low_offset_steps: null }); }}>OEM</button>}
+                        </td>; })}</tr>)}</tbody>
+            </table>
+            <table aria-label="Plate at each station" className="mt-3 text-left text-xs [&_td]:px-2 [&_td]:py-1 [&_th]:px-2">
+                <thead className="text-slate-400"><tr><th>Station</th><th>Plate there (its depth offsets apply)</th></tr></thead>
+                <tbody>{DEPTH_STATIONS.map(([loc, n]) => <tr key={loc}><td>{n}</td><td>
+                    <select aria-label={`Plate at ${loc}`} className="max-w-72" value={data.stations[loc] ?? ''} disabled={!connected}
+                        onChange={e => void put('/api/bioxp/plate-profiles/station', { location: loc, plate_id: e.target.value || null })}>
+                        <option value="">None recorded</option>{ids.map(id => <option key={id} value={id}>{name(id)}</option>)}</select></td></tr>)}</tbody>
+            </table>
+        </>}
         {error && <p role="alert">{error}</p>}
     </section>;
 }
@@ -254,6 +327,7 @@ export function BioXpPipetteCalibration({ generation, connected, destinations, v
 
         <BioXpLldProfiles generation={generation} connected={connected} visible={visible} />
         <BioXpDepthOffsets generation={generation} connected={connected} visible={visible} />
+        <BioXpPlateProfiles generation={generation} connected={connected} visible={visible} />
 
         <section aria-label="Liquid detection test" className="rounded border border-slate-700 p-3 space-y-2">
             <h4 className="font-semibold">Liquid detection test</h4>
