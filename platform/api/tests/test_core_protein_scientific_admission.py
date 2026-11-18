@@ -211,8 +211,10 @@ def test_resume_preserves_known_overrides_and_legacy_extra_policy():
 async def admission(monkeypatch, tmp_path):
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "0")
     monkeypatch.setattr(jobs, "get_results_dir", lambda: tmp_path / "results")
+    monkeypatch.setattr(job_submission, "get_results_dir", lambda: tmp_path / "results")
     registry = ModelRegistry(Path(__file__).resolve().parents[1] / "config" / "models")
     monkeypatch.setattr(jobs, "get_registry", lambda: registry)
+    monkeypatch.setattr(job_submission, "get_registry", lambda: registry)
     monkeypatch.setattr(job_requests, "get_registry", lambda: registry)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'jobs.sqlite'}")
     async with engine.begin() as connection:
@@ -253,6 +255,7 @@ async def test_common_boundary_rejects_post_schema_mutation_before_handoff(monke
     def never(*args, **kwargs):
         raise AssertionError("trusted handoff/registry must not execute")
     monkeypatch.setattr(jobs, "get_registry", never)
+    monkeypatch.setattr(job_submission, "get_registry", never)
     monkeypatch.setattr(job_requests, "get_registry", never)
     monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", never)
     with pytest.raises(HTTPException) as exc:
