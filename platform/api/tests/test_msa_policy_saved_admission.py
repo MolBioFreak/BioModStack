@@ -38,7 +38,11 @@ async def test_auto_admission_persists_effective_policy_without_losing_intent(ad
     request = JobCreate(name='explicit-no-msa', model_id='boltz2', mode='predict', params={
         'sequence': 'ACDEFGHIK', 'msa_provider': 'auto', 'boltz_use_msa': False, 'use_msa': False,
     })
-    response = await job_submission._create_job(request, BackgroundTasks(), admission)
+    first, response = [await job_submission.submit_job(request.model_copy(deep=True), BackgroundTasks(), admission)
+                       for _ in range(2)]
+    assert first.id != response.id
+    from services.job_readback import read_job
+    assert (await read_job(admission, first.id)).params == (await read_job(admission, response.id)).params
     job = await admission.get(Job, response.id)
     assert job.params['msa_provider'] == 'colabfold_api'
     assert job.params['boltz_use_msa'] is False
@@ -46,3 +50,18 @@ async def test_auto_admission_persists_effective_policy_without_losing_intent(ad
     assert policy['requested']['msa_provider'] == 'auto'
     assert policy['effective']['msa_provider'] == 'colabfold_api'
     assert policy['provider_database_version'] is None
+
+
+@pytest.mark.asyncio
+async def test_later_child_refusal_leaves_no_committed_jobs(admission):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    good = JobCreate(name='standalone-child', model_id='boltz2', mode='predict', params={
+        'sequence': 'ACDEFGHIK', 'boltz_use_msa': False, 'use_msa': False})
+    rejected = good.model_copy(deep=True)
+    rejected.params.update(msa_provider='local', boltz_use_msa=True)
+    with pytest.raises(HTTPException) as exc:
+        await job_submission.submit_selected_child_jobs([good, rejected], BackgroundTasks(), admission, None,
+            destination_launch_context_id=None, idempotency_key='standalone', response_context={})
+    assert exc.value.status_code == 422 and 'Local MSA search is disabled' in str(exc.value.detail)
+    async with async_sessionmaker(admission.bind)() as reader:
+        assert not list(await reader.scalars(select(Job.id)))
