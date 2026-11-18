@@ -2963,17 +2963,8 @@ async def submit_job(
         )
     except LaunchContextError as exc:
         await experiment_session.rollback()
-        try:
-            await release_launch_context_claim(
-                experiment_session,
-                launch_context_id=launch_context_id,
-                claim_token=claim_token,
-            )
-            await experiment_session.commit()
-        except Exception:
-            await experiment_session.rollback()
-        # The Job may already be durable. Never claim experiment membership without
-        # the verified binding receipt; the claimed context remains fail-closed.
+        # The core Job already committed. Keep its claim so retry can finish
+        # the binding against that same Job instead of attempting a new insert.
         raise _launch_context_http_error(exc) from exc
 
     return response.model_copy(
