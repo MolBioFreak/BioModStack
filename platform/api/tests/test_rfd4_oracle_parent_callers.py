@@ -1,4 +1,6 @@
 """Actual shared callers with the parent's exact patch applied; no native execution."""
+
+from services import binder_source_materialization
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -98,7 +100,7 @@ async def test_actual_source_free_preparation_seam(tmp_path, monkeypatch, active
     monkeypatch.setattr(paths, 'get_allowed_roots', lambda: {'fixture': tmp_path})
     monkeypatch.setattr(paths, 'resolve_allowed_path', lambda value: tmp_path / value)
     async def no_governed(_): return []
-    monkeypatch.setattr(files, 'get_governed_ngs_result_roots', no_governed)
+    monkeypatch.setattr(binder_source_materialization, 'governed_ngs_result_roots', no_governed)
     p = params(tags=None if active else [])
     monkeypatch.setattr(paths, 'get_container_dir', lambda: tmp_path / 'containers')
     monkeypatch.setattr(paths, 'get_weights_root', lambda: tmp_path / 'weights')

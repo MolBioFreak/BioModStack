@@ -170,7 +170,7 @@ def test_la_shared_source_snapshot_keeps_motif_generations_distinct(tmp_path, mo
     monkeypatch.setattr(files,'get_allowed_roots',lambda: roots)
     monkeypatch.setattr(binder_source_materialization,'get_allowed_roots',lambda: roots)
     async def no_governed_roots(session): return []
-    monkeypatch.setattr(files,'get_governed_ngs_result_roots',no_governed_roots)
+    monkeypatch.setattr(binder_source_materialization, 'governed_ngs_result_roots',no_governed_roots)
     samples=roots['inputs']/'samples'; samples.mkdir()
     motif=roots['inputs']/'motif.pdb'; motif.write_text('first reference')
     config=roots['inputs']/'native.yaml'
