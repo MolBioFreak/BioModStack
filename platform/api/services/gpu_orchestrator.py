@@ -883,6 +883,137 @@ def _reconcile_terminal_history_without_process(
     return True
 
 
+async def _finalize_recovered_success(
+    job: Any,
+    session: Any,
+    result_output_dir: Optional[str],
+    *,
+    snapshot_history: bool,
+    gate_present: bool,
+    age_seconds: float,
+    stale_fail_after_seconds: float,
+) -> bool:
+    """Complete a recovered run whose Nextflow history is OK; return whether it completed.
+
+    finalize_successful_job commits the terminal state itself: its result is used and
+    nothing is stamped here. A run with no finalizer (a review gate, or no result
+    directory and no required results) is stamped here, once.
+
+    ``snapshot_history`` is True for the per-cycle history snapshot caller and False
+    for the run-directory history reread. The two route MD jobs and report MD rejection
+    differently, and only the snapshot caller publishes at once and runs the MD-analysis
+    and refinement hooks.
+    """
+    model_id = str(getattr(job, "model_id", "") or "").strip().lower()
+    mode = str(getattr(job, "mode", "") or "").strip().lower()
+    is_md = model_id == "molecular_dynamics"
+    md_parent = is_md and mode == "simulate" and getattr(job, "parent_job_id", None) is None
+
+    def fail(stage: str, message: str) -> None:
+        job.status = "failed"
+        job.queue_status = "failed"
+        job.current_stage = stage
+        job.stage_progress = None
+        job.error_message = message
+        job.completed_at = datetime.utcnow()
+
+    if snapshot_history:
+        # A top-level MD run always meets its barrier; MD children need a result directory.
+        md_finalizer = md_parent or (is_md and mode in {"simulate", "analyze"} and bool(result_output_dir))
+    else:
+        md_finalizer = is_md and mode == "simulate"
+        if md_finalizer and not result_output_dir:
+            fail("MD Completion Blocked", "MD completion barrier requires a job-owned result directory")
+            return False
+    if not md_finalizer and not result_output_dir and _job_requires_result_output_for_terminal_history(job):
+        found = "workflow completed" if snapshot_history else "terminal workflow history found"
+        fail(
+            "Result Ingestion Failed",
+            f"{found} but no job-specific output directory was available "
+            "for required result ingestion and validation",
+        )
+        return False
+
+    finalization = None
+    stamp = gate_present or getattr(job, "awaiting_input", False) or not (md_finalizer or result_output_dir)
+    if stamp:
+        pass
+    elif md_finalizer:
+        from services.nextflow import _finalize_local_md_job
+
+        try:
+            await _finalize_local_md_job(job, session, result_output_dir)
+        except Exception as exc:
+            if not snapshot_history:
+                raise
+            if md_parent:
+                fail("MD Completion Blocked", f"{getattr(exc, 'code', 'md_completion_invalid')}: {exc}")
+                logger.warning("[COMPLETION] MD barrier rejected %s: %s", job.name, exc)
+            else:
+                fail("MD Result Validation Failed", f"MD history completion validation failed: {exc}")
+            await _commit_reconciled_job_mutations(session)
+            return False
+        # The MD finalizer leaves completion uncommitted in this session.
+        if snapshot_history and md_parent:
+            job.completed_at = datetime.utcnow()
+        stamp = not snapshot_history
+    else:
+        from services.result_state_integrity import finalize_successful_job
+
+        finalization = await finalize_successful_job(job, result_output_dir, session)
+        if not finalization.completed:
+            logger.warning(
+                f"[COMPLETION] Reconciled workflow {job.name} finished, "
+                "but result ingestion/validation failed"
+            )
+            return False
+
+    if stamp and snapshot_history:
+        job.queue_status = "completed"
+        if job.status == "running":
+            job.status = "completed"
+        job.current_stage = "Complete"
+        job.stage_progress = None
+        job.error_message = None
+        job.completed_at = datetime.utcnow()
+    elif stamp:
+        _reconcile_terminal_history_without_process(
+            job,
+            history_status="OK",
+            gate_present=gate_present,
+            age_seconds=age_seconds,
+            stale_fail_after_seconds=stale_fail_after_seconds,
+        )
+        if job.status != "completed":
+            return False
+
+    if snapshot_history:
+        # Publish uncommitted completion before hooks that can issue queries/commits in this session.
+        if session.dirty:
+            await _commit_reconciled_job_mutations(session)
+        if is_md and mode == "analyze" and getattr(job, "parent_job_id", None):
+            from services.nextflow import reconcile_md_analysis_parent_if_current
+
+            await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session)
+            await session.commit()
+    try:
+        if finalization is not None:
+            logger.info(
+                f"[COMPLETION] Ingested and validated {finalization.design_count} designs "
+                f"for reconciled job {job.name}"
+            )
+        from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+
+        schedule_viewer_minimum_analyses_for_job(str(job.id))
+        if snapshot_history:
+            from services.nextflow import maybe_trigger_mutation_seed_refinement
+
+            await maybe_trigger_mutation_seed_refinement(job, session)
+    except Exception as hook_err:
+        logger.warning(f"[COMPLETION] Post-ingestion completion hook failed for {job.name}: {hook_err}")
+    return True
+
+
 def _normalize_protenix_profile(params: Dict[str, Any]) -> str:
     """Map Protenix params to the closest VRAM profile."""
     use_msa = _coerce_bool(params.get("protenix_use_msa", True), default=True)
@@ -3723,106 +3854,17 @@ class GPUOrchestrator:
                                 if has_stage_gate(job) or getattr(job, "awaiting_input", False):
                                     reconciled += 1
                                     continue
-                                finalization = None
-                                is_md_parent = (
-                                    str(getattr(job, "model_id", "") or "").strip().lower() == "molecular_dynamics"
-                                    and str(getattr(job, "mode", "") or "").strip().lower() == "simulate"
-                                    and getattr(job, "parent_job_id", None) is None
-                                )
-                                if is_md_parent:
-                                    from services.nextflow import _finalize_local_md_job
-
-                                    try:
-                                        await _finalize_local_md_job(job, session, result_output_dir)
-                                        job.completed_at = datetime.utcnow()
-                                    except Exception as exc:
-                                        job.status = "failed"
-                                        job.queue_status = "failed"
-                                        job.current_stage = "MD Completion Blocked"
-                                        job.stage_progress = None
-                                        job.error_message = f"{getattr(exc, 'code', 'md_completion_invalid')}: {exc}"
-                                        job.completed_at = datetime.utcnow()
-                                        await _commit_reconciled_job_mutations(session)
-                                        logger.warning("[COMPLETION] MD barrier rejected %s: %s", job.name, exc)
-                                        reconciled += 1
-                                        continue
-                                elif (str(getattr(job, 'model_id', '')).lower() == 'molecular_dynamics'
-                                      and str(getattr(job, 'mode', '')).lower() in {'simulate', 'analyze'}
-                                      and result_output_dir):
-                                    from services.nextflow import _finalize_local_md_job
-                                    try:
-                                        await _finalize_local_md_job(job, session, result_output_dir)
-                                    except Exception as exc:
-                                        job.status = 'failed'
-                                        job.queue_status = 'failed'
-                                        job.current_stage = 'MD Result Validation Failed'
-                                        job.stage_progress = None
-                                        job.error_message = f'MD history completion validation failed: {exc}'
-                                        job.completed_at = datetime.utcnow()
-                                        await _commit_reconciled_job_mutations(session)
-                                        reconciled += 1
-                                        continue
-                                elif result_output_dir:
-                                    from services.result_state_integrity import finalize_successful_job
-
-                                    finalization = await finalize_successful_job(job, result_output_dir, session)
-                                    if not finalization.completed:
-                                        logger.warning(
-                                            f"[COMPLETION] Reconciled workflow {job.name} finished, "
-                                            "but result ingestion/validation failed"
-                                        )
-                                        reconciled += 1
-                                        continue
-                                else:
-                                    from services.result_state_integrity import job_expects_design_results
-
-                                    if job_expects_design_results(job):
-                                        job.status = "failed"
-                                        job.queue_status = "failed"
-                                        job.current_stage = "Result Ingestion Failed"
-                                        job.stage_progress = None
-                                        job.error_message = (
-                                            "workflow completed but no job-specific output directory was available "
-                                            "for required result ingestion and validation"
-                                        )
-                                        job.completed_at = datetime.utcnow()
-                                        reconciled += 1
-                                        continue
-                                    job.queue_status = "completed"
-                                    if job.status == "running":
-                                        job.status = "completed"
-                                    job.current_stage = "Complete"
-                                    job.stage_progress = None
-                                    job.error_message = None
-                                    job.completed_at = datetime.utcnow()
-
-                                # The no-output non-result path above mutates the ORM job directly.
-                                # Publish it before hooks that can issue queries/commits in this session.
-                                if session.dirty:
-                                    await _commit_reconciled_job_mutations(session)
-                                if (
-                                    str(getattr(job, "model_id", "") or "").strip().lower() == "molecular_dynamics"
-                                    and str(getattr(job, "mode", "") or "").strip().lower() == "analyze"
-                                    and getattr(job, "parent_job_id", None)
+                                if not await _finalize_recovered_success(
+                                    job,
+                                    session,
+                                    result_output_dir,
+                                    snapshot_history=True,
+                                    gate_present=False,
+                                    age_seconds=age_seconds,
+                                    stale_fail_after_seconds=stale_fail_after_seconds,
                                 ):
-                                    from services.nextflow import reconcile_md_analysis_parent_if_current
-
-                                    await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session)
-                                    await session.commit()
-                                try:
-                                    if finalization is not None:
-                                        logger.info(
-                                            f"[COMPLETION] Ingested and validated {finalization.design_count} designs "
-                                            f"for reconciled top-level job {job.name}"
-                                        )
-                                    from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
-                                    from services.nextflow import maybe_trigger_mutation_seed_refinement
-                                    schedule_viewer_minimum_analyses_for_job(str(job.id))
-                                    await maybe_trigger_mutation_seed_refinement(job, session)
-                                except Exception as ingest_err:
-                                    logger.warning(
-                                        f"[COMPLETION] Post-ingestion completion hook failed for {job.name}: {ingest_err}"
-                                    )
+                                    reconciled += 1
+                                    continue
                                 if history_note:
                                     logger.info(
                                         f"[COMPLETION] {job.name} completed (no process found, "
@@ -3876,74 +3918,24 @@ class GPUOrchestrator:
                             else:
                                 history_status = nextflow_history_status(job)
                                 gate_present = has_stage_gate(job)
-                                result_output_dir = job.child_output_dir or job.output_dir
-                                is_md_parent = job.model_id == "molecular_dynamics" and job.mode == "simulate"
-                                if history_status == "OK" and is_md_parent and not result_output_dir:
-                                    job.status = "failed"
-                                    job.queue_status = "failed"
-                                    job.current_stage = "MD Completion Blocked"
-                                    job.stage_progress = None
-                                    job.error_message = "MD completion barrier requires a job-owned result directory"
-                                    job.completed_at = datetime.utcnow()
-                                    reconciled += 1
-                                    continue
-                                if (
-                                    history_status == "OK"
-                                    and _job_requires_result_output_for_terminal_history(job)
-                                    and not result_output_dir
-                                ):
-                                    job.status = "failed"
-                                    job.queue_status = "failed"
-                                    job.current_stage = "Result Ingestion Failed"
-                                    job.stage_progress = None
-                                    job.error_message = (
-                                        "terminal workflow history found but no job-specific output directory was "
-                                        "available for required result ingestion and validation"
+                                if history_status == "OK":
+                                    await _finalize_recovered_success(
+                                        job,
+                                        session,
+                                        job.child_output_dir or job.output_dir,
+                                        snapshot_history=False,
+                                        gate_present=gate_present,
+                                        age_seconds=age_seconds,
+                                        stale_fail_after_seconds=stale_fail_after_seconds,
                                     )
-                                    job.completed_at = datetime.utcnow()
-                                    reconciled += 1
-                                    continue
-                                finalization = None
-                                if (
-                                    history_status == "OK"
-                                    and not gate_present
-                                    and not getattr(job, "awaiting_input", False)
-                                    and result_output_dir
-                                ):
-                                    if job.model_id == "molecular_dynamics" and job.mode == "simulate":
-                                        from services.nextflow import _finalize_local_md_job
-
-                                        await _finalize_local_md_job(job, session, result_output_dir)
-                                    else:
-                                        from services.result_state_integrity import finalize_successful_job
-
-                                        finalization = await finalize_successful_job(job, result_output_dir, session)
-                                        if not finalization.completed:
-                                            reconciled += 1
-                                            continue
-                                reconciled_now = _reconcile_terminal_history_without_process(
+                                elif not _reconcile_terminal_history_without_process(
                                     job,
                                     history_status=history_status,
                                     gate_present=gate_present,
                                     age_seconds=age_seconds,
                                     stale_fail_after_seconds=stale_fail_after_seconds,
-                                )
-                                if not reconciled_now:
+                                ):
                                     continue
-                                if history_status == "OK" and job.status == "completed":
-                                    try:
-                                        if finalization is not None:
-                                            logger.info(
-                                                f"[COMPLETION] Ingested and validated {finalization.design_count} designs "
-                                                f"for terminal OK job {job.name}"
-                                            )
-                                        from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
-
-                                        schedule_viewer_minimum_analyses_for_job(str(job.id))
-                                    except Exception as ingest_err:
-                                        logger.warning(
-                                            f"[COMPLETION] Terminal OK post-ingestion hook failed for {job.name}: {ingest_err}"
-                                        )
 
                             reconciled += 1
                 
