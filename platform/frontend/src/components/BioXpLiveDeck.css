@@ -3,9 +3,9 @@
 .bld-heading h2 { font-size: 21px; font-weight: 650; margin: 0 0 4px; }
 .bld-heading p { margin: 0; color: var(--text-secondary); }
 .bld-status { color: var(--text-secondary); font-size: 12px; }
-.bld-workspace { display: grid; grid-template-columns: minmax(0, min(62%, calc(100dvh - 190px))) minmax(320px, 1fr); gap: 14px; align-items: start; }
+.bld-workspace { display: grid; grid-template-columns: minmax(0, 1fr) clamp(340px, 24vw, 440px); gap: 14px; align-items: start; }
 .bld-map-pane, .bld-side, .bld-side > *, .bld-band > *, .bld-details { min-width: 0; max-width: 100%; }
-.bld-side { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); align-items: start; gap: 12px; overflow-wrap: anywhere; }
+.bld-side { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 12px; overflow-wrap: anywhere; }
 .bld-pose-card { border: 1px solid var(--border-secondary); border-radius: 12px; background: var(--bg-secondary); padding: 8px 14px; font-size: 12px; margin-top: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 22px; }
 .bld-pose-card h3 { font-size: 14px; font-weight: 650; margin: 0; white-space: nowrap; }
 .bld-pose-card dt { color: var(--text-secondary); margin-top: 9px; }
@@ -124,7 +124,7 @@
 .bld-route-actions { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; }
 .bld-preview { margin: 8px 0 0 18px; list-style: decimal; font-size: 12px; color: var(--text-secondary); }
 .bld-pipette p { margin: 6px 0 0; font-size: 12px; }
-.bld-camera .aspect-\[4\/3\] { aspect-ratio: 16 / 9; }
+.bld-camera .aspect-\[4\/3\] { aspect-ratio: 16 / 9; max-height: 250px; }
 .bioxp-live-deck .bioxp-method-map .bwd-selection-tools { position: static; display: inline-block; margin: 0 0 6px !important; }
 .bioxp-live-deck .bioxp-method-map .bwd-selection-tools[open] { display: block; }
 .bld-route-options label:last-child { margin-left: 0; }
