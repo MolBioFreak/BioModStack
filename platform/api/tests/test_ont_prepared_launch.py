@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job, MolBioNgsReceipt, NgsComparisonPanelReceipt
 from routers import ont_runs, jobs
+from services import job_readback
 from services import job_requests
 from services import molbio_ngs_receipts as receipts, ngs_comparison_panels as panels
 from services import ont_submission_trust as custody
@@ -41,6 +42,7 @@ async def launch(tmp_path, monkeypatch):
         monkeypatch.setattr(owner, "get_inputs_dir", lambda: inputs)
     monkeypatch.setattr(paths, "get_data_root", lambda: data)
     monkeypatch.setattr(jobs, "get_data_root", lambda: data)
+    monkeypatch.setattr(job_readback, "get_data_root", lambda: data)
     monkeypatch.setattr(jobs, "get_results_dir", lambda: results)
     monkeypatch.setattr(result_roots, "get_results_dir", lambda: results)
     monkeypatch.setattr(ont_runs, "get_allowed_roots", lambda: {"inputs": inputs, "results": results})

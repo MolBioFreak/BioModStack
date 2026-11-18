@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job
 from routers import jobs
+from services import job_readback
 from schemas import JobResponse
 from services.job_stage_progress import project_execution_stages
 
@@ -165,8 +166,8 @@ def test_antibody_output_discovery_does_not_mutate_completion(tmp_path, monkeypa
         completed.append('file_only')
         outputs['file_only'] = [str(tmp_path / 'candidate.pdb')]
         return completed, outputs
-    monkeypatch.setattr(jobs, 'infer_antibody_stage_state', infer)
-    completed, outputs = jobs._resolve_stage_state_for_response(job)
+    monkeypatch.setattr(job_readback, 'infer_antibody_stage_state', infer)
+    completed, outputs = job_readback._resolve_stage_state_for_response(job)
     assert completed == job.completed_stages == ['recorded']
     assert 'file_only' in outputs
     assert [row['id'] for row in project_execution_stages(job)] == ['recorded']

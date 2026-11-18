@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from database import Job, NgsPooledAssignmentRelease, NgsPooledAssignmentReleaseTarget
 from routers import jobs, ont_runs
+from services import job_readback
 from services import job_requests
 from schemas import ExecutionPolicy, JobCreate
 from test_ont_pooled_reference_assignment import (
@@ -28,6 +29,7 @@ async def policy_context(pooled_context, monkeypatch):
     monkeypatch.setattr(jobs, "get_results_dir", lambda: context.results_root)
     monkeypatch.setattr(jobs, "get_inputs_dir", lambda: context.inputs_root)
     monkeypatch.setattr(jobs, "get_data_root", lambda: context.inputs_root.parent)
+    monkeypatch.setattr(job_readback, "get_data_root", lambda: context.inputs_root.parent)
     monkeypatch.setattr(jobs, "get_allowed_roots", lambda: {"inputs": context.inputs_root, "results": context.results_root})
     monkeypatch.setattr(job_requests, "get_allowed_roots", lambda: {"inputs": context.inputs_root, "results": context.results_root})
     monkeypatch.setattr(ont_runs.ont_submission_trust, "get_inputs_dir", lambda: context.inputs_root)

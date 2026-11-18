@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from routers import jobs, ont_runs
+from services import job_readback
 from services.ont_ngs_contract import CANONICAL_ONT_WORKFLOWS, normalize_ont_launch_params
 
 REPO = Path(__file__).resolve().parents[3]
@@ -36,7 +37,7 @@ def test_rna_tables_stay_off_unless_asked_for_and_need_a_reference() -> None:
 
 def test_rna_stage_list_names_the_tables_only_when_they_were_asked_for() -> None:
     base = {"pod5_dir": "/data/pod5", "reference_fasta": "/data/ref.fa"}
-    assert jobs._planned_nanopore_stages(base, mode="basecall_rna") == ["dorado_basecall", "dorado_align"]
-    assert jobs._planned_nanopore_stages({**base, "run_modkit": True}, mode="basecall_rna") == ["dorado_basecall", "dorado_align"]
-    assert jobs._planned_nanopore_stages({**base, "run_modkit": True, "modified_bases": "m6A_DRACH"}, mode="basecall_rna") == [
+    assert job_readback._planned_nanopore_stages(base, mode="basecall_rna") == ["dorado_basecall", "dorado_align"]
+    assert job_readback._planned_nanopore_stages({**base, "run_modkit": True}, mode="basecall_rna") == ["dorado_basecall", "dorado_align"]
+    assert job_readback._planned_nanopore_stages({**base, "run_modkit": True, "modified_bases": "m6A_DRACH"}, mode="basecall_rna") == [
         "dorado_basecall", "dorado_align", "modkit"]

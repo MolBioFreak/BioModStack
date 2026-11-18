@@ -223,6 +223,8 @@ async def test_preview_approved_insert_offline_independent_lineage(admission, se
         monkeypatch.setattr(module, 'get_results_dir', lambda: roots['bms_results'])
         monkeypatch.setattr(module, 'get_inputs_dir', lambda: roots['inputs'])
         monkeypatch.setattr(module, 'get_data_root', lambda: tmp_path)
+    from services import job_readback
+    monkeypatch.setattr(job_readback, 'get_data_root', lambda: tmp_path)
     monkeypatch.setattr(nextflow, 'get_work_dir', lambda: tmp_path / 'work')
     async with factory() as session:
         original, selection = await source_rows(session, tmp_path, False)

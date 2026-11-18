@@ -36,6 +36,8 @@ async def remote_action(tmp_path, monkeypatch):
         monkeypatch.setattr(owner, 'get_results_dir', lambda: tmp_path)
         monkeypatch.setattr(owner, 'get_data_root', lambda: tmp_path)
         monkeypatch.setattr(owner, 'get_inputs_dir', lambda: tmp_path)
+    from services import job_readback
+    monkeypatch.setattr(job_readback, 'get_data_root', lambda: tmp_path)
     identity = SourceIdentity('a' * 40, 'b' * 40)
     monkeypatch.setattr(SourceIdentity, 'from_checkout', classmethod(lambda cls, root: identity))
     monkeypatch.setattr(bundle, 'current_source_identity', lambda: (identity.revision, identity.tree))

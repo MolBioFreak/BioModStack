@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job
 from routers import jobs
-from routers.jobs import (
+from services.job_readback import (
     _infer_nanopore_stage_outputs,
     _planned_nanopore_stages,
     _resolve_nanopore_fastq_qc_mode,

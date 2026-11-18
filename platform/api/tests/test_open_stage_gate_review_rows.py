@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import routers.jobs as jobs
+from services import job_readback
 from database import Base, Design, Job
 from services import stage_review
 
@@ -38,6 +39,7 @@ def _job(tmp_path):
 def _isolate(monkeypatch):
     monkeypatch.setattr(stage_review, "refresh_gate_payload", lambda payload, _out: payload)
     monkeypatch.setattr(jobs, "refresh_gate_payload", lambda payload, _out: payload)
+    monkeypatch.setattr(job_readback, "refresh_gate_payload", lambda payload, _out: payload)
     monkeypatch.setattr(stage_review, "resolve_review_path", lambda value, _out=None: Path(value) if value else None)
 
 

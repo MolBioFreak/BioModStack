@@ -2,7 +2,7 @@
 import pytest
 
 from routers.ont_runs import _validate_ont_input_contract
-from routers.jobs import _planned_nanopore_stages
+from services.job_readback import _planned_nanopore_stages
 
 
 @pytest.mark.parametrize("key,mode", [("fastq_path", "fastq"), ("bam_path", "bam"), ("pod5_dir", "pod5")])

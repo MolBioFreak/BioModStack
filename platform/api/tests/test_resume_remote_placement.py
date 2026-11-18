@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, ExecutionTarget, Job, get_session
 from routers import jobs
+from services import job_readback
 from services.remote_execution import bundle
 
 
@@ -169,6 +170,7 @@ async def test_explicit_review_retrieval_uses_only_checkpoint_files(store, monke
         target.write_bytes(data)
     monkeypatch.setattr(executor, 'rsync_selected_from_remote', transfer)
     monkeypatch.setattr(jobs, 'to_allowed_relative', lambda path: str(path))
+    monkeypatch.setattr(job_readback, 'to_allowed_relative', lambda path: str(path))
     assert (await client.get('/jobs/source/structure-files')).status_code == 200
     assert not copied
     response = await client.get('/jobs/source/structure-files', params={'checkpoint_sha256': 'c'*64})

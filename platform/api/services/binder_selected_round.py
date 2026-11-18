@@ -123,7 +123,7 @@ async def selection_refs(session, source, request):
         if request.selection.candidate_refs is not None:
             refs = [wire(r) for r in request.selection.candidate_refs]
         else:
-            from routers.jobs import _saved_review_filter_entries
+            from services.job_readback import _saved_review_filter_entries
             entry = next((r for r in _saved_review_filter_entries(source)
                           if r['id'] == request.selection.saved_set_id
                           and r.get('revision', 1) == request.selection.revision), None)
@@ -1001,11 +1001,17 @@ async def reconcile(session, experiments, root_id, round_id, *, retry=False):
 
 
 async def response(session, retained):
-    from routers.jobs import get_job
+    from services.job_readback import read_job
+
+    async def launched(job_id):
+        job = await read_job(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return job
     refs = retained['selection']['candidate_refs']
     return {'operation': 'round', 'source_job_id': retained['source_job_id'], 'root_job_id': retained['root_job_id'],
         'round_id': retained['round_id'], 'state': retained['state'],
         'selected_design_count': sum(r['kind'] == 'design' for r in refs),
         'selected_native_count': sum(r['kind'] in {'native_document', 'native_observation'} for r in refs),
         'selected_sequence_count': sum(r['kind'] == 'native_sequence' for r in refs),
-        'launched_jobs': [await get_job(s['job_id'], session) for s in retained['steps'] if s['job_id']], 'round': retained}
+        'launched_jobs': [await launched(s['job_id']) for s in retained['steps'] if s['job_id']], 'round': retained}

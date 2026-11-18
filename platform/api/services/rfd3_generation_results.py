@@ -130,7 +130,7 @@ async def read_generation_results(job, session, *, offset=0, limit=None):
     Omitted limit preserves the historical API. Explicit pages avoid loading
     coordinates and retain full producer totals rather than page-sized totals.
     """
-    from routers.jobs import _rfd3_public_json
+    from services.job_readback import _rfd3_public_json
     if offset < 0 or (limit is not None and not 1 <= limit <= 1000):
         raise HTTPException(422, 'Invalid native page')
     params = job.params if isinstance(job.params, dict) else {}
