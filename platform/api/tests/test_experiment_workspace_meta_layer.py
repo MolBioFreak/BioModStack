@@ -449,9 +449,6 @@ _MUTATION_HTTP_CASES = {
     "create_experiment_backup": (
         "/api/experiment-workspaces/ops/backup", None, None,
     ),
-    "record_ngs_molbio_package_acceptance": (
-        "/api/experiment-workspaces/ops/ngs-molbio/package-acceptance", None, None,
-    ),
     "restore_experiment_backup_drill": (
         "/api/experiment-workspaces/ops/backups/backup/restore-drill", None, None,
     ),

@@ -1093,17 +1093,6 @@ async def resubmit_workspace_run_group(
         raise _error(exc) from exc
 
 
-@router.post("/ops/ngs-molbio/package-acceptance", deprecated=True, status_code=status.HTTP_410_GONE)
-async def record_ngs_molbio_package_acceptance() -> None:
-    raise HTTPException(
-        status_code=status.HTTP_410_GONE,
-        detail={
-            "code": "package_acceptance_retired",
-            "message": "Online v1 package acceptance is retired. Existing receipts remain readable.",
-        },
-    )
-
-
 async def _creation_receipt_authority(
     session: AsyncSession,
     *,
