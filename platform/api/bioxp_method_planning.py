@@ -769,6 +769,9 @@ def prepare_occurrences(occurrences, method, dependencies):
             for vessel in labware:
                 if vessel.get('id') == inputs['labware_id']:
                     vessel['station'] = inputs.get('target_location')
+                    if vessel.get('profile_id'):
+                        # The robot's saved plate profile (gripper heights) is keyed by this id.
+                        inputs.setdefault('plate_type', str(vessel['profile_id']))
     if failures:
         raise RepresentationErrors(failures)
     policy = method.get('tip_policy', 'manual')

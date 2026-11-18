@@ -61,7 +61,7 @@ CONTRACTS = {
     'plate_release': obj({'destination': I, 'press_plate': B, 'run_in_parallel': B}, ['destination']),
     'plate_press': obj({'plate': I, 'run_in_parallel': B}, ['plate']),
     'cut_seal': obj({'count': {'type': 'integer', 'not': {'const': 0}}, 'cut_z_offset_steps': I}),
-    'plate_move': obj({'plate_id': S, 'target_location': S, 'move_mode': S}, ['plate_id', 'target_location']),
+    'plate_move': obj({'plate_id': S, 'target_location': S, 'move_mode': S, 'plate_type': S}, ['plate_id', 'target_location']),
     'move_cover': obj({'cover_id': S, 'target_location': S, 'move_mode': S}, ['cover_id', 'target_location']),
     'plate_prepare': obj({'plate_ids': {'type': 'array', 'items': enum('PL_POOL', 'PL_OUTPUT', 'PL_REAGENT')}}),
     'thermal_door': obj({'door_command': enum('DO', 'DC')}),
