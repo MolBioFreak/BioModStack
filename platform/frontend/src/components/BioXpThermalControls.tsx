@@ -32,7 +32,7 @@ export function BioXpThermalControls({ variant, generation, ownershipGeneration,
 }) {
     const readings = useQuery({
         queryKey: ['bioxp', 'thermal-readings', generation],
-        queryFn: async ({ signal }) => (await api.get<{ services?: Reading[] }>('/api/bioxp/operator-controls/thermal/readings', { signal })).data,
+        queryFn: async ({ signal }) => (await api.get<{ services?: Reading[]; chiller_blocks_c?: Record<string, number | null> }>('/api/bioxp/operator-controls/thermal/readings', { signal, params: { include_chiller_blocks: true } })).data,
         enabled: connected && visible && generation > 0, retry: false, refetchOnWindowFocus: false,
         refetchInterval: connected && visible ? 10_000 : false, refetchIntervalInBackground: false,
     });
@@ -93,7 +93,8 @@ export function BioXpThermalControls({ variant, generation, ownershipGeneration,
         {heaterJob && <p role="status">Heaters off: {heaterJob}</p>}
         {heaters.error && <p role="alert">Heaters off: {heaters.error}</p>}
     </div>;
-    const now = (bank: Bank) => temp(reading(bank)?.current_c) ?? <span className="bx-th-muted">not reported</span>;
+    const current = (bank: Bank) => temp(bank.family === 'chiller' ? readings.data?.chiller_blocks_c?.[bank.id] : reading(bank)?.current_c);
+    const now = (bank: Bank) => current(bank) ?? <span className="bx-th-muted">not reported</span>;
 
     if (variant === 'compact') {
         return <section className="bx-ui bx-card bx-thermal-compact" aria-label="Chillers and thermal cycler" data-testid="thermal-controls">
@@ -103,7 +104,7 @@ export function BioXpThermalControls({ variant, generation, ownershipGeneration,
                 return <div key={bank.id} className="bx-th-row" data-bank={bank.id}>
                     <div><strong>{bank.family === 'thermal' ? `TC ${bank.label.toLowerCase()}` : bank.label}</strong>
                         <small>{row ? `ped ${temp(row.pedestal_c)?.replace(' °C', '') ?? '—'} · fan ${row.fan_speed ?? '—'}` : 'not reported'}</small></div>
-                    <span className="bx-th-now">{temp(row?.current_c) ?? '—'}<small data-target={bank.id}>set {target(row)}</small></span>
+                    <span className="bx-th-now">{current(bank) ?? '—'}<small data-target={bank.id}>set {target(row)}</small></span>
                     <span className="bx-th-set">{setpoint(bank)}</span>
                 </div>;
             })}

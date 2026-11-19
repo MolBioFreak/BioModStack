@@ -303,9 +303,30 @@ def clear_deck_contents(station: str | None = Query(default=None, min_length=2, 
 
 
 @router.get("/operator-controls/thermal/readings", response_model=None)
-async def operator_thermal_readings(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> Any:
-    """Robot's own block and chiller readings (temperature, pedestal, fan). Read-only."""
-    return await _query(runtime, "thermal_fan_services", require_fresh=False)
+async def operator_thermal_readings(runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+                                    include_chiller_blocks: bool = False) -> Any:
+    """Fan service state, optionally accompanied by passive chiller block readings in °C."""
+    generation = runtime.connection.generation
+    fan = await _query(runtime, "thermal_fan_services", require_fresh=False)
+    if not include_chiller_blocks:
+        return fan
+    try:
+        snapshot = await runtime.connection.request_active_query(
+            "chiller_snapshot", expected_generation=generation, require_fresh=False)
+    except RobotTransportError:
+        snapshot = {}  # The fan report remains usable when block readings are unavailable.
+    except ConnectionStateError as exc:
+        raise _translate_robot_error(exc) from exc
+    temps = snapshot
+    for key in ("domains", "chiller", "observation", "temps"):
+        temps = temps.get(key) if isinstance(temps, dict) else None
+    blocks = {}
+    for bank in ("rc", "oc"):
+        sensor = temps.get(f"{bank}_temp_c") if isinstance(temps, dict) else None
+        ack = sensor.get("ack") if isinstance(sensor, dict) else None
+        value = ack.get("value") if isinstance(ack, dict) else None
+        blocks[bank] = value / 1000 if type(value) in (int, float) else None
+    return {**fan, "chiller_blocks_c": blocks}
 
 
 @router.post("/operator-controls/deck/record", response_model=None,
