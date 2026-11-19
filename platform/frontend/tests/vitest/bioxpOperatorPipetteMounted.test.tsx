@@ -43,7 +43,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
     bioXpErrorText: (error: unknown) => String(error),
 }));
 
-import { BioXpPipetteAdvancedTools, BioXpPipetteControlPanel, BioXpSoftwareTipType } from '../../src/components/BioXpPipetteControlPanel';
+import { BioXpPipetteAdvancedTools, BioXpPipetteControlPanel } from '../../src/components/BioXpPipetteControlPanel';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -132,41 +132,18 @@ describe('mounted BioXP pipette status and tools', () => {
     it('robot primitives follow catalog admission and dispatch the mapped action; planner is separate', async () => {
         const invokeCalls: Array<{ actionId: string; inputs: Record<string, unknown> }> = [];
         const action = (actionId: string, enabled: boolean, disabledReason: string | null = null) => ({ action_id: actionId, enabled, disabled_reason: disabledReason, unavailable_reason: null } as never);
-        const actions = [action('route.liquid_tip_liquid_tip_post.08698e28', true), action('oem.z.scriptmove_to', true),
-            action('route.liquid_fluid_detection_liquid_fluid_detection_post.a12feee3', false, 'Motion arm is not confirmed.'),
+        const actions = [action('oem.z.scriptmove_to', false, 'Motion arm is not confirmed.'),
             action('oem.z.lift_pipette', true), action('oem.z.lower_pipette', true)];
         await act(async () => root.render(<BioXpPipetteAdvancedTools generation={77} connected actions={actions} invokeAction={(actionId, inputs) => invokeCalls.push({ actionId, inputs })} />));
         const buttons = [...container.querySelectorAll<HTMLButtonElement>('[data-physical-pipette-control]')];
         expect(buttons.map(b => [b.textContent, b.disabled])).toEqual([
-            ['Assign source tip type / location (host only)', false], ['Move to waste physically', false],
-            ['Detect fluid physically', true], ['Lift pipette head (Z)', false], ['Lower pipette head (Z)', false]]);
-        expect(buttons[2].title).toBe('Motion arm is not confirmed.');
-        await act(async () => buttons[2].click());
+            ['Move to waste physically', true], ['Lift pipette head (Z)', false], ['Lower pipette head (Z)', false]]);
+        expect(buttons[0].title).toBe('Motion arm is not confirmed.');
+        await act(async () => buttons[0].click());
         expect(invokeCalls).toEqual([]);
-        await act(async () => buttons[3].click());
+        await act(async () => buttons[1].click());
         expect(invokeCalls).toEqual([{ actionId: 'oem.z.lift_pipette', inputs: { location_id: 'LOC_TC' } }]);
         expect(container.textContent).toContain('Planner dependencies: gantry:unbound');
         expect(state.planCalls).toEqual([]);
-    });
-    it('sets tip type only through the advertised action, including 10 µL', async () => {
-        const calls: Array<{ actionId: string; inputs: Record<string, unknown> }> = [];
-        const tipAction = { action_id: 'tip-type', informational_method: 'POST', informational_path: '/liquid/pipette/tip-type', enabled: true, disabled_reason: null, unavailable_reason: null } as never;
-        const render = async (actions: unknown[], pipettes: unknown, invokePending = false) => act(async () => root.render(
-            <BioXpSoftwareTipType connected pipettes={pipettes as never} actions={actions as never} invokePending={invokePending} invokeAction={(actionId, inputs) => calls.push({ actionId, inputs })} />));
-        const button = () => container.querySelector<HTMLButtonElement>('[data-software-tip-type-control] button')!;
-        await render([], { tip_type: 201, channels: [] });
-        expect(button().disabled).toBe(true);
-        expect(container.textContent).toContain('Currently 201');
-        await render([tipAction], { tip_type: 201, channels: [] });
-        const select = container.querySelector<HTMLSelectElement>('select[aria-label="Software tip type"]')!;
-        expect([...select.options].map(o => Number(o.value))).toEqual([10, 50, 200, 201]);
-        await act(async () => { select.value = '10'; select.dispatchEvent(new Event('change', { bubbles: true })); });
-        await act(async () => button().click());
-        expect(calls).toEqual([{ actionId: 'tip-type', inputs: { tip_type: 10 } }]);
-        await render([tipAction], { tip_type: 10, channels: [] }, true);
-        expect(button().disabled).toBe(true);
-        await render([{ ...(tipAction as object), enabled: false, disabled_reason: 'Robot unavailable' }], { tip_type: 10, channels: [] });
-        expect(button().title).toBe('Robot unavailable');
-        expect(calls).toHaveLength(1);
     });
 });

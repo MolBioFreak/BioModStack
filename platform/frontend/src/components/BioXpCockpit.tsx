@@ -47,7 +47,7 @@ import { BioXpThermalControls } from './BioXpThermalControls';
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
 import { BioXpCalibrationAnalysis } from './BioXpCalibrationAnalysis';
 import { BioXpPressureCapture } from './BioXpPressureCapture';
-import { BioXpPipetteAdvancedTools, BioXpPipetteControlPanel, BioXpSoftwareTipType } from './BioXpPipetteControlPanel';
+import { BioXpPipetteAdvancedTools, BioXpPipetteControlPanel } from './BioXpPipetteControlPanel';
 import { BioXpPipetteCalibration } from './BioXpPipetteCalibration';
 import { BioXpPlatesPanel } from './BioXpPlatesPanel';
 import { BioXpCalibrationSettings } from './BioXpCalibrationSettings';
@@ -1879,9 +1879,6 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         onClick={() => setPipetteSection(name)} className={`rounded border px-3 py-1 text-sm ${pipetteSection === name ? 'border-cyan-400 bg-cyan-900 text-white' : 'border-slate-700 bg-slate-900 text-slate-300'}`}>{name}</button>)}
                 </div>
                 <div className="mt-3 rounded border border-slate-700 p-4">
-                    {pipetteSection === 'Tips' && <div className="mb-3"><BioXpSoftwareTipType connected={robotControlReady && operatorCatalog.data !== undefined}
-                        pipettes={operatorCatalog.data?.dashboard.pipettes ?? undefined} actions={catalog?.actions} catalogLoading={operatorCatalog.isLoading}
-                        invokePending={invokeOperatorAction.isPending} invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)} /></div>}
                     {pipetteSection === 'Plates' && <BioXpPlatesPanel visible={documentVisible && controlTab === 'pipettes'} generation={generation} connected={linkConnected} />}
                     {pipetteSection === 'Calibration' && <div className="mb-4 space-y-4">
                         <BioXpPipetteCalibration visible={documentVisible && controlTab === 'pipettes'} generation={generation} connected={linkConnected}

@@ -29,17 +29,13 @@ type Props = {
 const OPERATIONS: BioXpPipetteApplicationOperation[] = ['load_tip', 'move_to_waste', 'detect_fluid', 'plunger_up', 'plunger_down'];
 
 const PHYSICAL_ACTION_IDS = [
-    'route.liquid_tip_liquid_tip_post.08698e28',
     'oem.z.scriptmove_to',
-    'route.liquid_fluid_detection_liquid_fluid_detection_post.a12feee3',
     'oem.z.lift_pipette',
     'oem.z.lower_pipette',
 ] as const;
 
 const PHYSICAL_CONTROLS = [
-    'Assign source tip type / location (host only)',
     'Move to waste physically',
-    'Detect fluid physically',
     'Lift pipette head (Z)',
     'Lower pipette head (Z)',
 ] as const;
@@ -127,28 +123,6 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
     );
 }
 
-/** Software tip type: records the type for offsets and volumes; never picks up a tip. */
-export function BioXpSoftwareTipType({ connected = true, pipettes, actions = [], catalogLoading = false, invokePending = false, invokeAction }: {
-    connected?: boolean; pipettes?: Pipettes; actions?: BioXpOperatorActionSpec[]; catalogLoading?: boolean; invokePending?: boolean;
-    invokeAction?: (actionId: string, inputs: Record<string, unknown>) => void;
-}) {
-    const [selected, setSelected] = useState<10 | 50 | 200 | 201>(50);
-    const action = actions.find((row) => row.informational_method === 'POST' && row.informational_path === '/liquid/pipette/tip-type');
-    return <div className="rounded border border-slate-700 p-3 text-sm" data-software-tip-type-control>
-        <h4 className="font-semibold">Tip type in software</h4>
-        <p className="text-xs text-slate-400">Currently {pipettes?.tip_type ?? 'unknown'}. Sets which tip offset and volume limits apply. Does not pick up a tip.</p>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-            <label>Tip type<select aria-label="Software tip type" value={selected} onChange={(event) => setSelected(Number(event.target.value) as 10 | 50 | 200 | 201)} className="ml-2 rounded bg-slate-900 px-2 py-1">
-                {[10, 50, 200, 201].map((value) => <option key={value} value={value}>{value === 201 ? '200 µL (201)' : `${value} µL`}</option>)}
-            </select></label>
-            <button type="button" disabled={!connected || catalogLoading || invokePending || !action?.enabled || !invokeAction}
-                title={action?.disabled_reason ?? action?.unavailable_reason ?? undefined}
-                onClick={() => { if (action?.enabled && invokeAction) invokeAction(action.action_id, { tip_type: selected }); }}
-                className="rounded bg-cyan-800 px-3 py-1 text-white disabled:opacity-50">Set tip type</button>
-        </div>
-    </div>;
-}
-
 /** Robot-owned primitives and the no-motion planner; kept for service work. */
 export function BioXpPipetteAdvancedTools({ visible = true, generation = 0, connected = true, actions = [], catalogLoading = false, invokePending = false, invokeAction }: {
     visible?: boolean; generation?: number; connected?: boolean; actions?: BioXpOperatorActionSpec[]; catalogLoading?: boolean; invokePending?: boolean;
@@ -168,9 +142,7 @@ export function BioXpPipetteAdvancedTools({ visible = true, generation = 0, conn
     const actionById = (actionId: string) => actions.find((action) => action.action_id === actionId);
     const inputsFor = (control: typeof PHYSICAL_CONTROLS[number]): Record<string, unknown> => {
         switch (control) {
-            case 'Assign source tip type / location (host only)': return { action: 'load' };
             case 'Move to waste physically': return { location_id: 'WASTE_BIN' };
-            case 'Detect fluid physically': return { dry_run: false };
             case 'Lift pipette head (Z)': return { location_id: plungerLocation };
             case 'Lower pipette head (Z)': return { location_id: plungerLocation, overpress: false };
         }
@@ -196,7 +168,7 @@ export function BioXpPipetteAdvancedTools({ visible = true, generation = 0, conn
                     const enabled = actionById(actionId)?.enabled === true;
                     const reason = actionById(actionId)?.disabled_reason ?? actionById(actionId)?.unavailable_reason ?? 'Robot-owned physical primitive.';
                     return <button key={label} type="button" data-physical-pipette-control disabled={!connected || catalogLoading || invokePending || !enabled}
-                        title={enabled ? label === 'Assign source tip type / location (host only)' ? 'Host-only source type/location assignment; no physical pickup' : 'Robot-owned physical primitive' : reason}
+                        title={enabled ? 'Robot-owned physical primitive' : reason}
                         onClick={() => { if (invokeAction && enabled) invokeAction(actionId, inputsFor(label)); }}
                         className={enabled ? 'rounded border border-amber-600 bg-amber-800 px-2 py-2 text-amber-50 hover:bg-amber-700 disabled:opacity-35' : 'rounded border border-slate-700 bg-slate-900 px-2 py-2 text-slate-500'}>{label}</button>;
                 })}
