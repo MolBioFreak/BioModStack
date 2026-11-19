@@ -324,7 +324,7 @@ async def operator_thermal_readings(runtime: BioXpRuntime = Depends(get_bioxp_ru
     for bank in ("rc", "oc"):
         sensor = temps.get(f"{bank}_temp_c") if isinstance(temps, dict) else None
         ack = sensor.get("ack") if isinstance(sensor, dict) else None
-        value = ack.get("value") if isinstance(ack, dict) else None
+        value = ack.get("value") if isinstance(ack, dict) and ack.get("status") == 100 else None
         blocks[bank] = value / 1000 if type(value) in (int, float) else None
     return {**fan, "chiller_blocks_c": blocks}
 
