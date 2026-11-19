@@ -74,7 +74,7 @@ export function BioXpLiveDeckPipette({ generation, connected, visible, route, on
                 {[0, 1, 2, 3].map(item => <option key={item} value={item}>Channel {item + 1}</option>)}
             </select>
         </div></header>
-        {route.length === 0 ? <p className="bld-hint">Set “Click does” to Pipette, then click wells on the deck in order.</p>
+        {route.length === 0 ? <p className="bld-hint">Click wells on the deck in order and choose Aspirate from or Dispense to.</p>
             : <ol className="bld-route">{route.map((stop, index) => <li key={index} data-route-stop={routeLetter(index)}>
                 <i>{routeLetter(index)}</i><span title={stopLabel(stop)}>{stopLabel(stop)}</span>
                 <select aria-label={`Stop ${routeLetter(index)} action`} value={stop.action} onChange={event => update(index, { action: event.target.value as LiveRouteStop['action'] })}>

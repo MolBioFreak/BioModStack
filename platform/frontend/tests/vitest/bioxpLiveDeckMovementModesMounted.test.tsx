@@ -27,7 +27,9 @@ const button = (label: string, owner: ParentNode = live()) => {
     const el = [...owner.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === label);
     expect(el, label).toBeTruthy(); return el!;
 };
-const click = async (el: Element) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); }); await advance(); };
+const moveHere = () => [...document.querySelectorAll<HTMLButtonElement>('.bld-popup button')].find(b => b.textContent?.trim() === 'Move here');
+// A well click opens the well menu; its Move here button sends the well intent.
+const click = async (el: Element) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); }); const go = el.hasAttribute('data-well') ? moveHere() : undefined; if (go) await act(async () => go.click()); await advance(); };
 const well = (station: string, address: string) => live().querySelector(`[data-station="${station}"][data-well="${address}"]`)!;
 const move = (target: string) => live().querySelector(`svg g[data-move-to="${target}"]`)!;
 const status = () => live().querySelector('[data-testid="deck-lane-status"]')?.textContent;

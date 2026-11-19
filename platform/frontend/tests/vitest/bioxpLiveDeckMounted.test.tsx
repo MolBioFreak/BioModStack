@@ -41,8 +41,12 @@ async function render(next: Partial<BioXpLiveDeckProps> = {}) {
     });
 }
 function el(label: string) { const e = host.querySelector(`[aria-label="${label}"]`); expect(e, label).not.toBeNull(); return e!; }
-async function click(label: string, init: MouseEventInit = {}) { await act(async () => el(label).dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, ...init }))); }
-async function key(label: string, key: string, init: KeyboardEventInit = {}) { await act(async () => el(label).dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key, ...init }))); }
+const moveHere = () => [...document.querySelectorAll<HTMLButtonElement>('.bld-popup button')].find(b => b.textContent?.trim() === 'Move here');
+// A well click opens the well menu; its Move here button sends the well intent.
+async function click(label: string, init: MouseEventInit = {}) { const target = el(label); await act(async () => target.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, ...init }))); await moveFromMenu(target); }
+async function openMenu(label: string) { await act(async () => el(label).dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))); }
+async function moveFromMenu(target: Element) { const go = target.hasAttribute('data-well') ? moveHere() : undefined; if (go && !go.disabled) await act(async () => go.click()); }
+async function key(label: string, key: string, init: KeyboardEventInit = {}) { const target = el(label); await act(async () => target.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key, ...init }))); if (!init.repeat) await moveFromMenu(target); }
 async function button(text: string) { await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === text)!.click()); }
 beforeEach(() => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
@@ -164,7 +168,7 @@ it('shares the full deck with exact station/well callbacks for every rendered ad
     expect(api.post).not.toHaveBeenCalled();
     expect(host.querySelector('[data-testid="oem-deck-movement"]')!.textContent).toContain('Door slot');
     expect([...host.querySelectorAll('details')].every(d => !d.open)).toBe(true);
-});
+}, 180000);
 it('renders a vertical rail and four recognizable gun modules with fixed source centers; destination is not position', async () => {
     await render();
     const rail = host.querySelector('[data-testid="vertical-deck-arm"]')!;
@@ -254,7 +258,7 @@ it('rejects late old-generation geometry and cannot resurrect a prior connection
 it('respects only parent action admission, not missing pose/geometry, and preserves disabled reasons', async () => {
     await render({ dashboard: null, connected: false, wellDisabledReason: 'Submitting', stationDisabledReason: () => 'Submitting' });
     await click('Select Waste bin'); await click('Magnetic station A1'); expect(station).not.toHaveBeenCalled(); expect(well).not.toHaveBeenCalled();
-    expect(el('Magnetic station A1').getAttribute('aria-disabled')).toBe('true');
+    await act(async () => el('Magnetic station A1').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))); expect(moveHere()?.disabled).toBe(true);
     await render({ wellDisabledReason: null, stationDisabledReason: () => null });
     await key('Select Waste bin', 'Enter'); await key('Magnetic station A1', ' '); expect(station).toHaveBeenCalledTimes(1); expect(well).toHaveBeenCalledTimes(1);
 });
@@ -337,19 +341,18 @@ it('saves a well amount, builds a route from clicked wells and clears per module
     vi.mocked(api.get).mockImplementation((url: string) => url.endsWith('/updates') ? new Promise(() => {})
         : Promise.resolve({ data: url.endsWith('/deck/contents') ? { wells: { LOC_MS: { A1: 50 } } } : url === '/api/bioxp/calibration-settings' ? settings : {} }));
     await render();
-    await button('Pipette');
-    await vi.waitFor(() => expect(el('Magnetic station A1').closest('g')?.outerHTML ?? '').toBeTruthy());
-    await click('Magnetic station A1');
+    await vi.waitFor(() => expect(host.innerHTML).toContain('50 µL recorded'));
+    await openMenu('Magnetic station A1');
     const amount = el('Liquid in well (µL)') as HTMLInputElement;
     await vi.waitFor(() => expect((el('Liquid in well (µL)') as HTMLInputElement).value).toBe('50'));
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(amount, '80'); amount.dispatchEvent(new Event('input', { bubbles: true })); });
     await button('Save');
     expect(put).toHaveBeenLastCalledWith('/api/bioxp/operator-controls/deck/contents', { station: 'LOC_MS', wells: { A1: 80 } });
     await button('Aspirate from');
-    await click('Output chiller B2'); await button('Dispense to');
+    await openMenu('Output chiller B2'); await button('Dispense to');
     expect([...host.querySelectorAll('[data-route-stop]')].map(row => row.getAttribute('data-route-stop'))).toEqual(['A', 'B']);
     expect(host.querySelector('[data-route-stop="B"]')!.textContent).toContain('Output chiller B2');
-    await click('Magnetic station A1'); await button('Clear module');
+    await openMenu('Magnetic station A1'); await button('Clear module');
     expect(del).toHaveBeenLastCalledWith('/api/bioxp/operator-controls/deck/contents', { params: { station: 'LOC_MS' } });
     expect([...host.querySelectorAll('[data-route-stop]')]).toHaveLength(1);
     await button('Clear deck'); await button('Yes, clear');

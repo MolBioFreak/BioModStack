@@ -39,8 +39,11 @@ const button = (label: string, owner: ParentNode = host) => {
     const result = [...owner.querySelectorAll<HTMLButtonElement>('button')].find(el => el.textContent?.trim() === label);
     expect(result, label).toBeTruthy(); return result!;
 };
+const moveHere = () => [...document.querySelectorAll<HTMLButtonElement>('.bld-popup button')].find(b => b.textContent?.trim() === 'Move here');
+// A well click opens the well menu; its Move here button sends the well intent.
 const click = async (el: Element, detail = 1, options: MouseEventInit = {}) => {
     await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true, detail, ...options })); });
+    const go = el.hasAttribute('data-well') ? moveHere() : undefined; if (go && !go.disabled) await act(async () => go.click());
     await advance();
 };
 const tab = (name: string) => click(host.querySelector(`#control-tab-${name}`)!);
@@ -48,7 +51,9 @@ const key = async (el: Element, value: string, repeat = false) => {
     await act(async () => {
         el.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, repeat }));
         el.dispatchEvent(new KeyboardEvent('keyup', { key: value, bubbles: true }));
-    }); await advance();
+    });
+    const go = !repeat && el.hasAttribute('data-well') ? moveHere() : undefined; if (go && !go.disabled) await act(async () => go.click());
+    await advance();
 };
 const well = (station: string, address: string) => live().querySelector(`[data-station="${station}"][data-well="${address}"]`)!;
 const station = (label: string) => {
@@ -249,10 +254,11 @@ it('keeps view navigation, focus, arrow exploration and repeated keys nonmoving 
 it('keeps synchronous deck admission ownership across tabs, leaves Stop independent and accepts the next explicit intent after POST', async () => {
     autoAccept = false; await mount();
     const first = well('LOC_TC', 'B3'), second = well('LOC_OC', 'H12');
-    await act(async () => {
-        first.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
-        second.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
-    }); await advance();
+    // Two quick well-menu moves before any reply: only the first is admitted.
+    await act(async () => { first.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); });
+    await act(async () => { moveHere()!.click(); });
+    await act(async () => { second.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); });
+    await act(async () => { moveHere()?.click(); }); await advance();
     expect(held).toHaveLength(1); expect(held[0].body.inputs).toEqual({ location_id: 2, well: 'B3', position_flag: 1 });
     await tab('robot'); await tab('live-deck'); await click(second);
     expect(held).toHaveLength(1);

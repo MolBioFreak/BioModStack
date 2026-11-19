@@ -48,7 +48,8 @@ type PlateProfiles = { plates?: Record<string, { name?: string }>; stations?: Re
 type LibraryPlate = { id: string; name?: string; short_name?: string; vessel_geometry?: { height_to_volume?: number[][] | null; calibrated_low_gap_mm?: number | null } };
 type Popup = { kind: 'module'; station: string; left: number; top: number } | { kind: 'well'; station: string; locationId: number; well: string; left: number; top: number };
 const CONTENTS_URL = '/api/bioxp/operator-controls/deck/contents';
-const FIT = { x: 85, y: 30, width: 1075, height: 1070 };
+// Deck drawing plus a small margin; the outer blank band of the old view is cut.
+const FIT = { x: 94, y: 40, width: 1058, height: 994 };
 // Plate (gripper) station of each pipetting station, as the robot names them.
 const GRIP_STATION: Record<string, string> = { LOC_P_MS: 'LOC_MS', LOC_P_TC: 'LOC_TC', LOC_P_OC: 'LOC_OC', LOC_P_RC: 'LOC_RC' };
 const PLATE_STATIONS = deckResources.filter(resource => resource.kind === 'plate');
@@ -82,7 +83,6 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
     const plateGeometry: Record<string, PlateGeometry> = Object.fromEntries(plates.map(plate => [plate.id,
         { table: plate.vessel_geometry?.height_to_volume ?? null, gap: plate.vessel_geometry?.calibrated_low_gap_mm ?? null }]));
 
-    const [mode, setMode] = useState<'move' | 'pipette'>('move');
     const [route, setRoute] = useState<LiveRouteStop[]>([]);
     const [popup, setPopup] = useState<Popup | null>(null);
     const [draft, setDraft] = useState('');
@@ -132,10 +132,7 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
     const refreshDeck = () => { void refreshRecords(); void tipTrays.refetch(); void geometry.refetch(); };
     const openWell = (locationId: number, well: string) => {
         const resource = deckResources.find(item => item.locationId === locationId);
-        if (!resource || resource.kind === 'rack') {
-            if (!props.wellDisabledReason) props.onMoveToWell(locationId, well); else props.onBlockedMove?.({ locationId, well });
-            return;
-        }
+        if (!resource) return;
         const known = contents[resource.id]?.[well];
         setDraft(known === undefined ? '' : String(known)); setNotice(null);
         setPopup({ kind: 'well', station: resource.id, locationId, well, ...anchor(`[data-station="${resource.id}"][data-well="${well}"]`) });
@@ -192,18 +189,15 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
     const contentLabels = Object.fromEntries(Object.entries(contents).map(([station, wells]) => [station,
         Object.fromEntries(Object.entries(wells).map(([well, volume]) => [well, `${volume} µL recorded`]))]));
     const stopLabel = (stop: LiveRouteStop) => `${stationLabel(stop.station)} ${stop.well}`;
-    const pipetting = mode === 'pipette';
     return <section className="bioxp-live-deck" data-testid="oem-deck-movement" aria-label="Live deck">
-        <header className="bld-heading"><div><h2>Live deck</h2><p>{pipetting ? 'Click a well to record its liquid or add it to the route. Click a plate to set its type.' : 'Click a well or a Move button to move the head. Click a plate to set its type.'}</p></div><span className="bld-status">{connected ? 'Connected' : 'Disconnected'} · {geometryLabel}</span></header>
+        <header className="bld-heading"><div><h2>Live deck</h2><p>Click a well for its menu: move there, record its liquid, or add it to the route. Click a plate to set its type. Move buttons move the head.</p></div><span className="bld-status">{connected ? 'Connected' : 'Disconnected'} · {geometryLabel}</span></header>
         <div className="bld-workspace">
             <div className="bld-map-pane bioxp-method-map" ref={pane}>
                 <BioXpWorkflowDeck canvas fit={FIT} selection={selection} onChange={() => { /* Authoring selection is not a live intent. */ }}
                     resources={resources} tipOccupancy={props.tipOccupancy} holderTargets={holderTargets} contents={contentLabels}
-                    live={{ onStation: props.onMoveToStation, onWell: pipetting ? openWell : props.onMoveToWell, selectedStation: selectedStation?.id,
-                        stationDisabledReason: props.stationDisabledReason, wellDisabledReason: pipetting ? null : props.wellDisabledReason, onBlocked: props.onBlockedMove, onModule: openModule }}
-                    navigationLead={<span className="bld-click-mode" role="group" aria-label="Deck click action">Click does
-                        <button type="button" aria-pressed={!pipetting} onClick={() => { setMode('move'); setPopup(null); }}>Move head</button>
-                        <button type="button" aria-pressed={pipetting} onClick={() => { setMode('pipette'); setPopup(null); }}>Pipette</button>
+                    live={{ onStation: props.onMoveToStation, onWell: openWell, selectedStation: selectedStation?.id,
+                        stationDisabledReason: props.stationDisabledReason, wellDisabledReason: null, onBlocked: props.onBlockedMove, onModule: openModule }}
+                    navigationLead={<span className="bld-click-mode" role="group" aria-label="Deck records">
                         <button type="button" onClick={refreshDeck} title="Re-read plate types, liquid amounts, tips and geometry.">Refresh deck</button>
                         {confirmClear ? <><span>Clear all plate types and liquid amounts?</span>
                             <button type="button" className="bld-danger" disabled={saving} onClick={() => void clearDeck()}>Yes, clear</button>
@@ -252,13 +246,14 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
                 {popup?.kind === 'well' && <div role="dialog" aria-label={`${stationLabel(popup.station)} ${popup.well}`} className="bx-ui bld-popup" style={{ left: popup.left, top: popup.top }}>
                     <button type="button" className="bld-popup-close" aria-label="Close" onClick={() => setPopup(null)}>×</button>
                     <b>{stationLabel(popup.station)} · {popup.well}</b>
+                    <div className="bld-popup-row"><button type="button" className="bx-go" disabled={!!props.wellDisabledReason && !props.onBlockedMove} title={props.wellDisabledReason ?? undefined}
+                        onClick={() => { const { locationId, well } = popup; setPopup(null); if (!props.wellDisabledReason) props.onMoveToWell(locationId, well); else props.onBlockedMove?.({ locationId, well }); }}>Move here</button></div>
+                    {!(deckResources.find(item => item.id === popup.station)?.kind === 'rack') && <>
                     <div className="bld-popup-row"><label>Liquid in well <input type="number" min={0} step="any" aria-label="Liquid in well (µL)" placeholder="µL" value={draft} onChange={event => setDraft(event.target.value)} /> µL</label>
                         <button type="button" className="bx-go" disabled={saving} onClick={() => void saveWell(popup.station, popup.well, draft)}>Save</button></div>
                     <small>Your estimate; saved until you clear it. Checked by pressure detection when pipetting.</small>
-                    <div className="bld-popup-row"><button type="button" onClick={() => addStop('aspirate')}>Aspirate from</button><button type="button" onClick={() => addStop('dispense')}>Dispense to</button>
-                        <button type="button" disabled={!!props.wellDisabledReason && !props.onBlockedMove} title={props.wellDisabledReason ?? undefined}
-                            onClick={() => { const { locationId, well } = popup; setPopup(null); if (!props.wellDisabledReason) props.onMoveToWell(locationId, well); else props.onBlockedMove?.({ locationId, well }); }}>Move head</button></div>
-                    <div className="bld-popup-row"><button type="button" disabled={saving} title="Clears this module's plate type and liquid amounts. Nothing moves." onClick={() => void clearModule(popup.station)}>Clear module</button></div>
+                    <div className="bld-popup-row"><button type="button" onClick={() => addStop('aspirate')}>Aspirate from</button><button type="button" onClick={() => addStop('dispense')}>Dispense to</button></div>
+                    <div className="bld-popup-row"><button type="button" disabled={saving} title="Clears this module's plate type and liquid amounts. Nothing moves." onClick={() => void clearModule(popup.station)}>Clear module</button></div></>}
                     {notice && <p role="alert">{notice}</p>}
                 </div>}
                 {!popup && notice && <p role="alert">{notice}</p>}

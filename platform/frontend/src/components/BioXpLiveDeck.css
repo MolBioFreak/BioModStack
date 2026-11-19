@@ -140,4 +140,12 @@
 .bioxp-live-deck .bld-workspace { grid-template-columns: minmax(0, 1fr) clamp(360px, 37%, 540px); align-items: start; }
 .bioxp-live-deck .bld-side { grid-template-rows: none; }
 .bioxp-live-deck .bioxp-method-map .bwd-canvas-presentation .bwd-map { height: auto; aspect-ratio: 1075 / 1070; }
+.bld-camera .aspect-\[4\/3\] { width: min(100%, 640px); margin-left: auto; margin-right: auto; }
+@media (max-width: 1100px) { .bioxp-live-deck .bld-workspace { grid-template-columns: minmax(0, 1fr); } }
+/* No scrolling to see the deck: the deck is sized to the window height (never wider
+   than the reference 63%), the single card rail takes the rest of the width, and the
+   record cards stay in one row under both. */
+.bioxp-live-deck { --bld-fit-h: clamp(560px, calc(100dvh - 390px), 1400px); max-width: none; }
+.bioxp-live-deck .bld-workspace { grid-template-columns: min(calc(var(--bld-fit-h) * 1058 / 994), calc(63% - 14px)) minmax(360px, 1fr); }
+.bioxp-live-deck .bioxp-method-map .bwd-canvas-presentation .bwd-map { aspect-ratio: 1058 / 994; max-height: var(--bld-fit-h); }
 @media (max-width: 1100px) { .bioxp-live-deck .bld-workspace { grid-template-columns: minmax(0, 1fr); } }
