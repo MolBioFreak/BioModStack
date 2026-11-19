@@ -134,10 +134,3 @@
 .bioxp-live-deck { --bld-deck-h: clamp(840px, calc(100dvh - 230px), 1300px); max-width: max(1408px, calc(var(--bld-deck-h) * 1.5)); }
 .bld-band { gap: 14px; margin-top: 14px; align-items: stretch; }
 @media (max-width: 1100px) { .bld-workspace { grid-template-columns: minmax(0, 1fr); } .bioxp-live-deck { --bld-deck-h: clamp(520px, 100vw, 840px); } }
-/* Wider than the approved form needs: same deck and rail, with the three record cards as a third column instead of blank space. */
-@media (min-width: 1900px) {
-  .bioxp-live-deck { max-width: none; display: grid; grid-template-columns: minmax(0, calc(var(--bld-deck-h) * 1.5)) minmax(0, 1fr); column-gap: 14px; align-items: start; }
-  .bioxp-live-deck > * { grid-column: 1 / -1; }
-  .bioxp-live-deck > .bld-workspace { grid-column: 1; grid-row: 2; }
-  .bioxp-live-deck > .bld-band { grid-column: 2; grid-row: 2; margin-top: 0; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); align-items: start; }
-}
