@@ -403,3 +403,19 @@ it('keeps dashboard observation running on the Workflows tab without mutations',
     expect(requests.some(r => r.url.endsWith('/operator-controls/updates'))).toBe(true);
     expect(mutations()).toHaveLength(0);
 });
+
+it('refreshes Motion at unchanged ownership without sending a command', async () => {
+    const motion = catalog.dashboard.telemetry.motion;
+    Object.assign(motion, { state: 'unknown', enabled: false, reason: 'Same-epoch CAN readiness has not been established.' });
+    catalog.dashboard.telemetry.connection.ownership.CAN_READY = null;
+    await mount('robot');
+    const toggle = () => host.querySelector('[data-testid="motion-toggle"]')?.getAttribute('data-motion');
+    expect(toggle()).toBe('unknown');
+    for (const [state, enabled] of [['off', false], ['on', true]] as const) {
+        Object.assign(motion, { state, enabled, reason: enabled ? null : 'Motion is inactive.' });
+        if (enabled) catalog.dashboard.telemetry.connection.ownership.CAN_READY = true;
+        await advance(6000);
+        expect(toggle()).toBe(state);
+    }
+    expect(mutations()).toEqual([]);
+});

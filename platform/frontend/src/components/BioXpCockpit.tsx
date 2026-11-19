@@ -522,7 +522,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const ownershipLabel = ownership
         ? `${ownership.transport ?? 'unknown'} / ${ownership.usb ?? 'unknown'} / ${ownership.router ?? 'unknown'}`
         : 'Unavailable';
-    const motionControlsAvailable = displayTelemetry?.motion.enabled;
+    const motionControlsAvailable = displayTelemetry?.motion.state === 'unknown' ? null : displayTelemetry?.motion.enabled;
     const telemetryUnavailableReason = !linkConnected ? 'Connect to view robot state.'
         : !robotControlReady ? 'Robot runtime is not ready; telemetry is unavailable.'
             : catalogV2Query.error != null ? `Robot state request failed: ${bioXpErrorText(catalogV2Query.error)}`
@@ -535,7 +535,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         ? 'Controllers enabled — not a homing or reference confirmation'
         : motionControlsAvailable === false
             ? `Blocked${dashboard?.motion.reason ? ` — ${dashboard.motion.reason}` : ''}`
-            : `Unknown — ${telemetryUnavailableReason ?? 'Telemetry is unavailable.'}`;
+            : `Unknown — ${telemetryUnavailableReason ?? dashboard?.motion.reason ?? 'Telemetry is unavailable.'}`;
     const recentCommands = useMemo(
         () => (!displayConnected ? [] : (historyQuery.data?.items ?? [])).slice(0, historyLimit),
         [historyQuery.data?.items, displayConnected, historyLimit],
@@ -1397,7 +1397,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                             onClick={() => disconnect.mutate(undefined)}
                         >Disconnect</button>
 </>}
-                motion={<BioXpMotionToggle enabled={motionControlsAvailable} reason={dashboard?.motion.reason} connected={linkConnected}
+                motion={<BioXpMotionToggle reportedState={dashboard?.motion.state} enabled={motionControlsAvailable} reason={dashboard?.motion.reason} connected={linkConnected}
                     onDisabledReason={v2ActionDisabledReason('meta.activate_motion')} pending={invokeLifecycleActionMutation.isPending}
                     onOn={claimTransport} onOff={motionOff} />}
                 connectionMessages={<>                        {statusQuery.isError && <p role="status" className="mt-1 text-sm text-[var(--text-secondary)]">Connection status refresh failed; showing last-known observations. The robot checks each request.</p>}

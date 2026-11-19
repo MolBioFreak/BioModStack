@@ -6,7 +6,7 @@ export interface BioXpStatusStripProps {
     data: BioXpOperatorDashboard | undefined;
     stale?: boolean;
     connectedLabel?: string;
-    motionControlsAvailable?: boolean;
+    motionControlsAvailable?: boolean | null;
     motionLabel?: string;
     observedAt?: string | null;
     hardwareFresh?: boolean | null;

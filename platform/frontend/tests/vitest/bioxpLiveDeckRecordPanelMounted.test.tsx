@@ -132,7 +132,7 @@ it('shows a robot refusal without retrying', async () => {
 it('Motion toggle: On follows the robot catalog, Off is never disabled by sensor state', async () => {
     const on = vi.fn(), off = vi.fn();
     await render(<BioXpMotionToggle enabled={false} reason="Door open" connected onDisabledReason="Door open; close it first." onOn={on} onOff={off} />);
-    expect(host.querySelector('[data-motion]')!.getAttribute('data-motion')).toBe('off');
+    expect(host.querySelector('[data-motion]')!.getAttribute('data-motion')).toBe('blocked');
     expect(button('Enable motion').disabled).toBe(true);
     expect(button('Disable motion').disabled).toBe(false);
     await act(async () => button('Disable motion').click()); expect(off).toHaveBeenCalledTimes(1);
@@ -144,4 +144,16 @@ it('Motion toggle: On follows the robot catalog, Off is never disabled by sensor
     await render(<BioXpMotionToggle enabled={undefined} connected={false} onDisabledReason={null} onOn={on} onOff={off} />);
     expect(host.querySelector('[data-motion]')!.getAttribute('data-motion')).toBe('unknown');
     expect(button('Disable motion').disabled).toBe(true);
+});
+
+it('reports unknown CAN, explicit Off, and a readiness promotion without sending commands', async () => {
+    const on = vi.fn(), off = vi.fn();
+    for (const state of ['unknown', 'off', 'on', 'blocked'] as const) {
+        await render(<BioXpMotionToggle enabled={state === 'on'} reportedState={state} connected
+            onDisabledReason={null} onOn={on} onOff={off} />);
+        expect(host.querySelector('[data-motion]')?.getAttribute('data-motion')).toBe(state);
+        expect(button('Disable motion').getAttribute('aria-pressed')).toBe(String(state === 'off'));
+        expect(button('Disable motion').disabled).toBe(false);
+    }
+    expect(on).not.toHaveBeenCalled(); expect(off).not.toHaveBeenCalled();
 });

@@ -301,7 +301,7 @@ export interface BioXpOperatorDashboard {
     schema_version: 'bioxp.operator_dashboard.v1';
     ownership_generation: number;
     connection: { live: boolean; ownership: Record<string, unknown> };
-    motion: { enabled: boolean; reason: string | null };
+    motion: { enabled: boolean; reason: string | null; state?: 'on' | 'off' | 'blocked' | 'unknown' };
     operation: { state: string | null; reason: string | null };
     enclosure: { door_closed: boolean | null; latch_closed: boolean | null };
     axes: BioXpOperatorDashboardAxis[];
