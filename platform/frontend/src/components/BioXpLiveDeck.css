@@ -131,14 +131,6 @@
 .bld-route li { grid-template-columns: 20px minmax(0, 1fr) 96px 62px 18px 26px; }
 /* Approved form: deck left, one card rail right, three record cards under. The whole
    block keeps those proportions on any monitor: its width follows the deck height. */
-.bioxp-live-deck { --bld-deck-h: clamp(700px, calc(100dvh - 215px), 1500px); }
-/* The deck drawing is square: it is as large as the window height allows and the card rail takes all remaining width. */
-.bioxp-live-deck .bld-workspace { grid-template-columns: min(66%, var(--bld-deck-h)) minmax(0, 1fr); }
-@media (min-width: 1700px) {
-  .bioxp-live-deck .bld-side { grid-template-columns: minmax(360px, 1fr) minmax(0, 1.35fr); grid-template-rows: auto 1fr; }
-  .bioxp-live-deck .bld-side > * { grid-column: 2; }
-  .bioxp-live-deck .bld-side > .bld-camera { grid-column: 1; grid-row: 1 / span 2; }
-  .bioxp-live-deck .bld-camera > section { height: 100%; }
-}
+.bioxp-live-deck { --bld-deck-h: clamp(840px, calc(100dvh - 230px), 1300px); max-width: max(1408px, calc(var(--bld-deck-h) * 1.5)); }
 .bld-band { gap: 14px; margin-top: 14px; align-items: stretch; }
 @media (max-width: 1100px) { .bld-workspace { grid-template-columns: minmax(0, 1fr); } .bioxp-live-deck { --bld-deck-h: clamp(520px, 100vw, 840px); } }
