@@ -168,7 +168,7 @@ function UnassignedProjectRecords({ model }: { model: ProjectHubReadModel }) {
 
 export function DNASequenceProjectWorkspace({ model }: { model: ProjectHubReadModel }) {
     return (
-        <section aria-label="DNA sequence relationship workspace" className="dna-project-workspace min-h-0 flex-1 overflow-auto bg-surface p-3 sm:p-4">
+        <section aria-label="DNA sequence relationship workspace" className="dna-project-workspace shrink-0 bg-surface p-3 sm:p-4">
             <div className="mx-auto max-w-7xl">
                 <header className="flex flex-wrap items-start justify-between gap-3">
                     <div>
