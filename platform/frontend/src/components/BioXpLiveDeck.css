@@ -150,3 +150,18 @@
 .bioxp-live-deck .bld-workspace { grid-template-columns: minmax(0, 1fr) clamp(360px, 37%, 540px); }
 .bioxp-live-deck .bioxp-method-map .bwd-canvas-presentation .bwd-map { aspect-ratio: 1058 / 994; max-height: var(--bld-fit-h); }
 @media (max-width: 1100px) { .bioxp-live-deck .bld-workspace { grid-template-columns: minmax(0, 1fr); } }
+/* Wide screens: plate/thermal/record cards stacked in a narrow left column, the deck
+   filling the middle at its true proportions, camera / pipette / head rail on the right. */
+@media (min-width: 1800px) {
+  .bioxp-live-deck { display: grid; grid-template-columns: 490px minmax(0, 1fr) 540px; grid-template-rows: auto auto auto auto 1fr auto auto; gap: 14px; align-items: start; }
+  .bioxp-live-deck > * { grid-column: 1 / -1; }
+  .bioxp-live-deck .bld-workspace, .bioxp-live-deck .bld-band { display: contents; }
+  .bioxp-live-deck .bld-map-pane { grid-column: 2; grid-row: 2 / span 4; }
+  .bioxp-live-deck .bld-side { grid-column: 3; grid-row: 2 / span 4; }
+  .bioxp-live-deck .bld-band > :nth-child(1) { grid-column: 1; grid-row: 2; }
+  .bioxp-live-deck .bld-band > :nth-child(2) { grid-column: 1; grid-row: 3; }
+  .bioxp-live-deck .bld-band > :nth-child(3) { grid-column: 1; grid-row: 4; }
+  .bioxp-live-deck .bioxp-method-map .bwd-canvas-presentation .bwd-map { max-height: none; }
+  .bioxp-live-deck .bld-pose-card { grid-row: 6; margin-top: 0; }
+  .bioxp-live-deck .bld-details { grid-row: 7; margin-top: 0; }
+}
