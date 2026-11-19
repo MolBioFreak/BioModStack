@@ -56,14 +56,15 @@ history is the archive for obsolete material.
 
 ## Supported product areas
 
-Current BMS surfaces include:
+Use the [workflow index](docs/README.md#what-are-you-trying-to-do) to choose a task and its result workspace. Current BMS surfaces include:
 
 - structure prediction, validation, and governed structure review;
-- de novo/binder-design and protein-redesign workflows;
-- conformational mapping and molecular-dynamics orchestration/review;
+- binder design for a target, including BindCraft2 and BoltzGen;
+- de novo protein design and redesign, centered on RFD4-Proteina;
+- conformational mapping and GROMACS molecular dynamics;
 - molecular-biology design, construct, and verification workflows;
 - Nanopore/NGS launch, quality-control, and result review;
-- scientific result artifacts and the Structure Workbench;
+- family alignments, statistics, scientific result artifacts and the Structure Workbench;
 - compact BioXP operator integration, where robot-local capability and safety
   contracts remain authoritative;
 - managed service, workflow, and deployment status for operators.

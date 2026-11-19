@@ -5,70 +5,26 @@ also expose sequence operations, nanopore analysis, and the BioXP compact contro
 
 ## Molecular Biology Toolkit
 
-Frontend route:
-- `/designer`
+Start at `/designer` for work on a molecule. Use `/ngs` for a sequencing run, even when the reference is the same construct. The [Molecular Biology Toolkit](../platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx) groups work around the selected molecule:
 
-Primary component:
-- [platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx](../platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx)
+| Task | Where to work and what to keep |
+|---|---|
+| Create or edit a construct | Import, paste or reopen a DNA/RNA record from the sequence shelf. Use the sequence and feature views to edit or annotate it. Use History to distinguish the current molecule from an earlier revision; share the revision when the exact sequence matters. |
+| Review primers and PCR products | Use the Primer and PCR panels on the chosen template. A primer annotation and a simulated product are different records. Keep the template revision with the product. |
+| Inspect restriction sites or assemble a construct | Use Digest for cut maps and predicted fragments; use Assembly for restriction–ligation, Gibson overlap assembly or Golden Gate. A preview is not a saved molecule. Reopen the saved product or exact revision before using it as input to another operation. |
+| Compare or inspect sequences | Use search, pairwise alignment or RNA structure inspection in the editor. For a family alignment, use the [Alignments workspace](Workspaces.md), not the editor’s pairwise panel. |
 
-Current surface includes:
-
-- DNA and RNA construct viewing/editing
-- sequence shelf / construct library
-- construct import and paste flows
-- feature and primer editing
-- digest planning
-- PCR product generation
-- search/find utilities
-- direct sequence edit operations
-- GC-content and annotation-oriented sequence visualization
-
-The mol bio API surface is split across:
-
-- `/api/sequences`
-  saved nucleotide constructs
-- `/api/molbio`
-  digest, PCR, ligation, mutagenesis, Gibson, and Golden Gate operations
-- `/api/user-sequences`
-  user sequence library helpers
-- `/api/user-templates`
-  reusable sequence/template assets
+For maintainers, [restriction operations](../platform/api/routers/molbio_restriction.py), [Gibson suggestions](../platform/api/routers/molbio_gibson_suggest.py) and [Golden Gate design](../platform/api/routers/molbio_golden_gate_design.py) are distinct from the sequence shelf. A Project reference identifies a record; it is not itself an exported copy of the molecule.
 
 ## Nanopore / NGS Surface
 
-Frontend route:
-- `/ngs`
+Open `/ngs` for ONT run review. Pick the workflow by the input already in hand and the question to answer. The [ONT configuration](../platform/api/config/models/nanopore.yaml) marks the suite experimental; its [workflow implementations](../workflows/ngs/) distinguish these tasks:
 
-Primary components:
+- **Basecalling:** DNA and RNA basecalling are separate modes for raw reads. Existing FASTQ reads do not require another basecall just to review read quality.
+- **Read and construct QC:** FASTQ QC summarizes reads; plasmid QC compares reads with a reference. Construct screening, pooled reference assignment and clone validation are distinct modes, not names for the same report.
+- **Methylation analysis:** review modified-base evidence from compatible inputs, including an already tagged BAM. A plain alignment or FASTQ is not equivalent to modified-base calls.
 
-- [platform/frontend/src/components/NGSToolkit.tsx](../platform/frontend/src/components/NGSToolkit.tsx)
-- [platform/frontend/src/components/NanoporeTemplate.tsx](../platform/frontend/src/components/NanoporeTemplate.tsx)
-
-The current sequencing surface is oriented around Oxford Nanopore workflows.
-
-Supported input patterns:
-
-- POD5 input for Dorado basecalling
-- existing BAM input for methylation/reporting workflows
-- FASTQ input for alignment and QC against a reference
-
-Current sequencing features:
-
-- Dorado basecalling
-- optional Dorado alignment
-- BAM normalization/preparation for downstream analysis
-- modkit methylation summary outputs
-- FASTQ plasmid QC
-- IGV-ready track and reference artifacts
-- optional clone-validation style workflow handoff parameters
-
-Sequencing model configuration:
-- [platform/api/config/models/nanopore.yaml](../platform/api/config/models/nanopore.yaml)
-
-The workflow logic lives in:
-- [ngs.nf](../ngs.nf), which dispatches the nanopore workflow entrypoint
-- [workflows/ngs/ont_methylation_analysis.nf](../workflows/ngs/ont_methylation_analysis.nf)
-- the Dorado/modkit modules under `modules/`
+Open the selected run generation for its reports, alignments and retained files. Use the read and signal workbench below for a particular read or locus. The [BNS deployment guide](BNS_NGS_Runtime_Deployment.md) covers a separate edition; it does not establish which dependencies are installed in full BMS.
 
 ### ONT Read and Signal Workbench
 

@@ -1,276 +1,33 @@
-# Structure Design and Refinement
+# Structure prediction, design and simulation
 
-This document describes the structure-design source contracts in BioModStack.
-Workflow and registry presence is not a claim of deployed or scientifically
-qualified capability. Acquisition, admission, and live acceptance remain separate.
+Choose the workflow by the result you need. **Binder design** and **de novo protein design/redesign** are separate starting points, even when both can use the same prediction or analysis tool. If the work belongs to a Project, open its saved setup first so you can return to the Job and its results from the same experiment. See [Projects, Jobs and results](Project_to_Result.md).
 
-## Mandatory model-control policy
+## Binder design
 
-Every model in this document is governed by
-[Model configuration, operator control, and agent parity](Model_Configuration_Operator_Control_and_Agent_Parity.md).
-All relevant scientific and inference settings must be available through suitable
-typed browser controls and the same typed API used by AI agents. Model settings,
-effective execution values, lineage, data, statistics, visualization, capture,
-and exports must use global reusable mechanisms where applicable. Workflow cards
-may add context. They do not receive permission to hide supported model settings
-or create reduced parallel result authorities.
+Use this family when the question is about a binder and its target. **BindCraft2 (BC2)** is a native campaign workflow, marked experimental in its [BMS configuration](../platform/api/config/models/bindcraft2.yaml). A campaign, its ranking, and a selected candidate are different records. Reopen the campaign to review its candidates; carry the selected candidate and source Job into any subsequent refinement. Ranking an existing campaign is not a new generation run.
 
-The active FrustraMPNN global tranche is specified in
-[FrustraMPNN global configuration and analysis workbench](specs/frustrampnn-global-configuration-analysis-workbench.md).
-It must reach 100% before workflow-specific Structure Prediction, RFD3, and CM
-consumer tranches are considered seamless integration work.
+**BoltzGen** is a separate [binder generation workflow](../workflows/boltzgen_generation.nf), not a BC2 stage. The [De Novo Binder launcher](../platform/frontend/src/lib/launcherCatalog.ts) also offers workflow-specific PPIFlow and RFantibody paths. Use the modes exposed by the selected engine. Selection, refinement and GROMACS simulation are separate actions, not automatic stages that every binder completes. For an existing result, use the [results guide](Results_and_Analysis.md) to distinguish the campaign from a particular structure or round.
 
-## Main workflow families
+## De novo protein design and redesign
 
-### Antibody de novo and refinement
+Use this family to generate a new protein or work from an existing structure. **RFD4-Proteina** is the suite to use for new work. Its [task workspace](../platform/frontend/src/components/Rfd4TaskWorkspace.tsx) and [native workflow](../workflows/rfd4_proteina.nf) distinguish generation, refinement and search from evaluation. In the [model configuration](../platform/api/config/models/rfd4_proteina.yaml), `generate` includes generation or refinement; `evaluate` evaluates native structures rather than creating another design. When reopening a result, retain the native output identity as well as the Job ID, especially if the run produced multiple samples.
 
-Registry and parent workflow:
+Other implemented choices have their own roles: the experimental De Novo workbench includes DISCO and La-Proteina generation, while the [La-Proteina evaluator](../workflows/laproteina_evaluation.nf) operates on retained samples. [Complexa](../workflows/complexa.nf) has its own generation and evaluation contract. These are not aliases for RFD4-Proteina. A sequence method offered for a selected structure is not another top-level design workflow.
 
-- [Antibody / nanobody model configuration](../platform/api/config/models/antibody_denovo.yaml)
-- [workflows/antibody_denovo.nf](../workflows/antibody_denovo.nf)
+**Older results:** RFD3 is being phased out. Its name and the disabled `protein_local_redesign` ID can still occur in saved Jobs; neither is the recommended entry for new work. RF3 is not a current structure-prediction choice.
 
-[workflows/antibody_child.nf](../workflows/antibody_child.nf) is the internal
-validation/scoring child, not the user-facing parent entrypoint.
+## Structure prediction
 
-Entry modes include:
+Use Structure Prediction when you already have the molecular inputs and want a predicted structure. Choose [Protenix](../platform/api/config/models/protenix.yaml), [Boltz-2](../platform/api/config/models/boltz2.yaml), [NVIDIA Fold-CP](../platform/api/config/models/boltz_cp_experimental.yaml) or [ESMFold2](../platform/api/config/models/esmfold2.yaml) according to the inputs and compute available. Fold-CP is a backend within this workflow. The older `esmfold2_experimental` ID reopens as ESMFold2, not as a second predictor.
 
-- `antibody_denovo_pipeline`
-- `antibody_refinement_pipeline`
+Review the selected prediction and its own confidence artifacts in the [structure prediction results workspace](../platform/frontend/src/components/StructurePredictionWorkspace.tsx). A folding MSA is an input to a prediction, not a family-alignment result. A structure prediction used to check a design is not itself a binder generation run or experimental confirmation of binding.
 
-Current pipeline shape:
+## Conformational mapping and molecular dynamics
 
-1. RFantibody backbone generation
-2. sequence design with FAMPNN, AntiFold, or ProteinMPNN
-3. structure validation with Boltz-2, plus workflow-level Protenix validation when explicitly selected by the antibody/structure workflows
-4. downstream scoring and review
-5. optional refinement/maturation branches such as PPIFlow
+- **Conformational mapping** compares structural hypotheses. Its [typed workflow](../workflows/conformational_mapping.nf) distinguishes Protenix ensembles, ConforNets hypotheses and registered structure imports. Review a result in the context of its source. An imported structure is not a new prediction; an ensemble is not a time-resolved trajectory.
+- **GROMACS molecular dynamics** produces trajectories, energies and checkpoints. Use the [MD guide](Molecular_Dynamics_Suite.md) for guided versus prepared inputs, feature availability, playback and restart. A saved structure or a short relaxation is not a completed MD simulation.
+- **FrustraMPNN** is structure analysis, not sequence redesign. Where a parent workflow requests it, inspect its analysis for the selected structure rather than looking for a separate design launcher.
 
-Important notes:
+## Availability and further reading
 
-- this is the main staged antibody/binder refinement surface in BMS
-- refinement is designed to consume upstream artifacts rather than always start
-  from RFantibody
-- Boltz-2 is the registry-backed validator exposed for this path; Protenix remains a workflow-level validator module/param path, not a standalone model-registry YAML in the current tracked tree
-- RF3 exists as a generic structure predictor but should not be described here
-  as the main antibody-validator backend
-
-### Generic structure prediction and validation
-
-BioModStack exposes one Structure Prediction surface through the API model
-registry under [platform/api/config/models](../platform/api/config/models) and
-[workflow-specific dispatch](../platform/api/services/workflow_adapter_registry.py).
-[main.nf](../main.nf) is a compatibility wrapper, not the universal API launch path.
-
-Current registry-backed predictor families:
-
-- [Boltz-2](../platform/api/config/models/boltz2.yaml)
-- [RF3](../platform/api/config/models/rf3.yaml)
-- [NVIDIA Fold-CP](../platform/api/config/models/boltz_cp_experimental.yaml)
-
-Workflow-level predictor/validator modules also include [Protenix](../modules/protenix.nf),
-but there is no tracked `platform/api/config/models/protenix.yaml` in the current
-registry. Do not describe Protenix as a standalone registry card until that YAML
-or an equivalent API registry entry exists again.
-
-Important distinction:
-
-- Boltz-2 / RF3 remain registry-backed structure predictors
-- NVIDIA Fold-CP is selected inside Structure Prediction when OEM context
-  parallelism is appropriate for the target and compute placement
-
-### Protein local redesign
-
-Primary workflow:
-
-- [workflows/protein_local_redesign.nf](../workflows/protein_local_redesign.nf)
-
-Purpose:
-
-- remodel a limited window of an existing structure
-- merge the edited region back into the original context
-- redesign sequence with FAMPNN or ProteinMPNN
-- optionally validate the resulting complex
-
-### Experimental protein CAD
-
-Primary workflow:
-
-- [workflows/protein_cad_experimental.nf](../workflows/protein_cad_experimental.nf)
-
-Registry model:
-
-- [platform/api/config/models/protein_cad_experimental.yaml](../platform/api/config/models/protein_cad_experimental.yaml)
-
-Purpose:
-
-- compile BMS launch inputs into native La-Proteina or DISCO requests
-- run experimental non-binder de novo generation backends
-- normalize outputs into BMS design IDs and manifests
-
-Current backend coverage from the live model config:
-
-- La-Proteina:
-  unconditional generation and motif scaffolding
-- DISCO:
-  unconditional, ligand-conditioned, DNA-conditioned, RNA-conditioned, and
-  custom-JSON launches
-
-Use the linked model configuration and workflow for the supported parameter and
-execution contracts. Runtime availability must be checked through the managed
-capability/preflight surfaces; no live acceptance is implied here.
-
-### Protein Hunter Experimental
-
-Registry model:
-
-- [platform/api/config/models/protein_hunter_experimental.yaml](../platform/api/config/models/protein_hunter_experimental.yaml)
-
-Purpose:
-
-- experimental iterative generator family using Protein Hunter
-- backend selection between Boltz and Chai
-- task families for protein binders, unconditional generation,
-  ligand-conditioned binders, and nucleic-acid binders
-
-This is intentionally documented as experimental launcher surface area, not a
-matured canonical production pipeline.
-
-### Caliby Experimental
-
-Registry model:
-
-- [platform/api/config/models/caliby_experimental.yaml](../platform/api/config/models/caliby_experimental.yaml)
-
-Purpose:
-
-- structure-conditioned sequence design
-- ensemble-conditioned design
-- sidechain packing
-- optional AF2 self-consistency evaluation of designed outputs
-
-The linked model configuration is the source contract. Treat this as an
-experimental integration and verify its runtime prerequisites and acceptance
-state before use.
-
-### NVIDIA Fold-CP
-
-Registry model:
-
-- [platform/api/config/models/boltz_cp_experimental.yaml](../platform/api/config/models/boltz_cp_experimental.yaml)
-
-Workflow:
-
-- [workflows/boltz_cp_experimental.nf](../workflows/boltz_cp_experimental.nf)
-
-Product placement:
-
-- selected as `NVIDIA Fold-CP` inside the normal Structure Prediction workflow
-- reuses Structure sequence, complex, MSA, GPU, launch, result, and template controls
-- can send its terminal structures into the same required FrustraMPNN parent fanout
-- retains a dedicated workflow entrypoint only as the BioModStack adapter to the
-  pinned OEM runtime
-
-OEM runtime constraints:
-
-- physical GPU assignment remains scheduler-owned
-- `size_cp` is the OEM square context-parallel mesh size
-- `input_format` is `config_files` or `preprocessed`
-- one Fold-CP inference owns the selected context-parallel GPU set
-
-### RFdiffusion and backbone generation
-
-Generic backbone-generation support exists for RFdiffusion-style workflows and
-related child/orchestrator paths.
-
-Primary registry entry:
-
-- [platform/api/config/models/rfdiffusion.yaml](../platform/api/config/models/rfdiffusion.yaml)
-
-### BoltzGen
-
-Primary registry entry:
-
-- [platform/api/config/models/boltzgen.yaml](../platform/api/config/models/boltzgen.yaml)
-
-Surface includes:
-
-- ligand-aware generation
-- nucleotide-aware generation
-- nanobody/VHH campaigns
-- scaffolded or target-conditioned all-atom generation
-
-### Oligo Designer / RFDpoly
-
-Primary workflow:
-
-- [workflows/oligo_design.nf](../workflows/oligo_design.nf)
-
-Primary registry entry:
-
-- [platform/api/config/models/oligo_design.yaml](../platform/api/config/models/oligo_design.yaml)
-
-Purpose:
-
-- multi-polymer design across DNA, RNA, protein, and mixed assemblies
-
-## Model groups
-
-### Backbone or generative design
-
-- RFantibody
-- RFdiffusion
-- BoltzGen
-- Oligo Designer / RFDpoly
-- La-Proteina
-- DISCO
-- Protein Hunter Experimental
-- Caliby Experimental
-
-### Sequence design and redesign
-
-- FAMPNN
-- AntiFold
-- ProteinMPNN
-- FrustraMPNN
-- Caliby Experimental
-
-### Prediction and validation
-
-- Boltz-2
-- Protenix
-- RF3
-- NVIDIA Fold-CP
-
-### Post-processing and scoring
-
-- AntiBERTy
-- ANARCI / ANARCII
-
-## Internal-only orchestrator models
-
-Some registry entries are internal child jobs rather than user-facing launch
-surfaces. Examples include:
-
-- `antibody_child`
-- `rfantibody_child`
-- `fampnn_child`
-- `boltzgen_child`
-
-The docs should describe them as implementation details, not as standalone user
-products.
-
-## Output and review model
-
-These workflows are not just file dumps. The system persists:
-
-- job-level stage state
-- design-level lineage and artifact identity
-- stage review metadata
-- optional persisted analyses and aligned-error artifacts
-
-See [Results and Analysis](Results_and_Analysis.md) for the data/review side.
-
-## Reference inventory
-
-For the broader registry-level view of model integrations, see
-[docs/ai_guidance/Model_Integrations.md](ai_guidance/Model_Integrations.md).
+An experimental workflow here has a BMS entry point and implementation. The label does not mean the required weights, runtime, worker or result artifacts are present on this installation. For missing dependencies see [Operations](Operations.md); for result identity and remote retrieval see [Results and analysis](Results_and_Analysis.md). Internal child Jobs record stages of a parent; they are not separate products to launch. The [model-control policy](Model_Configuration_Operator_Control_and_Agent_Parity.md) describes integration requirements, not a list of independently supported products.
