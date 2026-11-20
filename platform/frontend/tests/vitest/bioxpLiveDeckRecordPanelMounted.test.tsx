@@ -98,6 +98,23 @@ it('saves only changed fields, shows robot warnings and reads the record again',
     expect(select('Set Reagent cover to').value).toBe('');
 });
 
+it('paints tips out of a full rack by dragging and saves the remaining wells once', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { schema_version: 'bioxp.operator_deck_record_result.v1', record_id: 'auto-3',
+        motion_commanded: false, physical_observation: false } } as never);
+    await render(<BioXpDeckRecordPanel generation={3} connected />);
+    await choose('Set Tips 1 to', 'pick');
+    const fire = (node: EventTarget, type: string) => node.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 }));
+    const tip = (w: string) => host.querySelector(`[aria-label="Tip ${w}"]`)!;
+    await act(async () => { fire(tip('A9'), 'pointerdown'); });
+    await act(async () => { fire(tip('A10'), 'pointermove'); });
+    await act(async () => { fire(document, 'pointerup'); });
+    expect(host.textContent).toContain('94 of 96 tips');
+    await act(async () => button('Save record').click()); await tick();
+    expect(api.post).toHaveBeenCalledTimes(1);
+    const wells = 'ABCDEFGH'.split('').flatMap(r => Array.from({ length: 12 }, (_, c) => `${r}${c + 1}`)).filter(w => w !== 'A9' && w !== 'A10');
+    expect(vi.mocked(api.post).mock.calls[0][1]).toEqual({ expected_connection_generation: 3, tip_trays: [{ tray: 1, tips: wells }] });
+});
+
 it('shows and records the tip size per rack', async () => {
     vi.mocked(api.get).mockImplementation(async path => {
         if (path === '/api/bioxp/operator-controls/deck/state') return { data: deckState() } as never;

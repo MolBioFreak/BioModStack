@@ -1,0 +1,57 @@
+.bwg { --bwg-cell-w: 40px; --bwg-cell-h: 40px; display: inline-grid; gap: 3px; align-items: center; justify-items: stretch; touch-action: none; user-select: none; -webkit-user-select: none; }
+.bwg-small { --bwg-cell-w: 22px; --bwg-cell-h: 22px; gap: 2px; }
+.bwg-wide { --bwg-cell-w: 124px; --bwg-cell-h: 36px; gap: 4px; }
+.bwg > span:first-child { width: 22px; }
+.bwg-small > span:first-child { width: 18px; }
+.bwg .bwg-head { all: unset; box-sizing: border-box; height: 22px; min-width: 22px; display: flex; align-items: center; justify-content: center; font-size: 11px; white-space: nowrap; color: var(--text-primary); opacity: .82; background: color-mix(in srgb, var(--text-primary) 9%, transparent); border-radius: 4px; cursor: pointer; }
+.bwg-small .bwg-head { height: 16px; min-width: 18px; font-size: 10px; border-radius: 3px; }
+.bwg .bwg-head:hover:not(:disabled) { opacity: 1; background: color-mix(in srgb, var(--text-primary) 16%, transparent); }
+.bwg .bwg-head:focus-visible, .bwg .bwg-cell:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+.bwg .bwg-cell { all: unset; box-sizing: border-box; position: relative; width: var(--bwg-cell-w); height: var(--bwg-cell-h); border-radius: 50%; border: 1px solid color-mix(in srgb, var(--text-primary) 32%, transparent);
+    display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 10px; line-height: 1; white-space: nowrap; overflow: hidden; color: var(--text-primary); cursor: crosshair; }
+.bwg-small .bwg-cell { border-radius: 50%; }
+.bwg-wide .bwg-cell { border-radius: 18px; justify-content: flex-start; padding: 0 10px; font-size: 11px; }
+.bwg .bwg-cell.is-on { background: color-mix(in srgb, #2dd4bf 26%, transparent); border-color: #2dd4bf; }
+.bwg-small .bwg-cell.is-on { background: var(--accent-primary, #0f766e); border-color: transparent; }
+.bwg .bwg-cell.is-pending { outline: 2px solid #f59e0b; outline-offset: 1px; }
+.bwg .bwg-cell:disabled { cursor: default; opacity: .6; }
+.bwg-order { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; border-radius: 50%; background: #f59e0b; color: #111; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.bwg-cell .bwg-tag { font-weight: 600; }
+.bwg-cell .bwg-name { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.bwg-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 11px; white-space: nowrap; color: var(--text-secondary); }
+.bwg-foot b { color: var(--text-primary); }
+.bwg-foot button { padding: 2px 8px; font-size: 11px; }
+
+/* Plate sheet: grid on the left, material tray on the right. */
+.bps { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 22px; padding: 4px 2px 8px; font-size: 12px; color: var(--text-primary); }
+.bps * { box-sizing: border-box; }
+/* width 0 + min-width 100%: text never widens the grid column, it wraps to the grid's width. */
+.bps-read { margin-top: 10px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 0; min-width: 100%; min-height: 16px; }
+.bps-hint { margin-top: 4px; font-size: 11px; color: var(--text-secondary); width: 0; min-width: 100%; }
+.bps-amount { display: inline-flex; align-items: center; gap: 4px; flex: none; white-space: nowrap; }
+.bps-tray { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.bps-bar { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
+.bps-bar .bps-grow { flex: 1 1 auto; }
+.bps button { border: 1px solid var(--border-secondary, var(--border-primary)); border-radius: 6px; padding: 5px 10px; background: var(--bg-primary); color: var(--text-primary); font-size: 12px; white-space: nowrap; cursor: pointer; }
+.bps button[aria-pressed="true"] { border-color: #f59e0b; color: #f59e0b; }
+.bps button:disabled { opacity: .45; cursor: default; }
+.bps-seg { display: inline-flex; border: 1px solid var(--border-secondary, var(--border-primary)); border-radius: 6px; overflow: hidden; }
+.bps .bps-seg button { border: 0; border-radius: 0; padding: 4px 10px; }
+.bps .bps-seg button[aria-pressed="true"] { background: rgba(245, 158, 11, .18); }
+.bps-muted { color: var(--text-secondary); font-size: 11px; }
+.bps input.bps-search, .bps input.bps-ul { border: 1px solid var(--border-secondary, var(--border-primary)); border-radius: 6px; padding: 5px 8px; font-size: 12px; background: var(--bg-primary); color: var(--text-primary); margin: 0; }
+.bps input.bps-search { flex: 1 1 140px; min-width: 0; width: auto; }
+.bps input.bps-ul { width: 64px; text-align: right; }
+.bps-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr)); gap: 3px 6px; max-height: 300px; overflow: auto; padding: 2px; }
+.bps-item { all: unset; box-sizing: border-box; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 4px 8px; border: 1px solid var(--border-secondary, var(--border-primary)); border-radius: 6px; white-space: nowrap; cursor: grab; font-size: 12px; }
+.bps-item:focus-visible { outline: 2px solid var(--accent-primary); }
+.bps-item.is-selected { border-color: #f59e0b; background: rgba(245, 158, 11, .15); }
+.bps-item.is-placed .bps-item-name { color: var(--text-secondary); }
+.bps-item-tag { font-size: 10px; text-align: center; border: 1px solid var(--border-secondary, var(--border-primary)); border-radius: 4px; padding: 1px 0; overflow: hidden; text-overflow: ellipsis; }
+.bps-item-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.bps-item-where { font-size: 11px; color: var(--text-secondary); }
+.bps-import { border-top: 1px solid var(--border-secondary, var(--border-primary)); padding-top: 6px; }
+.bps-import > summary { cursor: pointer; font-size: 12px; color: var(--text-secondary); }
+@media (max-width: 900px) { .bps { grid-template-columns: minmax(0, 1fr); } .bps > div:first-child { overflow-x: auto; } }
+.bwg .bwg-cell.is-selected-well { box-shadow: inset 0 0 0 2px var(--accent-primary); }
+.bwg-tips { margin-top: 6px; display: inline-flex; flex-direction: column; max-width: 100%; }

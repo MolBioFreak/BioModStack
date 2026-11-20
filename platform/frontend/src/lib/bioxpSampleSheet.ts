@@ -1,4 +1,5 @@
 import type { WorkflowDeckPlan, WorkflowLabware, WorkflowMaterial } from './bioxpWorkflowPlan';
+import { normalizeWell, paintMaterials, type FilledWells } from './bioxpWellPaint';
 
 /** Parse CSV/TSV text (quoted fields, CRLF) into a header row and data rows. */
 export function parseSampleSheet(text: string): { headers: string[]; rows: string[][] } {
@@ -25,7 +26,7 @@ export function parseSampleSheet(text: string): { headers: string[]; rows: strin
 }
 
 /** Column roles. Unmapped columns are kept in the description as "Header: value". */
-export type SampleSheetMapping = { name: number; barcode?: number; concentration?: number; volume?: number; kind?: WorkflowMaterial['kind'] };
+export type SampleSheetMapping = { name: number; barcode?: number; concentration?: number; volume?: number; well?: number; kind?: WorkflowMaterial['kind'] };
 
 /** Best-guess column roles from header names; the operator can change any of them. */
 export function guessMapping(headers: string[]): SampleSheetMapping {
@@ -43,6 +44,7 @@ export function guessMapping(headers: string[]): SampleSheetMapping {
         barcode: find(/barcode|^rb\d*$/i),
         concentration: find(/working.*conc|^conc/i) ?? find(/conc/i),
         volume: volume < 0 ? undefined : volume,
+        well: find(/^(well|position|well[ _]?(id|position|name)|plate[ _]?well)$/i),
     };
 }
 
@@ -54,6 +56,64 @@ export function wellOrder(columns: number): string[] {
 }
 
 export type SampleTarget = { labware_id: string; wells: string[] };
+
+const MATERIAL_FIELDS = ['name', 'kind', 'description', 'concentration', 'concentration_unit', 'barcode'] as const;
+
+/** The material a sheet row describes. Unmapped columns go into the description as "Header: value". */
+export function rowMaterial(sheet: { headers: string[] }, mapping: SampleSheetMapping, row: string[], index: number): Omit<WorkflowMaterial, 'id'> {
+    const name = row[mapping.name] || `Row ${index + 1}`;
+    const roles = new Set([mapping.name, mapping.concentration, mapping.volume, mapping.well].filter((v): v is number => v !== undefined));
+    const barcode = mapping.barcode !== undefined ? row[mapping.barcode] : '';
+    const description = sheet.headers.map((h, i) => roles.has(i) || !row[i] ? '' : `${h}: ${row[i]}`).filter(Boolean).join('; ');
+    const conc = mapping.concentration !== undefined ? row[mapping.concentration] : '';
+    return { name, kind: mapping.kind ?? 'sample', description,
+        ...(conc ? { concentration: conc, concentration_unit: /ng\/?u?l/i.test(sheet.headers[mapping.concentration!]) ? 'ng/µL' : '' } : {}),
+        ...(barcode ? { barcode } : {}) };
+}
+
+/** Reuse an identical material already in the plan, or add one. */
+function materialFor(materials: WorkflowMaterial[], values: Omit<WorkflowMaterial, 'id'>, newId: () => string): { material: WorkflowMaterial; added: boolean } {
+    const match = materials.find(m => MATERIAL_FIELDS.every(key => m[key] === values[key]));
+    if (match) return { material: match, added: false };
+    const material = { id: newId(), ...values }; materials.push(material);
+    return { material, added: true };
+}
+
+/** Add every row as a material without placing it; rows already in the plan are reused. */
+export function addSheetToTray(plan: WorkflowDeckPlan, sheet: { headers: string[]; rows: string[][] }, mapping: SampleSheetMapping,
+    newId: () => string = () => crypto.randomUUID()): { plan: WorkflowDeckPlan; ids: string[]; added: number } {
+    const materials = [...plan.materials]; let added = 0;
+    const ids = sheet.rows.map((row, index) => { const made = materialFor(materials, rowMaterial(sheet, mapping, row, index), newId); if (made.added) added++; return made.material.id; });
+    return { plan: { ...plan, materials }, ids, added };
+}
+
+const STRIPS = ['LOC_STRIP1', 'LOC_STRIP2', 'LOC_STRIP3', 'LOC_STRIP4'];
+
+/**
+ * Place each row in the well named by its Well column. On a strip, the column number is the strip
+ * number: B3 is strip 3, position B. Occupied wells follow `filled`.
+ */
+export function placeSheetByWell(plan: WorkflowDeckPlan, sheet: { headers: string[]; rows: string[][] }, mapping: SampleSheetMapping, station: string,
+    filled: FilledWells, labwareName: (station: string) => string = s => s, newId: () => string = () => crypto.randomUUID()): {
+        plan: WorkflowDeckPlan; placed: number; added: number; unplaced: string[];
+    } {
+    if (mapping.well === undefined) return { plan, placed: 0, added: 0, unplaced: sheet.rows.map((r, i) => r[mapping.name] || `Row ${i + 1}`) };
+    const strip = STRIPS.includes(station);
+    let next: WorkflowDeckPlan = { ...plan, materials: [...plan.materials] };
+    const unplaced: string[] = []; let placed = 0; let added = 0;
+    sheet.rows.forEach((row, index) => {
+        const values = rowMaterial(sheet, mapping, row, index);
+        const well = normalizeWell(row[mapping.well!] ?? '');
+        const target = well && (strip ? (Number(well.slice(1)) <= 4 ? { station: STRIPS[Number(well.slice(1)) - 1], well: `${well[0]}1` } : null) : { station, well });
+        if (!target) { unplaced.push(values.name); return; }
+        const made = ensureLabware(next, [{ station: target.station, name: labwareName(target.station) }], newId); next = { ...made.plan, materials: [...made.plan.materials] };
+        const material = materialFor(next.materials, values, newId); if (material.added) added++;
+        const amount = mapping.volume !== undefined && row[mapping.volume] ? row[mapping.volume] : null;
+        next = paintMaterials(next, [{ labware_id: made.ids[0], well: target.well }], [material.material.id], amount, filled, newId).plan;
+        placed++;
+    });
+    return { plan: next, placed, added, unplaced };
+}
 
 /**
  * Place rows without replaying existing associations or overwriting occupied wells.
@@ -68,18 +128,10 @@ export function placeSampleSheet(plan: WorkflowDeckPlan, sheet: { headers: strin
     const slots = targets.flatMap(t => t.wells.map(well => ({ labware_id: t.labware_id, well })));
     const materials = [...plan.materials]; const assignments = [...plan.assignments]; const unplaced: string[] = [];
     const conflicts: { name: string; labware_id: string; well: string }[] = [];
-    const fields = ['name', 'kind', 'description', 'concentration', 'concentration_unit', 'barcode'] as const;
     let added = 0; let reused = 0;
     sheet.rows.forEach((row, index) => {
-        const name = row[mapping.name] || `Row ${index + 1}`;
-        const roles = new Set([mapping.name, mapping.concentration, mapping.volume].filter((v): v is number => v !== undefined));
-        const barcode = mapping.barcode !== undefined ? row[mapping.barcode] : '';
-        const description = sheet.headers.map((h, i) => roles.has(i) || !row[i] ? '' : `${h}: ${row[i]}`).filter(Boolean).join('; ');
-        const conc = mapping.concentration !== undefined ? row[mapping.concentration] : '';
-        const values: Omit<WorkflowMaterial, 'id'> = { name, kind: mapping.kind ?? 'sample', description,
-            ...(conc ? { concentration: conc, concentration_unit: /ng\/?u?l/i.test(sheet.headers[mapping.concentration!]) ? 'ng/µL' : '' } : {}),
-            ...(barcode ? { barcode } : {}) };
-        const matching = materials.filter(m => fields.every(key => m[key] === values[key]));
+        const values = rowMaterial(sheet, mapping, row, index); const name = values.name;
+        const matching = materials.filter(m => MATERIAL_FIELDS.every(key => m[key] === values[key]));
         const slot = slots[index];
         const volume = mapping.volume !== undefined ? row[mapping.volume] : '';
         const amount = volume || null;
@@ -88,8 +140,7 @@ export function placeSampleSheet(plan: WorkflowDeckPlan, sheet: { headers: strin
             reused++; return;
         }
         // Keep an unplaced row available for ordinary manual assignment, too.
-        let material = matching[0];
-        if (!material) { material = { id: newId(), ...values }; materials.push(material); }
+        const material = matching[0] ?? materialFor(materials, values, newId).material;
         if (!slot) { unplaced.push(name); return; }
         if (occupied.length) { conflicts.push({ name, ...slot }); return; }
         assignments.push({ id: newId(), ...slot, material_id: material.id, volume_ul: amount });
