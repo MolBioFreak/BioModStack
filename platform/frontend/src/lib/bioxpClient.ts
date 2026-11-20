@@ -663,6 +663,9 @@ export interface BioXpPipettes {
     live_query_performed: false;
     /** Software-selected group tip type, not evidence of a physically loaded tip. */
     tip_type: number;
+    /** Robot: false for a clean pickup, true once the tip touched liquid or went into a well. */
+    tip_used?: boolean;
+    tip_type_known?: boolean;
     allow_to_stop: boolean;
     last_error: { channel: 0 | 1 | 2 | 3; error_code: number; source: 'ClassPipetteCollection.handlePipetteMessage' } | null;
     last_group_transaction: Record<string, unknown> | null;

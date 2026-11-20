@@ -73,6 +73,9 @@ function DirectLiquidEvidence({ owner }: { owner: Pick<ReturnType<typeof useRead
     </div>;
 }
 
+/** 201 is the OEM code for an unknown tip type. */
+export const tipTypeLabel = (value: number | null | undefined) => typeof value === 'number' && [10, 50, 200].includes(value) ? `${value} µL` : 'unknown';
+
 /** Compact status: one row per channel, one read button, debug fields in a single fold. */
 export function BioXpPipetteControlPanel({ generation = 0, connected = true, pipettes, freshness }: Props) {
     const readback = useReadBioXpPipetteReadback(generation, connected);
@@ -85,7 +88,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                     <h3 className="font-semibold">Pipettes</h3>
-                    <p className="text-xs text-slate-400">Tip type in software: {pipettes?.tip_type ?? 'unknown'} · last report {age}{returned ? ' · hardware read' : ''}</p>
+                    <p className="text-xs text-slate-400">Tip type: {tipTypeLabel(pipettes?.tip_type)}{pipettes?.tip_used === true ? ' · used tip (wet route to waste)' : pipettes?.tip_used === false ? ' · clean tip' : ''} · last report {age}{returned ? ' · hardware read' : ''}</p>
                 </div>
                 <div className="flex items-center gap-3 text-xs">
                     <label><input type="checkbox" checked={includeData} onChange={(event) => setIncludeData(event.target.checked)} /> Include data sweep</label>

@@ -121,7 +121,7 @@ describe('mounted BioXP pipette status and tools', () => {
         expect(rows[1].textContent).toContain('no report');
         expect(rows[2].textContent).toContain('unavailable');
         expect(container.textContent).not.toContain('999');
-        expect(container.textContent).toContain('Tip type in software: 10');
+        expect(container.textContent).toContain('Tip type: 10 µL');
         expect(container.textContent).toContain('41.25 s ago');
         expect(container.querySelector('[role="alert"]')?.textContent).toContain('channel 3 · code 17');
         expect(container.textContent).toContain('condition_or_status_failed');

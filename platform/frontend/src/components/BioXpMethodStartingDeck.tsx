@@ -36,7 +36,7 @@ export function BioXpMethodStartingDeck({ plan, station, wells, onChange }: { pl
                 {rack && <button type="button" onClick={() => setRack(null)}>Not set</button>}
             </div>
             {mode === 'wells' && <><p>{available.length} of 96 tips present. Select wells on the deck, then use them.</p><button type="button" disabled={!wells.length} onClick={() => setRack({ tips: { available: allWells.filter(w => wells.includes(w)) } })}>Use selected wells as the tips present</button></>}
-            <label>Tip type<select aria-label={`Tip rack ${tray} tip type`} value={rack?.tip_type ?? ''} onChange={e => setRack({ tip_type: (e.target.value || null) as WorkflowTipRack['tip_type'] })}><option value="">Not set</option>{TIP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}</select></label>
+            <label>Tip type<select aria-label={`Tip rack ${tray} tip type`} value={rack?.tip_type ?? ''} onChange={e => setRack({ tip_type: (e.target.value || null) as WorkflowTipRack['tip_type'] })}><option value="">Not set</option>{TIP_TYPES.map(t => <option key={t} value={t}>{t === 'T201' ? 'Unknown' : `${t.slice(1)} µL`}</option>)}</select></label>
             {profiles.length > 0 && <section aria-label="Assign rack profile"><h4>Tips stored in this rack</h4><div>{profiles.map(profile => <button type="button" key={String(profile.id)} aria-pressed={rack?.profile_id === profile.id} onClick={() => {
                 library?.pin(profile);
                 const tipType = tipTypeForProfile(String(profile.id));

@@ -173,7 +173,7 @@ export function BioXpPipetteCalibration({ generation, connected, destinations, v
             <table aria-label="Tip offset values" className="mt-2 w-full text-left text-xs [&_td]:px-2 [&_td]:py-1 [&_th]:px-2">
                 <thead className="text-slate-400"><tr><th>Tip</th><th>In use</th><th>Datasheet</th><th>Source</th><th>New value (mm)</th><th /></tr></thead>
                 <tbody>{tips.map(row => <tr key={row.tip_type}>
-                    <th scope="row">{row.tip_type === 201 ? '200 (201)' : row.tip_type} µL</th>
+                    <th scope="row">{row.tip_type === 201 ? 'Unknown' : `${row.tip_type} µL`}</th>
                     <td>{mm(row.offset_steps)} mm</td>
                     <td>{row.datasheet_delta_steps == null ? '—' : `${mm(row.datasheet_delta_steps)} mm`}</td>
                     <td>{row.confirmed ? `confirmed ${row.confirmed.confirmed_at.slice(0, 10)}` : row.measured ? 'datasheet default' : 'none'}</td>
