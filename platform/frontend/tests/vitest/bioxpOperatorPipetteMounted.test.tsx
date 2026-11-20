@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
     readbackCalls: [] as Array<Record<string, unknown>>,
 }));
 
+vi.mock('../../src/components/BioXpUnknownTipGuard', () => ({ BioXpUnknownTipGuard: () => null }));
 vi.mock('../../src/lib/bioxpClient', () => ({
     useBioXpPipetteApplicationStatus: () => ({
         data: {

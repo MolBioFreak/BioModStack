@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { PipetteValue } from './BioXpPipetteResults';
+import { BioXpUnknownTipGuard } from './BioXpUnknownTipGuard';
 
 import {
     bioXpErrorText,
@@ -97,6 +98,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                     </button>
                 </div>
             </div>
+            <BioXpUnknownTipGuard generation={generation} connected={connected} pipettes={pipettes} />
             <table aria-label="Pipette channels" className="mt-2 w-full text-left text-xs [&_td]:px-2 [&_td]:py-1 [&_th]:px-2 [&_th]:py-1">
                 <thead className="text-slate-400"><tr><th>Channel</th><th>Software</th><th>Tip (record)</th><th>Tip (hardware)</th><th>Pressure (raw)</th><th>Liquid µL</th></tr></thead>
                 <tbody>{([0, 1, 2, 3] as const).map((channelId) => <ChannelRow key={channelId} channelId={channelId}

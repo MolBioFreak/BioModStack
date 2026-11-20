@@ -235,6 +235,7 @@ export default defineConfig({
             './tests/vitest/bioxpOperatorTypedInputsMounted.test.tsx',
             './tests/vitest/bioxpDirectLiquidIdempotency.test.ts',
             './tests/vitest/bioxpOperatorPipetteMounted.test.tsx',
+            './tests/vitest/bioxpUnknownTipGuardMounted.test.tsx',
             './tests/vitest/bioxpReceiptTerminality.test.ts',
             './tests/vitest/bioxpHistoryPolling.test.tsx',
             './tests/vitest/bioxpManualAvailabilityRecovery.test.tsx',

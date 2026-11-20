@@ -1,3 +1,4 @@
+import { BioXpUnknownTipGuard } from './BioXpUnknownTipGuard';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
@@ -1866,6 +1867,8 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 {controlTab === 'robot' && <BioXpThermalControls variant="full" generation={generation} ownershipGeneration={ownershipGeneration} connected={linkConnected} visible={robotVisible}
                     actions={catalog?.actions} catalogLoading={operatorCatalog.isLoading} />}
             </div>
+            <BioXpUnknownTipGuard mode="auto" generation={generation} connected={robotControlReady && operatorCatalog.data !== undefined}
+                visible={documentVisible} pipettes={operatorCatalog.data?.dashboard.pipettes ?? undefined} />
             <div role="tabpanel" id="control-panel-pipettes" aria-labelledby="control-tab-pipettes" hidden={controlTab !== 'pipettes'}>
                 {pipettesOpened && <>
                 <BioXpPipetteControlPanel visible={documentVisible && controlTab === 'pipettes'}

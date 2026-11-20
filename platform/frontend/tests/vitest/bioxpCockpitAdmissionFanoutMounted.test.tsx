@@ -640,6 +640,7 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
 
 vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: (props: Record<string, unknown>) => <output data-testid="camera-session">{JSON.stringify(props)}</output> }));
 vi.mock('../../src/components/BioXpOperatorControlTabs', () => ({ BioXpOperatorControlTabs: () => null }));
+vi.mock('../../src/components/BioXpUnknownTipGuard', () => ({ BioXpUnknownTipGuard: () => null }));
 vi.mock('../../src/components/BioXpPipetteControlPanel', () => ({ BioXpPipetteControlPanel: () => null,
     BioXpPipetteAdvancedTools: (props: Record<string, unknown>) => { state.pipetteProps = props; return null; } }));
 vi.mock('../../src/components/BioXpPipetteCalibration', () => ({ BioXpPipetteCalibration: () => null }));
