@@ -8,6 +8,10 @@ vi.mock('../../src/lib/bioxpImmediateRun', () => ({
     useBioXpImmediateRun: () => ({ enabled: true, pending: false, error: null, job: null,
         run: async (build: () => Promise<unknown>) => { state.runs += 1; await build(); } }),
 }));
+const posts = vi.hoisted(() => [] as Array<[string, unknown]>);
+vi.mock('../../src/lib/api', () => ({ api: { post: async (url: string, body: unknown) => { posts.push([url, body]); return { data: {} }; } } }));
+vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: () => undefined }) }));
+vi.mock('../../src/lib/bioxpClient', () => ({ bioXpErrorText: (e: unknown) => String(e) }));
 import { BioXpUnknownTipGuard, unknownTipsLoaded } from '../../src/components/BioXpUnknownTipGuard';
 
 const pipettes = (tip_type: number, loaded: boolean) => ({ tip_type, channels: [0, 1, 2, 3].map(channel => ({ channel, software_tip_loaded: loaded })) }) as any;
@@ -36,5 +40,15 @@ describe('unknown tip guard', () => {
         await act(async () => { window.dispatchEvent(new Event('bioxp-auto-eject')); });
         await act(async () => root.render(<BioXpUnknownTipGuard mode="auto" generation={3} connected pipettes={pipettes(201, true)} />));
         expect(state.runs).toBe(1);
+    });
+    it('Set tips records the tips on the guns without moving', async () => {
+        await act(async () => root.render(<BioXpUnknownTipGuard generation={3} connected pipettes={pipettes(201, true)} />));
+        const select = container.querySelector('select[aria-label="Tips on the guns"]') as HTMLSelectElement;
+        await act(async () => { select.value = '50'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+        const button = [...container.querySelectorAll('button')].find(b => b.textContent === 'Set tips')!;
+        await act(async () => button.click());
+        expect(posts.at(-1)).toEqual(['/api/bioxp/loaded-tip-type', { expected_connection_generation: 3, tip_type: 50, used: true }]);
+        expect(state.runs).toBe(0);
+        expect(container.textContent).toContain('Recorded 50 µL used tips');
     });
 });

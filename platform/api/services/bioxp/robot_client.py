@@ -44,6 +44,7 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "operation_parameters": ("GET", "/liquid/pipette/settings", 10.0),
     "tip_offsets": ("GET", "/liquid/pipette/tip-offsets", 10.0),
     "save_tip_offset": ("PUT", "/liquid/pipette/tip-offsets", 10.0),
+    "set_loaded_tip_type": ("POST", "/liquid/pipette/tip-type", 15.0),
     "lld_profiles": ("GET", "/liquid/pipette/lld-profiles", 10.0),
     "save_lld_profile": ("PUT", "/liquid/pipette/lld-profiles", 10.0),
     "depth_offsets": ("GET", "/liquid/pipette/depth-offsets", 10.0),

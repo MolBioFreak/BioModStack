@@ -176,7 +176,7 @@ export function BioXpPipetteCalibration({ generation, connected, destinations, v
                     <th scope="row">{row.tip_type === 201 ? 'Unknown' : `${row.tip_type} µL`}</th>
                     <td>{mm(row.offset_steps)} mm</td>
                     <td>{row.datasheet_delta_steps == null ? '—' : `${mm(row.datasheet_delta_steps)} mm`}</td>
-                    <td>{row.confirmed ? `confirmed ${row.confirmed.confirmed_at.slice(0, 10)}` : row.measured ? 'datasheet default' : 'none'}</td>
+                    <td>{row.confirmed ? `confirmed ${row.confirmed.confirmed_at.slice(0, 10)}` : row.measured ? 'Tecan datasheet (not yet confirmed on this robot)' : 'none'}</td>
                     <td><input aria-label={`Tip ${row.tip_type} offset (mm)`} type="number" step="0.05" className="w-24" value={edits[row.tip_type] ?? ''}
                         placeholder={mm(row.offset_steps)} onChange={e => setEdits(x => ({ ...x, [row.tip_type]: e.target.value }))} /></td>
                     <td><button type="button" disabled={!connected || edits[row.tip_type] === undefined} onClick={() => void saveOffset(row)}>Save</button></td>
