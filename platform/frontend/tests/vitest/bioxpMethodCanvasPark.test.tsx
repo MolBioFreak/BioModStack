@@ -31,8 +31,8 @@ it('projects omitted Park homing ON without rewriting the retained draft; edits 
 
 it('new Park from the ordinary action palette authors rehome true explicitly without submitting', async () => {
     const state = await mounted({ schema: 'bms.bioxp-method.v1', steps: [] });
-    const select = host.querySelector<HTMLSelectElement>('[aria-label="Action palette"]')!;
-    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'park'); select.dispatchEvent(new Event('change', { bubbles: true })); });
+    const park = host.querySelector<HTMLElement>('[aria-label="Action palette"] [data-value="park"]')!; expect(park).toBeTruthy();
+    await act(async () => park.click());
     const add = [...host.querySelectorAll('button')].find(b => b.textContent === 'Add step')!;
     await act(async () => add.click());
     expect((state().current.steps as MethodValue[])[0]).toMatchObject({ action: 'park', inputs: { rehome: true } });

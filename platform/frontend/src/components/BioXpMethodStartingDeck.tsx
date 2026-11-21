@@ -44,7 +44,10 @@ export function BioXpMethodStartingDeck({ plan, station, wells, onChange, genera
                 setCopyNote(`Copied the robot's record: ${row.occupancy.filter(Boolean).length} of 96 tips.`);
             } catch (cause) { setCopyNote(`Robot record unavailable: ${bioXpErrorText(cause)}`); }
         };
-        const profiles = (library?.profiles ?? []).filter(p => typeof p.id === 'string');
+        const published = (library?.profiles ?? []).filter(p => typeof p.id === 'string');
+        const tipProfiles = published.filter(p => Object.hasOwn(p, 'source_variants') || tipTypeForProfile(String(p.id)) !== null);
+        const volume = (p: { id?: unknown }) => Number(/(\d+)\s*$/.exec(String(p.id))?.[1] ?? Infinity);
+        const profiles = tipProfiles.length ? [...tipProfiles].sort((a, b) => volume(a) - volume(b)) : published;
         return <section aria-label="Tip rack setup" className="bioxp-starting-deck">
             <h3>{meta?.label ?? `Tip rack ${tray}`}</h3>
             <div role="group" aria-label={`Tip rack ${tray} contents`}>

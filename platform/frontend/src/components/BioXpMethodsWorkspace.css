@@ -339,3 +339,287 @@
 .bioxp-stage-chip rect { fill:#0f172a; stroke-width:2.2; filter:drop-shadow(0 2px 6px #0008); }
 .bioxp-stage-chip text { fill:#fff; font:600 14px system-ui; }
 .bioxp-stage-chip text.is-detail { fill:#cbd5e1; font-weight:500; }
+
+/* ---- Workflows frame: one toolbar, Deck / Steps / Check, three columns that fit the window ---- */
+.bioxp-methods [hidden] { display:none!important; }
+.bioxp-methods { gap:6px; }
+.bioxp-methods > p[role=status], .bioxp-methods > p[role=alert] { margin:0; padding:1px 8px; font-size:12px; }
+.bxw-toolbar { position:relative; z-index:20; display:flex; flex-wrap:wrap; align-items:center; gap:6px 16px; padding:4px 10px; border:1px solid var(--border-secondary); border-radius:8px; background:var(--card-bg,var(--bg-secondary)); }
+.bioxp-methods .bxw-toolbar [role=tablist] { border-bottom:0; gap:14px; flex:none; }
+.bioxp-methods .bxw-toolbar [role=tablist] button { padding:6px 0; }
+.bxw-tools { display:flex; flex:1 1 640px; flex-wrap:wrap; align-items:center; gap:6px 8px; min-width:0; }
+.bioxp-methods .bxw-tools button { padding:5px 10px; font-size:12.5px; white-space:nowrap; }
+.bioxp-methods .bxw-tools button[aria-expanded=true] { border-color:var(--accent-primary); background:color-mix(in srgb,var(--accent-primary) 24%,var(--card-bg,var(--bg-secondary))); }
+.bioxp-methods input.bxw-name { flex:1 1 220px; min-width:140px; font-size:14px; font-weight:600; padding:5px 9px; }
+.bxw-chip { flex:none; font-size:11.5px; color:var(--text-secondary); border:1px solid var(--border-secondary); border-radius:10px; padding:1px 8px; white-space:nowrap; }
+.bioxp-methods button.bxw-chip.is-run { color:#ffd9a0; border-color:#b7791f; background:#5b3a12; border-radius:10px; padding:1px 9px; font-size:11.5px; }
+.bioxp-methods button.bxw-chip.is-run.is-done { color:var(--text-secondary); border-color:var(--border-secondary); background:transparent; }
+.bxw-end { display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px 10px; margin-left:auto; }
+.bxw-views { display:inline-flex; flex:none; border:1px solid var(--accent-primary); border-radius:7px; overflow:hidden; }
+.bioxp-methods .bxw-views button { border:0; border-radius:0; border-right:1px solid var(--accent-primary); padding:6px 14px; font-size:13.5px; background:transparent; white-space:nowrap; }
+.bioxp-methods .bxw-views button:last-child { border-right:0; }
+.bioxp-methods .bxw-views button[aria-pressed=true] { background:color-mix(in srgb,var(--accent-primary) 34%,var(--card-bg,var(--bg-secondary))); font-weight:700; box-shadow:inset 0 -3px 0 var(--accent-primary); }
+.bxw-views small { margin-left:7px; font-size:10.5px; font-weight:500; padding:1px 6px; border-radius:8px; background:#5b3a12; color:#ffd9a0; }
+.bxw-views small.is-warn { background:#7f1d1d; color:#fecaca; }
+.bioxp-methods label.bxw-ack { flex-wrap:nowrap; white-space:nowrap; gap:6px; font-size:12.5px; color:var(--text-secondary); }
+.bioxp-methods button.bxw-run { background:#0f766e; border-color:#0f766e; color:#fff; font-weight:600; padding:6px 18px; }
+.bioxp-methods button.bxw-run:disabled { opacity:.6; }
+.bioxp-methods button.bxw-x { border:0; background:none; padding:0 6px; font-size:18px; line-height:1; color:var(--text-secondary); }
+
+.bxw-menu { position:absolute; top:calc(100% + 2px); left:8px; z-index:30; max-width:calc(100% - 16px); max-height:calc(100dvh - 250px); overflow:auto; border:1px solid var(--accent-primary); border-radius:10px; background:var(--card-bg,var(--bg-secondary)); box-shadow:0 18px 50px #000a; font-size:12.5px; }
+.bxw-menu > header { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 12px; border-bottom:1px solid var(--border-secondary); position:sticky; top:0; z-index:1; background:var(--card-bg,var(--bg-secondary)); }
+.bxw-menu > header > span { display:inline-flex; align-items:center; gap:6px; }
+.bxw-menu small { color:var(--text-secondary); font-weight:400; }
+.bxw-menu h5 { margin:0; padding:8px 12px 4px; font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-secondary); }
+.bioxp-methods .bxw-menu button { padding:4px 9px; font-size:12px; }
+.bioxp-methods .bxw-menu input:not([type=checkbox]):not([type=file]) { padding:4px 8px; font-size:12px; }
+.bxw-menu-open { width:900px; }
+.bxw-menu-cols { display:grid; grid-template-columns:minmax(0,1fr) 260px; }
+.bxw-menu-cols > div:first-child { border-right:1px solid var(--border-secondary); }
+.bxw-menu-cols > div > small { display:block; padding:4px 12px 10px; }
+.bxw-menu-cols > div:first-child { padding-bottom:6px; }
+.bioxp-methods .bxc-pills button { text-align:center; }
+.bxw-menu > footer { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:8px 12px; border-top:1px solid var(--border-secondary); }
+.bxw-menu > footer .bxw-end label { font-size:12px; color:var(--text-secondary); flex-wrap:nowrap; }
+.bxw-menu > footer .bxw-end input { width:80px; }
+.bioxp-methods label.bxw-file { position:relative; border:1px solid var(--border-primary); border-radius:7px; padding:4px 9px; font-size:12px; cursor:pointer; overflow:hidden; }
+.bioxp-methods label.bxw-file input { position:absolute; inset:0; opacity:0; cursor:pointer; margin:0; padding:0; }
+.bxw-menu > section[aria-label="Revision changes"] { padding:0 12px 10px; }
+.bxw-menu-new { width:330px; padding:6px; display:flex; flex-direction:column; gap:4px; }
+.bioxp-methods .bxw-menu-new > button { text-align:left; font-weight:600; border-color:transparent; padding:6px 9px; }
+.bxw-menu-new .bioxp-new-experiment { display:flex; flex-direction:column; flex-wrap:nowrap; align-items:stretch; gap:4px; padding:0 0 4px; border:0; border-top:1px solid var(--border-secondary); border-radius:0; }
+.bxw-menu-new .bioxp-new-experiment p, .bxw-menu-new .bioxp-new-experiment > small { padding:0 9px; margin:0; }
+.bxw-menu-advanced { width:780px; }
+.bxw-menu-advanced > div, .bxw-menu-advanced > details, .bxw-menu-advanced > button { margin:0 12px; }
+.bioxp-methods .bxw-menu-advanced details { margin:0 12px; padding:8px 0; border-top:1px solid var(--border-primary); }
+.bioxp-methods .bxw-menu-advanced details details { margin:6px 0 0; }
+.bxw-advanced-items { display:flex; flex-direction:column; }
+.bioxp-methods .bxw-menu-advanced details.bioxp-method-fixtures { display:block; margin:0 12px!important; padding:8px 0!important; border-top:1px solid var(--border-primary)!important; font-size:inherit; }
+.bioxp-methods .bxw-deck-tools > details { margin:0; padding:8px 0; border-top:1px solid var(--border-primary); }
+.bxw-menu-advanced > div { padding-bottom:0; }
+.bioxp-methods .bxw-advanced-items > details { margin:0; }
+.bxw-advanced-items .bioxp-method-view, .bxw-advanced-items .bioxp-preview-reference { margin:0; padding:8px 0; }
+.bxw-advanced-items .bioxp-method-execution-text { margin:0; }
+.bxw-advanced-items .bioxp-projection-notes { margin:0; }
+
+/* Choice lists: every option visible, one selected. */
+.bxc { display:flex; min-width:0; }
+.bioxp-methods .bxc button { display:flex; align-items:baseline; gap:8px; margin:0; text-align:left; font-size:12.5px; background:transparent; color:var(--text-primary); }
+.bioxp-methods .bxc button[aria-selected=true] { background:color-mix(in srgb,var(--accent-primary) 24%,var(--card-bg,var(--bg-secondary))); color:var(--text-primary); }
+.bxc .bxc-label { flex:1 1 auto; min-width:0; }
+.bxc small { flex:none; font-size:11.5px; color:var(--text-secondary); white-space:nowrap; }
+.bxc-rows { flex-direction:column; }
+.bioxp-methods .bxc-rows button { border:0; border-radius:0; border-bottom:1px solid color-mix(in srgb,var(--border-secondary) 45%,transparent); padding:5px 12px; }
+.bioxp-methods .bxc-rows button[aria-selected=true] { box-shadow:inset 3px 0 0 var(--accent-primary); font-weight:600; }
+.bxc-rows i { flex:none; display:inline-grid; place-items:center; min-width:22px; height:20px; border-radius:5px; background:color-mix(in srgb,var(--accent-primary) 18%,var(--bg-primary)); font-size:11.5px; font-style:normal; font-weight:400; }
+.bxc-seg { display:inline-flex; flex:none; border:1px solid var(--border-secondary); border-radius:6px; overflow:hidden; }
+.bioxp-methods .bxc-seg button { border:0; border-radius:0; border-right:1px solid var(--border-secondary); padding:3px 10px; font-size:12px; white-space:nowrap; color:var(--text-secondary); }
+.bioxp-methods .bxc-seg button:last-child { border-right:0; }
+.bioxp-methods .bxc-seg button[aria-selected=true] { font-weight:600; }
+.bxc-pills { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:5px; padding:4px 12px 12px; }
+.bioxp-methods .bxc-pills button { justify-content:center; min-width:38px; padding:3px 8px; border-radius:12px; font-variant-numeric:tabular-nums; }
+.bioxp-methods .bxc-pills button:first-child { grid-column:1 / -1; }
+.bioxp-methods .bxc-pills button[aria-selected=true] { border-color:var(--accent-primary); font-weight:600; }
+.bxc-cols { display:block; columns:5 150px; column-gap:10px; }
+.bioxp-methods .bxc-cols button { display:block; width:100%; break-inside:avoid; border:0; border-radius:4px; padding:2px 6px; font-size:12px; line-height:1.35; }
+
+/* The frame. --bxw-h is the height left in the window; --bxw-aspect is the drawn deck's width / height. */
+.bioxp-method-workbench.bxw { --bxs-source:#3b82f6; --bxs-destination:#f59e0b; --bxs-tip:#c084fc; --bxs-liquid:#2dd4bf; --bxs-cover:#f472b6; --bxs-hazard:#f87171;
+    display:grid; grid-template-columns:minmax(0,1fr); gap:8px; border:0; border-radius:0; background:none; overflow:visible; }
+.bxw-grid { display:grid; grid-template-columns:300px min(calc(var(--bxw-h,720px) * var(--bxw-aspect,1.03)), 47%) minmax(0,1fr); gap:10px; height:var(--bxw-h,720px); min-width:0; }
+.bxw.is-deck .bxw-grid { grid-template-columns:262px min(calc(var(--bxw-h,720px) * var(--bxw-aspect,1.03)), 47%) minmax(0,1fr); }
+.bxw.is-check .bxw-grid { grid-template-columns:minmax(0,1fr) min(calc(var(--bxw-h,720px) * var(--bxw-aspect,1.03)), 44%) minmax(0,1fr); }
+.bxw.is-wide-editor .bxw-grid { grid-template-columns:min(calc(var(--bxw-h,720px) * var(--bxw-aspect,1.03)), 40%) minmax(0,1fr); }
+.bxw.is-wide-editor .bxw-left { display:none; }
+.bxw.is-wide-editor .bioxp-tools-popover, .bxw.is-sequence-only .bioxp-tools-popover { grid-column:1; }
+.bxw.is-sequence-only .bxw-grid { grid-template-columns:300px minmax(0,1fr); }
+.bxw-left, .bxw-right, .bxw-centre { min-width:0; min-height:0; height:var(--bxw-h,720px); }
+.bxw .bioxp-method-inspector { margin:0; padding:0; }
+.bxw-card, .bxw .bioxp-editor-body, .bxw .bioxp-tools-popover, .bxw-menu, .bioxp-plan-still, .bxw .bps-list { scrollbar-width:thin; scrollbar-color:#6c86b8 color-mix(in srgb,var(--bg-primary) 70%,transparent); }
+.bxw-card { display:flex; flex-direction:column; max-height:100%; min-height:0; overflow-y:auto; overflow-x:hidden; border:1px solid var(--border-secondary); border-radius:8px; background:var(--card-bg,var(--bg-secondary)); }
+.bxw-card > header, .bxw-checklist > header { display:flex; align-items:center; justify-content:space-between; gap:8px; flex:none; min-height:38px; padding:6px 10px; border-bottom:1px solid var(--border-secondary); position:sticky; top:0; z-index:2; background:var(--card-bg,var(--bg-secondary)); }
+.bxw-card > header small { font-weight:400; color:var(--text-secondary); margin-left:6px; }
+.bioxp-methods .bxw-card > header button { padding:3px 9px; font-size:12px; white-space:nowrap; }
+.bxw-card > header nav { display:inline-flex; gap:5px; }
+.bxw-hint p { margin:0; padding:8px 10px 0; font-size:12.5px; color:var(--text-secondary); line-height:1.5; }
+.bxw-hint p:last-child { padding-bottom:10px; }
+.bxw-acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+.bioxp-methods .bxw-acts button { padding:3px 9px; font-size:12px; }
+
+.bxw-checklist { display:flex; flex-direction:column; }
+.bxw-check { display:grid; grid-template-columns:24px minmax(0,1fr); gap:8px; padding:8px 10px; border-bottom:1px solid color-mix(in srgb,var(--border-secondary) 45%,transparent); }
+.bxw-check:last-child { border-bottom:0; }
+.bxw-check.is-on { background:color-mix(in srgb,var(--accent-primary) 16%,transparent); box-shadow:inset 3px 0 0 var(--accent-primary); }
+.bxw-check > i { display:grid; place-items:center; width:22px; height:20px; border-radius:5px; background:color-mix(in srgb,var(--accent-primary) 18%,var(--bg-primary)); font-size:11.5px; font-style:normal; }
+.bxw-check > div { display:flex; flex-direction:column; align-items:flex-start; gap:2px; min-width:0; }
+.bxw-check small { font-size:11.5px; line-height:1.45; color:var(--text-secondary); }
+.bioxp-methods .bxw-check small[role=status] { padding:2px 0 0; border:0; color:var(--text-primary); }
+.bioxp-methods button.bxw-link { border:0; background:none; padding:0; font-size:12px; text-align:left; color:var(--text-primary); border-radius:0; }
+.bioxp-methods button.bxw-link:hover { text-decoration:underline; }
+.bxw-check dl { width:100%; margin:2px 0; font-size:12px; font-variant-numeric:tabular-nums; }
+.bioxp-methods .bxw-check dl > div { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; border:0; }
+.bxw-check dd { margin:0; color:var(--text-secondary); white-space:nowrap; }
+.bxw-check dd b { color:var(--text-primary); font-weight:600; }
+
+.bxw-centre { position:relative; border:1px solid var(--border-secondary); border-radius:8px; background:var(--card-bg,var(--bg-secondary)); overflow:hidden; }
+.bxw .bioxp-method-canvas { min-height:0; height:100%; padding:0; }
+.bxw .bioxp-method-map .bioxp-workflow-deck.bwd-canvas-presentation { height:100%; }
+.bxw .bioxp-method-map .bwd-canvas-presentation .bwd-map { width:100%; height:100%; min-height:0; aspect-ratio:auto; margin:0; }
+.bxw .bioxp-method-map .bwd-map-label { paint-order:stroke; stroke:var(--card-bg,var(--bg-secondary)); stroke-width:4px; stroke-linejoin:round; }
+.bxw-centre > p[role=status] { position:absolute; left:10px; right:10px; bottom:8px; margin:0; background:var(--bg-primary); }
+.bxw-pop { position:absolute; z-index:6; width:292px; padding:9px 11px; border:1px solid var(--text-primary); border-radius:9px; background:var(--card-bg,var(--bg-secondary)); box-shadow:0 10px 30px #000a; font-size:12.5px; }
+.bxw-pop > b { display:block; padding-right:22px; }
+.bxw-pop small { display:block; margin-top:3px; font-size:11.5px; color:var(--text-secondary); }
+.bxw-pop > .bxw-x { position:absolute; top:5px; right:4px; }
+.bxw-pop .bxw-acts button { flex:1 1 46%; justify-content:center; text-align:center; white-space:nowrap; }
+.bxw-pop .bxw-adopt:empty { display:none; }
+.bxw-pop .bxw-adopt { padding-top:6px; border-top:1px solid var(--border-secondary); }
+.bxw-pop .bxw-adopt::before { content:'Selected step'; flex-basis:100%; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-secondary); }
+.bxw-pop .bxw-adopt small { flex-basis:100%; margin:0; }
+.bxw-left { grid-column:1; grid-row:1; } .bxw-centre { grid-column:2; grid-row:1; } .bxw-right { grid-column:3; grid-row:1; }
+.bxw.is-wide-editor .bxw-centre { grid-column:1; } .bxw.is-wide-editor .bxw-right { grid-column:2; } .bxw.is-sequence-only .bxw-right { grid-column:2; }
+.bxw .bioxp-tools-popover { position:relative; grid-column:2; grid-row:1; inset:auto; z-index:7; width:auto; min-height:0; max-height:none; overflow:auto; background:var(--card-bg,var(--bg-secondary)); padding:0 14px 12px; border:1px solid var(--accent-primary); border-radius:8px; box-shadow:none; }
+.bxw .bioxp-tools-popover > header { top:0; padding:9px 0 8px; }
+.bxw .bioxp-tools-group, .bxw .bioxp-method-later-wait { padding:8px 0; align-content:flex-start; }
+.bxw .bioxp-tools-group > span { font-size:11px; color:var(--text-secondary); }
+.bxw .bioxp-tools-popover > .bioxp-tools-generic { padding-bottom:8px; }
+.bioxp-methods .bxw .bioxp-tools-group button, .bioxp-methods .bxw .bioxp-method-later-wait button { padding:4px 9px; font-size:12px; }
+.bioxp-add-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px 0; font-size:12px; color:var(--text-secondary); }
+.bioxp-add-row input { flex:0 1 220px; }
+.bioxp-add-row > small { margin-left:auto; }
+.bxw .bioxp-tools-generic .bioxp-sequence-add { border-bottom:0!important; }
+.bxw .bioxp-tools-generic .bioxp-sequence-add > small { display:block; padding-top:6px; font-size:11.5px; color:var(--text-secondary); }
+
+/* Docked editor: the same sheet, in the right column instead of over the deck. */
+.bxw .bioxp-method-local-editor, .bxw .bioxp-method-local-editor.is-expanded, .bxw .bioxp-method-local-editor.is-transfer, .bxw .bioxp-method-local-editor.is-setup,
+.bxw .bioxp-method-local-editor:has(.bioxp-thermal-program), .bxw .bioxp-method-local-editor.is-expanded:has(.bioxp-thermal-program) {
+    position:static; display:flex; flex-direction:column; left:auto; top:auto; transform:none; width:auto; max-width:none; max-height:100%; overflow:hidden;
+    border:1px solid var(--border-secondary); border-top:3px solid var(--accent-primary); border-radius:8px; box-shadow:none; }
+.bxw .bioxp-method-local-editor > header { position:static; flex:none; padding:7px 12px; gap:8px; }
+.bxw .bioxp-editor-heading h2 { font-size:15px; letter-spacing:0; }
+.bxw .bioxp-editor-heading p { margin:1px 0 0; font-size:11.5px; }
+.bioxp-methods .bxw .bioxp-method-local-editor > header > button { padding:3px 9px; }
+.bxw .bioxp-method-local-editor > .bioxp-editor-body { flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; padding:12px; }
+.bxw .bioxp-method-local-editor > .bioxp-editor-footer { position:static; flex:none; padding:7px 12px; }
+.bioxp-methods .bxw .bioxp-editor-footer button { padding:4px 14px; }
+
+/* Steps as a list. */
+.bxw-steps > section, .bxw-steps > fieldset { margin:0 10px; }
+.bxw-steps .bioxp-page-summary { padding:0; margin:0 10px; }
+.bxw-steps .bioxp-page-summary p, .bxw-steps .bioxp-page-summary ul, .bxw-steps .bioxp-page-summary ol { margin:6px 0; font-size:12.5px; line-height:1.45; }
+.bxw-steps .bioxp-stage-timeline { margin:6px 10px; }
+.bxw-steps > section[aria-label="Method outline"] { margin:0; }
+.bxw .bioxp-sequence-heading { margin:0; padding:5px 10px; min-height:0; border-block:1px solid color-mix(in srgb,var(--border-secondary) 45%,transparent); }
+.bxw .bioxp-sequence-heading h3 { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-secondary); }
+.bioxp-methods .bxw .bioxp-sequence-heading button { padding:2px 8px; }
+.bxw .bioxp-method-sequence { flex-direction:column; align-items:stretch; gap:0; padding:0; overflow:visible; }
+.bxw .bioxp-method-sequence > li:not(.bioxp-sequence-connector) { flex:none; border-bottom:1px solid color-mix(in srgb,var(--border-secondary) 45%,transparent); }
+.bxw .bioxp-method-sequence > li:not(:last-child)::after { content:none; }
+.bxw .bioxp-method-sequence > li.is-selected { background:color-mix(in srgb,var(--accent-primary) 20%,transparent); box-shadow:inset 3px 0 0 var(--accent-primary); }
+.bioxp-methods .bxw .bioxp-method-sequence li:not(.bioxp-sequence-connector) > button { min-height:0; padding:5px 10px; gap:9px; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.bxw .bioxp-sequence-number { width:auto; min-width:22px; height:20px; border:0; border-radius:5px; padding:0 3px; background:color-mix(in srgb,var(--accent-primary) 18%,var(--bg-primary)); color:var(--text-primary); font-size:11.5px; }
+.bxw .bioxp-sequence-copy { flex:1 1 auto; }
+.bxw .bioxp-sequence-copy strong { font-size:12.5px; font-weight:500; }
+.bxw .bioxp-sequence-copy small { margin-top:1px; }
+.bxw .bioxp-step-note { flex:none; margin-left:auto; white-space:nowrap; font-size:11px; padding:1px 7px; border-radius:9px; background:#5b3a12; color:#ffd9a0; }
+.bxw .bioxp-sequence-actions { display:flex; flex-wrap:wrap; gap:6px; padding:1px 10px 8px 41px; }
+.bioxp-methods .bxw .bioxp-sequence-actions button { padding:3px 9px; font-size:12px; }
+.bxw .bioxp-method-mark { padding:2px 10px 0 41px; }
+.bxw .bioxp-method-group-tools { padding:8px 10px; }
+.bxw-steps section[aria-label="Method outline"] > p { margin:0; padding:10px; font-size:12.5px; color:var(--text-secondary); }
+
+.bxw-foot { display:flex; align-items:center; gap:10px; min-width:0; padding:3px 10px; border:1px solid var(--border-secondary); border-radius:8px; background:var(--card-bg,var(--bg-secondary)); }
+.bioxp-methods .bxw-foot button { padding:2px 8px; font-size:12px; white-space:nowrap; }
+.bioxp-methods .bxw-foot p[role=status] { margin:0; padding:0 0 0 8px; font-size:12px; white-space:nowrap; }
+.bxw-foot .bioxp-method-legend { flex:1 1 auto; min-width:0; padding:0; gap:2px 16px; font-size:11.5px; }
+.bxw-nav { flex:none; }
+.bxw-nav .bwd-navigation { flex-wrap:nowrap; gap:4px; padding:0; border:0; }
+.bxw-nav .bwd-navigation > span { min-width:40px; text-align:center; font-size:11.5px; color:var(--text-secondary); font-variant-numeric:tabular-nums; }
+
+/* Check tab. */
+.bxw .bioxp-method-findings { margin:0; }
+.bxw .bioxp-method-run { margin:0; padding:0 0 10px; font-size:12.5px; }
+.bxw .bioxp-method-run h4 { margin:0; padding:8px 10px 2px; font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-secondary); }
+.bxw .bioxp-method-run p { margin:0; padding:2px 10px; }
+.bioxp-methods .bxw .bioxp-method-findings > p[role=status] { margin:10px; }
+.bioxp-plan-summary, .bioxp-plan-notes { font-size:12.5px; line-height:1.45; }
+.bioxp-plan-summary h3, .bioxp-plan-notes h3 { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:0; min-height:38px; padding:6px 10px; border-bottom:1px solid var(--border-secondary); font-size:13px; font-weight:600; }
+.bioxp-plan-summary h3 small, .bioxp-plan-notes h3 small { font-weight:400; color:var(--text-secondary); }
+.bioxp-plan-notes h3 small:first-of-type { margin-right:auto; }
+.bioxp-plan-summary h4 { margin:0; padding:8px 10px 2px; font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-secondary); }
+.bioxp-plan-summary p, .bioxp-plan-notes p { margin:0; padding:2px 10px; }
+.bioxp-methods .bioxp-plan-summary p[role=status] { margin:6px 10px; }
+.bioxp-plan-summary ul, .bioxp-plan-summary ol { margin:0; padding:0 10px 0 28px; }
+.bioxp-plan-summary ul { list-style:none; padding-left:10px; }
+.bioxp-plan-summary ol { list-style:decimal; }
+.bioxp-methods .bioxp-plan-summary ol li { list-style:decimal; }
+.bioxp-plan-summary .bioxp-plan-start { color:var(--text-secondary); }
+.bioxp-plan-summary .bioxp-plan-still { max-height:220px; overflow:auto; color:var(--text-secondary); scrollbar-width:thin; }
+.bioxp-methods .bioxp-plan-summary button { padding:1px 8px; font-size:11.5px; margin-left:6px; }
+.bioxp-plan-summary > small { display:block; padding:8px 10px 2px; color:var(--text-secondary); }
+.bioxp-plan-notes ul { list-style:none; margin:0; padding:0; }
+.bioxp-plan-notes li { padding:6px 10px; border-bottom:1px solid color-mix(in srgb,var(--border-secondary) 45%,transparent); }
+.bioxp-plan-chips { display:flex; flex-wrap:wrap; gap:5px; margin-top:4px; }
+.bioxp-plan-chips em { font-style:normal; font-size:11px; padding:1px 7px; border-radius:9px; background:#5b3a12; color:#ffd9a0; white-space:nowrap; }
+.bioxp-methods details.bxw-preview { margin:0; padding:10px; border:1px solid var(--border-secondary); border-radius:8px; background:var(--card-bg,var(--bg-secondary)); }
+
+@media (max-width:1560px) { .bxw .bps { grid-template-columns:minmax(0,1fr); } .bxw.is-deck .bxw-grid { grid-template-columns:230px min(calc(var(--bxw-h,720px) * var(--bxw-aspect,1.03)), 40%) minmax(0,1fr); } .bxw .bioxp-method-local-editor > .bioxp-editor-body { overflow-x:auto; } .bxw.is-steps .bxw-grid { grid-template-columns:260px min(calc(var(--bxw-h,720px) * var(--bxw-aspect,1.03)), 47%) minmax(0,1fr); } }
+@media (max-width:1100px) {
+    .bxw-grid, .bxw.is-deck .bxw-grid, .bxw.is-check .bxw-grid, .bxw.is-wide-editor .bxw-grid, .bxw.is-sequence-only .bxw-grid { grid-template-columns:minmax(0,1fr); height:auto; }
+    .bxw-left, .bxw-right, .bxw-centre, .bxw .bioxp-tools-popover, .bxw.is-wide-editor .bxw-centre, .bxw.is-wide-editor .bxw-right, .bxw.is-sequence-only .bxw-right { grid-column:1; grid-row:auto; }
+    .bxw-left, .bxw-right { height:auto; }
+    .bxw-centre { order:-1; height:min(96vw, 78dvh); }
+    .bxw-card, .bxw .bioxp-method-local-editor { max-height:none; }
+    .bxw-menu { width:auto; right:8px; }
+    .bxw-menu-cols { grid-template-columns:minmax(0,1fr); }
+    .bxw-foot { flex-wrap:wrap; }
+    .bxc-cols { columns:2 140px; }
+}
+
+/* An open menu dims the page below the toolbar; the Stop buttons above stay untouched. */
+.bioxp-methods.has-menu > [role=tabpanel], .bioxp-methods.has-menu > section, .bioxp-methods.has-menu > p { filter:blur(4px) brightness(.38); pointer-events:none; }
+/* Add step: quick actions two across, the full action list below them. */
+.bxw .bioxp-tools-popover { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:18px; align-content:start; }
+.bxw .bioxp-tools-popover > header, .bxw .bioxp-tools-popover > .bioxp-add-row, .bxw .bioxp-tools-popover > .bioxp-tools-generic, .bxw .bioxp-tools-popover > .bioxp-method-later-wait, .bxw .bioxp-tools-popover > [aria-label="Placement and operator stages"] { grid-column:1 / -1; }
+.bxw .bioxp-tools-popover > .bioxp-add-row { border-bottom:1px solid var(--border-primary); }
+.bioxp-methods .bxc-cols button:hover { background:color-mix(in srgb,var(--accent-primary) 12%,transparent); }
+/* Transfer maps keep the plate's well size whatever the column count. */
+.bxw .bioxp-transfer-scene .bioxp-transfer-plate { width:max-content; max-width:100%; align-self:start; align-content:start; }
+.bxw .bioxp-tools-popover > .bioxp-tools-generic { margin-top:0; }
+.bxw .bioxp-transfer-scene .bioxp-transfer-link { align-items:start; }
+/* Station starting state: one spaced row, the note on its own line. */
+.bxw .bioxp-starting-deck { display:flex; flex-wrap:wrap; gap:8px 18px; align-items:center; }
+.bxw .bioxp-starting-deck > h3 { flex-basis:100%; margin:0; }
+.bxw .bioxp-starting-deck label { display:inline-flex; gap:8px; align-items:center; }
+.bxw .bioxp-starting-deck > small, .bxw .bioxp-starting-deck > p { flex-basis:100%; margin:0; }
+.bxw fieldset { min-width:0; }
+.bxw fieldset[aria-label="Import sample sheet"] label { display:grid; gap:4px; min-width:0; }
+.bxw fieldset[aria-label="Import sample sheet"] input, .bxw fieldset[aria-label="Import sample sheet"] textarea, .bxw fieldset[aria-label="Import sample sheet"] select { width:100%; max-width:100%; min-width:0; box-sizing:border-box; }
+/* Step settings sub-tabs: the same controls in seven groups; groups stay mounted. */
+.bioxp-transfer-scene .bxw-subtabs { position:sticky; top:-12px; z-index:3; display:flex; flex-wrap:wrap; gap:2px; margin:-12px 0 0; padding:6px 0 0; border-bottom:1px solid var(--border-primary); background:var(--card-bg,var(--bg-secondary)); }
+.bioxp-transfer-scene .bxw-subtabs button { padding:7px 11px; border:0; border-bottom:2px solid transparent; border-radius:0; background:none; font-size:12.5px; color:var(--text-secondary); white-space:nowrap; }
+.bioxp-transfer-scene .bxw-subtabs button:hover { color:var(--text-primary); }
+.bioxp-transfer-scene .bxw-subtabs button[aria-selected=true] { border-bottom-color:var(--accent-primary); color:var(--text-primary); font-weight:600; }
+.bioxp-transfer-scene .bioxp-transfer-tab { display:grid; gap:1rem; min-width:0; align-content:start; }
+.bioxp-transfer-scene .bioxp-transfer-tab[hidden] { display:none; }
+.bioxp-transfer-scene .bioxp-transfer-top { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:1rem; align-items:start; padding-bottom:.9rem; border-bottom:1px solid var(--border-primary); }
+.bioxp-transfer-scene .bioxp-transfer-top > .bioxp-transfer-amount { border:0; padding:0; }
+.bioxp-transfer-scene .bioxp-transfer-top > label { display:grid; gap:.3rem; font-size:.8rem; }
+.bioxp-transfer-scene .bioxp-transfer-top > label select { width:100%; }
+.bioxp-transfer-scene .bioxp-transfer-tab.is-more > details > summary, .bioxp-transfer-scene .bioxp-transfer-tab > details > summary { cursor:pointer; font-size:.85rem; }
+/* A transfer step keeps its developer sections and placement context under More; notices stay on every tab. */
+.bxw .bioxp-canvas-properties:has(.bioxp-transfer-tab.is-more[hidden]) > details,
+.bxw .bioxp-editor-body:has(.bioxp-transfer-tab.is-more[hidden]) > section[aria-label="Planned plate endpoint"] { display:none; }
+.bxw .bioxp-method-local-editor > .bioxp-editor-body { padding-bottom:18px; }
+.bxw section[aria-label="Planned plate endpoint"] { display:grid; gap:6px; }
+.bxw section[aria-label="Planned plate endpoint"] > small { display:block; }
+.bxw .bioxp-transfer-scene .bioxp-transfer-tab.is-more { gap:0; }
+.bxw .bioxp-transfer-scene .bioxp-transfer-tab.is-more > details > summary { padding:6px 0; border-top:0; font-size:inherit; }
+.bxw .bioxp-transfer-scene:has(.bioxp-transfer-tab.is-more:not([hidden])) { gap:.35rem; }
+.bxw .bioxp-step-advisory { margin-top:10px; }
+.bxw section[aria-label="Planned plate endpoint"] { margin-top:12px; padding-top:10px; border-top:1px solid var(--border-primary); }
+.bxw section[aria-label="Planned plate endpoint"] > small { font-size:11.5px; color:var(--text-secondary); }
+.bxw .bioxp-tools-group > span { flex-basis:100%; }
+.bxw .bioxp-tools-popover { padding-bottom:18px; }
+.bxw-card { padding-bottom:6px; }
+.bxc-pills .bxc-label { flex:none; }

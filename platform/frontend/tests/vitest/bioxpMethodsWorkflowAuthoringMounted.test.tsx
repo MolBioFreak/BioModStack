@@ -23,6 +23,7 @@ function button(name: string, scope: ParentNode = host) { const b = [...scope.qu
 async function click(name: string, scope?: ParentNode) { await act(async () => button(name, scope).click()); await settle(); }
 async function input(label: string, value: string) {
     const el = host.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!; expect(el, label).toBeTruthy();
+    if (el.getAttribute('role') === 'listbox') { const option = el.querySelector<HTMLElement>(`[data-value="${value}"]`)!; expect(option, value).toBeTruthy(); await act(async () => option.click()); await settle(); return; }
     await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); await settle();
 }
 async function station(id: string) { const el = host.querySelector<SVGGElement>(`[data-station="${id}"]:not([data-well])`) ?? host.querySelector<SVGGElement>(`[data-station="${id}"]`)!; expect(el, id).toBeTruthy(); await act(async () => el.dispatchEvent(new MouseEvent('click', { bubbles: true }))); await settle(); }

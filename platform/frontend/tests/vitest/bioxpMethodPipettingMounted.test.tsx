@@ -97,7 +97,7 @@ it('connects two native well panes with exact volume, explicit adoption and orde
     expect(host.textContent).toContain('Authored reagent');
     expect(host.querySelectorAll('[aria-label="Transfer pairs"] li')).toHaveLength(2);
     expect(host.querySelector('[aria-label="Transfer pairs"]')?.textContent).toContain('Not set → C2');
-    expect(host.querySelectorAll('.bioxp-transfer-scene > details')).toHaveLength(2);
+    expect(host.querySelectorAll('.bioxp-transfer-scene > .bioxp-transfer-tab > details')).toHaveLength(2);
     expect(host.querySelector('details[open]')).toBeNull();
     expect(host.querySelector('.bioxp-plan-leaf')).toBeNull();
     await click('Source well D4'); await click('Source well A1');

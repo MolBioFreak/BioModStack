@@ -1447,9 +1447,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                     {linkConnected && componentStop.error && <p role="alert">Component Stop: {bioXpErrorText(componentStop.error)}</p>}
             </div>
             <div role="tabpanel" id="control-panel-workflows" aria-labelledby="control-tab-workflows" hidden={controlTab !== 'workflows'}>
-                {workflowsOpened && <BioXpWorkflowMutationProvider><section className="w-full space-y-4" aria-label="BioXP workflows workspace">
-                    <header className="flex items-baseline gap-3"><h2 className="text-lg font-semibold">Workflows</h2>
-                        <span className="text-xs text-content-secondary">Editing never moves the robot.</span></header>
+                {workflowsOpened && <BioXpWorkflowMutationProvider><section className="w-full" aria-label="BioXP workflows workspace">
                     <BioXpMethodsWorkspace holderTargets={deckDestinations.filter(destination => destination.xy != null)} visible={documentVisible && controlTab === 'workflows'} generation={generation} connected={linkConnected} controlsEnabled={robotControlReady} />
                 </section></BioXpWorkflowMutationProvider>}
             </div>

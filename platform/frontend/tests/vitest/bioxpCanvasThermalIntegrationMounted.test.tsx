@@ -15,16 +15,16 @@ async function mount(initial: MethodValue, preview?: MethodCompile, initialBindi
     root = createRoot(host); await act(async () => root.render(<Owner />));
 }
 async function click(label: string) { const button = [...host.querySelectorAll<HTMLButtonElement>('button,[role=button]')].find(b => b.textContent === label || b.getAttribute('aria-label') === label)!; expect(button, label).toBeTruthy(); await act(async () => button.dispatchEvent(new MouseEvent('click', { bubbles: true }))); }
-async function input(label: string, value: string) { const el = host.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!; expect(el, label).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); }
+async function input(label: string, value: string) { const el = host.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!; expect(el, label).toBeTruthy(); if (el.getAttribute('role') === 'listbox') { const option = el.querySelector<HTMLElement>(`[data-value="${value}"]`)!; expect(option, value).toBeTruthy(); await act(async () => option.click()); return; } await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); }
 // Canvas presentation and native receiving must both pass after integration.
 it('R07: opens the canvas thermal profile compactly rather than defaulting to full', async () => {
     await mount({ steps: [{ type: 'action', step_id: 'program', action: 'thermal_profile', inputs: { segments: [] } }] });
-    await click('Edit selected step');
+    await click('Step settings');
     expect(host.querySelector('[aria-label="Thermal workflow editor"]')?.classList.contains('compact')).toBe(true);
 });
 it('R07: keeps the composed thermal group in the profile editor instead of falling back to generic structure', async () => {
     await mount({ steps: [{ type: 'action', step_id: 'program', action: 'thermal_profile', inputs: { segments: [{ bank: 'nest', target_temp_c: methodNumber('10'), duration_s: methodNumber('0.125'), start: 'dispatch' }] } }] });
-    await click('Edit selected step'); await click('Expand editor'); await input('Repeat first step', '0'); await input('Repeat last step', '0'); await input('Selected group total passes', '2'); await click('Repeat selected steps');
+    await click('Step settings'); await click('Expand editor'); await input('Repeat first step', '0'); await input('Repeat last step', '0'); await input('Selected group total passes', '2'); await click('Repeat selected steps');
     expect((current.steps as any[])[0].type).toBe('group');
     expect(host.querySelector('[aria-label="Temperature program group"]')).not.toBeNull();
 });
@@ -48,7 +48,7 @@ receiving.each(['0', '2'])('lowers a real bound canvas profile subgroup (%s pass
     const bound = { segments: ['10', '20', '30', '40'].map(target => ({ bank: 'nest', target_temp_c: methodNumber(target), duration_s: methodNumber('0.1250'), start: 'dispatch' })) };
     const reference = { expr: { version: 1, op: 'param', id: 'program' } };
     await mount({ schema: 'bms.bioxp-method.v1', name: 'Canvas thermal integration', parameters: [{ id: 'program', type: 'object' }], steps: [{ type: 'action', step_id: 'program-step', label: 'Bound program', action: 'thermal_profile', inputs: reference, on_error: 'pause_for_operator', required_capability: null }] }, undefined, { program: bound });
-    await click('Edit selected step');
+    await click('Step settings');
     await input('Stage 2 Target temperature (°C)', '0021.2500');
     const retained = structuredClone(values) as { program: typeof bound };
     expect((current.steps as any[])[0].inputs).toEqual(reference);
@@ -79,7 +79,7 @@ receiving('composes both bound chillers through the real canvas writer and recei
     await mount({ schema: 'bms.bioxp-method.v1', name: 'Canvas cooler integration', parameters: ['rc', 'oc'].map(id => ({ id, type: 'object' })), steps: ['rc', 'oc'].map(id => ({ type: 'action', step_id: id, label: id, action: 'chiller_setpoint', inputs: { expr: { version: 1, op: 'param', id } } })) }, undefined, bindings);
     for (const bank of ['rc', 'oc']) {
         const button = host.querySelector<HTMLButtonElement>(`[data-method-path="/steps/${bank === 'rc' ? 0 : 1}"]`)!;
-        await act(async () => button.click()); await click('Edit selected step'); await open('Elapsed conditioning timer');
+        await act(async () => button.click()); await click('Step settings'); await open('Elapsed conditioning timer');
         await input('Chiller timer identity', bank + '-timer'); await input('Chiller elapsed seconds', '000.2500');
         await input('Chiller timing', 'here'); await click('Add elapsed timer');
     }
@@ -116,7 +116,7 @@ receiving('inserts an explicitly selected cooler wait after other work and cold 
 
 it('shares canvas and thermal expansion while preserving an unfinished repeat-selection draft', async () => {
     await mount({ steps: [{ type: 'action', step_id: 'program', action: 'thermal_profile', inputs: { segments: [{ bank: 'nest', target_temp_c: '001.250', duration_s: '0.125', start: 'dispatch' }] } }] });
-    await click('Edit selected step'); await click('Expand editor');
+    await click('Step settings'); await click('Expand editor');
     expect(host.querySelector('[aria-label="On-deck editor"]')?.classList.contains('is-expanded')).toBe(true);
     await input('Repeat first step', '0'); await input('Selected group total passes', '003');
     await click('Compact editor');

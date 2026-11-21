@@ -21,7 +21,7 @@ async function mount(initial: MethodValue, preview?: MethodCompile, initialBindi
     root = createRoot(host); await act(async () => root.render(<QueryClientProvider client={client}><Owner /></QueryClientProvider>));
 }
 async function click(label: string) { const button = [...host.querySelectorAll<HTMLButtonElement>('button,[role=button]')].find(b => b.textContent === label || b.getAttribute('aria-label') === label)!; expect(button, label).toBeTruthy(); await act(async () => button.dispatchEvent(new MouseEvent('click', { bubbles: true }))); }
-async function input(label: string, value: string) { const el = host.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!; expect(el, label).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); }
+async function input(label: string, value: string) { const el = host.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!; expect(el, label).toBeTruthy(); if (el.getAttribute('role') === 'listbox') { const option = el.querySelector<HTMLElement>(`[data-value="${value}"]`)!; expect(option, value).toBeTruthy(); await act(async () => option.click()); return; } await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); }
 async function well(station: string, well: string) { const el = host.querySelector(`[data-station="${station}"][data-well="${well}"]`)!; await act(async () => el.dispatchEvent(new MouseEvent('click', { bubbles: true }))); }
 const plan = { labware: [{ id: 'plate', name: 'Reaction plate', station: 'LOC_MS', profile_id: '' }], materials: [], assignments: [] };
 const transfer = { source: { station: 'LOC_RC', location_id: 3, wells: ['A1'] }, destination: { station: 'LOC_MS', location_id: 0, wells: ['A1'], labware_id: 'plate', retained: null }, volume_ul: '002.5000', channels: [0], aspirate_speed: '030.00', dispense_speed: '040.00', source_position_flag: '0', destination_position_flag: '0', source_lift_height_steps: null, destination_lift_height_steps: null };
@@ -151,7 +151,7 @@ it('accepts editor-owned structural lowering without erasing the original whole-
     const bound = { segments: [], repeat: '03', retained: null };
     const reference = { expr: { version: 1, op: 'param', id: 'program' } };
     await mount({ parameters: [{ id: 'program', type: 'object' }], steps: [{ step_id: 'program-step', type: 'action', action: 'thermal_profile', inputs: reference }] }, undefined, { program: bound }, (_node, change) => <button onClick={() => change({ step_id: 'program-step', type: 'group', steps: [] })}>Lower selected program</button>);
-    await click('Edit selected step'); await click('Lower selected program');
+    await click('Step settings'); await click('Lower selected program');
     expect(current.steps).toEqual([{ step_id: 'program-step', type: 'group', steps: [] }]);
     expect(values).toEqual({ program: bound });
     expect(current.parameters).toEqual([{ id: 'program', type: 'object' }]);
@@ -295,12 +295,12 @@ it.runIf(!!discovery && !!process.env.BMS_TEST_PYTHON)('pages all 24 transfers t
     expect(wire.status, wire.stderr).toBe(0);
     const compiled: MethodCompile = JSON.parse(wire.stdout); expect(compiled.document, JSON.stringify(compiled.issues)).toBeTruthy();
     await mount(original, compiled);
-    const stage = () => host.querySelector<HTMLSelectElement>('[aria-label="Workflow stage"]')!;
-    expect(stage().options).toHaveLength(4);
+    const stage = () => host.querySelector<HTMLElement>('[aria-label="Workflow stage"]')!;
+    expect(stage().querySelectorAll('[role="option"]')).toHaveLength(4);
     expect(host.querySelectorAll('.bioxp-method-link')).toHaveLength(0);
     expect(host.querySelector<HTMLButtonElement>('[aria-label="Previous stage"]')!.disabled).toBe(true);
     await click('Next stage');
-    expect(stage().value).toBe('barcodes');
+    expect(stage().dataset.value).toBe('barcodes');
     expect(host.querySelectorAll('.bioxp-method-link')).toHaveLength(24);
     expect(host.querySelector('[aria-label="Stage summary"]')!.textContent).toContain('24 transfers');
     expect(host.querySelectorAll('.bwd-well.is-stage-active[data-station="LOC_RC"]')).toHaveLength(24);
