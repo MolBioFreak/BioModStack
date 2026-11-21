@@ -393,6 +393,111 @@ async def recovery(job_id: str, data: Recovery,
                         "message": "Original actions retained, not replayed. Author intended recovery actions and starting assumptions; partial operations are not self-contained."}]}
 
 
+# Compact reads and small edits for API/LLM callers. Same stored document, same
+# revision rules as PUT; nothing here touches the robot.
+class OutlineRequest(Wire):
+    method: dict[str, JsonValue]
+    check: StrictBool = False
+    bindings: dict[str, JsonValue] = Field(default_factory=dict)
+    dependencies: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class EditRequest(Wire):
+    method: dict[str, JsonValue]
+    edits: list[dict[str, JsonValue]] = Field(min_length=1)
+
+
+class SavedEditRequest(Wire):
+    expected_base_revision: Revision
+    edits: list[dict[str, JsonValue]] = Field(min_length=1)
+
+
+class RecipeBuild(Wire):
+    answers: dict[str, JsonValue] = Field(default_factory=dict)
+    name: str | None = Field(None, min_length=1, max_length=255)
+    save: StrictBool = False
+
+
+def _edited(method, edits):
+    from bioxp_method_outline import apply_edits, EditError
+    try:
+        return apply_edits(method, edits)
+    except EditError as error:
+        raise HTTPException(422, {"code": "edit_rejected", "category": "representation", "edit_index": error.index,
+                                  "message": error.detail, "applied": False})
+
+
+def _recipe(recipe_id):
+    from bioxp_method_model import method_examples
+    entries = method_examples()
+    entries = entries if isinstance(entries, list) else entries.get("examples", [])
+    for entry in entries:
+        if entry.get("id") == recipe_id:
+            return entry
+    raise HTTPException(404, f"No recipe {recipe_id!r}")
+
+
+@router.post("/outline")
+async def outline_draft(data: OutlineRequest):
+    from bioxp_method_outline import outline
+    compiled = None
+    if data.check:
+        compiled = await run_in_threadpool(compile_method, deepcopy({"method": data.method, "bindings": data.bindings,
+                                                                     "dependencies": data.dependencies}))
+    return outline(deepcopy(data.method), compiled)
+
+
+@router.get("/library/{template_id}/outline")
+async def outline_saved(template_id: str, revision: int | None = Query(None, ge=0), check: bool = False,
+                        session: AsyncSession = Depends(get_session)):
+    from bioxp_method_outline import outline
+    saved = await exact_revision(session, await _template(session, "library", template_id), revision)
+    compiled = await run_in_threadpool(compile_method, {"method": deepcopy(saved["method"])}) if check else None
+    return {"id": saved["id"], "revision": saved["revision"], **outline(deepcopy(saved["method"]), compiled)}
+
+
+@router.post("/edit")
+def edit_draft(data: EditRequest):
+    """Apply addressed edits to a draft body and return it; nothing is saved."""
+    method, changes = _edited(data.method, data.edits)
+    return {"method": method, "changes": changes}
+
+
+@router.post("/library/{template_id}/edits", response_model=dict[str, JsonValue])
+async def edit_saved(template_id: str, data: SavedEditRequest, session: AsyncSession = Depends(get_session)):
+    """Apply edits to the saved head and store them as the next revision (stale base is refused like PUT)."""
+    template = await _template(session, "library", template_id)
+    head = await exact_revision(session, template, data.expected_base_revision)
+    method, changes = _edited(head["method"], data.edits)
+    _check_schema("library", method)
+    updated = await user_templates.update_user_template(template_id, user_templates.UserTemplateUpdate(
+        params=method, expected_base_revision=data.expected_base_revision), session)
+    record = await exact_revision(session, updated, data.expected_base_revision + 1)
+    return {**record, "changes": changes}
+
+
+@router.get("/recipes")
+def list_recipes():
+    """Starting points and the questions each one asks. Values are never invented here."""
+    from bioxp_method_model import method_examples
+    from bioxp_method_outline import recipes
+    entries = method_examples()
+    return recipes(entries if isinstance(entries, list) else entries.get("examples", []))
+
+
+@router.post("/recipes/{recipe_id}/build")
+async def build_recipe(recipe_id: str, data: RecipeBuild, session: AsyncSession = Depends(get_session)):
+    """Method plus bindings from the caller's answers. Optionally saved as a new library entry; never run."""
+    from bioxp_method_outline import build_recipe as build
+    try:
+        built = build(_recipe(recipe_id), data.answers, data.name)
+    except ValueError as error:
+        raise HTTPException(422, {"code": "recipe_answers", "category": "representation", "message": str(error)})
+    if data.save:
+        built["saved"] = await _create("library", DraftCreate(method=built["method"], name=data.name), session)
+    return built
+
+
 # Static run/discovery routes precede collection parameter routes.
 @router.get("/{collection}", response_model=list[DraftRecord])
 async def library(collection: Collection, limit: int = Query(100, ge=1, le=500),
