@@ -93,8 +93,13 @@ async function mount(values: Record<string, unknown> = {}) {
 }
 async function open() {
     const detail = document.querySelector<HTMLDetailsElement>('[data-molecular-construction-panel]')!;
-    expect(detail).toBeTruthy();
-    await act(async () => { detail.open = true; detail.dispatchEvent(new Event('toggle')); });
+    if (detail) await act(async () => { detail.open = true; detail.dispatchEvent(new Event('toggle')); });
+    else {
+        await wait(() => expect(document.querySelector('[aria-label="AtomWorks entry workspace"]')).not.toBeNull());
+        await click('Starting points');
+        await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Start from a sequence"]')!.click());
+        if (control('Molecule')?.value === 'protein') await edit('Molecule', 'dna');
+    }
     await wait(() => expect(document.querySelector('[aria-label="Molecular construction workbench"]')).not.toBeNull());
 }
 async function click(text: string) {
