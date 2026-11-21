@@ -58,9 +58,9 @@ export function LegacyNativeGenerationControls({ model, task, value, onChange }:
 }
 
 /** Presentation of the native owner's schema, never a second scientific compiler. */
-export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initialValues, onDraftChange, runDetails, suiteView, onSuiteViewChange, entryWorkspace = true, constructionTools }: {
+export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initialValues, onDraftChange, runDetails, suiteView, onSuiteViewChange, entryWorkspace = true, entryVisit = 0, constructionTools }: {
     model: 'rfd4_proteina' | 'complexa'; mode?: string; initialValues: Record<string, unknown>;
-    entryWorkspace?: boolean; constructionTools?: ReactNode;
+    entryWorkspace?: boolean; entryVisit?: number; constructionTools?: ReactNode;
     onDraftChange: (draft: Record<string, unknown>) => void; runDetails?: ReactNode; suiteView?: 'simple' | 'advanced'; onSuiteViewChange?: (view: 'simple' | 'advanced') => void;
 }) {
     const entryEnabled = entryWorkspace && model === 'rfd4_proteina' && mode === 'generate';
@@ -99,6 +99,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
     const [explicitSequenceNull, setExplicitSequenceNull] = useState(() => initialValues.sequence_design === null || initialValues.sequence_design_null === true);
     const [sequenceOmitted, setSequenceOmitted] = useState(() => initialValues.sequence_design_omitted === true);
     const [section, setSection] = useState('Design');
+    useEffect(() => { if (entryVisit) setSection('Design'); }, [entryVisit]);
     const manualSection = useRef(false);
     useEffect(() => { if (manualSection.current) { manualSection.current = false; return; } if (suiteView) setSection(suiteView === 'advanced' ? 'Native settings' : 'Design'); }, [suiteView]);
     const navigate = useNavigate(); const client = useQueryClient();
@@ -249,7 +250,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
         {inventory.error && <p role="alert">{inventory.error.message}. Saved native values are retained.</p>}
         <div hidden={section !== 'Design'}><ProteinDesignPanel title="Design" showTitle={false}>
             {schema && (model === 'rfd4_proteina' ? <Rfd4TaskWorkspace entry={entryEnabled ? {
-                task: taskLabel, hasTask: Boolean(recipe || input.kind), sourceFree: input.kind === 'unconditional', applied: consumedDocuments,
+                visit: entryVisit, task: taskLabel, hasTask: Boolean(recipe || input.kind), sourceFree: input.kind === 'unconditional', applied: consumedDocuments,
                 inspected: Object.entries(inspections).filter(([slot, item]) => item.binding === JSON.stringify(nativeDraft.sources?.[slot])).map(([slot, item]) => `${slot}: ${item.receipt.path?.split('/').at(-1) ?? 'source'}${item.receipt.model_number != null ? ` · MODEL ${item.receipt.model_number}` : ''}`),
                 start: next => changeRecipe(next, true), sequence: <Rfd4SequenceEntry value={sequenceEntry} onChange={setSequenceEntry}>{constructionTools}</Rfd4SequenceEntry>,
             } : undefined} advanced={suiteView === 'advanced'} request={request} schema={schema} mode={mode} recipe={recipe} onRecipe={changeRecipe} onChange={changeRequest} renderNative={renderField} renderSource={renderSource} sourceNames={Object.keys(nativeDraft.sources ?? {})} effectiveConfig={effectiveReadback?.generation === readbackGeneration.current.value ? effectiveReadback.effective : undefined}

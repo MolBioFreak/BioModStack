@@ -42,15 +42,15 @@ export const launcherExperimentalTemplates = [
         {
             id: 'protein_modification_experimental',
             name: 'De Novo Design',
-            description: 'Generate new proteins, redesign an existing structure, or work from a shape. RFD3 leads; complementary engines support their own design goals.',
+            description: 'Start with RFD4-Proteina, choose another generation engine, or open a redesign, resequencing or shape editor.',
             icon: 'cube',
             color: '#22C55E',
             experimental: true,
             stages: [
-                { tool: 'Generate · RFD3' },
+                { tool: 'Generate · RFD4-Proteina' },
                 { tool: 'Redesign structure' },
                 { tool: 'Shape' },
-                { tool: 'DISCO · La-Proteina' },
+                { tool: 'Resequence' },
             ],
         },
 

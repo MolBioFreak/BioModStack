@@ -174,7 +174,7 @@ export function ProteinModificationTemplate({
     useEffect(() => {
         if (previousNavigation.current === navigationSignature) return;
         previousNavigation.current = navigationSignature;
-        if (navigationState) setNavigation(resolveNavigation({ ...navigationState }));
+        if (navigationState) { setEntryVisit(0); setNavigation(resolveNavigation({ ...navigationState })); }
     }, [navigationSignature, navigationState]);
     const reportDraft = useCallback((draft: Record<string, unknown>) => {
         // Child snapshots replace values, including explicit clears; inactive drafts never enter requests.
@@ -194,7 +194,10 @@ export function ProteinModificationTemplate({
         // retaining the child's exact request rather than recompiling science.
         reportDraft({ ...drafts.current[activeKey], ...activeRequest.current });
     };
+    // UI-only intent. Ordinary navigation reopens the selected native task.
+    const [entryVisit, setEntryVisit] = useState(0);
     const changeNavigation = (state: DeNovoNavigationState) => {
+        setEntryVisit(0);
         const next = resolveNavigation({ ...state });
         // Only shared intent seeds an untouched engine draft. Never translate
         // length ranges, structural roles or model-native conditions by guessing.
@@ -242,10 +245,17 @@ export function ProteinModificationTemplate({
             preparedRef.current = { ...preparedRef.current, [key]: structuredClone(document) };
             reportDraft({ ...drafts.current[activeKey], ...activeRequest.current });
         } }}>
-        <div className="space-y-3 text-[var(--text-primary)]" data-bms-de-novo-form="complete">
+        <section aria-label="De novo design workspace" className="space-y-3 text-[var(--text-primary)]" data-bms-de-novo-form="complete">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2" data-de-novo-header-controls>
                 <button type="button" onClick={onBack} className="rounded-lg bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm">Back</button>
-                <h2 className="text-lg font-semibold">Protein design</h2>
+                <h2 className="text-lg font-semibold">De novo design workspace</h2>
+                <button type="button" className="rounded-lg border border-[var(--border-primary)] px-3 py-1.5 text-sm" onClick={() => {
+                    if (mode !== 'de_novo_design' || generator !== 'rfd4_proteina' || (navigation.native_mode ?? 'generate') !== 'generate') {
+                        changeNavigation({ modification_mode: 'de_novo_design', generator: 'rfd4_proteina', design_task: lastTaskByEngine.current.rfd4_proteina ?? 'unconditional', native_mode: 'generate' });
+                    }
+                    setSuiteView('simple');
+                    setEntryVisit(visit => visit + 1);
+                }}>RFD4-Proteina starting points</button>
                 <nav aria-label="Design task" className="flex flex-wrap gap-2">
                 {DE_NOVO_MODIFICATION_MODE_CARDS.map(card => <button type="button" key={card.id}
                     aria-pressed={mode === card.id} onClick={() => chooseMode(card.id)}
@@ -283,7 +293,7 @@ export function ProteinModificationTemplate({
                 </div>
                 {generator === 'laproteina' && navigation.native_mode === 'evaluate' ? <LaProteinaEvaluation key={activeKey} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />
                     : generator === 'rfd4_proteina' || generator === 'complexa' ? <DeNovoNativeGenerationSettings key={activeKey} model={generator}
-                    constructionTools={<MolecularConstructionWorkbench initialDraft={construction} onDraftChange={changeConstruction} />} mode={navigation.native_mode ?? 'generate'}
+                    entryVisit={entryVisit} constructionTools={<MolecularConstructionWorkbench initialDraft={construction} onDraftChange={changeConstruction} />} mode={navigation.native_mode ?? 'generate'}
                     initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} />
                     : ['rfd3', 'disco', 'laproteina'].includes(generator) ? <GenerationEditor key={activeKey} initialValues={childValues.current.values} generator={generator}
                     designTask={task} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} /> : <p role="alert">No native editor registered for {generator}. Retained settings have not been translated to another engine.</p>}
@@ -298,7 +308,7 @@ export function ProteinModificationTemplate({
                     baseTemplateId: 'protein_modification_experimental',
                     currentMode: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? navigation.native_mode ?? 'generate' : mode === 'rfd3_iteration' ? validatedRedesign ? 'region_redesign' : 'de_novo_design' : mode,
                 })}>Template Manager</button>}
-        </div>
+        </section>
         </PreparedGeometryContext.Provider>
     );
 }

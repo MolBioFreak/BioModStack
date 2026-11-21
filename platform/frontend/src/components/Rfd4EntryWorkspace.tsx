@@ -1,13 +1,14 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { DeNovoDocumentEditorPanels, StudioTaskRail } from './DeNovoDocumentEditors';
 
 export type Rfd4EntryProps = {
-    task: string; hasTask: boolean; sourceFree: boolean; applied: string[]; inspected: string[];
+    visit?: number; task: string; hasTask: boolean; sourceFree: boolean; applied: string[]; inspected: string[];
     sequence: ReactNode; start: (recipe: string) => void;
 };
 export function Rfd4EntryWorkspace({ entry, picker, children }: { entry: Rfd4EntryProps; picker: (choose: () => void) => ReactNode; children: ReactNode }) {
     const [rail, setRail] = useState<HTMLDivElement | null>(null);
     const [view, setView] = useState<'start' | 'task' | 'sequence'>(entry.hasTask ? 'task' : 'start');
+    useEffect(() => { if (entry.visit) setView('start'); }, [entry.visit]);
     const choices = [['New chains', 'Specify the chains to generate. No input file.', 'source_free'], ['Open a structure', 'Choose a CIF or PDB from files or RCSB.', 'protein_context'], ['Start from a sequence', 'Paste or import sequence; choose protein, DNA or RNA.', 'sequence']] as const;
     const pane = 'min-w-0 space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4';
     return <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)]">

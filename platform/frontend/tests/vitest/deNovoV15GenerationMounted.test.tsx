@@ -151,7 +151,7 @@ it('renders one RFD3 editor and one run area after scientific inputs when select
     expect([...document.querySelectorAll('nav[aria-label="Generation sections"] button')].map(el => el.textContent)).toEqual(['Design', 'Sampling', 'Sequence Design']);
     expect(document.querySelectorAll('[data-execution]')).toHaveLength(1);
     expect(document.querySelectorAll('[data-policy]')).toHaveLength(1);
-    expect([...document.querySelectorAll('h2')].filter(el => el.textContent === 'Protein design')).toHaveLength(1);
+    expect([...document.querySelectorAll('h2')].filter(el => el.textContent === 'De novo design workspace')).toHaveLength(1);
     expect(document.body.textContent).not.toContain('backup');
     expect(control('Minimum length').compareDocumentPosition(document.querySelector('[data-execution]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await click('Generate candidates');
