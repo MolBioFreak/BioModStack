@@ -34,6 +34,14 @@ def selected_provider(params: dict) -> str:
     return provider
 
 
+def boltz_provider_params(params: dict) -> dict:
+    # The native CSV writer needs both roles. Adapt its provider operation,
+    # not the authored settings or other consumers of the shared cache.
+    if params.get('colabfold_pairing_mode') == 'paired' and selected_provider(params) == 'colabfold_api':
+        return {**params, 'colabfold_pairing_mode': 'unpaired_paired'}
+    return params
+
+
 def provider_settings(params: dict) -> dict:
     """Only provider scientific controls; local-search tuning is inapplicable.
 
@@ -274,9 +282,10 @@ def inspect_msa_cache(model_id: str, params: dict) -> dict:
                 or native_roster) else 'unresolved'}
     if any(not isinstance(s, str) or not re.fullmatch('[A-Z]+', s) for group in groups for s in group):
         return {'state': 'unresolved'}
+    request_params = boltz_provider_params(params) if model_id in {'boltz2', 'boltz_cp_experimental'} else params
     for group in groups:
         try:
-            replay_model_msa(sequences=group, params=params)
+            replay_model_msa(sequences=group, params=request_params)
         except MSACacheMiss:
             return {'state': 'miss'}
     return {'state': 'ready'}

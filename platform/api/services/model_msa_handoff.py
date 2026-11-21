@@ -59,7 +59,7 @@ def _publish_alignment(target: Path, data: bytes, *, retained_source: Path | Non
 
 from biomodstack_msa_handoff import digest
 from biomodstack_boltz_msa import a3m_rows, validate_boltz_msa, write_paired_csv
-from biomodstack_msa_handoff import validate_a3m
+from biomodstack_msa_handoff import verified_provider_a3m
 
 
 def generated_msa_service_supported(service) -> bool:
@@ -209,10 +209,7 @@ def native_alignments(result: dict, sequences: list[str], destination: Path, *, 
             raise ValueError('Provider artifact chain index is invalid')
         if (index, role) in paths or role not in {'paired', 'unpaired'}:
             raise ValueError('Duplicate or invalid provider artifact role')
-        source = Path(artifact['path'])
-        if digest(source.read_bytes()) != artifact['sha256']:
-            raise ValueError('Shared MSA cache artifact digest mismatch')
-        data = validate_a3m(source, sequences[index])
+        data = verified_provider_a3m(artifact, sequences[index])
         destination.mkdir(parents=True, exist_ok=True)
         target = destination / f'chain-{index}-{role}.a3m'
         _publish_alignment(target, data)
@@ -320,8 +317,7 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path, *, native
         sequences = [str(c['sequence']).strip() for c in missing]
         if any(not s or ':' in s for s in sequences):
             raise ValueError('MSA preparation requires explicit per-chain protein sequences')
-        from services.msa_preparation import prepare_model_msa
-        result = prepare_model_msa(sequences=sequences, params=effective)
+        result = _prepare_boltz_msa(sequences, effective)
         paths = native_alignments(result, sequences, destination, model_id=model_id)
         for component, path in zip(missing, paths):
             component['msa_path'] = str(path)
@@ -426,6 +422,12 @@ def prepare_esmfold2_msa(params: dict, destination: Path) -> dict:
     return effective
 
 
+def _prepare_boltz_msa(sequences, params):
+    from services.msa_preparation import prepare_model_msa
+    from services.msa_provider_setup import boltz_provider_params
+    return prepare_model_msa(sequences=sequences, params=boltz_provider_params(params))
+
+
 def _validate_partial_group(proteins: list, missing: list, params: dict) -> None:
     if not proteins or not missing or len(missing) == len(proteins):
         return
@@ -449,11 +451,10 @@ def _prepare_proteins(proteins, params, destination, *, model_id, base):
             protein['msa'] = str(source.resolve())
     receipt = {'backend': 'supplied'}
     if missing:
-        from services.msa_preparation import prepare_model_msa
         sequences = [p['sequence'] for p in missing]
         if any(not s or ':' in s for s in sequences):
             raise ValueError('MSA preparation requires explicit per-chain protein sequences')
-        result = prepare_model_msa(sequences=sequences, params=params)
+        result = _prepare_boltz_msa(sequences, params)
         paths = native_alignments(result, sequences, destination, model_id=model_id)
         for protein, path in zip(missing, paths):
             protein['msa'] = str(path)

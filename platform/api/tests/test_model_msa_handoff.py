@@ -661,3 +661,57 @@ def test_cp_config_parse_and_digest_use_same_bytes(tmp_path, monkeypatch, replac
     else:
         assert resolve_boltz_config(source, root=tmp_path, manifest_sha256=digest(manifest_bytes)) == payload
     assert reads == [source]
+
+
+@pytest.mark.parametrize('consumer', ['boltz', 'protenix'])
+def test_cache_handoff_keeps_verified_snapshot(tmp_path, monkeypatch, consumer):
+    from services import msa_preparation
+    source = tmp_path / 'cache.a3m'
+    original = b'>query\nACDE\n>hit\n-CDE\n'
+    source.write_bytes(original)
+    artifact = dict(chain_index=0, role='unpaired', path=str(source), sha256=digest(original))
+    result = dict(artifacts=[artifact], provider='colabfold_api', request_digest='fixture',
+                  provenance={}, cache_hit=True)
+    read = Path.read_bytes
+
+    def replace_after_read(path):
+        data = read(path)
+        if path == source:
+            source.write_bytes(original.replace(b'-CDE', b'ACD-'))
+        return data
+
+    monkeypatch.setattr(Path, 'read_bytes', replace_after_read)
+    dest = tmp_path / 'native'
+    if consumer == 'boltz':
+        [output] = native_alignments(result, ['ACDE'], dest)
+    else:
+        monkeypatch.setattr(msa_preparation, 'prepare_model_msa', lambda **_: result)
+        roster = tmp_path / 'input.json'
+        roster.write_text(json.dumps([{'sequences': [{'proteinChain': {'sequence': 'ACDE'}}]}]))
+        manifest = msa_preparation.prepare_protenix_inputs(None, roster, dest, {})
+        output = dest / manifest['artifacts'][0]['path']
+    assert output.read_bytes() == original
+
+
+def test_boltz_paired_request_uses_both_cached_roles(tmp_path, monkeypatch):
+    from services import msa_provider_setup
+    monkeypatch.syspath_prepend(str(ROOT / 'tests'))
+    import test_msa_api_client as fixture
+
+    sequences = [fixture.SEQ, fixture.SEQ2]
+    cache = tmp_path / 'cache'
+    params = dict(sequence_input=':'.join(sequences), boltz_use_msa=True,
+                  msa_provider='colabfold_api', msa_cache_only=True, colabfold_pairing_mode='paired')
+    monkeypatch.setattr(msa_provider_setup, 'cache_root', lambda: cache)
+    # Populate both legitimate cache identities through the real offline client.
+    for mode, roles in [('paired', ['paired']), ('unpaired_paired', ['unpaired', 'paired'])]:
+        replies = [reply for role in roles for reply in fixture.cf_success(sequences, role)]
+        fixture.client(tmp_path, fixture.FixtureHTTP(*replies)).prepare_msa(
+            sequences=sequences, provider='colabfold_api', settings={'pairing_mode': mode}, cache_root=cache)
+        state = 'miss' if mode == 'paired' else 'ready'
+        assert msa_provider_setup.inspect_msa_cache('boltz2', params) == {'state': state}
+    destination = tmp_path / 'prepared'
+    prepared = prepare_launch_msa('boltz2', params, destination)
+    manifest = json.loads((destination / 'msa-inputs.json').read_bytes())
+    assert prepared['colabfold_pairing_mode'] == manifest['settings']['colabfold_pairing_mode'] == 'paired'
+    assert [chain['alignment']['format'] for chain in manifest['tasks'][0]['chains']] == ['csv', 'csv']
