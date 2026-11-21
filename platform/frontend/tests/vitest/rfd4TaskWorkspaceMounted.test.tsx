@@ -63,6 +63,23 @@ async function click(text: string) { const node = [...document.querySelectorAll<
 async function edit(label: string, value: string) { const node = document.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`); expect(node, label).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), 'value')!.set!.call(node, value); node!.dispatchEvent(new Event(node!.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); }
 async function disclose(text: string) { const node = [...document.querySelectorAll('summary')].find(s => s.textContent?.trim() === text); expect(node, text).toBeTruthy(); await act(async () => { const d = node!.parentElement as HTMLDetailsElement; d.open = true; d.dispatchEvent(new Event('toggle')); }); }
 function normalize(request: unknown, model = 'rfd4', mode = 'generate') { return JSON.parse(execFileSync('python', ['-c', model === 'rfd4' ? "import sys,json;from scripts.lib.rfd4_proteina_contract import normalize_request;print(json.dumps(normalize_request(json.loads(sys.argv[1]),sys.argv[2])))" : "import sys,json;from scripts.lib.complexa_contract import normalize_request;print(json.dumps(normalize_request(json.loads(sys.argv[1]))))", JSON.stringify(request), mode], { cwd, encoding: 'utf8' })); }
+it('starts source-free and structure authoring in the Studio workspace, without submitting', async () => {
+    await mount('rfd4_proteina');
+    const workspace = () => document.querySelector('[aria-label="AtomWorks entry workspace"]')!;
+    expect(workspace().textContent).toContain('Start from a sequence');
+    await act(async () => (workspace().querySelector('[aria-label="New chains"]') as HTMLButtonElement).click());
+    expect(workspace().querySelector('[aria-label="Chain 1 length mode"]')).toBeTruthy();
+    await edit('Chain 1 length mode', 'exact');
+    await edit('Chain 1 exact length', '63');
+    expect(draft.rfd4_request.input.chains[0].min_length).toBe(63);
+    await click('Starting points'); await act(async () => (workspace().querySelector('[aria-label="Open a structure"]') as HTMLButtonElement).click());
+    expect(workspace().querySelector('[aria-label="Choose structure for Conditioned document"]')).toBeTruthy();
+    expect(document.querySelector('[aria-label="Active task"]')?.textContent).toContain('No structure attached');
+    await edit('RFD4 task', 'source_free');
+    expect(draft.rfd4_request.input.chains[0].min_length).toBe(63);
+    expect(wire.some(call => call.url === '/api/jobs')).toBe(false);
+});
+
 it('retains opaque native editor companions without placing them in the Job request', async () => {
     const companion = { document: { hash: 'retained' }, selection: [], provenance: null };
     await mount('rfd4_proteina', { rfd4_request: {}, opaque_import: companion });

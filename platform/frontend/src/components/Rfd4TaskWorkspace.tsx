@@ -1,3 +1,4 @@
+import { Rfd4EntryWorkspace, type Rfd4EntryProps } from './Rfd4EntryWorkspace';
 import { useState } from 'react';
 import { Rfd4Regions, Rfd4SelectionSummary, rfd4ConditionName, type Rfd4VisualSelection } from './Rfd4VisualWorkbench';
 import conditionMetadata from '../lib/rfd4ConditionMetadata.json';
@@ -83,8 +84,8 @@ function Conditions({ value, families, visual, onChange, onInspect, advanced }: 
     </fieldset>;
 }
 
-export function Rfd4TaskWorkspace({ advanced, request, schema, mode, recipe, onRecipe, onChange, visual, sourceNames, renderNative, renderSource, retainedTasks, sourceChains, onClearSelection, effectiveConfig, onInspectCondition, lengthDrafts, onLengthDraftsChange }: {
-    advanced?: boolean; request: Record<string, any>; schema: Schema; mode: string; recipe?: string; onRecipe: (recipe: string) => void;
+export function Rfd4TaskWorkspace({ entry, advanced, request, schema, mode, recipe, onRecipe, onChange, visual, sourceNames, renderNative, renderSource, retainedTasks, sourceChains, onClearSelection, effectiveConfig, onInspectCondition, lengthDrafts, onLengthDraftsChange }: {
+    entry?: Rfd4EntryProps; advanced?: boolean; request: Record<string, any>; schema: Schema; mode: string; recipe?: string; onRecipe: (recipe: string) => void;
     onChange: (request: Record<string, any>) => void; visual?: Visual; sourceNames: string[];
     renderNative: (key: string, schema: Schema) => React.ReactNode;
     renderSource?: (label: string, value: string, onChange: (slot: string) => void) => React.ReactNode;
@@ -116,8 +117,8 @@ export function Rfd4TaskWorkspace({ advanced, request, schema, mode, recipe, onR
         const flattened = chains.flat() as string[];
         return new Set(flattened).size === flattened.length ? visual : undefined;
     };
-    return <div data-rfd4-task-workspace className="space-y-4 min-w-0">
-        {mode !== 'evaluate' && <label>RFD4 task<select aria-label="RFD4 task" value={recipe ?? ''} onChange={e => onRecipe(e.target.value)}><option value="">{Object.keys(request).length ? 'Saved task / choose another' : 'Choose task'}</option>{RFD4_RECIPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{retainedTasks?.map(({ key, label }) => <option key={key} value={`legacy:${key}`}>Restore retained {label}</option>)}</select></label>}
+    const picker = (choose: () => void) => mode !== 'evaluate' && <label>RFD4 task<select aria-label="RFD4 task" value={recipe ?? ''} onChange={e => { onRecipe(e.target.value); choose(); }}><option value="">{Object.keys(request).length ? 'Saved task / choose another' : 'Choose task'}</option>{RFD4_RECIPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{retainedTasks?.map(({ key, label }) => <option key={key} value={`legacy:${key}`}>Restore retained {label}</option>)}</select></label>;
+    const inputs = <>
         {mode === 'evaluate' && <h3>Evaluate annotated outputs</h3>}
         {input.kind === 'condition_spec' && <p>Choose a source, select residues, then apply a condition.</p>}
         {input.kind === 'unconditional' && <fieldset><legend>Generated chains</legend><p className="text-xs">New chains is source-free. To edit a document in AtomWorks, choose a context, motif or annotated task.</p>
@@ -160,6 +161,9 @@ export function Rfd4TaskWorkspace({ advanced, request, schema, mode, recipe, onR
                 </details>
                 <button type="button" onClick={() => setInput({ ...input, examples: examples.filter((_: any, n: number) => n !== i) })}>Remove example {i + 1}</button>
             </fieldset>)}<button type="button" onClick={() => setInput({ ...input, examples: [...examples, { name: RFD4_DEFAULT_EXAMPLE_NAME, sources: [] }] })}>Add conditioned example</button></>}
+    </>;
+    return <div data-rfd4-task-workspace className="space-y-4 min-w-0">
+        {entry ? <Rfd4EntryWorkspace entry={entry} picker={picker}>{inputs}</Rfd4EntryWorkspace> : <>{picker(() => {})}{inputs}</>}
         <datalist id="rfd4-source-names">{sourceNames.map(name => <option key={name} value={name} />)}</datalist>
         {mode !== 'evaluate' && <fieldset><legend>Sampling amount</legend><p>Designs per input are replicates; batch size is parallel sampling, not final beam count.</p><div className="flex flex-wrap gap-3">{[['num_replicates', 'Designs per input'], ['batch_size', 'Batch size'], ['seed', 'Seed']].map(([key, label]) => <NativeNumber key={key} label={label} value={settings[key]} inheritedLabel={effectiveConfig && Object.hasOwn(effectiveConfig, key) ? 'Resolved native value' : 'Schema reference'} inherited={effectiveConfig && Object.hasOwn(effectiveConfig, key) ? effectiveConfig[key] : schema.properties?.settings?.properties?.[key]?.default} nullable={key === 'seed'} onChange={v => setSetting(key, v)} />)}</div></fieldset>}
         {recipe === 'partial' && <fieldset><legend>Partial diffusion</legend><p>Native trajectory-tail fraction has domain (0,1], not percent. Trajectory-tail fraction counts the tail of integration steps; backbone and latent partial times are separate native controls. No fraction is chosen automatically.</p>{['partial_trajectory_fraction_steps', 'partial_t_backbone', 'partial_t_latent'].map(key => <NativeNumber key={key} label={key} maximum={key === 'partial_trajectory_fraction_steps' ? 1 : undefined} help={key === 'partial_trajectory_fraction_steps' ? 'Native fraction (0,1]; exact precision retained, no default partial override.' : 'Independent native time; not a percentage.'} value={settings.generation?.args?.[key]} inherited={effectiveConfig?.generation?.args?.[key]} onChange={v => setSetting('generation', { ...nativeRecord(settings.generation), args: patchNative(nativeRecord(settings.generation?.args), key, v) })} />)}</fieldset>}

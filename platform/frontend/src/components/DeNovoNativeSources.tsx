@@ -238,11 +238,11 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
 }
 
 /** Task-facing acquisition; the existing row owns materialization and stale reads. */
-export function NativeSourceInput({ label, value, bindings, onChange, onAcquire, onInspection, inspection, inspectionLayers, onSelection, selectedIdentities, integrated = false }: {
+export function NativeSourceInput({ label, value, bindings, onChange, onAcquire, onInspection, inspection, inspectionLayers, onSelection, selectedIdentities, integrated = false, initiallyOpen = false }: {
     inspectionLayers?: (receipt: StructureMaterialization) => MetricLayer[];
     label: string; value: string; bindings: NativeGenerationSourceBindings | undefined;
     /** Keep the selected structure and sequence visible in the task workbench. */
-    integrated?: boolean;
+    integrated?: boolean; initiallyOpen?: boolean;
     onChange: (slot: string) => void;
     onAcquire: (source: NativeGenerationSourceBinding) => string;
     inspection?: StructureMaterialization;
@@ -250,7 +250,7 @@ export function NativeSourceInput({ label, value, bindings, onChange, onAcquire,
     selectedIdentities?: Rfd4NativeSelectionIdentity[];
     onInspection?: (slot: string, receipt: StructureMaterialization, binding: NativeGenerationSourceBinding) => void;
 }) {
-    const [open, setOpen] = useState(false);
+    const [open, setOpen] = useState(initiallyOpen);
     const committedSlot = useRef<string | undefined>(undefined);
     useEffect(() => { committedSlot.current = undefined; }, [value]);
     const latest = useRef({ onAcquire, onInspection }); latest.current = { onAcquire, onInspection };
