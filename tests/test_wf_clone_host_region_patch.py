@@ -22,4 +22,4 @@ def test_lock_names_this_patch_and_a_source_directory_of_its_own() -> None:
     assert (patch["result_commit"], patch["result_tree"]) == (source["commit"], source["tree"])
     assert patch["base_commit"] == LOCK["upstream"]["commit"]
     # A changed source never reuses the directory of the edition before it.
-    assert source["path"].endswith("/v1.8.4-bms.3")
+    assert source["path"].endswith("/v1.8.4-bms.3/source")

@@ -7,7 +7,7 @@
     "sha256": "3d9ab967ded01c940a9378d587ff3f5682a4d79b31bfad60df1891645ef6fce2"
   },
   "containers": {
-    "cache_dir": "${BMS_RUNTIME_HOME}/ont-clone-v1.8.4-bms.2",
+    "cache_dir": "${BMS_CONTAINER_DIR}/ngs/wf-clone-validation/v1.8.4-bms.3/images",
     "images": [
       {
         "cache_file": "ontresearch-wf-clone-validation-sha0ebc91d22c0ea5183272af8bf2b96ca51e88ad5d.img",
@@ -103,7 +103,7 @@
   },
   "patched_source": {
     "commit": "ebc97a46a08dc79eb5628a00f680db18aef9865d",
-    "path": "${BMS_SHARED_DATA}/ngs/wf-clone-validation/v1.8.4-bms.3",
+    "path": "${BMS_CONTAINER_DIR}/ngs/wf-clone-validation/v1.8.4-bms.3/source",
     "tree": "de81faad199b22dc672b60c56691585750a0d4ea"
   },
   "runtime_policy": {

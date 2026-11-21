@@ -82,9 +82,23 @@ def _runtime_home() -> Path:
     return Path(base) / "biomodstack" / "runtime"
 
 
+def _container_dir() -> Path:
+    """Managed container dir: BMS_CONTAINER_DIR, else the install profile, else <data root>/apptainer.
+
+    Same resolver as the API's get_container_dir, so remote transport sees these
+    files inside managed storage.
+    """
+    repo = str(Path(__file__).resolve().parents[1])
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+    from biomodstack_runtime_profile import resolve_runtime_paths
+    return Path(str(resolve_runtime_paths()["container_dir"]))
+
+
 def expand_lock_location(raw: str) -> str:
     """A lock names installation locations symbolically; identities (digests) stay in the lock."""
-    for token, root in (("${BMS_SHARED_DATA}", _shared_data_root), ("${BMS_RUNTIME_HOME}", _runtime_home)):
+    for token, root in (("${BMS_SHARED_DATA}", _shared_data_root), ("${BMS_RUNTIME_HOME}", _runtime_home),
+                        ("${BMS_CONTAINER_DIR}", _container_dir)):
         if raw == token or raw.startswith(token + "/"):
             return str(root() / raw[len(token):].lstrip("/"))
     return raw

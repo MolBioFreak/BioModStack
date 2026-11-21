@@ -24,15 +24,15 @@ def install(tmp_path, monkeypatch):
         "weights_root": str(data / "weights"), "inputs_dir": str(data / "inputs")}))
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-    for name in ("BMS_HOST_DATA", "XDG_DATA_HOME"):
+    for name in ("BMS_HOST_DATA", "XDG_DATA_HOME", "BMS_CONTAINER_DIR", "BMS_DATA", "BMS_RUNTIME_MODE"):
         monkeypatch.delenv(name, raising=False)
     return home, data
 
 
 def test_tracked_lock_names_no_host_location():
     lock = json.loads(LOCK.read_text())
-    assert lock["patched_source"]["path"].startswith("${BMS_SHARED_DATA}/")
-    assert lock["containers"]["cache_dir"].startswith("${BMS_RUNTIME_HOME}/")
+    assert lock["patched_source"]["path"].startswith("${BMS_CONTAINER_DIR}/")
+    assert lock["containers"]["cache_dir"].startswith("${BMS_CONTAINER_DIR}/")
     assert "/home/" not in LOCK.read_text() and "/mnt/" not in LOCK.read_text()
 
 
@@ -40,6 +40,13 @@ def test_locations_resolve_to_this_installs_roots(install):
     home, data = install
     assert expand_lock_location("${BMS_SHARED_DATA}/ngs/x") == str(data / "ngs/x")
     assert expand_lock_location("${BMS_RUNTIME_HOME}/img") == str(home / ".local/share/biomodstack/runtime/img")
+
+
+def test_container_dir_follows_the_install_profile_and_its_override(install, monkeypatch, tmp_path):
+    _, data = install
+    assert expand_lock_location("${BMS_CONTAINER_DIR}/ngs/x") == str(data / "apptainer/ngs/x")
+    monkeypatch.setenv("BMS_CONTAINER_DIR", str(tmp_path / "elsewhere"))
+    assert expand_lock_location("${BMS_CONTAINER_DIR}/ngs/x") == str(tmp_path / "elsewhere/ngs/x")
 
 
 def test_host_data_and_xdg_override_the_profile(install, monkeypatch, tmp_path):
@@ -67,11 +74,11 @@ def test_cli_prints_the_resolved_location(install, capsys, monkeypatch):
     _, data = install
     monkeypatch.setattr("sys.argv", ["validate", "--lock", str(LOCK), "--resolve", "patched_source.path"])
     assert main() == 0
-    assert capsys.readouterr().out.strip() == str(data / "ngs/wf-clone-validation/v1.8.4-bms.3")
+    assert capsys.readouterr().out.strip() == str(data / "apptainer/ngs/wf-clone-validation/v1.8.4-bms.3/source")
 
 
 def test_container_config_binds_images_under_the_resolved_cache(install, monkeypatch):
-    home, _ = install
+    _, data = install
     monkeypatch.setenv("BMS_CONTAINER_BACKEND", "apptainer")
     config = wf_clone_container_config(LOCK, "flye")
-    assert str(home / ".local/share/biomodstack/runtime/ont-clone-v1.8.4-bms.2") in config
+    assert str(data / "apptainer/ngs/wf-clone-validation/v1.8.4-bms.3/images") in config
