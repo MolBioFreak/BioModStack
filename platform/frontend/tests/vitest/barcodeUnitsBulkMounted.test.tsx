@@ -2,8 +2,8 @@ import React,{act} from 'react';
 import {createRoot,type Root} from 'react-dom/client';
 import {QueryClient,QueryClientProvider} from '@tanstack/react-query';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
-const mocks=vi.hoisted(()=>({units:vi.fn(),sequences:vi.fn(),versions:vi.fn(),receipt:vi.fn(),submit:vi.fn()}));
-vi.mock('../../src/lib/api',async original=>({...await original<any>(),fetchOntBarcodeUnits:mocks.units,fetchNucleotideSequences:mocks.sequences,fetchMolBioSequenceRevisions:mocks.versions,issueMolBioNgsReceipt:mocks.receipt,submitOntBarcodeBatch:mocks.submit,fetchExecutionTargets:vi.fn().mockResolvedValue({data:[]})}));
+const mocks=vi.hoisted(()=>({units:vi.fn(),detail:vi.fn(),sequences:vi.fn(),versions:vi.fn(),receipt:vi.fn(),submit:vi.fn()}));
+vi.mock('../../src/lib/api',async original=>({...await original<any>(),fetchNucleotideSequence:mocks.detail,fetchOntBarcodeUnits:mocks.units,fetchNucleotideSequences:mocks.sequences,fetchMolBioSequenceRevisions:mocks.versions,issueMolBioNgsReceipt:mocks.receipt,submitOntBarcodeBatch:mocks.submit,fetchExecutionTargets:async()=>({data:[]})}));
 import {BarcodeUnitsPanel} from '../../src/components/ngs/BarcodeUnitsPanel';
 let host:HTMLDivElement,root:Root,client:QueryClient;
 async function settle(){await act(async()=>{await new Promise(resolve=>setTimeout(resolve,0));});}
@@ -65,4 +65,17 @@ it('adds and removes a further sequence row by hand and refuses a repeated plasm
     await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="Remove sequence 2 from barcode01"]')!.click());await settle();
     expect(host.querySelector('[data-testid="barcode-mapping-row-barcode01-extra-1"]')).toBeNull();
     await paste('barcode01,A\nbarcode01,A\nbarcode02,B');await click('Apply barcode mappings');await vi.waitFor(async()=>{await settle();expect(host.textContent).toContain('barcode01 lists A twice.');});
+});
+
+it('submits an explicitly selected reference-free assembly beside an off-page exact revision', async () => {
+    const id = '4588e09d-f644-46c2-b324-09feb21eda01';
+    mocks.detail.mockResolvedValue({data:{id,name:'Library plasmid',sequence_type:'dna'}});
+    await paste(`barcode02,${id},1`); await click('Apply barcode mappings');
+    await vi.waitFor(async()=>{await settle();expect(host.querySelector<HTMLSelectElement>('[aria-label="Saved sequence for barcode02"]')!.value).toBe(id);});
+    const target = host.querySelector<HTMLSelectElement>('[aria-label="Batch workflow"]')!;
+    await act(async()=>{target.value='wf_clone_validation';target.dispatchEvent(new Event('change',{bubbles:true}));});
+    await act(async()=>host.querySelector<HTMLInputElement>('[aria-label="Assemble barcode01 without a reference"]')!.click());
+    await click('Submit mapped batch'); await vi.waitFor(()=>expect(mocks.submit).toHaveBeenCalledOnce());
+    expect(mocks.receipt.mock.calls).toEqual([[id,{revision_id:`old-${id}`}]]);
+    expect(mocks.submit.mock.calls[0][1]).toMatchObject({target_workflow:'wf_clone_validation',mappings:[{unit_id:'barcode01',sample_alias:'sheet_A'},{unit_id:'barcode02',molbio_ngs_receipt_id:`receipt-${id}`}]});
 });

@@ -180,10 +180,13 @@ async def batch_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request
 
 @pytest.fixture
 def canonical_job_spy(monkeypatch: pytest.MonkeyPatch):
+    canonical_builder = ont_runs._job_create_for_ont_submit
     calls: list[dict[str, Any]] = []
     fail_at: int | None = None
 
     def build_job(workflow_id: str, submit: ont_runs.OntNgsSubmitRequest, **_kwargs: Any) -> JobCreate:
+        if workflow_id == "wf_clone_validation":
+            return canonical_builder(workflow_id, submit, **_kwargs)
         return JobCreate(
             name=str(submit.name),
             model_id="nanopore",
@@ -573,3 +576,33 @@ async def test_a_skipped_barcode_does_not_stop_one_holding_several_sequences(bat
     result = await _create(context, request)
     assert set(result["assignment_job_ids"]) == {"barcode02"}
     assert result["skipped_unit_ids"] == ["barcode03"] and len(result["child_job_ids"]) == 8
+
+@pytest.mark.asyncio
+async def test_full_assembly_optional_reference_and_replay(batch_context, canonical_job_spy, monkeypatch):
+    context = batch_context
+    monkeypatch.setattr(ont_runs, "get_allowed_roots", lambda: {"results": context.source_root, "inputs": context.inputs_root})
+    request = batches.BarcodeBatchRequest(idempotency_key="assembly-batch", target_workflow="wf_clone_validation",
+        mappings=[{"unit_id": "barcode01", "sample_alias": "solo"},
+                  {"unit_id": "barcode02", "molbio_ngs_receipt_id": context.receipt_ids[1]}])
+    result = await _create(context, request)
+    first, second = [call["job"].params for call in canonical_job_spy[0]]
+    assert first["ont_workflow_id"] == second["ont_workflow_id"] == "wf_clone_validation"
+    assert first["run_assembly"] is second["run_assembly"] is True
+    assert first["barcode_mapping_binding"]["sample_alias"] == "solo"
+    assert first["source_barcode_unit"] == "barcode01" and first["bam_path"]
+    assert not {"reference_fasta", "molbio_revision_binding", "bam_force_realign"}.intersection(first)
+    assert second["molbio_revision_binding"]["receipt_id"] == context.receipt_ids[1]
+    assert len(result["child_job_ids"]) == 2 and "barcode03" in result["skipped_unit_ids"]
+    assert await _create(context, request) == result and len(canonical_job_spy[0]) == 2
+
+
+@pytest.mark.parametrize("workflow,rows", [
+    ("ont_plasmid_qc", [{}]),
+    ("ont_construct_screening", [{}]),
+    ("wf_clone_validation", [{}, {"molbio_ngs_receipt_id": "receipt"}]),
+    ("wf_clone_validation", [{"molbio_ngs_receipt_id": "receipt"}, {}]),
+])
+def test_reject_reference_free_qc_or_pooled_mapping(workflow, rows):
+    with pytest.raises(ValueError, match="reference"):
+        batches.BarcodeBatchRequest(idempotency_key="invalid", target_workflow=workflow,
+            mappings=[{"unit_id": "barcode01", **row} for row in rows])

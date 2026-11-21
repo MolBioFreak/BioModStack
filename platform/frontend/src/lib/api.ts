@@ -1767,14 +1767,14 @@ export const fetchOntBarcodeUnits = (jobId: string) =>
 export interface OntBarcodeBatchMapping {
     unit_id: string;
     sample_alias: string | null;
-    molbio_ngs_receipt_id: string;
+    molbio_ngs_receipt_id?: string;
     /** Sequence name, sent when a barcode holds several sequences. */
     label?: string;
 }
 
 export interface OntBarcodeBatchSubmitRequest {
     idempotency_key: string;
-    target_workflow: 'ont_plasmid_qc' | 'ont_construct_screening';
+    target_workflow: 'ont_plasmid_qc' | 'ont_construct_screening' | 'wf_clone_validation';
     name_prefix?: string;
     pinned_gpu?: number | null;
     run_modkit?: boolean;
@@ -1844,7 +1844,7 @@ export const submitPooledReferenceAssignment = (
     );
 };
 
-export type PooledAssignmentTargetWorkflow = 'ont_plasmid_qc' | 'ont_construct_screening';
+export type PooledAssignmentTargetWorkflow = 'ont_plasmid_qc' | 'ont_construct_screening' | 'wf_clone_validation';
 
 export interface PooledAssignmentManifest {
     schema?: string;

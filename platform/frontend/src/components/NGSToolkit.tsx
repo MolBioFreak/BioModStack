@@ -4823,6 +4823,7 @@ export function NGSToolkit() {
 
                                 <PooledAssignmentReviewPanel
                                     key={`pooled-assignment-review-${selectedJob.id}`}
+                                    barcodeSource={selectedJob.params?.pooled_source_bam}
                                     jobId={selectedJob.id}
                                     jobStatus={selectedJob.status}
                                     mode={selectedJob.mode}

@@ -155,7 +155,7 @@ class PooledAssignmentReleaseRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
 
     idempotency_key: str = Field(min_length=1, max_length=255)
-    target_workflow: str = Field(pattern=r"^(ont_plasmid_qc|ont_construct_screening)$")
+    target_workflow: str = Field(pattern=r"^(ont_plasmid_qc|ont_construct_screening|wf_clone_validation)$")
     target_ids: list[str] = Field(min_length=1, max_length=96)
     name_prefix: str | None = Field(default=None, max_length=128)
     pinned_gpu: int | None = Field(default=None, ge=0, le=15)

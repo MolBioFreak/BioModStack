@@ -6,6 +6,7 @@ import type { ExecutionPolicy } from '../../lib/executionPolicy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     fetchMolBioSequenceRevisions,
+    fetchNucleotideSequence,
     fetchNucleotideSequences,
     fetchOntBarcodeUnits,
     issueMolBioNgsReceipt,
@@ -19,7 +20,8 @@ import {
     type OntBarcodeUnit,
 } from '../../lib/api';
 
-type TargetWorkflow = 'ont_plasmid_qc' | 'ont_construct_screening';
+type TargetWorkflow = OntBarcodeBatchSubmitRequest['target_workflow'];
+type SequenceOption = Pick<NucleotideSequenceListItem, 'id' | 'name'>;
 
 interface BarcodeUnitsPanelProps {
     jobId: string;
@@ -39,6 +41,8 @@ interface BarcodeMappingDraft {
     sampleAlias: string;
     sequenceId: string;
     revisionId: string;
+    sequenceName?: string;
+    referenceFree?: boolean;
 }
 
 function newIdempotencyKey(prefix: string): string {
@@ -54,7 +58,7 @@ function emptyMapping(): BarcodeMappingDraft {
 
 interface BarcodeMappingCellsProps {
     unitId: string;
-    sequences: NucleotideSequenceListItem[];
+    sequences: SequenceOption[];
     mapping: BarcodeMappingDraft;
     onChange: (next: BarcodeMappingDraft) => void;
     disabled?: boolean;
@@ -78,10 +82,13 @@ function BarcodeMappingCells({ unitId, sequences, mapping, onChange, disabled }:
                         aria-label={`Saved sequence for ${unitId}`}
                         value={mapping.sequenceId}
                         disabled={disabled}
-                        onChange={(event) => onChange({ ...mapping, sequenceId: event.target.value, revisionId: '' })}
+                        onChange={(event) => onChange({ ...mapping, referenceFree: false, sequenceName: undefined, sequenceId: event.target.value, revisionId: '' })}
                         className="w-full min-w-[15rem] rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-sm text-[var(--text-primary)]"
                     >
                         <option value="">Select saved sequence…</option>
+                        {mapping.sequenceId && !sequences.some(sequence => sequence.id === mapping.sequenceId) && (
+                            <option value={mapping.sequenceId}>{mapping.sequenceName || mapping.sequenceId}</option>
+                        )}
                         {sequences.map((sequence) => (
                             <option key={sequence.id} value={sequence.id}>{sequence.name}</option>
                         ))}
@@ -165,7 +172,12 @@ export function BarcodeUnitsPanel({ jobId, enabled, modifiedBases }: BarcodeUnit
                 const [barcode, name, exactVersion] = fields;
                 const unit = units.find(unit => unit.unit_id === barcode);
                 if (!unit || barcode === 'unclassified') throw new Error(`Unknown or repeated assignable barcode: ${barcode}`);
-                let matches = sequences.filter(sequence => sequence.id === name);
+                let matches: SequenceOption[] = sequences.filter(sequence => sequence.id === name);
+                if (!matches.length && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(name)) {
+                    const {data} = await fetchNucleotideSequence(name);
+                    if (data.id !== name || data.sequence_type !== 'dna') throw new Error(`No saved DNA sequence has ID ${name}.`);
+                    matches = [data];
+                }
                 if (!matches.length) {
                     const results = (await fetchNucleotideSequences({search:name,limit:500,sequence_type:'dna'})).data;
                     if (results.length === 500) throw new Error(`Too many matches for ${name}. Use an exact saved sequence ID.`);
@@ -177,7 +189,7 @@ export function BarcodeUnitsPanel({ jobId, enabled, modifiedBases }: BarcodeUnit
                 const version = exactVersion ? versions.find(version => version.id === exactVersion || String(version.revision_number) === exactVersion)
                     : versions.find(version => version.is_current);
                 if (!version) throw new Error(`The requested version of ${name} is unavailable.`);
-                const draft = {sampleAlias:unit.sample_alias || mappingByUnit[barcode]?.sampleAlias || '',sequenceId:sequence.id,revisionId:version.id};
+                const draft = {sampleAlias:unit.sample_alias || mappingByUnit[barcode]?.sampleAlias || '',sequenceName:sequence.name,sequenceId:sequence.id,revisionId:version.id};
                 if (!next[barcode]) { next[barcode] = draft; continue; }
                 // A repeated barcode row gives that barcode a further plasmid.
                 if ([next[barcode], ...(extra[barcode] || [])].some(item => item.sequenceId === draft.sequenceId && item.revisionId === draft.revisionId)) throw new Error(`${barcode} lists ${name} twice.`);
@@ -209,13 +221,14 @@ export function BarcodeUnitsPanel({ jobId, enabled, modifiedBases }: BarcodeUnit
             // A barcode left without a sequence is skipped; the others still run.
             const half = drafts.filter(({ draft }) => Boolean(draft.sequenceId) !== Boolean(draft.revisionId));
             if (half.length) throw new Error(`Choose a revision for ${half.map(({ unit }) => unit.unit_id).join(', ')}, or clear its sequence.`);
-            const chosen = drafts.filter(({ draft }) => draft.sequenceId && draft.revisionId);
+            const referenceFree = (draft: BarcodeMappingDraft) => targetWorkflow === 'wf_clone_validation' && draft.referenceFree && !draft.sequenceId;
+            const chosen = drafts.filter(({ draft }) => (draft.sequenceId && draft.revisionId) || referenceFree(draft));
             if (chosen.length === 0) throw new Error('Choose a saved sequence for at least one barcode before submitting.');
             const selected = chosen.flatMap(({ unit, draft }) => {
                 const all = [draft, ...(extraByUnit[unit.unit_id] || [])];
                 return all.map(item => ({ unit, draft: { ...item, sampleAlias: draft.sampleAlias }, several: all.length > 1 }));
             });
-            if (selected.some(({ draft }) => !draft.sequenceId || !draft.revisionId)) {
+            if (selected.some(({ draft }) => !referenceFree(draft) && (!draft.sequenceId || !draft.revisionId))) {
                 throw new Error('Choose a saved sequence and revision for every added sequence, or remove it.');
             }
             const parsedPinnedGpu = !executionTargetId && pinnedGpu.trim() ? Number(pinnedGpu) : null;
@@ -224,14 +237,16 @@ export function BarcodeUnitsPanel({ jobId, enabled, modifiedBases }: BarcodeUnit
             }
 
             const mappings = await Promise.all(selected.map(async ({ unit, draft, several }) => {
+                const alias = unit.sample_alias || draft.sampleAlias.trim() || null;
+                if (referenceFree(draft)) return {unit_id: unit.unit_id, sample_alias: alias};
                 const receiptResponse = await issueMolBioNgsReceipt(draft.sequenceId, { revision_id: draft.revisionId });
                 const receiptId = receiptResponse.data.receipt_id.trim();
                 if (!receiptId) throw new Error(`No receipt was returned for ${unit.unit_id}.`);
                 return {
                     unit_id: unit.unit_id,
-                    sample_alias: unit.sample_alias || draft.sampleAlias.trim() || null,
+                    sample_alias: alias,
                     molbio_ngs_receipt_id: receiptId,
-                    ...(several ? { label: sequences.find(sequence => sequence.id === draft.sequenceId)?.name || draft.sequenceId } : {}),
+                    ...(several ? { label: sequences.find(sequence => sequence.id === draft.sequenceId)?.name || draft.sequenceName || draft.sequenceId } : {}),
                 };
             }));
 
@@ -268,12 +283,13 @@ export function BarcodeUnitsPanel({ jobId, enabled, modifiedBases }: BarcodeUnit
             <ExecutionPolicyControl onChange={setExecutionPolicy} />
             <div>
                 <h4 className="text-sm font-semibold text-[var(--text-primary)]">Demultiplexed barcode units</h4>
-                <p className="text-xs text-[var(--text-secondary)]">Choose one or more saved sequences for each barcode. Barcodes with a sequence are submitted together. A barcode left without one is skipped and listed, and its reads are kept.</p>
+                <p className="text-xs text-[var(--text-secondary)]">Choose one or more saved sequences for each barcode. Barcodes with a sequence are submitted together. For full plasmid assembly, you can instead select a barcode to assemble without a reference. Unselected barcodes are skipped and their reads are kept.</p>
             </div>
             <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
-                <select value={targetWorkflow} onChange={(event) => setTargetWorkflow(event.target.value as TargetWorkflow)} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-sm text-[var(--text-primary)]">
+                <select aria-label="Batch workflow" value={targetWorkflow} onChange={(event) => setTargetWorkflow(event.target.value as TargetWorkflow)} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-sm text-[var(--text-primary)]">
                     <option value="ont_plasmid_qc">Plasmid QC</option>
                     <option value="ont_construct_screening">Construct screening</option>
+                    <option value="wf_clone_validation">Full plasmid assembly</option>
                 </select>
                 <input value={namePrefix} onChange={(event) => setNamePrefix(event.target.value)} placeholder="Optional name prefix" className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-sm text-[var(--text-primary)]" />
                 <input disabled={Boolean(executionTargetId)} value={pinnedGpu} onChange={(event) => setPinnedGpu(event.target.value)} inputMode="numeric" placeholder="Optional pinned GPU" className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-sm text-[var(--text-primary)]" />
@@ -338,6 +354,7 @@ export function BarcodeUnitsPanel({ jobId, enabled, modifiedBases }: BarcodeUnit
                                 sampleAlias: unit.sample_alias || '',
                             };
                             const extras = extraByUnit[unit.unit_id] || [];
+                            const free = targetWorkflow === 'wf_clone_validation' && Boolean(mapping.referenceFree);
                             const busy = applyBulkMapping.isPending || submitMutation.isPending;
                             const chosen = [mapping, ...extras].filter(item => item.sequenceId && item.revisionId).length;
                             const setExtras = (items: BarcodeMappingDraft[]) => setExtraByUnit(previous => ({ ...previous, [unit.unit_id]: items }));
@@ -360,12 +377,12 @@ export function BarcodeUnitsPanel({ jobId, enabled, modifiedBases }: BarcodeUnit
                                         unitId={unit.unit_id}
                                         sequences={sequences}
                                         mapping={mapping}
-                                        disabled={applyBulkMapping.isPending || submitMutation.isPending}
+                                        disabled={busy || free}
                                         onChange={(next) => setMappingByUnit((previous) => ({ ...previous, [unit.unit_id]: next }))}
                                     />
                                     <td className="px-3 py-2 align-top font-mono text-[var(--text-secondary)]">{unit.read_count}</td>
                                     <td className="px-3 py-2 align-top text-xs text-[var(--text-secondary)]" data-testid={`barcode-mapping-status-${unit.unit_id}`}>
-                                        {chosen === 0 || chosen < 1 + extras.length ? 'Needs a sequence' : chosen === 1 ? 'Mapped' : `Mapped · ${chosen} sequences`}
+                                        {free ? 'Assembly without reference' : chosen === 0 || chosen < 1 + extras.length ? 'Needs a sequence' : chosen === 1 ? 'Mapped' : `Mapped · ${chosen} sequences`}
                                     </td>
                                 </tr>
                                 {extras.map((extra, index) => (
@@ -387,7 +404,12 @@ export function BarcodeUnitsPanel({ jobId, enabled, modifiedBases }: BarcodeUnit
                                 <tr>
                                     <td className="px-3 pb-2" colSpan={2} />
                                     <td className="px-3 pb-2" colSpan={4}>
-                                        <button type="button" data-testid={`barcode-add-sequence-${unit.unit_id}`} disabled={busy} onClick={() => setExtras([...extras, emptyMapping()])} className="text-xs text-[var(--text-action)] hover:underline disabled:opacity-50">+ Add sequence</button>
+                                        <button type="button" data-testid={`barcode-add-sequence-${unit.unit_id}`} disabled={busy || free} onClick={() => setExtras([...extras, emptyMapping()])} className="text-xs text-[var(--text-action)] hover:underline disabled:opacity-50">+ Add sequence</button>
+                                        {targetWorkflow === 'wf_clone_validation' && <label className="ml-3 text-xs">
+                                            <input type="checkbox" aria-label={`Assemble ${unit.unit_id} without a reference`} checked={free}
+                                                disabled={busy || Boolean(mapping.sequenceId) || extras.length > 0}
+                                                onChange={event => {const referenceFree = event.target.checked; setMappingByUnit(previous => ({...previous, [unit.unit_id]: {...mapping, referenceFree}}));}} /> Assemble without a reference
+                                        </label>}
                                     </td>
                                 </tr>
                                 </Fragment>

@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,14 +63,14 @@ class BarcodeBatchRequestMapping(BaseModel):
 
     unit_id: str = Field(min_length=1, max_length=32)
     sample_alias: str | None = Field(default=None, max_length=128)
-    molbio_ngs_receipt_id: str = Field(min_length=1, max_length=36)
+    molbio_ngs_receipt_id: str | None = Field(default=None, min_length=1, max_length=36)
     # Shown beside the sequence when a barcode holds several; not part of the request identity.
     label: str | None = Field(default=None, min_length=1, max_length=255, pattern=r"^[^\x00-\x1f]*$")
 
     @field_validator("unit_id", "molbio_ngs_receipt_id")
     @classmethod
-    def reject_outer_whitespace(cls, value: str) -> str:
-        if value != value.strip() or not value:
+    def reject_outer_whitespace(cls, value: str | None) -> str | None:
+        if value is not None and (value != value.strip() or not value):
             raise ValueError("mapping identifiers must not contain outer whitespace")
         return value
 
@@ -90,7 +90,7 @@ class BarcodeBatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
 
     idempotency_key: str = Field(min_length=1, max_length=255)
-    target_workflow: str = Field(pattern="^(ont_plasmid_qc|ont_construct_screening)$")
+    target_workflow: str = Field(pattern="^(ont_plasmid_qc|ont_construct_screening|wf_clone_validation)$")
     name_prefix: str | None = Field(default=None, max_length=128)
     pinned_gpu: int | None = Field(default=None, ge=0, le=15)
     # A barcode may appear on several rows, one per sequence it holds.
@@ -103,6 +103,20 @@ class BarcodeBatchRequest(BaseModel):
     execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
     execution_policy: ExecutionPolicy | None = None
     execution_plan_approvals: dict[str, Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_reference_free_units(self):
+        seen = set()
+        free = set()
+        for item in self.mappings:
+            if item.molbio_ngs_receipt_id is None:
+                if self.target_workflow != "wf_clone_validation":
+                    raise ValueError("a reference receipt is required for this workflow")
+                free.add(item.unit_id)
+            if item.unit_id in free and item.unit_id in seen:
+                raise ValueError("a reference-free barcode cannot also have other mappings")
+            seen.add(item.unit_id)
+        return self
 
     @field_validator("idempotency_key")
     @classmethod
@@ -213,7 +227,7 @@ def _normalized_request(request: BarcodeBatchRequest, *, source_job_id: str) -> 
         }
         for item in request.mappings
     ]
-    mappings.sort(key=lambda item: (item["unit_id"], item["molbio_ngs_receipt_id"], item["sample_alias"] or ""))
+    mappings.sort(key=lambda item: (item["unit_id"], item["molbio_ngs_receipt_id"] or "", item["sample_alias"] or ""))
     return {
         "source_job_id": source_job_id,
         "idempotency_key": request.idempotency_key,
@@ -454,7 +468,8 @@ def _validate_request_mapping(
         if alias_key is not None and alias_key in seen_aliases:
             raise BarcodeBatchError("duplicate sample_alias values are forbidden")
         seen_units.add(unit_id)
-        seen_receipts.add(receipt_id)
+        if receipt_id is not None:
+            seen_receipts.add(receipt_id)
         if alias_key is not None:
             seen_aliases.add(alias_key)
         normalized.append(
@@ -527,10 +542,9 @@ def _remove_staged_manifest(manifest_path: Path | None) -> None:
 
 def _manifest_result(
     manifest_row: NgsReferenceSetManifest,
-    mappings: list[NgsReferenceSetMapping],
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    child_job_ids = [str(mapping.child_job_id) for mapping in mappings]
+    child_job_ids = [entry["child_job_id"] for entry in payload["entries"]]
     return {
         "schema": REFERENCE_SET_SCHEMA,
         "reference_set_id": str(manifest_row.id),
@@ -571,21 +585,24 @@ async def _read_existing_manifest(
             .order_by(NgsReferenceSetMapping.unit_id)
         )
     ).scalars().all()
-    if not mappings:
+    entries = payload.get("entries", [])
+    bound_entries = [entry for entry in entries if not (
+        manifest_row.target_workflow == "wf_clone_validation" and entry.get("reference_free") is True)]
+    if not entries or (bound_entries and not mappings):
         raise BarcodeBatchError("existing reference-set mapping rows are missing", status_code=409, code="REFERENCE_SET_CORRUPT")
-    child_ids = [str(mapping.child_job_id) for mapping in mappings]
+    child_ids = [entry["child_job_id"] for entry in entries]
     children = (
         await session.execute(select(Job.id).where(Job.id.in_(child_ids)))
     ).scalars().all()
     if set(str(child_id) for child_id in children) != set(child_ids):
         raise BarcodeBatchError("existing reference-set child jobs are missing", status_code=409, code="REFERENCE_SET_CORRUPT")
-    entries_by_unit = {str(entry.get("unit_id")): entry for entry in payload.get("entries", []) if isinstance(entry, dict)}
+    entries_by_unit = {str(entry.get("unit_id")): entry for entry in bound_entries if isinstance(entry, dict)}
     if len(entries_by_unit) != len(mappings) or any(
         entries_by_unit.get(str(mapping.unit_id), {}).get("child_job_id") != str(mapping.child_job_id)
         for mapping in mappings
     ):
         raise BarcodeBatchError("existing reference-set mapping does not match its manifest", status_code=409, code="REFERENCE_SET_CORRUPT")
-    return _manifest_result(manifest_row, list(mappings), payload)
+    return _manifest_result(manifest_row, payload)
 
 
 async def _find_idempotent_manifest(
@@ -627,7 +644,7 @@ async def _create_one_child(
     source: Mapping[str, Any],
     source_products: Mapping[str, Any],
     mapping: Mapping[str, Any],
-    receipt: MolBioNgsReceipt,
+    receipt: MolBioNgsReceipt | None,
     reference_set_id: str,
     reference_set_sha256: str,
     reference_set_path: Path,
@@ -644,7 +661,7 @@ async def _create_one_child(
         "reference_snapshot_sha256": str(receipt.reference_snapshot_sha256).lower(),
         "receipt_id": str(receipt.id),
         "binding_source": "server_issued_one_time_receipt",
-    }
+    } if receipt else None
     reference_set_binding = {
         "reference_set_id": reference_set_id,
         "manifest_sha256": reference_set_sha256,
@@ -662,8 +679,8 @@ async def _create_one_child(
     }
     params = {
         "bam_path": str(unit["bam_path"]),
-        "reference_fasta": str(receipt.reference_snapshot_path),
-        "bam_force_realign": True,
+        **({"reference_fasta": str(receipt.reference_snapshot_path), "bam_force_realign": True,
+            "molbio_revision_binding": revision_binding} if receipt else {}),
         "bam_source_sha256": str(unit["bam_sha256"]),
         "source_ont_job_id": str(source["id"]),
         "source_barcode_unit": str(unit["unit_id"]),
@@ -673,7 +690,6 @@ async def _create_one_child(
         "source_barcode_unit_manifest_sha256": str(unit["unit_manifest_sha256"]),
         "source_barcode_source_calls_sha256": str(unit["source_calls_sha256"]),
         "source_barcode_preflight_sha256": str(unit["preflight_sha256"]),
-        "molbio_revision_binding": revision_binding,
         "reference_set_binding": reference_set_binding,
         "ngs_reference_set_binding": reference_set_binding,
         "barcode_mapping_binding": barcode_mapping_binding,
@@ -681,7 +697,7 @@ async def _create_one_child(
         "source_stage_job_id": str(source["id"]),
         "source_stage_family": str(source["stage_family"]),
         "source_stage_mode": str(source["stage_mode"]),
-        **({"reference_topology": saved} if (saved := receipt_reference_topology(receipt)) else {}),
+        **({"reference_topology": saved} if receipt and (saved := receipt_reference_topology(receipt)) else {}),
         **({"sequencing_kits": ",".join(kits)} if (kits := source_products.get("sequencing_kits")) else {}),
         "selection_source_type": "ont_dorado_demux",
         "selection_source_job_id": str(source["id"]),
@@ -797,7 +813,7 @@ async def _create_single_reference_children(
         source_products = dict(source_products)
         source_products["unit_by_id"] = {str(unit["unit_id"]): unit for unit in units}
         mappings = _validate_request_mapping(request, units, pooled_units)
-        receipt_ids = [str(item["molbio_ngs_receipt_id"]) for item in mappings]
+        receipt_ids = [str(item["molbio_ngs_receipt_id"]) for item in mappings if item["molbio_ngs_receipt_id"] is not None]
         receipts = await _validate_receipts(session, receipt_ids)
 
         reference_set_id = request.reference_set_id or str(uuid.uuid4())
@@ -826,18 +842,20 @@ async def _create_single_reference_children(
         manifest_entries = []
         for item in mappings:
             unit = source_products["unit_by_id"][item["unit_id"]]
-            receipt = receipts[item["molbio_ngs_receipt_id"]]
+            receipt = receipts.get(item["molbio_ngs_receipt_id"])
             manifest_entries.append(
                 {
                     "unit_id": item["unit_id"],
                     "sample_alias": item["sample_alias"],
                     "child_job_id": child_ids[item["unit_id"]],
                     "mapping_id": mapping_ids[item["unit_id"]],
-                    "sequence_id": str(receipt.sequence_id),
-                    "revision_id": str(receipt.revision_id),
-                    "revision_sha256": str(receipt.revision_sha256).lower(),
-                    "receipt_id": str(receipt.id),
-                    "fasta_snapshot_sha256": str(receipt.reference_snapshot_sha256).lower(),
+                    **({
+                        "sequence_id": str(receipt.sequence_id),
+                        "revision_id": str(receipt.revision_id),
+                        "revision_sha256": str(receipt.revision_sha256).lower(),
+                        "receipt_id": str(receipt.id),
+                        "fasta_snapshot_sha256": str(receipt.reference_snapshot_sha256).lower(),
+                    } if receipt else {"reference_free": True}),
                     "source_bam_path": _relative_to_root(str(unit["bam_path"]), root, "source BAM"),
                     "source_bam_sha256": str(unit["bam_sha256"]),
                     "source_calls_sha256": str(unit["source_calls_sha256"]),
@@ -883,7 +901,7 @@ async def _create_single_reference_children(
                 previews[item["unit_id"]] = await _create_one_child(
                     session=session, background_tasks=background_tasks, source=source,
                     source_products=source_products, mapping=item,
-                    receipt=receipts[item["molbio_ngs_receipt_id"]],
+                    receipt=receipts.get(item["molbio_ngs_receipt_id"]),
                     reference_set_id=reference_set_id, reference_set_sha256=staged_manifest_sha256,
                     reference_set_path=staged_manifest_path, child_job_id=child_ids[item["unit_id"]],
                     mapping_id=mapping_ids[item["unit_id"]], request=request, prepare_only=True,
@@ -908,7 +926,7 @@ async def _create_single_reference_children(
 
         child_tokens: list[tuple[str, str]] = []
         for item in mappings:
-            receipt = receipts[item["molbio_ngs_receipt_id"]]
+            receipt = receipts.get(item["molbio_ngs_receipt_id"])
             child_path = get_results_dir() / child_ids[item["unit_id"]]
             if not child_path.exists() and not child_path.is_symlink():
                 transaction_job_dirs.append(child_ids[item["unit_id"]])
@@ -929,11 +947,12 @@ async def _create_single_reference_children(
             child_tokens.append((child_id, token))
 
         now = datetime.utcnow()
-        mapping_rows: list[NgsReferenceSetMapping] = []
         for item in mappings:
             unit = source_products["unit_by_id"][item["unit_id"]]
-            receipt = receipts[item["molbio_ngs_receipt_id"]]
+            receipt = receipts.get(item["molbio_ngs_receipt_id"])
             child_id = child_ids[item["unit_id"]]
+            if receipt is None:
+                continue  # No revision mapping or receipt exists for this assembly.
             receipt.consumed_at = now
             receipt.consumed_job_id = child_id
             mapping_row = NgsReferenceSetMapping(
@@ -956,13 +975,12 @@ async def _create_single_reference_children(
                 created_at=now,
             )
             session.add(mapping_row)
-            mapping_rows.append(mapping_row)
         await session.flush()
         await session.commit()
         committed = True
         for child_id, token in child_tokens:
             alignment_access.set_alignment_access_cookie(child_id, token, response, http_request)
-        return _manifest_result(manifest_row, sorted(mapping_rows, key=lambda row: str(row.unit_id)), manifest_payload)
+        return _manifest_result(manifest_row, manifest_payload)
     except BaseException as exc:
         if committed:
             raise
