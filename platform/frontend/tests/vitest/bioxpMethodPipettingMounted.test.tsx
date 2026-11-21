@@ -185,3 +185,11 @@ it('removes holder addressing when an ordinary deck selection is adopted', async
     await click('Use deck selection as source');
     expect((current.inputs as MethodValue).source).toEqual({ station: 'LOC_OC', location_id: 1, wells: ['D4'] });
 });
+
+it('maps a strip source with the OEM strip rule (every second well) when no plate profile is given', async () => {
+    await direct({ source: { station: 'LOC_STRIP1', location_id: 11, wells: ['A1'] }, destination: { station: 'LOC_OC', location_id: 1, wells: ['A1'] }, channels: [0, 1, 2, 3], volume_ul: '9' });
+    const source = host.querySelector('[aria-label="Source per-channel footprints"]')?.textContent ?? '';
+    expect(source).toContain('P1 A1, P2 C1, P3 E1, P4 G1');
+    expect(source).not.toContain('Mapping unavailable');
+    expect(host.querySelector('[aria-label="Destination per-channel footprints"]')?.textContent).toContain('Mapping unavailable');
+});

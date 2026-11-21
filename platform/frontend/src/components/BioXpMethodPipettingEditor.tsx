@@ -11,6 +11,9 @@ import { BioXpTransferSpeeds } from './BioXpTransferSpeeds';
 import { BioXpLiquidDetection } from './BioXpLiquidDetection';
 
 const scalar = (value: unknown) => typeof value === 'string' || typeof value === 'number' ? value : '';
+/** OEM ClassStrip: 8-well strip, head reference at the start well, channels every second row (num, num+2, num+4, num+6). */
+const OEM_STRIP_ADDRESSING = { row_increment: 2, column_increment: 0, reference_channel: 0 };
+const stripAddressing = (station: unknown) => typeof station === 'string' && /^LOC_STRIP[1-4]$/.test(station) ? OEM_STRIP_ADDRESSING : undefined;
 const display = (value: unknown): string => value === undefined ? 'Not set' : typeof value === 'string' ? value || 'Blank' : JSON.stringify(value);
 const TABS = [['wells', 'Wells and amount'], ['class', 'Liquid class'], ['speeds', 'Speeds and timing'], ['detect', 'Liquid detection'], ['heights', 'Heights'], ['channels', 'Channels'], ['more', 'More']] as const;
 /** Friendly projections change only edited fields; typed advanced inputs remain lossless. */
@@ -100,7 +103,7 @@ export function BioXpMethodPipettingEditor({ node, onChange, catalog, selection,
             const labware = (Array.isArray(object(workspace.method.deck_plan).labware) ? object(workspace.method.deck_plan).labware as MethodValue[] : []).map(object).filter(l => Object.hasOwn(current, 'labware_id') ? l.id === current.labware_id : nativeStation !== undefined && String(l.station) === nativeStation.id);
             const profile = (Array.isArray(workspace.dependencies.labware_profiles) ? workspace.dependencies.labware_profiles as MethodValue[] : []).map(object).find(p => labware.length === 1 && p.id === labware[0].profile_id);
             const holder = HOLDER_TARGET_OPTIONS.find(o => o.target === current.target);
-            const footprints = wells.map(well => holder ? holderTransferFootprint(holder.target, channels) : transferFootprint(well, channels, profile?.native_addressing));
+            const footprints = wells.map(well => holder ? holderTransferFootprint(holder.target, channels) : transferFootprint(well, channels, profile?.native_addressing ?? stripAddressing(current.station)));
             const chooseHolder = (target: string) => {
                 const { target: _target, holder_row: _row, material_id: _material, labware_id: _labware, ...rest } = current;
                 patch({ [side]: target ? { ...rest, station: 'LOC_TROUGH', location_id: 16, target, wells: wells.length ? wells : ['A1'] } : rest });
