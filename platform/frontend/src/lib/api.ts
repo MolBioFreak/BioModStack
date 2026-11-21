@@ -5237,12 +5237,20 @@ export interface OntInstrumentRun {
     fake_or_demo_devices: false;
 }
 
+export interface OntBasecallingChoice {
+    quality: string;
+    default: boolean;
+    default_min_qscore: number | null;
+    modified_bases: Array<{ id: string; canonical_base: string | null; context: string | null }>;
+}
+
 export interface OntProtocolOption {
     option_id: string;
     option_receipt_id: string;
     expires_at: string;
     protocol_label: string;
     basecalling_enabled: boolean;
+    basecalling_choices?: OntBasecallingChoice[];
     output_policy_id: string;
     output_policy_label: string;
 }
@@ -5289,6 +5297,7 @@ export const createOntRunIntent = (position: string, payload: {
     sample_id?: string;
     experiment_group?: string;
     barcode_samples?: Array<{ barcode: string; alias: string }>;
+    basecalling?: { quality?: string; modified_bases?: string[]; min_qscore?: number };
 }) => api.post<OntInstrumentRun>(`/api/ont/positions/${encodeURIComponent(position)}/run-intents`, payload);
 
 export interface OntBarcodeBasecallHandoff {

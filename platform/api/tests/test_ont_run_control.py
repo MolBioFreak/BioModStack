@@ -1476,3 +1476,135 @@ def test_run_list_filters_exact_project_before_limit_and_pages_with_offset() -> 
     assert [run["run_id"] for run in second_page.json()] == ["ont-run-page-0"]
     assert prefix_only.json() == []
     assert negative_offset.status_code == 422
+
+
+_KIT_MODELS = [
+    {"name": "dna_r10.4.1_e8.2_400bps_fast@v5.2.0", "variant": "fast", "min_qscore": 8.0, "modified_models": []},
+    {"name": "dna_r10.4.1_e8.2_400bps_hac@v5.0.0", "variant": "hac", "min_qscore": 9, "modified_models": [
+        {"name": "dna_r10.4.1_e8.2_400bps_hac@v5.0.0_6mA@v1", "variant": "6mA", "canonical_base": "A", "context": "A"}]},
+    {"name": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0", "variant": "sup", "min_qscore": 10.0, "modified_models": [
+        {"name": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_6mA@v1", "variant": "6mA", "canonical_base": "A", "context": "A"},
+        {"name": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_5mCG_5hmCG@v2", "variant": "5mCG_5hmCG", "canonical_base": "C", "context": "CG"},
+        {"name": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_5mC_5hmC@v2", "variant": "5mC_5hmC", "canonical_base": "C", "context": "C"}]},
+]
+
+
+async def _kit_catalog(monkeypatch):
+    preflight = _ready_host_preflight(
+        kit="SQK-RBK114-24",
+        basecalling_options={"simplex_models": ["dna_r10.4.1_e8.2_400bps_hac@v5.0.0"], "min_qscore": 9, "models": _KIT_MODELS})
+    monkeypatch.setattr(ont_run_control, "get_position_protocol_options", lambda _position, _kit=None: preflight)
+    return await ont_run_control.issue_position_protocol_catalog("X1", kit="SQK-RBK114-24")
+
+
+@pytest.mark.asyncio
+async def test_catalog_offers_accuracy_and_modifications_without_model_names(monkeypatch) -> None:
+    catalog = await _kit_catalog(monkeypatch)
+
+    choices = catalog["options"][0]["basecalling_choices"]
+    assert [(choice["quality"], choice["default"], choice["default_min_qscore"]) for choice in choices] == [
+        ("fast", False, 8.0), ("hac", True, 9), ("sup", False, 10.0)]
+    assert choices[0]["modified_bases"] == []
+    assert [item["id"] for item in choices[2]["modified_bases"]] == ["6mA", "5mCG_5hmCG", "5mC_5hmC"]
+    assert choices[2]["modified_bases"][1] == {"id": "5mCG_5hmCG", "canonical_base": "C", "context": "CG"}
+    assert "400bps" not in repr(catalog) and "@v" not in repr(catalog)
+
+
+@pytest.mark.asyncio
+async def test_chosen_accuracy_modifications_and_qscore_reach_the_minknow_start(monkeypatch) -> None:
+    catalog = await _kit_catalog(monkeypatch)
+    option = catalog["options"][0]
+    intent = await ont_run_control.create_run_intent("X1", {
+        "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"],
+        "experiment_group": "domain-1",
+        "barcode_samples": [{"barcode": "barcode01", "alias": "plasmid_A"}],
+        "basecalling": {"quality": "sup", "modified_bases": ["6mA", "5mCG_5hmCG"], "min_qscore": 12},
+    })
+    calls = []
+
+    def host(method, path, payload=None, *, query=None, timeout=None):
+        calls.append((method, path, payload))
+        if path == "/ont/positions/X1/protocol-runs":
+            return {"minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000002", "position": "X1"}
+        if path.startswith("/ont/runs/"):
+            return {"status": "running", "minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000002",
+                    "output_files": {"fastq": [], "pod5": [], "bam": []}}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", host)
+    await ont_run_control.validate_armed_intent_start(
+        intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]})
+
+    sent = next(call for call in calls if call[1] == "/ont/positions/X1/protocol-runs")[2]
+    assert sent["simplex_model"] == "dna_r10.4.1_e8.2_400bps_sup@v5.2.0"
+    assert sent["modified_models"] == ["dna_r10.4.1_e8.2_400bps_sup@v5.2.0_6mA@v1",
+                                       "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_5mCG_5hmCG@v2"]
+    assert sent["min_qscore"] == 12
+    assert sent["barcoding_kits"] == ["SQK-RBK114-24"]
+    assert sent["barcode_samples"] == [{"barcode": "barcode01", "alias": "plasmid_A"}]
+
+
+@pytest.mark.asyncio
+async def test_accuracy_alone_uses_that_models_own_qscore_and_no_modifications(monkeypatch) -> None:
+    catalog = await _kit_catalog(monkeypatch)
+    option = catalog["options"][0]
+    intent = await ont_run_control.create_run_intent("X1", {
+        "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"],
+        "basecalling": {"quality": "sup"}})
+    sent = {}
+
+    def host(method, path, payload=None, *, query=None, timeout=None):
+        if path == "/ont/positions/X1/protocol-runs":
+            sent.update(payload)
+            return {"minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000003", "position": "X1"}
+        return {"status": "running", "minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000003",
+                "output_files": {"fastq": [], "pod5": [], "bam": []}}
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", host)
+    await ont_run_control.validate_armed_intent_start(
+        intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]})
+
+    assert sent["simplex_model"] == "dna_r10.4.1_e8.2_400bps_sup@v5.2.0" and sent["min_qscore"] == 10.0
+    assert "modified_models" not in sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("choice, message", [
+    ({"quality": "fast", "modified_bases": ["6mA"]}, "no 6mA modification model for FAST"),
+    ({"quality": "sup", "modified_bases": ["5mCG_5hmCG", "5mC_5hmC"]}, "one modification model per base"),
+    ({"quality": "ultra"}, "no basecalling model of that accuracy"),
+    ({"quality": "sup", "min_qscore": 31}, "min_qscore"),
+    ({"quality": "sup", "simplex_model": "anything"}, "basecalling accepts"),
+])
+async def test_a_basecalling_choice_minknow_does_not_offer_is_refused_before_arming(monkeypatch, choice, message) -> None:
+    catalog = await _kit_catalog(monkeypatch)
+    option = catalog["options"][0]
+    with pytest.raises(ValueError, match=message):
+        await ont_run_control.create_run_intent("X1", {
+            "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"], "basecalling": choice})
+    # A refused choice leaves the option unused, so the same receipt still arms a run.
+    intent = await ont_run_control.create_run_intent("X1", {
+        "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"]})
+    assert intent["state"] == "armed"
+
+
+def test_run_intent_route_accepts_a_basecalling_choice_and_refuses_model_names(monkeypatch) -> None:
+    app = FastAPI()
+    app.include_router(ont_runs.router, prefix="/api/ont")
+    client = TestClient(app)
+    seen = []
+
+    async def create(position, payload):
+        seen.append(payload)
+        return {"id": "ont-run-x"}
+
+    monkeypatch.setattr(ont_run_control, "create_run_intent", create)
+    body = {"option_id": "ont-option-a", "option_receipt_id": "ont-preflight-a"}
+    ok = client.post("/api/ont/positions/X1/run-intents",
+                     json={**body, "basecalling": {"quality": "sup", "modified_bases": ["6mA"], "min_qscore": 12}})
+    assert ok.status_code == 200, ok.text
+    assert seen[0]["basecalling"] == {"quality": "sup", "modified_bases": ["6mA"], "min_qscore": 12}
+    for bad in ({"simplex_model": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0"}, {"quality": "sup", "min_qscore": 40},
+                {"quality": "../x"}, {"modified_bases": ["6mA; rm"]}):
+        assert client.post("/api/ont/positions/X1/run-intents", json={**body, "basecalling": bad}).status_code == 422
+    assert len(seen) == 1

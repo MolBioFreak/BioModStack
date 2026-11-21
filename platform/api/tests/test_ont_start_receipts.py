@@ -155,3 +155,60 @@ def test_an_idle_device_reporting_another_rate_still_finds_the_kit_model(monkeyp
                                "output_directories": {"reads": "/data"}}]}
     result = host.protocol_options("X1", kit="SQK-RBK114-24", status=status)
     assert result["can_start"] is True and result["basecalling_options"]["simplex_models"] == ["hac"]
+
+
+def _kit_models():
+    mods = lambda tier: [NS(name=f"{tier}_6mA@v1", variant="6mA", canonical_base="A", context="A", outdated=False),
+                         NS(name=f"{tier}_5mCG_5hmCG@v2", variant="5mCG_5hmCG", canonical_base="C", context="CG", outdated=False),
+                         NS(name=f"{tier}_old@v0", variant="4mC_5mC", canonical_base="C", context="C", outdated=True)]
+    return NS(name="configuration", sampling_rate=5000, simplex_models=[
+        NS(name="fast@v5", variant="fast", outdated=False, default_q_score_cutoff=8.0, modified_models=[]),
+        NS(name="hac@v5", variant="hac", outdated=False, default_q_score_cutoff=9.0, modified_models=mods("hac")),
+        NS(name="sup@v5", variant="sup", outdated=False, default_q_score_cutoff=10.0, modified_models=mods("sup")),
+        NS(name="sup@v4", variant="sup", outdated=True, default_q_score_cutoff=10.0, modified_models=[]),
+    ])
+
+
+def test_protocol_options_list_the_kit_models_and_their_modification_models(monkeypatch, fake_instrument):
+    _calls, tools, _payload = fake_instrument
+    connection = NS(device=NS(get_flow_cell_info=lambda: NS(product_code="FLO-MIN114")),
+                    protocol=NS(list_protocols=lambda: NS(protocols=[])))
+    config = _kit_models()
+    monkeypatch.setattr(host, "_connect_position",
+                        lambda *a, **kw: (NS(find_basecall_configurations=lambda *args: [config]), connection))
+    tools.find_protocol = lambda _connection, **kwargs: NS(identifier="protocol")
+    tools.find_default_simplex_model = lambda _connection, _kit, _rate, _available: (config, config.simplex_models[1])
+    status = {"live_devices": [{"position": "X1", "device_type": "mk1d", "running": False,
+                               "flow_cell": {"present": True, "sample_rate": 5000},
+                               "output_directories": {"reads": "/data"}}]}
+    options = host.protocol_options("X1", kit="SQK-RBK114-24", status=status)["basecalling_options"]
+    assert options["simplex_models"] == ["hac@v5"] and options["min_qscore"] == 9.0
+    assert [(model["variant"], model["name"], model["min_qscore"]) for model in options["models"]] == [
+        ("fast", "fast@v5", 8.0), ("hac", "hac@v5", 9.0), ("sup", "sup@v5", 10.0)]
+    assert options["models"][0]["modified_models"] == []
+    assert options["models"][2]["modified_models"] == [
+        {"name": "sup_6mA@v1", "variant": "6mA", "canonical_base": "A", "context": "A"},
+        {"name": "sup_5mCG_5hmCG@v2", "variant": "5mCG_5hmCG", "canonical_base": "C", "context": "CG"},
+    ]
+
+
+def test_chosen_modification_models_reach_minknow_and_the_run_writes_bam(fake_instrument):
+    calls, tools, payload = fake_instrument
+    tools.BasecallingArgs = lambda **kw: kw
+    tools.BarcodingArgs = lambda **kw: kw
+    code, _ = host.start_protocol("X1", {
+        **payload, "basecalling_enabled": True, "simplex_model": "sup@v5", "min_qscore": 12,
+        "modified_models": ["sup_6mA@v1", "sup_5mCG_5hmCG@v2"], "barcoding_kits": ["SQK-RBK114-24"]})
+    assert code == 201
+    basecalling = calls[0]["basecalling"]
+    assert basecalling["simplex_model"] == "sup@v5" and basecalling["min_qscore"] == 12
+    assert basecalling["modified_models"] == ["sup_6mA@v1", "sup_5mCG_5hmCG@v2"]
+    assert basecalling["barcoding"]["kits"] == ["SQK-RBK114-24"]
+    assert calls[0]["bam_arguments"] == {"reads_per_file": None, "batch_duration": None}
+
+
+def test_a_run_without_modification_models_starts_as_before(fake_instrument):
+    calls, tools, payload = fake_instrument
+    tools.BasecallingArgs = lambda **kw: kw
+    code, _ = host.start_protocol("X1", {**payload, "basecalling_enabled": True, "simplex_model": "hac@v5"})
+    assert code == 201 and calls[0]["basecalling"]["modified_models"] is None and "bam_arguments" not in calls[0]

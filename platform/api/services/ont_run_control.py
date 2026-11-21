@@ -125,6 +125,76 @@ def _option_snapshot(position: str, host_payload: dict[str, Any]) -> dict[str, A
     }
 
 
+def _basecalling_models(snapshot: Any) -> list[dict[str, Any]]:
+    options = snapshot.get("basecalling_options") if isinstance(snapshot, dict) else None
+    models = options.get("models") if isinstance(options, dict) else None
+    return [model for model in models or [] if isinstance(model, dict) and model.get("name") and model.get("variant")]
+
+
+def _default_simplex_model(snapshot: Any) -> str | None:
+    options = snapshot.get("basecalling_options") if isinstance(snapshot, dict) else None
+    names = options.get("simplex_models") if isinstance(options, dict) else None
+    return str(names[0]) if names else None
+
+
+def _public_basecalling_choices(snapshot: Any) -> list[dict[str, Any]]:
+    """Accuracy tiers and modification names MinKNOW offers for this kit; model names stay server-side."""
+    default = _default_simplex_model(snapshot)
+    return [
+        {
+            "quality": str(model["variant"]),
+            "default": model["name"] == default,
+            "default_min_qscore": model.get("min_qscore"),
+            "modified_bases": [
+                {"id": str(item["variant"]), "canonical_base": item.get("canonical_base"), "context": item.get("context")}
+                for item in model.get("modified_models") or [] if isinstance(item, dict) and item.get("variant")
+            ],
+        }
+        for model in _basecalling_models(snapshot)
+    ]
+
+
+def _basecalling_choice(value: Any, snapshot: Any) -> dict[str, Any] | None:
+    """Resolve the chosen accuracy, modifications and read-quality cutoff to MinKNOW's own model names."""
+    if not value:
+        return None
+    if not isinstance(value, dict) or set(value) - {"quality", "modified_bases", "min_qscore"}:
+        raise ValueError("basecalling accepts quality, modified_bases and min_qscore")
+    if not isinstance(snapshot, dict) or snapshot.get("basecalling_enabled") is not True:
+        raise ValueError("basecalling is off for this run")
+    models = _basecalling_models(snapshot)
+    quality = value.get("quality")
+    if quality is None:
+        default = _default_simplex_model(snapshot)
+        model = next((item for item in models if item["name"] == default), None)
+    else:
+        model = next((item for item in models if item["variant"] == str(quality).strip().lower()), None)
+    if model is None:
+        raise ValueError("MinKNOW offers no basecalling model of that accuracy for this kit and flow cell")
+    chosen: list[dict[str, Any]] = []
+    for name in value.get("modified_bases") or []:
+        match = next((item for item in model.get("modified_models") or []
+                      if isinstance(item, dict) and item.get("variant") == name), None)
+        if match is None:
+            raise ValueError(
+                f"MinKNOW offers no {name} modification model for {str(model['variant']).upper()} basecalling with this kit")
+        if any((item.get("canonical_base") or item["name"]) == (match.get("canonical_base") or match["name"]) for item in chosen):
+            raise ValueError("choose one modification model per base")
+        chosen.append(match)
+    min_qscore = value.get("min_qscore")
+    if min_qscore is None:
+        min_qscore = model.get("min_qscore")
+    elif isinstance(min_qscore, bool) or not isinstance(min_qscore, (int, float)) or not 0 <= min_qscore <= 30:
+        raise ValueError("min_qscore must be a number from 0 to 30")
+    return {
+        "quality": str(model["variant"]),
+        "simplex_model": str(model["name"]),
+        "modified_bases": [str(item["variant"]) for item in chosen],
+        "modified_models": [str(item["name"]) for item in chosen],
+        "min_qscore": min_qscore,
+    }
+
+
 def _catalog_blockers(host_payload: dict[str, Any]) -> list[str]:
     public_reasons = {
         "flowcell_absent",
@@ -818,6 +888,7 @@ async def issue_position_protocol_catalog(
                 f"{snapshot['kit']} sequencing · {float(run_hours):g} h", "MinKNOW sequencing protocol",
             ),
             "basecalling_enabled": snapshot["basecalling_enabled"],
+            "basecalling_choices": _public_basecalling_choices(snapshot) if snapshot["basecalling_enabled"] else [],
             "output_policy_id": f"ont-output-policy-{source_digest[:16]}",
             "output_policy_label": "MinKNOW-managed output policy",
         }
@@ -871,6 +942,14 @@ def _run_barcode_samples(events: list[OntInstrumentRunEvent]) -> list[dict[str, 
     return []
 
 
+def _run_basecalling_choice(events: list[OntInstrumentRunEvent]) -> dict[str, Any] | None:
+    for event in events:
+        payload = event.minknow_payload if isinstance(event.minknow_payload, dict) else {}
+        if event.event_type == "preflight_armed" and isinstance(payload.get("basecalling"), dict):
+            return dict(payload["basecalling"])
+    return None
+
+
 def _allowed_relative(path: Path) -> str:
     """The path as the ONT form submits it: below a named data root when it lies in one."""
     from paths import get_allowed_roots  # noqa: PLC0415
@@ -911,7 +990,7 @@ async def build_barcode_basecall_handoff(run_id: str) -> dict[str, Any]:
 
 async def create_run_intent(position: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Consume one opaque option receipt into an ARMED durable ledger row."""
-    allowed = {"option_id", "option_receipt_id", "sample_id", "experiment_group", "barcode_samples"}
+    allowed = {"option_id", "option_receipt_id", "sample_id", "experiment_group", "barcode_samples", "basecalling"}
     if not isinstance(payload, dict) or set(payload) - allowed:
         raise ValueError("run intent accepts only opaque option receipt IDs and bounded sample metadata")
     option_id = str(payload.get("option_id") or "").strip()
@@ -939,6 +1018,7 @@ async def create_run_intent(position: str, payload: dict[str, Any]) -> dict[str,
         barcode_samples = _barcode_samples(
             payload.get("barcode_samples"),
             receipt.source_snapshot.get("kit") if isinstance(receipt.source_snapshot, dict) else None)
+        basecalling_choice = _basecalling_choice(payload.get("basecalling"), receipt.source_snapshot)
         run_id = _new_run_id()
         record = OntInstrumentRun(
             id=run_id,
@@ -979,7 +1059,8 @@ async def create_run_intent(position: str, payload: dict[str, Any]) -> dict[str,
             observed_at=now,
             observed_generation=1,
             minknow_payload={"preflight_id": preflight.id, "source_digest": receipt.source_digest,
-                             **({"barcode_samples": barcode_samples} if barcode_samples else {})},
+                             **({"barcode_samples": barcode_samples} if barcode_samples else {}),
+                             **({"basecalling": basecalling_choice} if basecalling_choice else {})},
             output_files={"fastq": [], "pod5": [], "bam": []},
         )
         receipt.consumed_at = now
@@ -1066,16 +1147,19 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
         snapshot = preflight.source_snapshot if isinstance(preflight.source_snapshot, dict) else {}
         basecalling = snapshot.get("basecalling_options") if isinstance(snapshot.get("basecalling_options"), dict) else {}
         simplex_models = basecalling.get("simplex_models") or []
+        armed_events = await _events_for_run(session, run_id)
+        choice = _run_basecalling_choice(armed_events)
         start_request = {
             "confirm_start": True,
             "start_request_id": record.id,
             "protocol_id": snapshot.get("protocol_id"),
             "basecalling_enabled": snapshot.get("basecalling_enabled") is True,
-            "simplex_model": simplex_models[0] if simplex_models else None,
-            "min_qscore": basecalling.get("min_qscore"),
+            "simplex_model": choice["simplex_model"] if choice else (simplex_models[0] if simplex_models else None),
+            "min_qscore": choice["min_qscore"] if choice else basecalling.get("min_qscore"),
+            **({"modified_models": choice["modified_models"]} if choice and choice.get("modified_models") else {}),
             "run_hours": float(snapshot.get("run_hours") or DEFAULT_RUN_HOURS),
             **({"barcoding_kits": [snapshot["kit"]]} if snapshot.get("kit") in _barcoding_kits() else {}),
-            **({"barcode_samples": samples} if (samples := _run_barcode_samples(await _events_for_run(session, run_id))) else {}),
+            **({"barcode_samples": samples} if (samples := _run_barcode_samples(armed_events)) else {}),
             "sample_id": record.sample_id,
             "experiment_group": record.experiment_group,
         }

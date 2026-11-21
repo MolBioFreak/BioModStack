@@ -368,6 +368,29 @@ def _sequencing_kits(connection: Any, product_code: str | None) -> list[str]:
     return sorted(kits)
 
 
+def _basecall_model_catalog(config: Any) -> list[dict[str, Any]]:
+    """The current simplex models of one basecall configuration, each with its modification models."""
+    catalog: list[dict[str, Any]] = []
+    for simplex in _safe_get(config, "simplex_models", []) or []:
+        name = _string_or_none(_safe_get(simplex, "name"))
+        variant = (_string_or_none(_safe_get(simplex, "variant")) or "").casefold()
+        if not name or not variant or _safe_get(simplex, "outdated", False) is True:
+            continue
+        if any(item["variant"] == variant for item in catalog):
+            continue
+        modified = [
+            {"name": str(_safe_get(model, "name")), "variant": str(_safe_get(model, "variant")),
+             "canonical_base": _string_or_none(_safe_get(model, "canonical_base")),
+             "context": _string_or_none(_safe_get(model, "context"))}
+            for model in _safe_get(simplex, "modified_models", []) or []
+            if _string_or_none(_safe_get(model, "name")) and _string_or_none(_safe_get(model, "variant"))
+            and _safe_get(model, "outdated", False) is not True
+        ]
+        catalog.append({"name": name, "variant": variant,
+                        "min_qscore": _safe_get(simplex, "default_q_score_cutoff"), "modified_models": modified})
+    return catalog
+
+
 def protocol_options(
     position: str,
     *,
@@ -415,6 +438,9 @@ def protocol_options(
                             "simplex_models": [simplex.name],
                             "min_qscore": _safe_get(simplex, "default_q_score_cutoff"),
                         }
+                        models = _basecall_model_catalog(_config)
+                        if models:
+                            basecalling_options["models"] = models
             except Exception as exc:  # noqa: BLE001 - grpc/minknow failures vary by version
                 lookup_error = str(exc)[:500]
         result = build_protocol_options_preflight(
@@ -473,6 +499,7 @@ def start_protocol(position_name: str, payload: dict[str, Any], *,
         return rejected(409, "A protocol is already running on this position")
     tools = _protocols_module()
     basecalling = None
+    modified_models: list[str] | None = None
     if payload.get("basecalling_enabled") is True:
         simplex_model = _string_or_none(payload.get("simplex_model"))
         if not simplex_model:
@@ -481,8 +508,9 @@ def start_protocol(position_name: str, payload: dict[str, Any], *,
         kits = [str(kit) for kit in payload.get("barcoding_kits") or [] if str(kit).strip()]
         barcoding = tools.BarcodingArgs(kits=kits, trim_barcodes=False,
                                         barcodes_both_ends=payload.get("barcodes_both_ends") is True) if kits else None
+        modified_models = [str(name) for name in payload.get("modified_models") or [] if str(name).strip()] or None
         basecalling = tools.BasecallingArgs(
-            simplex_model=simplex_model, modified_models=None, stereo_model=None,
+            simplex_model=simplex_model, modified_models=modified_models, stereo_model=None,
             barcoding=barcoding, alignment=None, min_qscore=payload.get("min_qscore"),
         )
     output = tools.OutputArgs(reads_per_file=None, batch_duration=None)
@@ -499,6 +527,8 @@ def start_protocol(position_name: str, payload: dict[str, Any], *,
             basecalling=basecalling,
             pod5_arguments=output,
             fastq_arguments=output if basecalling else None,
+            # Modification calls travel in BAM tags, so a run that calls them also writes BAM.
+            **({"bam_arguments": output} if modified_models else {}),
             experiment_duration=float(run_hours),
         )
     except Exception as exc:  # noqa: BLE001

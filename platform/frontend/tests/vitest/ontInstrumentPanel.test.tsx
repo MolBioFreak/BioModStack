@@ -234,6 +234,64 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
             barcode_samples: [{ barcode: 'barcode01', alias: 'plasmid_A' }, { barcode: 'barcode02', alias: 'plasmid_B' }],
         }));
     });
+    it('sends the chosen basecalling accuracy, modified bases and minimum Q-score with the run', async () => {
+        const choices = [
+            { quality: 'fast', default: false, default_min_qscore: 8, modified_bases: [] },
+            { quality: 'hac', default: true, default_min_qscore: 9, modified_bases: [{ id: '6mA', canonical_base: 'A', context: 'A' }] },
+            { quality: 'sup', default: false, default_min_qscore: 10, modified_bases: [
+                { id: '6mA', canonical_base: 'A', context: 'A' },
+                { id: '5mCG_5hmCG', canonical_base: 'C', context: 'CG' },
+                { id: '5mC_5hmC', canonical_base: 'C', context: 'C' },
+            ] },
+        ];
+        ont.fetchOptions.mockResolvedValue({ data: { ...optionsResponse.data, available_kits: ['SQK-RBK114-24'],
+            options: [{ ...optionsResponse.data.options[0], basecalling_choices: choices }] } });
+        ont.createIntent.mockResolvedValue({ data: intent });
+        ont.startIntent.mockResolvedValue({ data: intent });
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+        await act(async () => { root.render(panel()); });
+        await flush();
+        const accuracy = () => container.querySelector<HTMLSelectElement>('[aria-label="Basecalling accuracy"]')!;
+        await waitUntil(() => expect(accuracy()).toBeTruthy());
+        expect(accuracy().value).toBe('hac');
+        expect(Array.from(accuracy().options).map(option => option.textContent)).toEqual(['FAST', 'HAC (MinKNOW default)', 'SUP']);
+        await act(async () => { accuracy().value = 'sup'; accuracy().dispatchEvent(new Event('change', { bubbles: true })); });
+        const box = (id: string) => container.querySelector<HTMLInputElement>(`[aria-label="Call ${id}"]`)!;
+        await act(async () => box('6mA').click());
+        await act(async () => box('5mC_5hmC').click());
+        // One model per base: the CG-context model replaces the all-C model.
+        await act(async () => box('5mCG_5hmCG').click());
+        expect(box('5mC_5hmC').checked).toBe(false);
+        expect(box('5mCG_5hmCG').checked).toBe(true);
+        const qscore = container.querySelector<HTMLInputElement>('[aria-label="Minimum read Q-score"]')!;
+        expect(qscore.placeholder).toBe('10 (MinKNOW default)');
+        await act(async () => {
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(qscore, '12');
+            qscore.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        const start = Array.from(container.querySelectorAll('button')).find((element) => element.textContent === 'Start sequencing') as HTMLButtonElement;
+        await waitUntil(() => expect(start.disabled).toBe(false));
+        await act(async () => start.click());
+        await flush();
+        expect(confirm.mock.calls.at(-1)![0]).toContain('Basecalling SUP, calling 6mA, 5mCG_5hmCG, minimum Q12.');
+        expect(ont.createIntent).toHaveBeenCalledWith('MD-105428', expect.objectContaining({
+            basecalling: { quality: 'sup', modified_bases: ['6mA', '5mCG_5hmCG'], min_qscore: 12 },
+        }));
+    });
+
+    it('starts with the MinKNOW default basecalling when nothing is changed, and shows no controls when none are offered', async () => {
+        ont.createIntent.mockResolvedValue({ data: intent });
+        ont.startIntent.mockResolvedValue({ data: intent });
+        await act(async () => { root.render(panel()); });
+        await flush();
+        const start = () => Array.from(container.querySelectorAll('button')).find((element) => element.textContent === 'Start sequencing') as HTMLButtonElement;
+        await waitUntil(() => expect(start().disabled).toBe(false));
+        expect(container.querySelector('[data-testid="ont-live-basecalling"]')).toBeNull();
+        await act(async () => start().click());
+        await flush();
+        expect(ont.createIntent.mock.calls[0][1]).not.toHaveProperty('basecalling');
+    });
+
     it('retains the durable run and reports an uncertain physical start without resubmitting it', async () => {
         let rejectStart: (reason: unknown) => void = () => undefined;
         ont.createIntent.mockResolvedValue({ data: intent });

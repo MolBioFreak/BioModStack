@@ -2032,7 +2032,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                         <div className="grid grid-cols-2 gap-2" role="group" aria-label="Modification models">
                             {modificationOptions.map(option => {
                                 const checked = selectedModifications.includes(option.modification);
-                                const unavailable = doradoMode !== 'simplex' || Boolean(barcodeKit);
+                                const unavailable = doradoMode !== 'simplex';
                                 return (
                                     <label key={option.id} className={`flex items-start gap-2 p-2 rounded-lg border text-left ${checked ? 'border-[var(--accent-secondary)]' : 'border-[var(--border-primary)]'} ${unavailable ? 'opacity-40' : 'cursor-pointer'}`}>
                                         <input
@@ -2042,7 +2042,6 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                             disabled={unavailable}
                                             onChange={() => {
                                                 setSelectedModifications(current => toggleModification(current, modificationOptions, option.modification));
-                                                setBarcodeKit(''); setSampleSheet('');
                                             }}
                                             className="mt-0.5"
                                         />
@@ -2055,7 +2054,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             })}
                         </div>
                     )}
-                    <p className="mt-3 text-xs text-[var(--text-secondary)]">Dorado runs one modification model per canonical base; choosing another model for the same base replaces it. Modification calling requires one-strand calling and no inline barcoding.</p>
+                    <p className="mt-3 text-xs text-[var(--text-secondary)]">Dorado runs one modification model per canonical base; choosing another model for the same base replaces it. Modification calling requires one-strand calling. On a barcoded run the calls stay in each barcode's reads.</p>
                 </div>
             )}
 

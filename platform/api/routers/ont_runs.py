@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from pydantic import (
@@ -302,6 +302,16 @@ class OntNgsPreparedReview(BaseModel):
     preview: JobExecutionPlanPreview
 
 
+class OntRunBasecallingChoice(BaseModel):
+    """Live basecalling picked from the choices the protocol option listed; no model names."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    quality: str | None = Field(default=None, pattern=r"^[a-z]{2,12}$")
+    modified_bases: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9_]{1,40}$")]] | None = Field(default=None, max_length=8)
+    min_qscore: float | None = Field(default=None, ge=0, le=30)
+
+
 class OntRunIntentRequest(BaseModel):
     """Bounded browser input: only server-issued option handles and metadata."""
 
@@ -312,6 +322,7 @@ class OntRunIntentRequest(BaseModel):
     sample_id: str | None = Field(default=None, max_length=255)
     experiment_group: str | None = Field(default=None, max_length=255)
     barcode_samples: list[dict[str, str]] | None = Field(default=None, max_length=96)
+    basecalling: OntRunBasecallingChoice | None = None
 
 
 class OntIntentStartRequest(BaseModel):

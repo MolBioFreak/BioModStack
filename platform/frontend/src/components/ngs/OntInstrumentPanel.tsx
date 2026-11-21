@@ -160,6 +160,10 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
     const [selectedKit, setSelectedKit] = useState('');
     const [runHours, setRunHours] = useState(24);
     const [barcodeSampleText, setBarcodeSampleText] = useState('');
+    // Live basecalling: accuracy, modifications and read-quality cutoff, from what MinKNOW offers for the kit.
+    const [basecallQuality, setBasecallQuality] = useState('');
+    const [basecallModifications, setBasecallModifications] = useState<string[]>([]);
+    const [basecallMinQscore, setBasecallMinQscore] = useState('');
     // The barcoding kits BMS demultiplexes; a run on one can carry a sample name per barcode.
     const barcodingKit = /^SQK-(RBK|NBD)114-(24|96)$/.test(selectedKit);
     const barcodeSamples = barcodingKit ? barcodeSampleText.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
@@ -208,6 +212,21 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
     const instrumentEvidenceError = deviceStatus.isError || protocolOptions.isError;
     const effectiveProtocolOptions = instrumentEvidenceError ? undefined : protocolOptions.data;
     const selectedOption: OntProtocolOption | undefined = effectiveProtocolOptions?.options[0];
+    const basecallingChoices = selectedOption?.basecalling_enabled ? selectedOption.basecalling_choices ?? [] : [];
+    const activeBasecalling = basecallingChoices.find(choice => choice.quality === basecallQuality)
+        ?? basecallingChoices.find(choice => choice.default) ?? basecallingChoices[0];
+    const activeModifications = basecallModifications.filter(id => activeBasecalling?.modified_bases.some(item => item.id === id));
+    const minQscoreError = basecallMinQscore !== '' && !(Number(basecallMinQscore) >= 0 && Number(basecallMinQscore) <= 30)
+        ? 'Minimum read Q-score must be from 0 to 30.' : '';
+    const toggleBasecallModification = (id: string) => setBasecallModifications(() => {
+        if (activeModifications.includes(id)) return activeModifications.filter(item => item !== id);
+        const base = activeBasecalling?.modified_bases.find(item => item.id === id)?.canonical_base ?? id;
+        // MinKNOW runs one modification model per base, so a second choice for the same base replaces the first.
+        return [...activeModifications.filter(item => (activeBasecalling?.modified_bases.find(other => other.id === item)?.canonical_base ?? item) !== base), id];
+    });
+    const basecallingSummary = activeBasecalling
+        ? ` Basecalling ${activeBasecalling.quality.toUpperCase()}${activeModifications.length ? `, calling ${activeModifications.join(', ')}` : ''}, minimum Q${basecallMinQscore !== '' ? basecallMinQscore : activeBasecalling.default_min_qscore ?? '?'}.`
+        : '';
 
     const samplesQuery = useInfiniteQuery({
         queryKey: ['molbio-ngs-summaries', exactDomainExperimentId, 'samples'],
@@ -506,6 +525,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
             if (!exactDomainExperimentId) throw new Error('Choose a Project to start sequencing.');
             if (!selectedDevice?.position || !selectedOption) throw new Error('No server-issued protocol option is available');
             if (barcodeSampleError) throw new Error(barcodeSampleError);
+            if (minQscoreError) throw new Error(minQscoreError);
             const intent = await createOntRunIntent(selectedDevice.position, {
                 option_id: selectedOption.option_id,
                 option_receipt_id: selectedOption.option_receipt_id,
@@ -514,6 +534,11 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                 // It is always the exact selected Domain Experiment ID, never the Global Experiment ID.
                 experiment_group: exactDomainExperimentId,
                 ...(barcodeSamples.length ? { barcode_samples: barcodeSamples } : {}),
+                ...(activeBasecalling ? { basecalling: {
+                    quality: activeBasecalling.quality,
+                    modified_bases: activeModifications,
+                    ...(basecallMinQscore !== '' ? { min_qscore: Number(basecallMinQscore) } : {}),
+                } } : {}),
             });
             // Select and refresh the durable BMS ledger immediately. The subsequent
             // physical-start revalidation never becomes the sole run-history authority.
@@ -698,7 +723,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                 </div>
 
                 <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
-                    <div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">New sequencing run</h3><p className="text-xs text-[var(--text-secondary)]">BNS picks the matching MinKNOW protocol and default basecalling model for the kit and flow cell.</p></div>
+                    <div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">New sequencing run</h3><p className="text-xs text-[var(--text-secondary)]">BNS picks the matching MinKNOW protocol for the kit and flow cell. Basecalling accuracy, modified bases and the read-quality cutoff appear once a kit is chosen.</p></div>
                     <label className="block text-xs font-semibold text-[var(--text-secondary)]">Sample
                         <select
                             value={selectedSample?.id ?? ''}
@@ -754,13 +779,54 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                             className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]"
                         />
                     </label>
+                    {activeBasecalling ? (
+                        <div className="space-y-2 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]" data-testid="ont-live-basecalling">
+                            <label className="block font-semibold">Basecalling accuracy
+                                <select
+                                    aria-label="Basecalling accuracy"
+                                    value={activeBasecalling.quality}
+                                    onChange={(event) => { setBasecallQuality(event.target.value); setBasecallMinQscore(''); }}
+                                    className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)]"
+                                >
+                                    {basecallingChoices.map((choice) => <option key={choice.quality} value={choice.quality}>{choice.quality.toUpperCase()}{choice.default ? ' (MinKNOW default)' : ''}</option>)}
+                                </select>
+                            </label>
+                            {activeBasecalling.modified_bases.length ? (
+                                <div role="group" aria-label="Modified bases called during the run" className="space-y-1">
+                                    <div className="font-semibold">Modified bases (optional)</div>
+                                    {activeBasecalling.modified_bases.map((item) => (
+                                        <label key={item.id} className="flex items-center gap-2">
+                                            <input type="checkbox" aria-label={`Call ${item.id}`} checked={activeModifications.includes(item.id)} onChange={() => toggleBasecallModification(item.id)} />
+                                            <span className="text-[var(--text-primary)]">{item.id.replace(/_/g, ' + ')}</span>
+                                            <span>{item.context && item.context !== item.canonical_base ? `${item.context} context` : item.canonical_base ? `all ${item.canonical_base}` : ''}</span>
+                                        </label>
+                                    ))}
+                                    <p>One model per base. A run that calls modifications also writes BAM, which carries the calls.</p>
+                                </div>
+                            ) : <p>MinKNOW offers no modification models for {activeBasecalling.quality.toUpperCase()} basecalling with this kit.</p>}
+                            <label className="block font-semibold">Minimum read Q-score
+                                <input
+                                    aria-label="Minimum read Q-score"
+                                    type="number"
+                                    min={0}
+                                    max={30}
+                                    step={1}
+                                    value={basecallMinQscore}
+                                    placeholder={activeBasecalling.default_min_qscore == null ? '' : `${activeBasecalling.default_min_qscore} (MinKNOW default)`}
+                                    onChange={(event) => setBasecallMinQscore(event.target.value)}
+                                    className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)]"
+                                />
+                            </label>
+                            {minQscoreError ? <p role="alert" className="text-[var(--warning)]">{minQscoreError}</p> : <p>Reads below this go to MinKNOW's fail output. Raw signal is kept for every read, so the run can be basecalled again in Data Analysis.</p>}
+                        </div>
+                    ) : null}
                     <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">{selectedOption ? `${selectedOption.protocol_label} · basecalling ${selectedOption.basecalling_enabled ? 'on' : 'off'}` : selectedKit ? 'MinKNOW has no sequencing protocol for this kit and flow cell.' : 'Choose a kit to prepare the run.'}{blockers.length ? <div className="mt-2 text-[var(--warning)]">Not ready: {blockers.join(', ')}</div> : null}</div>
                     <button
                         type="button"
                         disabled={!canStart}
                         title={domainIntentBlocker ?? undefined}
                         onClick={() => {
-                            if (window.confirm(`Start sequencing on ${selectedDevice?.position} with ${selectedKit} for ${runHours} h? This uses the flow cell.`)) startRun.mutate();
+                            if (window.confirm(`Start sequencing on ${selectedDevice?.position} with ${selectedKit} for ${runHours} h?${basecallingSummary} This uses the flow cell.`)) startRun.mutate();
                         }}
                         className="rounded-lg bg-[var(--accent-primary)] px-4 py-2 text-sm font-semibold text-[var(--text-on-accent)] disabled:cursor-not-allowed disabled:opacity-50"
                     >

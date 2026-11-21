@@ -345,6 +345,30 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-RBK114-96', modified_bases: '6mA', run_modkit: false });
     });
+    it('lets a modification be ticked after the barcoding kit is chosen, and keeps the kit', async () => {
+        await mount();
+        await input('select[aria-label="Barcoding"]', 'SQK-RBK114-24');
+        const box = () => container.querySelector<HTMLInputElement>('input[type="checkbox"][aria-label="6mA"]')!;
+        expect(box().disabled).toBe(false);
+        await act(async () => box().click()); await settle();
+        expect(box().checked).toBe(true);
+        expect(container.querySelector<HTMLSelectElement>('select[aria-label="Barcoding"]')!.value).toBe('SQK-RBK114-24');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-RBK114-24', modified_bases: '6mA' });
+    });
+    it('keeps a ticked modification editable when the barcoding kit is chosen afterwards', async () => {
+        await mount();
+        const box = (name: string) => container.querySelector<HTMLInputElement>(`input[type="checkbox"][aria-label="${name}"]`)!;
+        await act(async () => box('6mA').click()); await settle();
+        await input('select[aria-label="Barcoding"]', 'SQK-RBK114-24');
+        expect(box('6mA').checked).toBe(true);
+        expect(box('6mA').disabled).toBe(false);
+        await act(async () => box('6mA').click()); await settle();
+        expect(box('6mA').checked).toBe(false);
+        expect(container.querySelector<HTMLSelectElement>('select[aria-label="Barcoding"]')!.value).toBe('SQK-RBK114-24');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-RBK114-24', modified_bases: 'none' });
+    });
     it('sends the poly(A) option only when ticked, with the plasmid flanks when the tail is inside a plasmid', async () => {
         await mount();
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
