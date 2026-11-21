@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { fastaRoster, type Molecule } from '../../lib/fastaRoster';
+export { fastaRoster } from '../../lib/fastaRoster';
 import { api, submitJob } from '../../lib/api';
 import { getLaunchContext } from '../../lib/projectManager';
 import { errorText } from './alignmentText';
@@ -11,7 +13,7 @@ import requestSchema from './alignment-request.schema.json';
 import { engineHelp, engineLabels, fieldHelp, fieldLabel, nullLabel, optionLabel, plasmidPreset, primaryFieldsFor } from './alignmentFieldPresentation';
 
 type Engine = 'mafft' | 'famsa' | 'muscle' | 'twilight';
-type Molecule = 'protein' | 'dna' | 'rna';
+
 type Value = string | number | boolean | null | Record<string, string>;
 type Settings = Record<string, Value> & { engine: Engine };
 type Field = { key: string; label: string; kind: 'number' | 'integer' | 'boolean' | 'select' | 'text' | 'mapping'; options?: (string | number)[]; min?: number; nullable?: boolean; description?: string; format?: string };
@@ -41,14 +43,6 @@ function initialDrafts(molecule: Molecule, plasmid = false): Record<Engine,Setti
     if (molecule !== 'protein') next.muscle.hmmin = nucleotideIdentityHmm;
     if (plasmid) next.mafft = {...next.mafft, strategy: plasmidPreset.strategy, reorder: plasmidPreset.reorder};
     return next;
-}
-export function fastaRoster(text: string, molecule: Molecule) {
-    const rows: {row_id:string;header:string;sequence:string}[] = [];
-    for (const line of text.split(/\r?\n/)) {
-        if (line.startsWith('>')) rows.push({row_id:`row_${String(rows.length+1).padStart(8,'0')}`,header:line.slice(1),sequence:''});
-        else if (line.trim()) { if (!rows.length) throw new Error('Sequence before FASTA header'); rows[rows.length-1].sequence += line.replace(/\s/g,''); }
-    }
-    return {molecule, rows, source_format:'fasta', source_text:text};
 }
 const inputClass = 'rounded border border-slate-500 bg-slate-900 p-1 text-white';
 function NativeFileInput({field, value, onChange, identityPreset}: {field: Field; value: Value; onChange: (value: Value) => void; identityPreset?: string}) {
