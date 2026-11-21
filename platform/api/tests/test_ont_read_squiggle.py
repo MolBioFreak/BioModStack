@@ -168,3 +168,39 @@ def test_quick_squiggle_is_offered_only_when_its_own_pod5_and_basecall_bam_are_t
     assert router.quick_squiggle_availability(job(pod5_dir=str(tmp_path)), calls)["available"] is False  # outside the allowed roots
     assert router.quick_squiggle_availability(job(pod5_dir=str(pod5_dir)), [{"state": "present", "relative_path": "align/aligned.bam"}]) == {
         "available": False, "reason": "This run published no basecall BAM."}
+
+
+def test_barcode_membership_scopes_source_calls_before_sort_and_trace(tmp_path: Path) -> None:
+    source, pod5_dir = _setup(tmp_path, trimmed=12, samples=67, ns=64)
+    member = tmp_path / "unit.bam"
+    other_id = str(uuid.uuid4())
+    longer_id = str(uuid.uuid4())
+    with pysam.AlignmentFile(str(source), "rb", check_sq=False) as handle:
+        read = next(handle)
+        with pysam.AlignmentFile(str(member), "wb", template=handle) as unit:
+            read.set_tag("mv", None)  # the unit proves membership, not move coordinates
+            unit.write(read)
+            read.query_name = longer_id
+            unit.write(read)
+            read.query_name = other_id
+            read.is_secondary = True
+            unit.write(read)
+    with pysam.AlignmentFile(str(source), "wb", header={"HD": {"VN": "1.6"}}) as calls:
+        read.is_secondary = False
+        read.query_sequence = "CAGATAA"
+        calls.write(read)  # longer, but in a different barcode
+        read.query_name = longer_id
+        read.query_sequence = "CAGATA"
+        read.set_tag("mv", array("b", [6, 1, 1, 1, 1, 1, 1]))
+        calls.write(read)
+        read.query_name = READ_ID
+        read.query_sequence = "CAGAT"
+        read.set_tag("mv", array("b", [6, *MOVES]))
+        calls.write(read)
+    result = list_reads(source, limit=1, membership_bam=member)
+    assert result["total_primary_reads"] == 2
+    assert [(r["read_id"], r["has_moves"]) for r in result["reads"]] == [(longer_id, True)]
+    # The exact endpoint does not treat the list limit as a membership boundary.
+    assert read_squiggle(source, pod5_dir, READ_ID, membership_bam=member) == read_squiggle(source, pod5_dir, READ_ID)
+    with pytest.raises(OntReadReportError, match="not in this barcode"):
+        read_squiggle(source, pod5_dir, other_id, membership_bam=member)

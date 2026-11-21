@@ -1488,14 +1488,15 @@ def quick_squiggle_availability(authorized_job: Job, artifacts: list[dict[str, A
     return {"available": reason is None, "reason": reason}
 
 
-async def _job_basecall_bam_and_pod5(job_id: str, authorized_job: Job, pinned_root: Path) -> tuple[Path, Path]:
+async def _job_basecall_bam_and_pod5(job_id: str, authorized_job: Job, pinned_root: Path, *,
+                                     expected_calls_sha256: str | None = None) -> tuple[Path, Path]:
     """Move-tagged basecall BAM and the job's own POD5 input, both job-owned."""
     pod5_dir, reason = _job_pod5_input(authorized_job)
     if pod5_dir is None:
         raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND", message=str(reason),
                                job_id=job_id, resource="artifact")
     artifacts = await run_in_threadpool(
-        service.build_ngs_package_artifacts, job_id, **_job_package_authority(authorized_job),
+        service.build_ngs_package_artifacts, authorized_job.id, **_job_package_authority(authorized_job),
         job_output_dir=pinned_root, pinned_root_descriptor=True,
     )
     calls = next((item for item in artifacts if item.get("state") == "present"
@@ -1504,10 +1505,61 @@ async def _job_basecall_bam_and_pod5(job_id: str, authorized_job: Job, pinned_ro
         raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
                                message="This run published no basecall BAM.", job_id=job_id, resource="artifact")
     path, _metadata = await run_in_threadpool(
-        service.resolve_ngs_package_artifact, job_id, calls["artifact_id"],
+        service.resolve_ngs_package_artifact, authorized_job.id, calls["artifact_id"],
         **_job_package_authority(authorized_job), job_output_dir=pinned_root, pinned_root_descriptor=True,
     )
+    if expected_calls_sha256 is not None and _metadata.get("sha256") != expected_calls_sha256:
+        raise service.AlignmentSessionError("barcode source calls digest mismatch")
     return Path(path), pod5_dir
+
+
+def _child_barcode_bam(child: Job, source: Job, pinned_root: Path) -> tuple[Path, str]:
+    """Resolve the child's server-selected unit, never a path supplied by a viewer."""
+    from services.ont_barcode_units import load_barcode_unit
+
+    params = child.params
+    binding = params.get("barcode_mapping_binding")
+    terminal = (source.provenance or {}).get("ont_dorado_terminal_products")
+    products = terminal.get("products") if isinstance(terminal, dict) else None
+    anchor = products.get("demux_manifest") if isinstance(products, dict) else None
+    if (not isinstance(binding, dict) or binding.get("binding_source") != "server_authorized_completed_dorado_demux"
+            or binding.get("unit_id") != params.get("source_barcode_unit")
+            or not isinstance(anchor, dict) or not isinstance(anchor.get("sha256"), str)
+            or anchor["sha256"] != params.get("source_barcode_manifest_sha256")):
+        raise service.AlignmentSessionError("barcode child source binding disagrees")
+    root = pinned_root.resolve(strict=True)
+    try:
+        unit = load_barcode_unit(root / "demux/demux_manifest.json", root, params["source_barcode_unit"],
+                                 expected_manifest_sha256=anchor["sha256"])
+    except (OSError, ValueError, KeyError) as exc:
+        raise service.AlignmentSessionError("barcode unit validation failed") from exc
+    if (unit["bam_sha256"] != binding.get("source_bam_sha256") or unit["bam_sha256"] != params.get("bam_source_sha256")
+            or unit["unit_manifest_sha256"] != binding.get("source_unit_manifest_sha256")
+            or unit["unit_manifest_sha256"] != params.get("source_barcode_unit_manifest_sha256")
+            or unit["source_calls_sha256"] != params.get("source_barcode_source_calls_sha256")
+            or unit["bam_path"] != params.get("bam_path")):
+        raise service.AlignmentSessionError("barcode child input identity disagrees")
+    return pinned_root / Path(unit["bam_path"]).relative_to(root), unit["source_calls_sha256"]
+
+
+@asynccontextmanager
+async def _squiggle_inputs(child: Job, db: AsyncSession):
+    params = child.params or {}
+    barcode = "source_barcode_unit" in params or "barcode_mapping_binding" in params
+    source = child
+    if barcode:
+        source_id = params.get("source_ont_job_id")
+        if not source_id or source_id != (child.provenance or {}).get("source_stage_job_id"):
+            raise service.AlignmentSessionError("barcode source job binding disagrees")
+        source = await db.get(Job, source_id)
+        if not source or source.model_id != "nanopore" or source.mode != "basecall_dna" or source.status != "completed":
+            raise service.AlignmentSessionError("barcode source basecall unavailable")
+    async with _validated_pinned_result_root(source) as root:
+        membership, digest = None, None
+        if barcode:
+            membership, digest = await run_in_threadpool(_child_barcode_bam, child, source, root)
+        calls, pod5 = await _job_basecall_bam_and_pod5(child.id, source, root, expected_calls_sha256=digest)
+        yield calls, pod5, membership, (source.params or {}).get("ont_molecule_type")
 
 
 @router.get("/jobs/{job_id}/ngs-squiggle/reads", responses=_STANDARD_GOVERNED_ERRORS)
@@ -1515,15 +1567,15 @@ async def list_ngs_squiggle_reads(
     job_id: str,
     limit: int = Query(50, ge=1, le=200),
     authorized_job: Job = Depends(require_alignment_job),
+    db: AsyncSession = Depends(get_session),
 ):
     """Reads in this run that can be drawn as squiggles, longest first."""
     from services.ont_read_report import OntReadReportError
     from services.ont_read_squiggle import list_reads
 
     try:
-        async with _validated_pinned_result_root(authorized_job) as pinned_root:
-            bam, _pod5 = await _job_basecall_bam_and_pod5(job_id, authorized_job, pinned_root)
-            return await run_in_threadpool(list_reads, bam, limit=limit)
+        async with _squiggle_inputs(authorized_job, db) as (bam, _pod5, membership, _molecule):
+            return await run_in_threadpool(list_reads, bam, limit=limit, membership_bam=membership)
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
     except OntReadReportError as exc:
@@ -1538,17 +1590,19 @@ async def get_ngs_read_squiggle(
     start_base: int = Query(0, ge=0),
     bases: int = Query(200, ge=10, le=400),
     authorized_job: Job = Depends(require_alignment_job),
+    db: AsyncSession = Depends(get_session),
 ):
     """Signal (pA) segmented per called base, with per-base modification probabilities."""
     from services.ont_read_report import OntReadReportError
-    from services.ont_read_squiggle import read_squiggle
+    from services.ont_read_squiggle import BarcodeReadNotFound, read_squiggle
 
     try:
-        async with _validated_pinned_result_root(authorized_job) as pinned_root:
-            bam, pod5_dir = await _job_basecall_bam_and_pod5(job_id, authorized_job, pinned_root)
-            molecule = (authorized_job.params or {}).get("ont_molecule_type") if isinstance(authorized_job.params, dict) else None
+        async with _squiggle_inputs(authorized_job, db) as (bam, pod5_dir, membership, molecule):
             return await run_in_threadpool(read_squiggle, bam, pod5_dir, read_id, start_base=start_base, bases=bases,
-                                           molecule_type=str(molecule) if molecule else None)
+                                           molecule_type=str(molecule) if molecule else None, membership_bam=membership)
+    except BarcodeReadNotFound as exc:
+        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND", message=str(exc),
+                               job_id=job_id, resource="read") from exc
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="read") from exc
     except OntReadReportError as exc:

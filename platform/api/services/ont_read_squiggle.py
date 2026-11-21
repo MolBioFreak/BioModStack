@@ -28,12 +28,22 @@ def _open_bam(bam_path: Path):
     return pysam.AlignmentFile(str(bam_path), "rb", check_sq=False)
 
 
-def list_reads(bam_path: Path, *, limit: int = 50) -> dict[str, Any]:
+class BarcodeReadNotFound(OntReadReportError):
+    pass
+
+
+def list_reads(bam_path: Path, *, limit: int = 50, membership_bam: Path | None = None) -> dict[str, Any]:
     limit = max(1, min(int(limit), MAX_READ_LIST))
+    members = None
+    if membership_bam is not None:
+        with _open_bam(membership_bam) as unit:
+            members = {r.query_name for r in unit if not r.is_secondary and not r.is_supplementary}
     reads = []
     with _open_bam(bam_path) as handle:
         for read in handle.fetch(until_eof=True):
             if read.is_secondary or read.is_supplementary:
+                continue
+            if members is not None and read.query_name not in members:
                 continue
             mods: dict[str, int] = {}
             try:
@@ -93,9 +103,11 @@ def _signal_pa(pod5_dir: Path, read_id: str):
 
 
 def read_squiggle(bam_path: Path, pod5_dir: Path, read_id: str, *, start_base: int = 0,
-                  bases: int = 200, molecule_type: str | None = None) -> dict[str, Any]:
+                  bases: int = 200, molecule_type: str | None = None, membership_bam: Path | None = None) -> dict[str, Any]:
     if not READ_ID.fullmatch(read_id):
         raise OntReadReportError("read id is not a POD5 read UUID")
+    if membership_bam is not None and _find_bam_read(membership_bam, read_id) is None:
+        raise BarcodeReadNotFound("read is not in this barcode unit")
     bases = max(10, min(int(bases), MAX_WINDOW_BASES))
     read = _find_bam_read(bam_path, read_id)
     if read is None:
