@@ -72,6 +72,7 @@ import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
 import { OntReadReportPanel } from './ngs/OntReadReportPanel';
 import { OntFastqQcResultPanel } from './ngs/OntFastqQcResultPanel';
+import { OntReadSquigglePanel } from './ngs/OntReadSquigglePanel';
 import { PlasmidSummaryPanel } from './ngs/PlasmidSummaryPanel';
 import { NativeResultProjectAttach } from './ngs/NativeResultProjectAttach';
 import { AlignmentPresentationStatus } from './ngs/AlignmentPresentationStatus';
@@ -2522,6 +2523,19 @@ export function NGSToolkit() {
             : typeof selectedJobParams.workflow_id === 'string'
                 ? selectedJobParams.workflow_id
                 : null;
+    const barcodeSignalJobId = selectedJob?.status === 'completed' && selectedOntWorkflowId === 'wf_clone_validation'
+        && selectedJobParams.source_ont_job_id && selectedJobParams.source_barcode_unit
+        && !(signalDatasetId && rawSignalRunId && rawSignalObservedGeneration) ? selectedJob.id : null;
+    const [barcodeSignal, setBarcodeSignal] = useState<{ jobId: string; readId: string; opening: number } | null>(null);
+    const [clickedBarcodeRead, setClickedBarcodeRead] = useState('');
+    const barcodeSignalRef = useRef<HTMLDivElement>(null);
+    useEffect(() => { setBarcodeSignal(null); }, [barcodeSignalJobId]);
+    useEffect(() => { if (barcodeSignal) barcodeSignalRef.current?.focus(); }, [barcodeSignal]);
+    const openBarcodeSignal = (readId = '') => {
+        if (!barcodeSignalJobId) return;
+        if (igvModalOpen) void closeIgvModal();
+        setBarcodeSignal(previous => ({ jobId: barcodeSignalJobId, readId, opening: (previous?.opening ?? 0) + 1 }));
+    };
     // QC off runs alignment and multimer analysis only and publishes no QC result package.
     const fastqQcStageSelected = selectedJobParams.run_fastq_qc != null
         ? selectedJobParams.run_fastq_qc !== false
@@ -3993,6 +4007,10 @@ export function NGSToolkit() {
                     const trackClickHandler = (_track: unknown, popoverData: unknown) => {
                         if (!isCurrentLoad() || cancelled || igvBrowserRef.current !== igvBrowser) return;
                         const readId = resolveIgvClickedReadId(popoverData);
+                        if (barcodeSignalJobId) {
+                            setClickedBarcodeRead(readId || '');
+                            return;
+                        }
                         if (!readId || !selectedJob || !selectedAlignmentSession?.ready) return;
                         const requestToken = igvReadClickGuardRef.current.begin();
                         const locus = igvCurrentLocusRef.current;
@@ -4083,6 +4101,7 @@ export function NGSToolkit() {
             igvReadClickGuardRef.current.reset();
             if (isCurrentLoad()) igvLoadTokenRef.current += 1;
             removeLocusListener?.();
+            setClickedBarcodeRead('');
             removeTrackClickListener?.();
             try {
                 if (igvBrowser) removeIgvBrowser(igvLibraryRef.current, igvBrowser);
@@ -4105,6 +4124,7 @@ export function NGSToolkit() {
         searchOwnedIgvNavigation,
         selectedAlignmentSession?.session_id,
         nativeIgv,
+        barcodeSignalJobId,
     ]);
 
     useEffect(() => {
@@ -4732,8 +4752,15 @@ export function NGSToolkit() {
                                     <PlasmidSummaryPanel
                                         jobId={selectedJob.id}
                                         onOpenIgv={igvMissingReason ? undefined : () => void openIgvModal()}
-                                        onOpenSignal={signalDatasetId && rawSignalRunId && rawSignalObservedGeneration ? () => openSignalWorkbench() : undefined}
+                                        onOpenSignal={barcodeSignalJobId ? () => openBarcodeSignal() : signalDatasetId && rawSignalRunId && rawSignalObservedGeneration ? () => openSignalWorkbench() : undefined}
                                     />
+                                )}
+                                {barcodeSignal && barcodeSignal.jobId === barcodeSignalJobId && (
+                                    <div ref={barcodeSignalRef} tabIndex={-1}>
+                                        <button type="button" onClick={() => setBarcodeSignal(null)}>Close squiggles</button>
+                                        <OntReadSquigglePanel key={`${barcodeSignal.jobId}:${barcodeSignal.opening}`}
+                                            jobId={barcodeSignal.jobId} requestedReadId={barcodeSignal.readId} />
+                                    </div>
                                 )}
                                 {showOntReadReport && (
                                     <div className="space-y-2">
@@ -5690,13 +5717,14 @@ export function NGSToolkit() {
                             <button
                                 type="button"
                                 onClick={() => {
-                                    if (signalWorkbenchRequested) updateQueryParams({ view: null }, { replace: true });
+                                    if (barcodeSignalJobId) openBarcodeSignal(clickedBarcodeRead);
+                                    else if (signalWorkbenchRequested) updateQueryParams({ view: null }, { replace: true });
                                     else openSignalWorkbench();
                                 }}
-                                disabled={!signalDatasetId || !rawSignalRunId || !rawSignalObservedGeneration}
+                                disabled={!barcodeSignalJobId && (!signalDatasetId || !rawSignalRunId || !rawSignalObservedGeneration)}
                                 className="px-2 py-0.5 text-[11px] rounded border border-[var(--accent-secondary)]/50 text-[var(--text-action)] hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
                             >
-                                {signalWorkbenchRequested ? 'Hide signal' : 'Signal'}
+                                {barcodeSignalJobId ? `Open squiggles${clickedBarcodeRead ? ` for ${clickedBarcodeRead}` : ''}` : signalWorkbenchRequested ? 'Hide signal' : 'Signal'}
                             </button>
                             <button
                                 type="button"
@@ -5815,7 +5843,8 @@ export function NGSToolkit() {
                                                 );
                                             }
                                         }}
-                                        onOpenRawSignal={(read) => void openSignalWorkbenchForRead(read)}
+                                        onOpenRawSignal={barcodeSignalJobId ? read => openBarcodeSignal(read.read_id)
+                                            : rawSignalRunId && rawSignalObservedGeneration && rawSignalRepresentationId ? read => void openSignalWorkbenchForRead(read) : undefined}
                                     />
                                 )}
                             </div>

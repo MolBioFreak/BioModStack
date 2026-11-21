@@ -23,6 +23,8 @@ const alignmentMocks = vi.hoisted(() => ({
     rotateAlignmentAccess: vi.fn(),
 }));
 const igvMocks = vi.hoisted(() => ({ createBrowser: vi.fn(), removeBrowser: vi.fn() }));
+vi.mock('react-plotly.js', () => ({ default: () => null }));
+vi.mock('../../src/components/MolBioToolkit/SequenceViewer', () => ({ SequenceViewer: () => null }));
 vi.mock('igv', () => ({ default: { ...igvMocks, version: () => '3.7.3' } }));
 
 const contextMocks = vi.hoisted(() => ({
@@ -244,6 +246,51 @@ describe('NGS authoritative stage presentation', () => {
         expect(asked).toBe(expected);
         // No construct-QC manifest here, so the run is added to a Project from its published files.
         expect(container.querySelector('[data-testid="native-result-add-to-project"]')).not.toBeNull();
+    });
+    it.each(['report', 'IGV'] as const)('opens barcode-child signal from %s without guessing a read', async path => {
+        Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+        const job = { id: 'child', name: 'Barcode assembly', model_id: 'nanopore', mode: 'clone_validation',
+            status: 'completed', params: { ont_workflow_id: 'wf_clone_validation', source_barcode_unit: 'barcode83', source_ont_job_id: 'parent' } };
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [job], total: 1 } });
+        ngsApiMocks.fetchFullJob.mockResolvedValue(job);
+        ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { stages: [] } });
+        const on = vi.fn();
+        igvMocks.createBrowser.mockResolvedValue({ on, off: vi.fn(), trackViews: [] });
+        vi.stubGlobal('fetch', vi.fn(async () => new Response('>plasmid\nACGT\n')));
+        const base = '/api/jobs/child/ngs-squiggle/reads';
+        const readId = path === 'report' ? 'listed-read' : 'outside-first-page';
+        vi.mocked(api.get).mockImplementation(async (url: string) => {
+            if (url === '/api/jobs/child/ngs-artifacts') return { data: { artifacts: [], igv: [{ name: 'native',
+                reference: { fastaURL: '/ref.fa', indexURL: '/ref.fai' }, tracks: [{ type: 'alignment', url: '/align.bam', indexURL: '/align.bai' }] }] } } as never;
+            if (url === '/api/jobs/child/ngs-plasmid-summary') return { data: { schema: 'bms.ngs.plasmid-summary-response.v1',
+                summary: { consensus: { sequence: 'A', length_bp: 1 }, reads: {}, alignment: {}, coverage: { points: [] },
+                    read_length_histogram: { bins: [] }, features: [] }, files: [], download_all: { left_out: [] } } } as never;
+            if (url === base) return { data: { reads: [{ read_id: 'listed-read', length: 4, has_moves: true, modified_calls: {} }] } } as never;
+            if (url === `${base}/${readId}`) return { data: { read_id: readId, read_length: 1, start_base: 0, end_base: 1, signal_pa: [42],
+                bases: [{ index: 0, base: 'G', sample_start: 0, sample_end: 1, modifications: {} }] } } as never;
+            throw new Error(`Unavailable fixture: ${url}`);
+        });
+        await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/ngs?section=analyses&job_id=child']}><NGSToolkit /></MemoryRouter></QueryClientProvider>));
+        const button = (name: string) => [...container.querySelectorAll('button')].find(b => b.textContent === name);
+        const select = () => container.querySelector<HTMLSelectElement>('[aria-label="Squiggle read"]');
+        const requests = () => vi.mocked(api.get).mock.calls.map(call => call[0]).filter(url => url.includes('ngs-squiggle'));
+        const label = path === 'report' ? 'Open squiggles' : 'View in IGV';
+        await waitUntil(() => expect(button(label)?.disabled).toBe(false));
+        await act(async () => button(label)!.click());
+        if (path === 'IGV') {
+            await waitUntil(() => expect(on.mock.calls.some(([event]) => event === 'trackclick')).toBe(true));
+            const trackClick = on.mock.calls.find(([event]) => event === 'trackclick')![1];
+            await act(async () => trackClick({ type: 'alignment' }, [{ name: 'Read Name', value: readId }]));
+            await act(async () => button(`Open squiggles for ${readId}`)!.click());
+            expect(requests()).toEqual([`${base}/${readId}`]);
+        } else {
+            await waitUntil(() => expect(select()?.value).toBe(''));
+            expect(requests()).toEqual([base]);
+            await act(async () => { select()!.value = readId; select()!.dispatchEvent(new Event('change', { bubbles: true })); });
+        }
+        await waitUntil(() => expect(container.querySelector('[aria-label="Called bases"]')?.textContent).toBe('G'));
+        expect(select()?.value).toBe(readId);
+        expect(requests().at(-1)).toBe(`${base}/${readId}`);
     });
     it('opens native clone downloads and recovers the catalog in the actual toolkit cache', async () => {
         Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
