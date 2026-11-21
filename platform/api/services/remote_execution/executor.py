@@ -574,7 +574,6 @@ def _resource_monitor_contract(job, bundle, invocation, admission):
         return None
     from services.resource_usage_evidence import (
         build_resource_admission_handoff, build_dispatch_materialization_authority,
-        materialize_scheduler_dispatch_authority,
     )
     resources = json.loads(bundle.envelope.environment['BMS_TARGET_RESOURCES'])
     assignment = (job.provenance or {}).get('remote_execution_assignment') or {}
@@ -600,10 +599,9 @@ def _resource_monitor_contract(job, bundle, invocation, admission):
         lease_token=assignment['lease_id'], source_revision=bundle.envelope.source_revision,
         source_tree=bundle.envelope.source_tree,
     )
-    dispatch = build_dispatch_materialization_authority(payload_sha256=payload_sha256, handoff=handoff)
-    if device:
-        dispatch = materialize_scheduler_dispatch_authority(dispatch, handoff=handoff,
-            gpu_index=device['gpu_index'], gpu_uuid=device['gpu_uuid'])
+    dispatch = build_dispatch_materialization_authority(
+        payload_sha256=payload_sha256, handoff=handoff, assign_admitted_gpu=bool(devices),
+    )
     # First execution of this newly issued immutable attempt. Owner observations
     # are supplied later by the authenticated supervisor, never by this builder.
     return {'params': {'_global_resource_admission': handoff, '_global_dispatch_authority': dispatch},

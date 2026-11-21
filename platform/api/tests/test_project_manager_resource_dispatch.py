@@ -1135,3 +1135,75 @@ def test_typed_sequence_field_drives_job_sequence_length() -> None:
 
 def test_explicit_sequence_length_remains_authoritative() -> None:
     assert job_submission._resolve_job_sequence_length(99, {"sequence": "ACDE"}) == 99  # noqa: SLF001
+
+
+def _authority_counts(profiler):
+    names = ('validate_resource_admission_handoff', 'validate_dispatch_materialization_authority', '_sha256')
+    return tuple(sum(entry.callcount for entry in profiler.getstats()
+                     if getattr(entry.code, 'co_filename', None) == resource_evidence.__file__
+                     and entry.code.co_name == name) for name in names)
+
+
+@pytest.mark.asyncio
+async def test_scheduler_authority_work_before_claim_sql():
+    import cProfile
+    handoff = _handoff()
+    params = {resource_evidence.GLOBAL_RESOURCE_ADMISSION_PARAM: handoff,
+              resource_evidence.GLOBAL_DISPATCH_AUTHORITY_PARAM: _prepared_dispatch(handoff)}
+    class FirstSQL(Exception):
+        pass
+    async def execute(_statement):
+        raise FirstSQL
+    profiler = cProfile.Profile()
+    with pytest.raises(FirstSQL), profiler:
+        await gpu_orchestrator._claim_job_for_gpu(SimpleNamespace(execute=execute),
+            SimpleNamespace(id='job-1', params=params), 2, 4096, gpu_uuid='GPU-2')
+    assert _authority_counts(profiler) == (1, 1, 3)
+
+
+@pytest.mark.parametrize('gpu', [False, True])
+def test_remote_monitor_authority_work(gpu):
+    import cProfile
+    from services.remote_execution.executor import _resource_monitor_contract
+    job = SimpleNamespace(id='job-1', model_id='nanopore', execution_target_id='target',
+                          provenance={'remote_execution_assignment': {'lease_id': 'lease'}})
+    envelope = SimpleNamespace(source_revision='a'*40, source_tree='b'*40, environment={
+        'BMS_TARGET_RESOURCES': '{"schema":"resources","required":{"cpus":1,"memory_bytes":4096}}'})
+    bundle = SimpleNamespace(attempt_id='attempt', envelope=envelope)
+    invocation = SimpleNamespace(requested_json='{}', native_parameters={}, command=[],
+                                 execution_plan=SimpleNamespace(plan_sha256='c'*64))
+    device = {'gpu_index': 2, 'gpu_uuid': 'GPU-2'}
+    with cProfile.Profile() as profiler:
+        monitor = _resource_monitor_contract(job, bundle, invocation, {'devices': [device] if gpu else []})
+    params = monitor['params']
+    authority = resource_evidence.validate_dispatch_materialization_authority(
+        params[resource_evidence.GLOBAL_DISPATCH_AUTHORITY_PARAM],
+        expected_handoff=params[resource_evidence.GLOBAL_RESOURCE_ADMISSION_PARAM])
+    assert authority['schema'] == (resource_evidence.GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA if gpu
+                                   else resource_evidence.GLOBAL_DISPATCH_AUTHORITY_SCHEMA)
+    assert _authority_counts(profiler) == (2, 1, 6)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bad', ['missing_handoff', 'missing_dispatch', 'handoff_digest',
+                                 'dispatch_digest', 'binding', 'constraint', 'uuid', 'assigned'])
+async def test_invalid_scheduler_authority_never_reaches_claim_sql(bad):
+    handoff = _handoff(gpu_index=1, gpu_uuid='GPU-1') if bad == 'constraint' else _handoff()
+    dispatch = _prepared_dispatch(_handoff(gpu_index=0, gpu_uuid='GPU-0') if bad == 'binding' else handoff)
+    if bad == 'assigned':
+        dispatch = resource_evidence.materialize_scheduler_dispatch_authority(
+            dispatch, handoff=handoff, gpu_index=0, gpu_uuid='GPU-0')
+    if bad == 'handoff_digest':
+        handoff['handoff_sha256'] = '0' * 64
+    if bad == 'dispatch_digest':
+        dispatch['authority_sha256'] = '0' * 64
+    params = {resource_evidence.GLOBAL_RESOURCE_ADMISSION_PARAM: handoff,
+              resource_evidence.GLOBAL_DISPATCH_AUTHORITY_PARAM: dispatch}
+    if bad == 'missing_handoff':
+        del params[resource_evidence.GLOBAL_RESOURCE_ADMISSION_PARAM]
+    if bad == 'missing_dispatch':
+        del params[resource_evidence.GLOBAL_DISPATCH_AUTHORITY_PARAM]
+    async def execute(_statement):
+        pytest.fail('rejected authority reached claim SQL')
+    assert await gpu_orchestrator._claim_job_for_gpu(SimpleNamespace(execute=execute),
+        SimpleNamespace(id='job-1', params=params), 2, 4096, gpu_uuid=None if bad == 'uuid' else 'GPU-2') is None

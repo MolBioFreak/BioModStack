@@ -59,11 +59,8 @@ from services.resource_usage_evidence import (
     GLOBAL_DISPATCH_AUTHORITY_PARAM,
     GLOBAL_RESOURCE_ADMISSION_PARAM,
     ResourceUsageEvidenceError,
-    attach_dispatch_materialization_authority,
     attach_pre_spawn_nonexecution_receipt,
     materialize_scheduler_dispatch_authority,
-    validate_dispatch_materialization_authority,
-    validate_resource_admission_handoff,
 )
 from services.stage_review import (
     has_stage_gate,
@@ -1244,7 +1241,17 @@ def _pending_job_reservation_mb(job: "JobInfo", observed_live_by_model: Dict[str
     return max(1, min(peak_estimate, startup_reserve))
 
 
-def _running_job_reservation_mb(job: Any, live_vram_mb: Optional[int]) -> int:
+def _running_job_gpu_floor_mb(job: Any) -> int:
+    from native_components import job_gpu_capacity_requirements
+    try:
+        declared = job_gpu_capacity_requirements(getattr(job, "model_id", None), _normalize_job_params(getattr(job, "params", None)))
+    except (ValueError, OSError):
+        # An unavailable authority cannot release an already-running reservation.
+        return max(1, int(getattr(job, "vram_estimate_mb", 0) or 1))
+    return declared.get("gpu_memory_mb", 0)
+
+
+def _running_job_reservation_mb(job: Any, live_vram_mb: Optional[int], *, gpu_floor_mb: int | None = None) -> int:
     """
     Return the scheduler reservation to account for an already-running job.
 
@@ -1253,14 +1260,10 @@ def _running_job_reservation_mb(job: Any, live_vram_mb: Optional[int]) -> int:
     """
     peak_estimate = max(1, int(getattr(job, "vram_estimate_mb", 0) or 1))
     profile = _scheduler_profile(_effective_job_model_type(job))
-    from native_components import job_gpu_capacity_requirements
-    try:
-        declared = job_gpu_capacity_requirements(getattr(job, "model_id", None), _normalize_job_params(getattr(job, "params", None)))
-    except (ValueError, OSError):
-        # An unavailable authority cannot release an already-running reservation.
-        return peak_estimate
-    if declared.get("gpu_memory_mb"):
-        return max(peak_estimate, declared["gpu_memory_mb"])
+    if gpu_floor_mb is None:
+        gpu_floor_mb = _running_job_gpu_floor_mb(job)
+    if gpu_floor_mb:
+        return max(peak_estimate, gpu_floor_mb)
     startup_reserve = _profile_startup_reserve(profile, peak_estimate)
     live_surge = int(profile.get("live_surge_mb", 0))
     startup_grace = int(profile.get("startup_grace_seconds", 30))
@@ -1469,32 +1472,22 @@ async def _claim_job_for_gpu(
     original = _normalize_job_params(getattr(job, "params", None))
     try:
         scheduler_params = attach_scheduler_gpu_assignment(original, int(gpu_id))
-        handoff = validate_resource_admission_handoff(
-            original.get(GLOBAL_RESOURCE_ADMISSION_PARAM)
-        )
+        handoff = original.get(GLOBAL_RESOURCE_ADMISSION_PARAM)
         raw_dispatch = original.get(GLOBAL_DISPATCH_AUTHORITY_PARAM)
         if (handoff is None) != (raw_dispatch is None):
             raise ResourceUsageEvidenceError(
                 "resource admission and dispatch authority must be paired"
             )
         if handoff is not None:
-            prepared = validate_dispatch_materialization_authority(
-                raw_dispatch,
-                expected_handoff=handoff,
-            )
             if not isinstance(gpu_uuid, str) or not gpu_uuid:
                 raise ResourceUsageEvidenceError(
                     "live scheduler GPU UUID is unavailable"
                 )
-            assigned_dispatch = materialize_scheduler_dispatch_authority(
-                prepared,
+            scheduler_params[GLOBAL_DISPATCH_AUTHORITY_PARAM] = materialize_scheduler_dispatch_authority(
+                raw_dispatch,
                 handoff=handoff,
                 gpu_index=int(gpu_id),
                 gpu_uuid=gpu_uuid,
-            )
-            scheduler_params = attach_dispatch_materialization_authority(
-                scheduler_params,
-                assigned_dispatch,
             )
     except (ExecutionOwnershipError, ResourceUsageEvidenceError) as exc:
         logger.warning("[CLAIM SKIPPED] %s: %s", getattr(job, "id", ""), exc)
@@ -1546,9 +1539,9 @@ async def _claim_job_for_gpu(
     return scheduler_params
 
 
-def _reservation_shortfall_mb(job: Any, live_vram_mb: Optional[int]) -> int:
+def _reservation_shortfall_mb(job: Any, live_vram_mb: Optional[int], *, gpu_floor_mb: int | None = None) -> int:
     """Measured device use already includes only *attributed* live bytes."""
-    reservation = _running_job_reservation_mb(job, live_vram_mb)
+    reservation = _running_job_reservation_mb(job, live_vram_mb, gpu_floor_mb=gpu_floor_mb)
     return max(0, reservation - (live_vram_mb or 0))
 
 
@@ -1628,13 +1621,14 @@ async def _reserve_remote_capacity(
                 indices = _normalize_pinned_gpus((owner.params or {}).get("pinned_gpus")
                     or (owner.params or {}).get("bcp_gpu_ids")) or (
                     [owner.assigned_gpu] if owner.assigned_gpu is not None else [])
-            if owner.vram_estimate_mb == 0:
+            if owner.vram_estimate_mb == 0 or not indices:
                 continue
+            gpu_floor_mb = _running_job_gpu_floor_mb(owner)
             for index in set(indices):
                 counts[index] = counts.get(index, 0) + 1
                 live = _remote_attributed_vram_mb(owner, target, telemetry, index)
                 floor = int((assignment.get("admission_snapshot") or {}).get("required_per_gpu_mb") or 0)
-                reserve = max(_reservation_shortfall_mb(owner, live), max(0, floor - (live or 0)))
+                reserve = max(_reservation_shortfall_mb(owner, live, gpu_floor_mb=gpu_floor_mb), max(0, floor - (live or 0)))
                 shortfall[index] = shortfall.get(index, 0) + reserve
         requirements = job_gpu_capacity_requirements(job.model_id, _normalize_job_params(job.params))
         info = JobInfo(id=str(job.id), name=job.name or str(job.id),

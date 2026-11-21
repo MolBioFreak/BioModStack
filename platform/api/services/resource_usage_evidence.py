@@ -182,6 +182,7 @@ def build_dispatch_materialization_authority(
     *,
     payload_sha256: str,
     handoff: Mapping[str, Any],
+    assign_admitted_gpu: bool = False,
 ) -> dict[str, Any]:
     """Bind canonical Job params to the exact sealed dispatch envelope."""
 
@@ -195,8 +196,13 @@ def build_dispatch_materialization_authority(
         "canonical_job_id": validated_handoff["canonical_job_id"],
         "admission_handoff_sha256": validated_handoff["handoff_sha256"],
     }
+    if assign_admitted_gpu:
+        if validated_handoff["gpu_index"] is None:
+            raise ResourceUsageEvidenceError("scheduler dispatch requires an admitted GPU")
+        authority.update(schema=GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA,
+                         gpu_index=validated_handoff["gpu_index"], gpu_uuid=validated_handoff["gpu_uuid"])
     authority["authority_sha256"] = _sha256(_canonical_json(authority))
-    return validate_dispatch_materialization_authority(authority, expected_handoff=validated_handoff)
+    return validate_dispatch_materialization_authority(authority)
 
 
 def validate_dispatch_materialization_authority(
@@ -247,14 +253,14 @@ def validate_dispatch_materialization_authority(
             or authority["admission_handoff_sha256"] != handoff["handoff_sha256"]
         ):
             raise ResourceUsageEvidenceError("global dispatch materialization authority diverges from admission")
-        if schema == GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA and handoff["gpu_index"] is not None and (
-            authority["gpu_index"] != handoff["gpu_index"]
-            or authority["gpu_uuid"] != handoff["gpu_uuid"]
-        ):
-            raise ResourceUsageEvidenceError(
-                "scheduler GPU assignment differs from admitted GPU constraint"
-            )
+        if schema == GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA:
+            _check_admitted_gpu(handoff, authority["gpu_index"], authority["gpu_uuid"])
     return authority
+
+
+def _check_admitted_gpu(handoff, gpu_index, gpu_uuid):
+    if handoff["gpu_index"] is not None and (gpu_index, gpu_uuid) != (handoff["gpu_index"], handoff["gpu_uuid"]):
+        raise ResourceUsageEvidenceError("scheduler GPU assignment differs from admitted GPU constraint")
 
 
 def materialize_scheduler_dispatch_authority(
@@ -266,6 +272,9 @@ def materialize_scheduler_dispatch_authority(
 ) -> dict[str, Any]:
     """Upgrade prepared dispatch authority with scheduler-owned physical GPU identity."""
 
+    if not isinstance(handoff, Mapping):
+        raise ResourceUsageEvidenceError("global resource admission handoff must be an object")
+    handoff = dict(handoff)
     prepared = validate_dispatch_materialization_authority(
         authority,
         expected_handoff=handoff,
@@ -278,6 +287,7 @@ def materialize_scheduler_dispatch_authority(
         if prepared["gpu_index"] != gpu_index or prepared["gpu_uuid"] != gpu_uuid:
             raise ResourceUsageEvidenceError("scheduler dispatch GPU authority conflicts")
         return prepared
+    _check_admitted_gpu(handoff, gpu_index, gpu_uuid)
     assigned = {
         key: value
         for key, value in prepared.items()
@@ -289,10 +299,7 @@ def materialize_scheduler_dispatch_authority(
         gpu_uuid=gpu_uuid,
     )
     assigned["authority_sha256"] = _sha256(_canonical_json(assigned))
-    return validate_dispatch_materialization_authority(
-        assigned,
-        expected_handoff=handoff,
-    )
+    return assigned
 
 
 def dispatch_gpu_authority(
