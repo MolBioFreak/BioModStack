@@ -859,30 +859,49 @@ class MSAClient:
         This returns cancel_requested, NOT confirmed cancellation. Lost responses
         remain cancel_ambiguous and are never blindly retried. ColabFold callers
         may stop local polling but must keep/reconcile its active ticket.
+        Independent chains return one result per input in `chains`, in order.
         """
-        identity, digest = self._identity(sequences, provider, settings)
+        multichain = provider == "neurosnap_api" and isinstance(sequences, list) and len(sequences) > 1
+        if multichain and len(sequences) > 10:
+            raise MSAAPIError("sequences must contain 1-10 protein chains")
+        groups = [[seq] for seq in sequences] if multichain else [sequences]
+        requests = [self._identity(group, provider, settings) for group in groups]
         if provider != "neurosnap_api":
             raise MSAAPIError("ColabFold remote cancellation is not documented; retain ticket")
         with self._authority(provider):
-            entry = _directory(Path(cache_root) / provider / digest)
-            state = _load(entry / "state.json")
-            if state.get("identity") != identity:
-                raise ReconciliationRequired("cancel request identity mismatch")
-            ticket = state.get("tickets", {}).get("unpaired", {})
-            remote_id = ticket.get("remote_id")
-            if not isinstance(remote_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", remote_id):
-                raise ReconciliationRequired("no durable remote ID to cancel")
-            if ticket.get("phase") in ("complete", "terminal"):
-                return {"status": ticket["phase"], "remote_id": remote_id}
-            if ticket.get("cancel_state"):
-                return {"status": ticket["cancel_state"], "remote_id": remote_id}
-            headers = {"X-API-KEY": _credential(credential_file)}
-            ticket["cancel_state"] = "cancel_ambiguous"
-            _atomic(entry / "state.json", _json(state))
-            self._http(provider, "/job/cancel/" + remote_id, headers, method="POST")
-            ticket["cancel_state"] = "cancel_requested"
-            _atomic(entry / "state.json", _json(state))
-            return {"status": "cancel_requested", "remote_id": remote_id}
+            results = {}
+            for identity, digest in requests:
+                if digest in results:
+                    continue
+                try:
+                    entry = _directory(Path(cache_root) / provider / digest, create=not multichain)
+                except MSACacheMiss:
+                    results[digest] = {"status": "not_submitted"}
+                    continue
+                results[digest] = self._cancel_ticket(entry, identity, credential_file)
+            if multichain:
+                return {"chains": [results[digest] for _, digest in requests]}
+            return results[digest]
+
+    def _cancel_ticket(self, entry, identity, credential_file):
+        state = _load(entry / "state.json")
+        if state.get("identity") != identity:
+            raise ReconciliationRequired("cancel request identity mismatch")
+        ticket = state.get("tickets", {}).get("unpaired", {})
+        remote_id = ticket.get("remote_id")
+        if not isinstance(remote_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", remote_id):
+            raise ReconciliationRequired("no durable remote ID to cancel")
+        if ticket.get("phase") in ("complete", "terminal"):
+            return {"status": ticket["phase"], "remote_id": remote_id}
+        if ticket.get("cancel_state"):
+            return {"status": ticket["cancel_state"], "remote_id": remote_id}
+        headers = {"X-API-KEY": _credential(credential_file)}
+        ticket["cancel_state"] = "cancel_ambiguous"
+        _atomic(entry / "state.json", _json(state))
+        self._http(identity["provider"], "/job/cancel/" + remote_id, headers, method="POST")
+        ticket["cancel_state"] = "cancel_requested"
+        _atomic(entry / "state.json", _json(state))
+        return {"status": "cancel_requested", "remote_id": remote_id}
 
 
 def prepare_msa(*, sequences: list[str], provider: str, settings: dict,
