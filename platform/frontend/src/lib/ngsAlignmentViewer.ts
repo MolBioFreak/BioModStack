@@ -169,6 +169,32 @@ export function styleIgvShadow(mount: HTMLElement): void {
     root.appendChild(style);
 }
 
+/** IGV centres each ruler label on its tick and draws it even when half falls outside the track.
+ *  Skip labels that do not fit, as desktop IGV does. */
+export function hideClippedIgvRulerLabels(browser: { findTracks?: (filter: (track: { type?: unknown }) => boolean) => unknown[] }): boolean {
+    let found: unknown[] | undefined;
+    try { found = browser.findTracks?.((track) => track?.type === 'ruler'); } catch { return false; }
+    const ruler = (Array.isArray(found) ? found[0] : undefined) as
+        | { doDraw?: (args: { context: CanvasRenderingContext2D; pixelWidth: number }) => void; __bmsClipped?: boolean }
+        | undefined;
+    if (!ruler || typeof ruler.doDraw !== 'function') return false;
+    if (ruler.__bmsClipped) return true;
+    const draw = ruler.doDraw.bind(ruler);
+    ruler.doDraw = (args) => {
+        const context = args.context;
+        const fillText = context.fillText;
+        context.fillText = function clippedFillText(text: string, x: number, y: number, maxWidth?: number) {
+            const half = context.measureText(text).width / 2;
+            if (x - half < 0 || x + half > args.pixelWidth) return;
+            if (maxWidth === undefined) fillText.call(context, text, x, y);
+            else fillText.call(context, text, x, y, maxWidth);
+        };
+        try { draw(args); } finally { context.fillText = fillText; }
+    };
+    ruler.__bmsClipped = true;
+    return true;
+}
+
 export function removeIgvGenerationMount(container: HTMLElement, mount: HTMLElement): void {
     if (mount.parentElement === container) container.removeChild(mount);
 }
@@ -334,14 +360,7 @@ export function buildFullSourceCoverageTrackConfig(presentation: AlignmentPresen
 }
 
 export function buildLocalIgvConfig(input: LocalIgvConfigInput): Record<string, unknown> {
-    const sequenceTrack = {
-        id: 'ngs-reference-bases',
-        name: 'Reference bases',
-        type: 'sequence',
-        fastaURL: input.fastaUrl,
-        ...(input.faiUrl ? { indexURL: input.faiUrl } : {}),
-        order: -1000,
-    };
+    // IGV adds its own reference-bases row from `reference`; adding another drew the bases twice.
     return {
         loadDefaultGenomes: false,
         genomeList: [],
@@ -356,10 +375,7 @@ export function buildLocalIgvConfig(input: LocalIgvConfigInput): Record<string, 
                 : { indexed: false }),
         },
         ...(input.initialLocus ? { locus: input.initialLocus } : {}),
-        tracks: [
-            sequenceTrack,
-            ...input.auxiliaryTracks,
-        ],
+        tracks: [...input.auxiliaryTracks],
     };
 }
 

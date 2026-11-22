@@ -17,6 +17,7 @@ import {
     createGenerationBoundResourceWithTimeout,
     createIgvGenerationMount,
     styleIgvShadow,
+    hideClippedIgvRulerLabels,
     ownsIgvLoadTerminalState,
     parseLocalIgvRange,
     loadMissingTracksById,
@@ -3993,6 +3994,7 @@ export function NGSToolkit() {
                 });
                 if (!igvBrowser) return;
                 styleIgvShadow(igvMount);
+                if (hideClippedIgvRulerLabels(igvBrowser)) igvBrowser.repaintViews?.();
                 igvLibraryRef.current = igvAny;
                 ensureIgvThemeStyles(igvMount);
                 patchIgvRulerContrast(igvBrowser);

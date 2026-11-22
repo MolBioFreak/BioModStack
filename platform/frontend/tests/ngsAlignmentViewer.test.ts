@@ -8,6 +8,7 @@ import {
     buildAlignmentTrackConfig,
     buildFullSourceCoverageTrackConfig,
     buildLocalIgvConfig,
+    hideClippedIgvRulerLabels,
     resolveAlignmentViewerArtifacts,
     resolveBrowserAlignmentTrackSource,
     replaceAlignmentTrackTransactionally,
@@ -219,10 +220,9 @@ test('IGV config has authoritative sequence, honest reads, and full-source cover
         referenceId: 'plasmid', referenceName: 'plasmid', fastaUrl: '/reference.fasta', faiUrl: '/reference.fasta.fai',
         initialLocus: 'plasmid:1-100', auxiliaryTracks: [],
     });
-    assert.deepEqual((config.tracks as any[])[0], {
-        id: 'ngs-reference-bases', name: 'Reference bases', type: 'sequence',
-        fastaURL: '/reference.fasta', indexURL: '/reference.fasta.fai', order: -1000,
-    });
+    // IGV draws the reference bases from `reference`; a second sequence track drew them twice.
+    assert.deepEqual(config.tracks, []);
+    assert.equal((config.reference as any).fastaURL, '/reference.fasta');
     const previewTrack = buildAlignmentTrackConfig(preview, 420);
     assert.equal(previewTrack.name, 'Read preview');
     assert.equal(previewTrack.showCoverage, false, 'preview depth must not appear as full-source coverage');
@@ -633,4 +633,29 @@ test('replacement acknowledges only the recovered source dialog and retains swal
     await replaceAlignmentTrackTransactionally(browser, newTrack.config, () => true);
     assert.equal(acknowledgements, 2);
     assert.equal(dialog.container.style.display, 'flex');
+});
+
+test('ruler labels that would run past either edge are skipped', () => {
+    const drawn: string[] = [];
+    const context = {
+        measureText: (text: string) => ({ width: text.length * 6 }),
+        fillText(text: string) { drawn.push(text); },
+    } as unknown as CanvasRenderingContext2D;
+    const original = context.fillText;
+    const ruler: any = {
+        type: 'ruler',
+        doDraw({ context: ctx }: { context: CanvasRenderingContext2D }) {
+            ctx.fillText('100 bp', 30, 10);
+            ctx.fillText('190 bp', 250, 10);
+            ctx.fillText('280 bp', 495, 10);
+            ctx.fillText('70 bp', 4, 10);
+        },
+    };
+    const browser = { findTracks: (filter: (track: any) => boolean) => [ruler, { type: 'sequence' }].filter(filter) };
+    assert.equal(hideClippedIgvRulerLabels(browser), true);
+    assert.equal(hideClippedIgvRulerLabels(browser), true, 'wrapping twice is a no-op');
+    ruler.doDraw({ context, pixelWidth: 500 });
+    assert.deepEqual(drawn, ['100 bp', '190 bp']);
+    assert.equal(context.fillText, original, 'the canvas is restored after drawing');
+    assert.equal(hideClippedIgvRulerLabels({ findTracks: () => [] }), false);
 });
