@@ -128,6 +128,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const [local, setLocal] = useState<{ scope: string; key: string; document?: NativeGenerationDocument } | undefined>(() => {
         const saved = readRoundStorage<{ scope: string; key: string; document?: NativeGenerationDocument } | undefined>(jobId, `inspection:${adapter?.key ?? 'native'}`, undefined);
         const requested = new URLSearchParams(window.location.search).get('native_candidate');
+        if (artifactId != null || targetState != null) return undefined; // An exact return route supersedes saved inspection.
         return requested && saved?.key !== requested ? undefined : saved;
     });
     useEffect(() => { if (local) writeRoundStorage(jobId, `inspection:${adapter?.key ?? 'native'}`, local); }, [local, jobId, adapter?.key]);
@@ -273,13 +274,23 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const explicit = localSelection?.document != null || (!localSelection && (artifactId != null || targetState != null));
     const requestedArtifact = localSelection?.document?.artifact_id ?? artifactId;
     const requestedState = localSelection?.document ? localSelection.document.target_state : targetState;
-    const document = explicit
-        ? documents.find(doc => (requestedArtifact == null || doc.artifact_id === requestedArtifact) && (requestedState == null || doc.target_state === requestedState))
-        : documents.find(doc => doc.primary) ?? (row ? adapter?.preferredDocument?.(row) : undefined) ?? (row?.design_id || documents.length === 1 ? documents[0] : undefined);
-    // One MODEL authority for every continuation of the inspected molecule.
-    const requestedModel = new URLSearchParams(window.location.search).get('model_number');
     const nativeRef = row?.candidate_ref;
-    const sourceModel = document?.model ?? (requestedModel ? Number(requestedModel) : nativeRef?.kind === 'design' ? nativeRef.document?.model : nativeRef?.kind === 'native_document' ? nativeRef.model : undefined);
+    const candidateDocument = nativeRef?.kind === 'design' ? nativeRef.document : nativeRef?.kind === 'native_document' ? nativeRef : undefined;
+    const searchParams = new URLSearchParams(window.location.search);
+    const routeModel = searchParams.get('model_number');
+    const matchesCandidate = (doc: NativeGenerationDocument) => candidateDocument?.artifact_id === doc.artifact_id
+        && (candidateDocument.target_state ?? null) === (doc.target_state ?? null);
+    const matches = documents.filter(doc => (requestedArtifact == null || doc.artifact_id === requestedArtifact)
+        && (localSelection?.document ? (doc.target_state ?? null) === (requestedState ?? null) : requestedState == null || doc.target_state === requestedState));
+    const requestedMember = localSelection?.document?.model ?? (routeModel ? Number(routeModel) : undefined);
+    const member = requestedMember ?? candidateDocument?.model;
+    const document = explicit
+        ? localSelection?.document ? matches.find(doc => doc.model === localSelection.document?.model)
+            : matches.find(doc => member != null && doc.model === member && (requestedMember != null || matchesCandidate(doc)))
+                ?? (matches.length === 1 ? matches[0] : matches.find(doc => doc.model == null))
+        : documents.find(doc => matchesCandidate(doc) && (doc.model == null || doc.model === candidateDocument?.model))
+            ?? documents.find(doc => doc.primary) ?? (row ? adapter?.preferredDocument?.(row) : undefined) ?? (row?.design_id || documents.length === 1 ? documents[0] : undefined);
+    const sourceModel = document?.model ?? requestedMember ?? (document && matchesCandidate(document) ? candidateDocument?.model : undefined);
     const continuationSource = document ? { job_id: jobId, expected_sha256: document.sha256,
         ...(row?.design_id ? { design_id: row.design_id } : {}),
         document: { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}) },
@@ -294,6 +305,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         if (item.design_id) url.searchParams.set('design_id', item.design_id); else url.searchParams.delete('design_id');
         if (exact) url.searchParams.set('artifact_id', exact.artifact_id); else url.searchParams.delete('artifact_id');
         if (exact?.target_state != null) url.searchParams.set('target_state', exact.target_state); else url.searchParams.delete('target_state');
+        if (exact?.model != null) url.searchParams.set('model_number', String(exact.model)); else url.searchParams.delete('model_number');
         window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
         onInspectDocument?.(item, exact);
         if (view !== 'candidates') setView('structure');
@@ -481,6 +493,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                             back.searchParams.set('native_candidate', activeId!); back.searchParams.set('artifact_id', document.artifact_id);
                             if (document.target_state != null) back.searchParams.set('target_state', document.target_state); else back.searchParams.delete('target_state');
                             if (adapter) back.searchParams.set('native_scope', adapter.key);
+                            if (sourceModel != null) back.searchParams.set('model_number', String(sourceModel)); else back.searchParams.delete('model_number');
                             const href = buildResultsViewerMolecularDynamicsRoute(jobId, row.design_id ?? null, { sourceRef: { kind: 'candidate', id: jobId, candidate_ref: ref }, returnTo: `${back.pathname}${back.search}${back.hash}` });
                             window.location.assign(launchContextId ? `${href}&launch_context_id=${encodeURIComponent(launchContextId)}` : href);
                         }}>Use as MD starting structure</button></nav>}
@@ -495,7 +508,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                         }}>Edit this exact document</button>}
                         {adapter?.inspect?.(row)}
                         {!row.design_id && <details className="my-3"><summary className="cursor-pointer text-sm">Select saved structures for another operation</summary>
-                            {!documents.length ? <p>No saved molecule. This record remains available for inspection and export.</p> : documents.filter(doc => doc.artifact_id).map(doc => doc.artifact_id === document?.artifact_id && doc.target_state === document.target_state && sourceModel != null ? { ...doc, model: sourceModel } : doc).map((doc, index) => <div key={`${doc.artifact_id}:${doc.target_state}:${doc.model}`} className="my-3 space-y-2"><label className="flex items-start gap-2"><input type="checkbox" aria-label={`Use native document ${doc.artifact_id}`} checked={nativeSources.some(source => source.job_id === jobId && source.artifact_id === doc.artifact_id && source.document?.target_state === doc.target_state && source.document?.model === doc.model)} onChange={event => {
+                            {!documents.length ? <p>No saved molecule. This record remains available for inspection and export.</p> : documents.filter(doc => doc.artifact_id).map(doc => doc === document && sourceModel != null ? { ...doc, model: sourceModel } : doc).map((doc, index) => <div key={`${doc.artifact_id}:${doc.target_state}:${doc.model}`} className="my-3 space-y-2"><label className="flex items-start gap-2"><input type="checkbox" aria-label={`Use native document ${doc.artifact_id}`} checked={nativeSources.some(source => source.job_id === jobId && source.artifact_id === doc.artifact_id && source.document?.target_state === doc.target_state && source.document?.model === doc.model)} onChange={event => {
                                 const remaining = nativeSources.filter(source => source.job_id !== jobId || source.artifact_id !== doc.artifact_id || source.document?.target_state !== doc.target_state || source.document?.model !== doc.model);
                                 changeSources(event.target.checked ? [...remaining, { job_id: jobId, artifact_id: doc.artifact_id, document: doc }] : remaining);
                                 if (event.target.checked) { const next = Array.from(new Set([...nativeSelected, selectionId(row)])); setNativeSelected(next); writeBinderSelection(selectionScope, next); }

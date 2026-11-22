@@ -227,7 +227,7 @@ describe('mounted JobSubmission same-route MD handoff ownership', () => {
         if (mode === 'compiled') expect(container.textContent).toContain('MDP editing is not applied');
         else expect(container.querySelector('[aria-label="nstxout-compressed"]')).toHaveProperty('value', '0');
     });
-    it('shows exactly De Novo Design and Molecular Dynamics as Experimental workflows', async () => {
+    it('shows exactly Oligo Designer and Molecular Dynamics as Experimental workflows', async () => {
         apiMocks.fetchTemplates.mockResolvedValueOnce({
             data: [
                 { id: 'protein_cad_experimental', name: 'Protein CAD Experimental', experimental: true, stages: [] },
@@ -244,7 +244,8 @@ describe('mounted JobSubmission same-route MD handoff ownership', () => {
 
         const cards = container.querySelector('.grid.grid-cols-2.gap-3');
         expect(cards?.children).toHaveLength(2);
-        expect(cards?.textContent).toContain('De Novo Design');
+        expect(cards?.textContent).toContain('Oligo Designer');
+        expect(cards?.textContent).not.toContain('De Novo Design');
         expect(cards?.textContent).toContain('Molecular Dynamics');
         expect(cards?.textContent).not.toContain('Protein CAD Experimental');
         expect(cards?.textContent).not.toContain('RFD3 Local Redesign');

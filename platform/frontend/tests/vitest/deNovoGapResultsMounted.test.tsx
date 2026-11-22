@@ -13,6 +13,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { isolateDeNovoTransport } from './deNovoTransport';
 import { api } from '../../src/lib/api';
 import { NativeBinderGenerationResults } from '../../src/components/NativeBinderGenerationResults';
+import * as handoff from '../../src/components/gen2StartingStructureState';
 import { JobSubmission } from '../../src/components/JobSubmission';
 import { RFD3GenerationResultsContent } from '../../src/components/RFD3GenerationResultsPane';
 import type { RFD3GenerationReadModel } from '../../src/lib/api';
@@ -212,5 +213,34 @@ it.each([
             expect(emitted.params.rfd4_request).toMatchObject({ resume_slot: 'resume', settings: { search: { resume_seed: 0 } } });
         }
         await close();
+    }
+});
+
+it.each([
+    ['alternate', 'B', 'default', 2],
+    ['primary', 'A', undefined, undefined],
+    ['alternate', 'B', undefined, 2],
+    ['alternate', 'B', 2, 2],
+] as const)('MD handoff for %s/%s with routed MODEL %s', async (artifact, state, member, expected) => {
+    const original = [...documents];
+    const route = vi.spyOn(handoff, 'buildResultsViewerMolecularDynamicsRoute');
+    try {
+        if (member === 2) documents.splice(0, documents.length, ...[1, 2].map(model => ({ ...original[1], model })));
+        if (member === 'default') await mount(<NativeBinderGenerationResults jobId={jobId} />, `/designs/${jobId}?native_candidate=native`);
+        else await mount(<NativeBinderGenerationResults jobId={jobId} artifactId={artifact} targetState={state} />,
+            `/designs/${jobId}?native_candidate=native&artifact_id=${artifact}&target_state=${state}${member ? `&model_number=${member}` : ''}`);
+        await vi.waitFor(async () => { await settle(); expect(document.querySelector('[aria-label="Continue exact native document"]')).not.toBeNull(); });
+        const prediction = [...document.querySelectorAll('a')].find(a => a.textContent === 'Predict exact structure')!;
+        const predicted = JSON.parse(new URL(prediction.href).searchParams.get('source_structure')!);
+        expect(predicted.document).toEqual({ artifact_id: artifact, target_state: state });
+        expect(predicted.model_number).toBe(expected);
+        await click('Use as MD starting structure');
+        const options = route.mock.calls.at(-1)![2]!;
+        expect(options.sourceRef).toMatchObject({ candidate_ref: { artifact_id: artifact, target_state: state } });
+        expect((options.sourceRef as any).candidate_ref.model).toBe(expected);
+        expect(new URL(options.returnTo!, window.location.origin).searchParams.get('model_number')).toBe(expected == null ? null : String(expected));
+    } finally {
+        documents.splice(0, documents.length, ...original);
+        route.mockRestore();
     }
 });
