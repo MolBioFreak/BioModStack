@@ -286,3 +286,47 @@ async def test_native_launch_reaches_real_job_create_and_scratch_persistence(nat
             verify_input_snapshots(job.params["md_job_spec"])
     finally:
         await engine.dispose()
+
+
+@pytest.mark.parametrize("field,value,message", [
+    ("box_type", "cubic", "octahedron"), ("box_type", "triclinic", "octahedron"),
+    ("box_type", "dodecahedron", "octahedron"), ("salt_molar", 2.01, "salt_molar"),
+    ("neutralize", False, "neutralization"), ("salt_molar", 2, None), ("salt_molar", 0, None),
+])
+def test_amber_native_preview_settings(native_client, monkeypatch, field, value, message):
+    from services.md import native_launch
+    from services.md.chemistry_catalog import ChemistryCatalog, RuntimeProbeResult
+    from test_md_job_v2_contract import CATALOG_DIR
+
+    catalog = ChemistryCatalog(config_dir=CATALOG_DIR, probe=lambda: RuntimeProbeResult(
+        runtime_id="md-preparation-v1", runtime_version="1", available=True,
+        asset_ids=frozenset({"amber/ff19SB", "water/opc", "ions/opc-monovalent-pinned"}),
+        checked_at="2026-07-31T06:55:37Z",
+        sif_sha256="625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b",
+    ))
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: catalog)
+    intent, _, _ = _guided_intent()
+    view = catalog.view()
+    profile = view.get_profile("amber_ff19sb_opc_protein_v1")
+    intent["input"].update(chemistry_profile_id=profile["id"], chemistry_profile_sha256=profile["profile_sha256"],
+                           catalog_digest=view.catalog_digest, box_type="octahedron", neutralize=True)
+    intent["input"][field] = value
+    response = native_client.post("/api/molecular-dynamics/launch-preview", json={
+        "schema_version": "bms.md.launch-preview-request.v1", "intent": intent})
+    if message:
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "MD_PREPARATION_UNSUPPORTED"
+        assert message in response.json()["detail"]["message"]
+    else:
+        assert response.status_code == 200, response.text
+        assert response.json()["effective_request"]["preparation"][field] == value
+
+
+@pytest.mark.parametrize("field,value", [("ntmpi", True), ("ntmpi", 1.0), ("ntmpi", 2),
+                                        ("ntomp", 8.0), ("ntomp", False), ("ntomp", 0), ("ntomp", 129)])
+def test_native_resource_ints_do_not_coerce(native_files, field, value):
+    spec = _spec(native_files)
+    spec["execution"][field] = value
+    with pytest.raises(contract.MDLaunchError) as error:
+        contract.normalize_md_job_spec(params={"md_job_spec": spec}, job_id="threads", resolve_runtime_path=str)
+    assert (error.value.status_code, error.value.code) == (422, "MD_RESOURCE_CONTRACT_VIOLATION")

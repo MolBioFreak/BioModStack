@@ -19,6 +19,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 import yaml
 
+from scripts.bms_md.chemistry.prepare import preparation_owner, validate_amber_solvent
 from scripts.bms_md.contract import normalize_job_config
 from scripts.bms_md.native_config import INPUT_FILE_FIELDS, NATIVE_JOB_SCHEMA, parse_mdp
 from services.md.chemistry_catalog import (
@@ -161,13 +162,17 @@ def _bounded_resource_number(
     return float(value)
 
 
+def _validate_thread_bounds(execution: Mapping[str, Any]) -> None:
+    _bounded_resource_int(execution.get("ntmpi"), "execution.ntmpi", minimum=1, maximum=1)
+    _bounded_resource_int(execution.get("ntomp"), "execution.ntomp", minimum=1, maximum=128)
+
+
 def _validate_resource_contract(candidate: Mapping[str, Any]) -> None:
     if candidate.get("schema") == NATIVE_JOB_SCHEMA:
         execution = candidate.get("execution")
         if not isinstance(execution, Mapping):
             raise _resource_violation("execution")
-        _bounded_resource_int(execution.get("ntmpi"), "execution.ntmpi", minimum=1, maximum=1)
-        _bounded_resource_int(execution.get("ntomp"), "execution.ntomp", minimum=1, maximum=128)
+        _validate_thread_bounds(execution)
         return
     if "replicas" not in candidate:
         return
@@ -239,26 +244,21 @@ def _validate_resource_contract(candidate: Mapping[str, Any]) -> None:
     if energy_records > 5_000_000:
         raise _resource_violation("aggregate_energy_records")
 
-    _bounded_resource_int(execution.get("ntmpi"), "execution.ntmpi", minimum=1, maximum=1)
-    _bounded_resource_int(execution.get("ntomp"), "execution.ntomp", minimum=1, maximum=128)
+    _validate_thread_bounds(execution)
     if enabled_steps * replicas > 500_000_000:
         raise _resource_violation("aggregate_enabled_stage_steps")
 
 
 def _validate_raw_md_job_spec(candidate: Mapping[str, Any]) -> None:
     try:
-        errors = sorted(
-            _md_job_validator(str(candidate.get("schema") or "")).iter_errors(candidate),
-            key=lambda error: tuple(str(part) for part in error.absolute_path),
-        )
+        if _md_job_validator(str(candidate.get("schema") or "")).is_valid(candidate):
+            return
     except (OSError, json.JSONDecodeError, SchemaError) as exc:
         raise MDLaunchError(
             "MD_LAUNCH_SERVICE_UNAVAILABLE",
             "The molecular-dynamics launch contract is temporarily unavailable.",
             status_code=503,
         ) from exc
-    if not errors:
-        return
     raise MDLaunchError(
         "MD_JOB_CONTRACT_INVALID",
         "The molecular-dynamics job contract is invalid.",
@@ -870,6 +870,11 @@ def _resolve_v2_chemistry(
         compatibility = copy.deepcopy(normalized)
         compatibility["preparation"] = {**dict(normalized["preparation"]), **dict(resolved_preparation)}
         _validate_profile_launch_constraints(compatibility, profile)
+    elif preparation_owner(normalized) == "amber":
+        try:
+            validate_amber_solvent(**normalized["preparation"])
+        except ValueError as exc:
+            raise MDLaunchError("MD_PREPARATION_UNSUPPORTED", str(exc), status_code=422) from exc
     return normalized
 
 

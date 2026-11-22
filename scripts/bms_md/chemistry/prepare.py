@@ -109,10 +109,21 @@ def _fsync_directory(path: Path) -> None:
     finally: os.close(descriptor)
 
 
+def validate_amber_solvent(*, box_type: str, padding_nm: float, salt_molar: float, neutralize: bool) -> None:
+    if box_type != "octahedron":
+        raise ValueError("Amber preparation supports only box_type=octahedron (tleap solvateOct)")
+    if padding_nm <= 0:
+        raise ValueError("Amber preparation requires positive padding_nm")
+    if not 0 <= salt_molar <= 2:
+        raise ValueError("Amber preparation requires salt_molar between 0 and 2 inclusive")
+    if not neutralize:
+        raise ValueError("curated preparation profiles require charge neutralization")
+
+
 def build_preparation_bundle(
     *, source_structure: Path, destination: Path, profile_id: str, profile_sha256: str,
     runtime_lock: Path, padding_nm: float = 1.0, salt_molar: float = 0.15,
-    neutralize: bool = True, python_executable: str = sys.executable,
+    neutralize: bool = True, box_type: str = "octahedron", python_executable: str = sys.executable,
     worker_command: Sequence[str] | None = None, runtime_image: Path | None = None,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> dict[str, Any]:
@@ -121,10 +132,7 @@ def build_preparation_bundle(
     runtime_image = Path(runtime_image) if runtime_image is not None else None
     if len(profile_sha256) != 64 or any(char not in "0123456789abcdef" for char in profile_sha256):
         raise ValueError("profile_sha256 must be a lowercase SHA-256")
-    if padding_nm <= 0 or not 0 <= salt_molar <= 2:
-        raise ValueError("preparation solvent parameters are outside supported bounds")
-    if not neutralize:
-        raise ValueError("curated preparation profiles require charge neutralization")
+    validate_amber_solvent(box_type=box_type, padding_nm=padding_nm, salt_molar=salt_molar, neutralize=neutralize)
     if destination.exists():
         raise PreparationError("preparation bundle destination already exists")
     source_digest = _sha256(source_structure, maximum=MAX_SOURCE_BYTES)
