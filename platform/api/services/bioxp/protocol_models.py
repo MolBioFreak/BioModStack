@@ -88,6 +88,9 @@ class AbortControl(ControlBinding):
     action: Literal["abort"]
 
 
+PRESSURE_LIMITS = {'plld_threshold_adc': (1, 1000), 'plld_persistence_ms': (1, 100), 'plld_start_position_increments': (0, 44000), 'plld_speed_increments_s': (100, 1000), 'plld_travel_increments': (500, 44000), 'plld_direction': (0, 1), 'pressure_interval_ms': (1, 20), 'pressure_samples_per_can': (1, 3), 'hybrid_interval_ms': (1, 100)}
+
+
 class RequestedRecovery(ProtocolWireModel):
     action: Literal["recover"]
     decision: Literal["retry", "repeat", "skip", "manual_complete"]
@@ -95,10 +98,19 @@ class RequestedRecovery(ProtocolWireModel):
     source_occurrence_id: Identity
     native_action_id: Identity
     expected_attempt: Annotated[StrictInt, Field(ge=1)]
-    overrides: dict[Literal["aspiration_delay_ms", "submerge_steps", "on_contact_delay_ms"], Annotated[StrictInt, Field(ge=0)]] = Field(default_factory=dict)
+    scope: Literal["action", "occurrence"] = "action"
+    overrides: dict[Literal['source_offset_steps', 'destination_offset_steps', 'aspiration_delay_ms', 'dispense_delay_ms', 'on_contact_delay_ms', 'submerge_steps', 'plld_threshold_adc', 'plld_persistence_ms', 'plld_start_position_increments', 'plld_speed_increments_s', 'plld_travel_increments', 'plld_direction', 'pressure_interval_ms', 'pressure_samples_per_can', 'hybrid_interval_ms'], StrictInt] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_edits(self):
+        limits = PRESSURE_LIMITS
+        if self.overrides.get("on_contact_delay_ms", 0) > 5000:
+            raise ValueError("Contact delay exceeds native range")
+        for key, value in self.overrides.items():
+            if key in limits and not limits[key][0] <= value <= limits[key][1]:
+                raise ValueError(f"{key} outside native pressure range")
+            if key not in ("source_offset_steps", "destination_offset_steps") and value < 0:
+                raise ValueError(f"{key} must not be negative")
         if self.overrides and self.decision not in ("retry", "repeat"):
             raise ValueError("Only an executing decision accepts overrides")
         return self

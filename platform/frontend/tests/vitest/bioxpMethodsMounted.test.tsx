@@ -42,7 +42,7 @@ function fail(config: any, status: number, detail: unknown): never { throw new A
 async function settle() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 15)); }); }
 async function render() { await act(async () => root.render(<QueryClientProvider client={client}><BioXpMethodsWorkspace generation={generation} connected controlsEnabled visible={visible} /></QueryClientProvider>)); await settle(); }
 async function mount() { root = createRoot(host); await render(); }
-function button(name: string) { const node = [...host.querySelectorAll('button')].find(n => n.textContent === name || n.getAttribute('aria-label') === name); expect(node, name).toBeTruthy(); return node!; }
+function button(name: string) { if (name === 'Open run tab') return host.querySelector<HTMLButtonElement>('#method-tab-2')!; if (name === 'Run') return host.querySelector<HTMLButtonElement>('button.bxw-run')!; const node = [...host.querySelectorAll('button')].find(n => n.textContent === name || n.getAttribute('aria-label') === name); expect(node, name).toBeTruthy(); return node!; }
 async function click(name: string) { await act(async () => button(name).click()); await settle(); }
 async function input(label: string, value: string) { const el = host.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!; expect(el, label).toBeTruthy(); if (el.getAttribute('role') === 'listbox') { const option = el.querySelector<HTMLElement>(`[data-value="${value}"]`)!; expect(option, value).toBeTruthy(); await act(async () => option.click()); await settle(); return; } await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); await settle(); }
 async function openOriginal() { await input('Library entry', 'm1'); await click('Open'); }
@@ -331,7 +331,7 @@ it('keeps a run history list rather than one slot', async () => {
     await input('Method name', 'Second run'); await click('Run');
     const list = JSON.parse(localStorage.getItem('bms.bioxp.method-runs.v2')!);
     expect(list.map((r: any) => r.name)).toEqual(['Second run', sourceMethod.name]);
-    await click('Runs');
+    await click('Open run tab');
     const history = host.querySelector('[aria-label="Run history"]')!;
     expect([...history.querySelectorAll('button')].map(b => b.textContent?.split(' · ')[0])).toEqual(['Second run', sourceMethod.name]);
     expect(history.textContent).not.toContain('protocol-live-');
@@ -346,7 +346,7 @@ it('retains accepted create through readback failure and retries PUT rather than
 });
 it('has no separate Quick run tab and never checks on each keystroke', async () => {
     await mount(); await openOriginal();
-    expect([...host.querySelectorAll('[role="tab"]')].map(t => t.textContent)).toEqual(['Methods', 'Liquid classes', 'Runs']);
+    expect([...host.querySelectorAll('[role="tab"]')].map(t => t.textContent)).toEqual(['Methods', 'Liquid classes', 'Run']);
     await checked(); const before = checks().length;
     for (const name of ['a', 'ab', 'abc', 'abcd']) await input('Method name', name);
     expect(checks()).toHaveLength(before);
@@ -396,7 +396,7 @@ it.runIf(!!process.env.BIOXP_NATIVE_BMS_SNAPSHOTS).each([
         }
         return transport(config);
     };
-    await mount(); await click('Runs'); await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent?.endsWith(`· ${original.status}`))!.click()); await settle(); await click('Load method report');
+    await mount(); await click('Open run tab'); await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent?.endsWith(`· ${original.status}`))!.click()); await settle(); await click('Load method report');
     const selected = snapshot.compilation.provenance[0];
     await input('Exact recovery occurrence', selected.occurrence_id);
     await input('Recovery native action', String(selected.native_action_ids[0]));
@@ -712,7 +712,7 @@ it.each(['retry', 'repeat', 'skip', 'manual_complete'])('previews and submits on
         const reply = (data: unknown) => ({ config, data: JSON.stringify(data), status: 200, statusText: 'OK', headers: {} });
         if (config.url?.endsWith(`/${id}`)) return reply({ ...job(id), execution: { dry_run: false, runtime_state: { workflow: wf } } });
         if (config.url?.endsWith('/report')) return reply({ job_id: id, workflow: wf, action_results: [selected], events: [{ event: 'recovery_decision', detail: { decision: 'retry', native_action_id: 'a1', expected_attempt: 1 } }] });
-        if (config.url?.endsWith('/recovery-preview')) { const body = JSON.parse(config.data); previews.push(body); return reply({ ...body, job_id: id, submitted: false, attempt_results: [selected], sibling_results: [{ status: 'partial', liquid_amount: null }], editable_settings: ['aspiration_delay_ms'], previous_settings: { aspiration_delay_ms: 8 }, proposed_settings: { aspiration_delay_ms: 8, ...body.overrides } }); }
+        if (config.url?.endsWith('/recovery-preview')) { const body = JSON.parse(config.data); previews.push(body); return reply({ ...body, job_id: id, submitted: false, attempt_results: [selected], sibling_results: [{ status: 'partial', liquid_amount: null }], editable_settings: ['aspiration_delay_ms','destination_offset_steps','plld_threshold_adc'], previous_settings: { aspiration_delay_ms: 8 }, proposed_settings: { aspiration_delay_ms: 8, ...body.overrides } }); }
         if (config.url?.endsWith('/control')) { controls.push(JSON.parse(config.data)); throw new Error('Lost control response'); }
         return transport(config);
     };
@@ -722,11 +722,11 @@ it.each(['retry', 'repeat', 'skip', 'manual_complete'])('previews and submits on
     expect(button('Preview decision').disabled).toBe(true);
     if (gate === 'error_hold') expect(host.textContent).not.toContain('Continue workflow');
     await click('Load method report'); expect(host.textContent).toContain('Operator decision: retry');
-    await input('Reported attempt', 'a1'); await input('Recovery decision', decision); await click('Preview decision');
+    await input('Reported attempt', 'a1'); await input('Recovery decision', decision); if (decision === 'retry') await input('Redo scope', 'occurrence'); await click('Preview decision');
     expect(host.textContent).toContain('"liquid_amount":null');
-    if (decision === 'retry') { await input('aspiration_delay_ms', '0'); expect(button('Submit recovery decision').disabled).toBe(true); await click('Preview decision'); }
+    if (decision === 'retry') { await input('aspiration_delay_ms', '0'); await input('destination_offset_steps', '-18'); await input('plld_threshold_adc', '32'); expect(button('Submit recovery decision').disabled).toBe(true); await click('Preview decision'); }
     expect(controls).toHaveLength(0); expect(submits()).toHaveLength(0);
-    const expected = { action: 'recover', decision, gate_id: 'hold-A', expected_attempt: 2, native_action_id: 'a1', source_occurrence_id: provenance[0].occurrence_id, overrides: decision === 'retry' ? { aspiration_delay_ms: 0 } : {} };
+    const expected = { action: 'recover', ...(decision === 'retry' ? {scope:'occurrence'} : {}), decision, gate_id: 'hold-A', expected_attempt: 2, native_action_id: 'a1', source_occurrence_id: provenance[0].occurrence_id, overrides: decision === 'retry' ? { aspiration_delay_ms: 0, destination_offset_steps: -18, plld_threshold_adc: 32 } : {} };
     expect(previews.at(-1)).toEqual(expected);
     await act(async () => { const submit = button('Submit recovery decision'); submit.click(); submit.click(); }); await settle();
     expect(controls).toEqual([{ ...expected, command_id: id, expected_ownership_generation: 7, expected_connection_generation: generation, idempotency_key: expect.any(String) }]);

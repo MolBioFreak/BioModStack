@@ -91,8 +91,22 @@ function AttemptEvidence({ actions }: { actions: unknown }) {
 export function BioXpMethodProgress({ report, context }: { report: MethodValue; context?: MethodValue }) {
     const workflow = object(report.workflow);
     const { occurrence, current, label } = methodOccurrence(workflow, context);
+    const provenance = Array.isArray(context?.provenance) ? context.provenance as MethodValue[] : [];
+    const index = current ? provenance.indexOf(current) : -1;
+    const id = workflow.native_action_id ?? (current && Array.isArray(current.native_action_ids) && current.native_action_ids.length === 1 ? current.native_action_ids[0] : undefined);
+    const raw = object(context?.action_targets)[String(id)];
+    const targets = (Array.isArray(raw) ? raw : []).map(p => previewActionDestination({ kind: '', params: object(p), station: null, well: null })).filter(t => t.station);
+    const [focus, setFocus] = useState(0);
+    const target = targets[focus] ?? targets[0];
     const rows = Array.isArray(report.occurrences) && report.occurrences.length ? report.occurrences : Array.isArray(report.occurrence_outcomes) && report.occurrence_outcomes.length ? report.occurrence_outcomes : Array.isArray(report.action_results) ? report.action_results : [];
-    return <section aria-label="Occurrence outcomes"><h4>Exact occurrence progress and partial effects</h4>{occurrence != null && <p role="status">Current occurrence: {label ?? String(occurrence)} · {String(current?.occurrence_id ?? occurrence)} · {String(workflow.phase ?? 'unknown')}{current && ` · ${JSON.stringify({ call_path: current.call_path, loop_path: current.loop_path })}`}</p>}{(Array.isArray(report.events) ? report.events : []).filter(e => object(e).event === 'recovery_decision').map((event, i) => {
+    return <section aria-label="Occurrence outcomes"><h4>Exact occurrence progress and partial effects</h4>{context && <div className="bxw-preview">
+        <p>{index >= 0 ? `Current step ${index + 1} of ${provenance.length}: ${label ?? current?.step_id}` : 'Current authored step not reported'}</p>
+        {index >= 0 && <progress aria-label="Current step in original plan" max={provenance.length} value={index + 1} />}
+        <details open><summary>Run deck · planned targets, not measured position</summary>
+            {targets.length > 1 && <label>Show target <select value={targets[focus] ? focus : 0} onChange={e => setFocus(Number(e.target.value))}>{targets.map((t,i) => <option key={i} value={i}>{t.station} {t.well}</option>)}</select></label>}
+            {!target && <p>No deck target reported for this action.</p>}
+            <BioXpWorkflowDeck readOnly selection={{ station: target?.station ?? '', wells: target?.well ? [target.well] : [] }} onChange={() => {}} />
+        </details></div>}{occurrence != null && <p role="status">Current occurrence: {label ?? String(occurrence)} · {String(current?.occurrence_id ?? occurrence)} · {String(workflow.phase ?? 'unknown')}{current && ` · ${JSON.stringify({ call_path: current.call_path, loop_path: current.loop_path })}`}</p>}{(Array.isArray(report.events) ? report.events : []).filter(e => object(e).event === 'recovery_decision').map((event, i) => {
         const detail = object(object(event).detail);
         return <p key={i}>Operator decision: {String(detail.decision ?? 'not reported').replaceAll('_', ' ')} · {String(detail.source_occurrence_id ?? '')} · {String(detail.native_action_id ?? '')} · attempt {String(detail.expected_attempt ?? 'not reported')}. Decision recorded, not physical verification.</p>;
     })}<table><thead><tr><th>Authored occurrence</th><th>Call / loop path</th><th>Reported status</th><th>Generated native actions / partial effects</th></tr></thead><tbody>{rows.map((value, i) => { const row = object(value); const source = object(object(row.metadata).bms_method); return <tr key={String(row.occurrence_id ?? i)}><td>{String(row.occurrence_id ?? row.source_occurrence_id ?? object(row.metadata).occurrence_id ?? row.step_id ?? 'unknown')}</td><td>{JSON.stringify({ path: row.path ?? source.path, call_path: row.call_path ?? source.call_path, loop_path: row.loop_path ?? source.loop_path })}</td><td>{String(row.status ?? 'unknown')}</td><td><AttemptEvidence actions={row.children} />{JSON.stringify(row.children ?? row.native_actions ?? row.effects ?? row.child_outcomes ?? row.native_action_ids ?? null)}</td></tr>; })}</tbody></table>{(Array.isArray(report.action_results) ? report.action_results : []).map((action, index) => <BioXpPipetteResults key={index} value={action} />)}{rows.length === 0 && <p>No occurrence outcomes reported. An absent ACK or HTTP error does not establish that nothing started.</p>}</section>;

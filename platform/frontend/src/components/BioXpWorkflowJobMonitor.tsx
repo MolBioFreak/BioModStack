@@ -160,7 +160,7 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
                 {(gate === 'ordinary_pause' || gate === 'deferred_pause' || gate === 'delaypoint') && gateId && <button className={buttonClass} disabled={!mutable || pendingControl || workflow.phase !== 'waiting' || gate === 'deferred_pause' && !wakeReached} onClick={() => void send({ action: 'continue', gate, gate_id: gateId })}>{gate === 'delaypoint' ? 'Start now' : 'Continue workflow'}</button>}
                 <button className={buttonClass} disabled={!mutable} onClick={() => void send({ action: 'safe_stop' })}>Request safe-state stop</button>
             </div>
-            {methodsFacade && workflow.attempt != null && workflow.native_action_id && !command.terminal && workflow.phase === 'waiting' && gateId && (gate === 'error_hold' || gate === 'ordinary_pause') && <BioXpRecoveryDecision
+            {methodsFacade && !command.terminal && workflow.phase === 'waiting' && gateId && (gate === 'error_hold' || gate === 'ordinary_pause') && <BioXpRecoveryDecision
                 key={JSON.stringify([generation, jobId, command.ownership_generation, gateId, workflow.native_action_id, workflow.attempt])} jobId={job.job_id} gateId={gateId} generation={generation}
                 disabled={!mutable || pendingControl || query.isError} report={recoveryReport?.job_id === jobId && objectGate(recoveryReport) === gateId ? recoveryReport : null} send={send} />}
             {gate === 'review' && <div className="space-y-2">

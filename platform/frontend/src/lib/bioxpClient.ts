@@ -1046,7 +1046,7 @@ export function bioXpOperatorGenerationPayload(
 // Live workflows use robot custody.
 export type BioXpWorkflowPhase = 'queued' | 'preparing' | 'starting' | 'executing' | 'waiting' | 'waking' | 'epilogue' | 'cleanup' | 'reconciling' | 'terminal';
 export type BioXpWorkflowGate = 'ordinary_pause' | 'deferred_pause' | 'delaypoint' | 'review' | 'error_hold';
-export type BioXpRecoveryAction = { action: 'recover'; decision: 'retry' | 'repeat' | 'skip' | 'manual_complete'; gate_id: string; source_occurrence_id: string; native_action_id: string; expected_attempt: number; overrides: Record<string, number | string | null> };
+export type BioXpRecoveryAction = { action: 'recover'; scope?: 'action' | 'occurrence'; decision: 'retry' | 'repeat' | 'skip' | 'manual_complete'; gate_id: string; source_occurrence_id: string; native_action_id: string; expected_attempt: number; overrides: Record<string, number | string | null> };
 export type BioXpWorkflowAction =
     | BioXpRecoveryAction
     | { action: 'pause'; mode: 'ordinary' | 'deferred' }

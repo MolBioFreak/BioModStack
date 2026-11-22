@@ -328,8 +328,22 @@ async def run_context(job_id: str, expected_connection_generation: int | None = 
                       runtime=Depends(get_bioxp_runtime)):
     job = await protocols.get_protocol_job(job_id, expected_connection_generation, False, runtime)
     snapshot = _snapshot(job)
-    # Only immutable authoring/provenance; no result history, trays or simulation.
-    return {"job_id": job.job_id, "method": snapshot.get("method") if snapshot else None,
+    # Only frozen target fields for the read-only run deck (not live pose).
+    targets = {}
+    for stage in job.protocol.document.get('stages', []):
+        for action in stage.get('actions', []):
+            params = action.get('params', {})
+            recipe = params.get('recipe') or {}
+            positions = [step.get('positioning', {}) for phase in ('before_leading_air', 'before_liquid', 'before_dispense')
+                         for step in recipe.get(phase, []) if step.get('operation') == 'position']
+            if recipe.get('multi'):
+                positions.extend(step.get('positioning', {}) for aliquot in recipe['multi'].get('aliquots', [])
+                                 for step in aliquot.get('before', []) if step.get('operation') == 'position')
+            positions = params.get('targets') or positions or [params]
+            targets[action['action_id']] = [{k: p[k] for k in ('target_location', 'location_id', 'destination_location_id', 'target', 'destination', 'operation', 'tray', 'well', 'reference_well') if k in p}
+                                            for p in positions if isinstance(p, dict)]
+
+    return {"job_id": job.job_id, "action_targets": targets, "method": snapshot.get("method") if snapshot else None,
             "provenance": snapshot.get("compilation", {}).get("provenance", []) if snapshot else []}
 
 

@@ -64,7 +64,7 @@ def test_preview_reads_once_and_preserves_explicit_zero(monkeypatch):
 
 @pytest.mark.parametrize('changes', [dict(gate_id='old'), dict(expected_attempt=2),
                                      dict(native_action_id='earlier'), dict(source_occurrence_id='other'),
-                                     dict(overrides={'on_contact_delay_ms': 5001}), dict(decision='repeat')])
+                                     dict(overrides={'on_contact_delay_ms': 12}), dict(decision='repeat')])
 def test_invalid_preview_does_not_submit(monkeypatch, changes):
     client, runtime = make_client(monkeypatch, mutations=False)
     runtime.connection.client.responses['protocol_job'] = held_bundle()
@@ -73,7 +73,7 @@ def test_invalid_preview_does_not_submit(monkeypatch, changes):
     assert [call[0] for call in runtime.connection.client.calls] == ['protocol_job']
 
 
-@pytest.mark.parametrize('overrides', [{'pressure_threshold': 7}, {'operations': []},
+@pytest.mark.parametrize('overrides', [{'pressure_threshold': 7}, {'on_contact_delay_ms': 5001}, {'operations': []},
                                        {'submerge_steps': True}, {'submerge_steps': None},
                                        {'aspiration_delay_ms': -1}])
 def test_invalid_control_has_zero_dispatches(monkeypatch, overrides):
@@ -81,6 +81,51 @@ def test_invalid_control_has_zero_dispatches(monkeypatch, overrides):
     response = client.post(f'/api/bioxp/methods/runs/{JOB}/control', json=control_body(**recovery(overrides=overrides)))
     assert response.status_code == 422
     assert not runtime.connection.client.calls
+
+
+@pytest.mark.parametrize('mode,edits', [
+    (None, {'source_offset_steps': -25, 'destination_offset_steps': 0, 'dispense_delay_ms': 50}),
+    ('hybrid', {'plld_threshold_adc': 120, 'hybrid_interval_ms': 1, 'on_contact_delay_ms': 0}),
+])
+def test_occurrence_retry_and_attempt_local_controls(monkeypatch, mode, edits):
+    client, runtime = make_client(monkeypatch, mutations=False)
+    job = held_bundle()
+    doc = job['protocol']['document']
+    actions = doc['stages'][0]['actions']
+    recipe = actions[0]['params']['recipe']
+    if mode is None:
+        del recipe['liquid_detection']
+    else:
+        recipe['liquid_detection'].update(mode='on_contact', sensing=mode, pressure_overrides={'plld_threshold_adc': 13})
+    actions.insert(0, {'action_id': 'earlier', 'kind': 'pipette_position', 'source_occurrence_id': 'occ'})
+    actions.append({'action_id': 'later', 'kind': 'pipette_mix', 'source_occurrence_id': 'occ'})
+    doc['metadata']['bms_method_run']['compilation']['provenance'][0]['native_action_ids'].append('later')
+    runtime.connection.client.responses['protocol_job'] = job
+    response = client.post(f'/api/bioxp/methods/runs/{JOB}/recovery-preview', json=recovery(scope='occurrence', overrides=edits))
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert [a['action_id'] for a in data['affected_actions']] == ['earlier', 'recipe-1']
+    assert all(data['proposed_settings'][k] == v for k, v in edits.items())
+    if mode:
+        assert data['previous_settings']['plld_threshold_adc'] == 13
+        assert 'source_offset_steps' not in data['editable_settings']
+    assert [call[0] for call in runtime.connection.client.calls] == ['protocol_job']
+
+
+def test_frozen_batch_repeat_previews_only_addressed_target(monkeypatch):
+    client, runtime = make_client(monkeypatch, mutations=False)
+    job = held_bundle()
+    doc = job['protocol']['document']
+    owners = doc['metadata']['bms_method_run']['compilation']['provenance']
+    owners[:] = [{'occurrence_id': m, 'native_action_ids': ['recipe-1']} for m in ('occ', 'other')]
+    a = doc['stages'][0]['actions'][0]
+    a.update(kind='pipette_position', params={'operation': 'move_sequence', 'targets': [{'well': 'A1'}, {'well': 'C1'}]},
+             metadata={'bms_method': {'sequence': [dict(occurrence_id=o['occurrence_id'], target_index=i) for i,o in enumerate(owners)]}})
+    job['execution']['runtime_state']['action_results'][-1]['ok'] = True
+    runtime.connection.client.responses['protocol_job'] = job
+    response = client.post(f'/api/bioxp/methods/runs/{JOB}/recovery-preview', json=recovery(scope='occurrence', decision='repeat', source_occurrence_id='other'))
+    assert response.status_code == 200, response.text
+    assert response.json()['projected_target'] == {'well': 'C1'}
 
 
 def test_preview_uses_last_attempt_not_original_settings(monkeypatch):

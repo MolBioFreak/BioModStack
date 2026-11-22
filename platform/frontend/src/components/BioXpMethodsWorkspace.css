@@ -623,3 +623,8 @@
 .bxw .bioxp-tools-popover { padding-bottom:18px; }
 .bxw-card { padding-bottom:6px; }
 .bxc-pills .bxc-label { flex:none; }
+
+.bioxp-methods #method-runs-panel section { margin-block: .75rem; padding: .75rem; border: 1px solid var(--border-secondary); border-radius: .5rem; }
+.bioxp-methods #method-runs-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.bioxp-methods #method-runs-panel label { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .25rem .65rem .25rem 0; }
+.bioxp-methods #method-runs-panel .bwd-map { max-height: 52vh; }
