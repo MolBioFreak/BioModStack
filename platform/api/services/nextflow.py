@@ -2873,12 +2873,14 @@ async def _observe_local_terminal_binder_results(session, job_id, output_dir):
         logger.exception('Retained binder observation failed for terminal job %s', job_id)
 
 
-async def _finalize_local_md_job(job, session, output_dir, *, projection_ingested=False):
+async def _finalize_local_md_job(job, session, output_dir, *, projection_ingested=False, expected_attempt=None):
     """One native completion transaction for launch and process-loss recovery."""
     from services.md.completion import validate_and_finalize_md_job
     from services.result_ingester import ingest_component_projection
     from services.result_state_integrity import finalize_component_projection
 
+    if expected_attempt is None:
+        expected_attempt = (job.nextflow_run_id, job.remote_attempt_id)
     if not projection_ingested:
         context_path = (job.provenance or {}).get('component_context_path')
         if context_path:
@@ -2890,7 +2892,7 @@ async def _finalize_local_md_job(job, session, output_dir, *, projection_ingeste
     if retry:
         job.child_output_dir = retry['output_dir']
     try:
-        await validate_and_finalize_md_job(job, session)
+        await validate_and_finalize_md_job(job, session, expected_attempt=expected_attempt)
         await finalize_component_projection(job, session)
     except Exception:
         job.child_output_dir = previous_child_output
@@ -3071,6 +3073,7 @@ async def launch_nextflow_job(
             logger.info(f"Job {job_id} was cancelled before starting, aborting launch")
             return
         
+        md_attempt = None
         remote_launch_authority = (
             job.execution_target_id, job.remote_attempt_id, job.nextflow_run_id,
             dict((job.provenance or {}).get("remote_execution_assignment") or {}),
@@ -3623,6 +3626,7 @@ async def launch_nextflow_job(
                         raise ExecutionOwnershipError(
                             "Transient workflow runner requires the adapter-persisted unit identity"
                         )
+                    md_attempt = (job.nextflow_run_id, job.remote_attempt_id)
                     with open(log_path, "ab", buffering=0) as log_sink:
                         process = await asyncio.create_subprocess_exec(
                             *cmd,
@@ -3668,6 +3672,7 @@ async def launch_nextflow_job(
                     )
                     _running_units[job_id] = unit_name
                     job.nextflow_run_id = unit_name
+                    md_attempt = (unit_name, job.remote_attempt_id)
                     provenance = dict(job.provenance or {})
                     provenance["execution_owner_receipt"] = owner_receipt(
                         lane=launch_lane,
@@ -3775,6 +3780,9 @@ async def launch_nextflow_job(
             if job:
                 # Refresh status to see if it was cancelled by API while we waited
                 await session.refresh(job)
+                if (job.model_id == "molecular_dynamics" and job.mode == "simulate"
+                        and (job.nextflow_run_id, job.remote_attempt_id) != md_attempt):
+                    return
                 terminal_snapshot = capture_terminal_job_publication_snapshot(job)
                 # Failed/cancelled executions also need real child control facts
                 # before MD retry reconciliation; never infer science from exit.
@@ -3835,7 +3843,7 @@ async def launch_nextflow_job(
 
                             if is_md_parent:
                                 await _finalize_local_md_job(
-                                    job, session, result_output_dir, projection_ingested=True)
+                                    job, session, result_output_dir, projection_ingested=True, expected_attempt=md_attempt)
                                 logger.info("Validated the immutable MD completion generation for job %s", job_id)
                             elif is_ont_fastq_qc_job(job) and ont_fastq_qc_stage_selected(job.params):
                                 integrity = await _validate_ont_fastq_qc_terminal_completion(
@@ -4046,6 +4054,9 @@ async def launch_nextflow_job(
             if job:
                 # Don't overwrite if already cancelled
                 await session.refresh(job)
+                if (job.model_id == "molecular_dynamics" and job.mode == "simulate" and md_attempt is not None
+                        and (job.nextflow_run_id, job.remote_attempt_id) != md_attempt):
+                    return
                 if job.status == JobStatus.COMPLETED.value or (job.current_stage or "").lower() == "complete":
                     logger.warning(
                         f"Detached runner caught exception for already-completed job {job_id}; preserving completed status"

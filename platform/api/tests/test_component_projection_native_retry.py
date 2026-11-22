@@ -305,6 +305,26 @@ async def test_zero_exit_diagnostic_never_promotes_child(store, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_completed_projection_cannot_replace_failed_native_segment(store, tmp_path):
+    ledger = runtime(tmp_path)
+    execute_child(ledger, request(), state='completed')
+    context = publish(ledger, state='completed')
+    async with store() as session:
+        parent = await session.get(Job, 'root')
+        await ingest_component_projection(parent, str(tmp_path), session, expected_context=context)
+        segment = await session.scalar(select(MdAttemptSegment))
+        segment.state = 'failed'
+        await session.commit()
+    async with store() as session:
+        parent = await session.get(Job, 'root')
+        with pytest.raises(MdStateError, match='failed segment'):
+            await ingest_component_projection(parent, str(tmp_path), session, expected_context=context)
+        await session.rollback()
+    async with store() as session:
+        assert (await session.scalar(select(MdAttemptSegment))).state == 'failed'
+
+
+@pytest.mark.asyncio
 async def test_full_native_completion_and_reopened_idempotence(store, tmp_path, monkeypatch):
     from test_md_analysis_results import test_replica_reporting_never_pools_frames_as_biological_replicates
     from services.md.completion import validate_and_finalize_md_job

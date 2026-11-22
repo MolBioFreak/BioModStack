@@ -87,11 +87,18 @@ async def _ingest_durable_artifacts(job: MDJobRecord, session: Any, *, _inventor
         select(MdAttemptSegment)
         .join(MdReplicaRun, MdReplicaRun.id == MdAttemptSegment.replica_run_id)
         .where(MdReplicaRun.md_job_id == job.id)
+        .execution_options(populate_existing=True)
         .order_by(MdAttemptSegment.replica_run_id, MdAttemptSegment.segment_index.desc())
     )).all())
     latest_segment: dict[str, MdAttemptSegment] = {}
     for segment in segments:
         latest_segment.setdefault(segment.replica_run_id, segment)
+
+    # Reject before either native endpoint updates or legacy frame-map closure.
+    for replica in replicas:
+        segment = latest_segment.get(replica.id)
+        if segment is not None and segment.state in {'failed', 'cancelled', 'orphaned'}:
+            raise MDResultError('MD_COMPLETION_CONFLICT', 'Native completion would rewrite a failed segment', 409)
 
     id_by_artifact = {
         item.artifact_id: str(uuid.uuid5(
@@ -224,10 +231,13 @@ async def _ingest_durable_artifacts(job: MDJobRecord, session: Any, *, _inventor
     await session.flush()
 
 
-async def validate_and_finalize_md_job(job: Job, session: Any) -> dict[str, Any]:
+async def validate_and_finalize_md_job(job: Job, session: Any, *,
+        expected_attempt: tuple[str | None, str | None] | None = None) -> dict[str, Any]:
     """Apply the MD-specific terminal barrier to the caller's current DB transaction."""
 
     from services.remote_execution.executor import _joined_thread
+    if expected_attempt is None:
+        expected_attempt = (job.nextflow_run_id, job.remote_attempt_id)
     with session.no_autoflush:
         await session.refresh(job, attribute_names=['status', 'queue_status', 'awaiting_input', 'paused'])
     run = await session.get(MdRun, job.id, populate_existing=True)
@@ -239,7 +249,8 @@ async def validate_and_finalize_md_job(job: Job, session: Any) -> dict[str, Any]
     # Take writer ownership only after pure readback. The exact-state CAS protects
     # against cancellation/review arriving while the filesystem leaf is running.
     claimed = await session.execute(update(Job).where(
-        Job.id == job.id, Job.status == status, Job.queue_status == queue_status,
+        Job.id == job.id, Job.nextflow_run_id == expected_attempt[0],
+        Job.remote_attempt_id == expected_attempt[1], Job.status == status, Job.queue_status == queue_status,
         Job.status != "cancelled", Job.awaiting_input.is_(False), Job.paused.is_(False),
     ).values(status=status).execution_options(synchronize_session=False))
     if claimed.rowcount != 1:
@@ -249,13 +260,12 @@ async def validate_and_finalize_md_job(job: Job, session: Any) -> dict[str, Any]
     run = await session.get(MdRun, job.id, populate_existing=True)
     if run is None or run.phase in {"cancelled", "cancelling", "paused", "checkpointing"}:
         raise MDResultError("MD_COMPLETION_CONFLICT", "Authoritative MD run does not own completion", 409)
-    await _ingest_durable_artifacts(job, session, _inventory=inventory, _frame_endpoints=endpoints)
     # Require the exact current native children after ALL replica/analysis
     # contracts passed. Shared finalize_component_projection owns host promotion
     # after the caller marks this parent completed in the same transaction.
     for key, stage in (('replica_child_ids', 'md_replica'), ('analysis_child_ids', 'md_analysis')):
         for child_id in snapshot[key]:
-            child = await session.get(Job, child_id)
+            child = await session.get(Job, child_id, populate_existing=True)
             if child is None or child.parent_job_id != job.id or child.child_stage != stage:
                 raise MDResultError('MD_COMPLETION_CONFLICT', 'Native completion child projection is missing', 409)
             control = (child.provenance or {}).get('component_projection')
@@ -264,6 +274,10 @@ async def validate_and_finalize_md_job(job: Job, session: Any) -> dict[str, Any]
                         or control.get('state') != 'completed'
                         or not (control.get('result') or {}).get('references')):
                     raise MDResultError('MD_COMPLETION_CONFLICT', 'Native completion lacks validated component evidence', 409)
+            elif (stage == 'md_analysis' and child.status != 'completed'
+                    and not optional_analysis(job.params['md_job_spec'])):
+                raise MDResultError('MD_COMPLETION_CONFLICT', 'Required MD analysis child has not succeeded', 409)
+    await _ingest_durable_artifacts(job, session, _inventory=inventory, _frame_endpoints=endpoints)
     if optional_analysis((job.params or {}).get("md_job_spec")):
         latest_analysis = {}
         children = (await session.scalars(select(Job).where(

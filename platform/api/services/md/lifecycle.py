@@ -62,6 +62,7 @@ async def reconcile_md_analysis_parent(parent_job_id: str, session: AsyncSession
     await session.refresh(parent)
     if parent.status == "cancelled" or parent.awaiting_input or parent.paused:
         return {"status": "cancelled" if parent.status == "cancelled" else "waiting"}
+    expected_attempt = (parent.nextflow_run_id, parent.remote_attempt_id)
     status, queue_status = parent.status, parent.queue_status
 
     children = list(
@@ -116,7 +117,8 @@ async def reconcile_md_analysis_parent(parent_job_id: str, session: AsyncSession
     await session.refresh(parent)
     if parent.status == "cancelled" or parent.awaiting_input or parent.paused:
         return {"status": "cancelled" if parent.status == "cancelled" else "waiting"}
-    if (parent.status, parent.queue_status) != (status, queue_status):
+    if ((parent.status, parent.queue_status) != (status, queue_status)
+            or (parent.nextflow_run_id, parent.remote_attempt_id) != expected_attempt):
         return {"status": "waiting"}
 
     provenance = dict(parent.provenance or {})
@@ -149,6 +151,7 @@ async def reconcile_md_analysis_parent(parent_job_id: str, session: AsyncSession
     )
     if collection["status"] != "completed" and not collection.get("optional"):
         claimed = await session.execute(update(Job).where(
+            Job.nextflow_run_id == expected_attempt[0], Job.remote_attempt_id == expected_attempt[1],
             Job.id == parent.id, Job.status == status, Job.queue_status == queue_status,
             Job.status != "cancelled", Job.awaiting_input.is_(False), Job.paused.is_(False),
         ).values(status=status).execution_options(synchronize_session=False))
@@ -163,7 +166,7 @@ async def reconcile_md_analysis_parent(parent_job_id: str, session: AsyncSession
         return {"status": "partial_failure", "collection": collection}
 
     await _joined_thread(_publish_barrier, parent_root, str(parent.id))
-    snapshot = await validate_and_finalize_md_job(parent, session)
+    snapshot = await validate_and_finalize_md_job(parent, session, expected_attempt=expected_attempt)
     from services.result_state_integrity import finalize_component_projection
     await finalize_component_projection(parent, session)
     return {"status": "completed", "lifecycle": snapshot}

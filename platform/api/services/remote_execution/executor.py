@@ -3520,7 +3520,7 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
         elif job.model_id == "molecular_dynamics" and job.mode == "simulate":
             from services.md.completion import validate_and_finalize_md_job
 
-            await validate_and_finalize_md_job(job, session)
+            await validate_and_finalize_md_job(job, session, expected_attempt=(expected_run_id, expected_attempt_id))
         else:
             from services.result_state_integrity import finalize_successful_job
 
