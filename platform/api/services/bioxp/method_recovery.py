@@ -65,6 +65,30 @@ def _setting_values(params):
     return values, keys
 
 
+def _attempt_pressure_refs(result, job_id, data):
+    # Only the validated selected result owns the references. A sibling,
+    # earlier attempt or stand-alone capture is not evidence for this stroke.
+    refs = result.get('pressure_traces', [])
+    identity = {'job_id': job_id, 'source_occurrence_id': data.source_occurrence_id,
+                'native_action_id': data.native_action_id, 'attempt': data.expected_attempt}
+    found = {}
+    uncertain = not isinstance(refs, list)
+    for ref in refs if isinstance(refs, list) else []:
+        if (not isinstance(ref, dict) or result.get('source_occurrence_id') != data.source_occurrence_id
+                or any(k in ref and ref[k] != v for k, v in identity.items())):
+            uncertain = True
+            continue
+        stream = ref.get('stream_session_id')
+        if isinstance(stream, str) and stream.strip():
+            found[stream] = {'stream_session_id': stream}
+        else:
+            uncertain = True
+        if ref.get('observation_error'):
+            uncertain = True
+    return {'pressure_traces': list(found.values()), **({'pressure_trace_warning':
+            'Some pressure evidence could not be verified for this attempt.'} if uncertain else {})}
+
+
 def preview_recovery(job, snapshot, data):
     """Read-only preview. The native executor arbitrates the eventual control."""
 
@@ -145,6 +169,7 @@ def preview_recovery(job, snapshot, data):
             raise ValueError(f"{key} is not an attempt-local setting on this action")
     siblings = set(row["native_action_ids"]) - {aid}
     return {"job_id": job.job_id, **data.model_dump(), "occurrence": row,
+            **_attempt_pressure_refs(latest, job.job_id, data),
             "previous_settings": previous, "proposed_settings": {**previous, **data.overrides},
             "projected_target": params["targets"][projection] if projection is not None else None,
             "affected_actions": [{"action_id": a["action_id"], "kind": a["kind"]} for a in affected],

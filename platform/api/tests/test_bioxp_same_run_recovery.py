@@ -173,3 +173,28 @@ def test_unavailable_scope_is_not_previewed(monkeypatch, invalid):
     response = client.post(f'/api/bioxp/methods/runs/{JOB}/recovery-preview', json=recovery())
     assert response.status_code == 422
     assert [call[0] for call in runtime.connection.client.calls] == ['protocol_job']
+
+
+@pytest.mark.parametrize('refs,wanted,warn', [
+    (None, [], False),
+    ([{'stream_session_id': 'stroke-2'}], [{'stream_session_id': 'stroke-2'}], False),
+    ([{'stream_session_id': 'wrong', 'attempt': 1}, {'observation_error': 'read failed'},
+      {'stream_session_id': 'stroke-2', 'observation_error': 'partial'}],
+     [{'stream_session_id': 'stroke-2'}], True),
+])
+def test_preview_selects_only_exact_attempt_pressure(monkeypatch, refs, wanted, warn):
+    client, runtime = make_client(monkeypatch, mutations=False)
+    job = held_bundle()
+    rows = job['execution']['runtime_state']['action_results']
+    rows[0]['pressure_traces'] = [{'stream_session_id': 'sibling'}]
+    rows[-1]['pressure_traces'] = [{'stream_session_id': 'stroke-1'}]
+    rows.append({**rows[-1], 'attempt': 2, 'overrides': {}})
+    del rows[-1]['pressure_traces']
+    if refs is not None:
+        rows[-1]['pressure_traces'] = refs
+    runtime.connection.client.responses['protocol_job'] = job
+    reply = client.post(f'/api/bioxp/methods/runs/{JOB}/recovery-preview', json=recovery(expected_attempt=2))
+    assert reply.status_code == 200, reply.text
+    assert reply.json()['pressure_traces'] == wanted
+    assert bool(reply.json().get('pressure_trace_warning')) == warn
+    assert [call[0] for call in runtime.connection.client.calls] == ['protocol_job']
