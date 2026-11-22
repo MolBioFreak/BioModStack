@@ -390,3 +390,50 @@ def test_one_unavailable_graph_series_leaves_the_others():
     stats = NS(DataSelection=lambda **kw: NS(**kw), ReadLengthHistogramSplit=lambda **kw: NS(**kw), EstimatedBases=1, ReadLengths=1)
     charts = host._acquisition_charts(connection, {"acquisition_id": "acq", "started_at": 100, "ended_at": 220}, stats)
     assert charts["read_lengths"] is None and len(charts["pore_activity"]) == 2 and len(charts["cumulative"]) == 2
+
+
+class _StreamFault(Exception):
+    def __init__(self, name):
+        self._name = name
+    def code(self):
+        return NS(name=self._name)
+
+
+def _failing_stream(error):
+    def stream():
+        raise error
+        yield  # pragma: no cover
+    return stream()
+
+
+@pytest.mark.parametrize("at_call", [True, False])
+def test_a_failed_barcode_reading_is_reported_as_missing_not_as_zero(monkeypatch, at_call):
+    connection = _live_connection()
+    def output(acquisition_run_id, split, _timeout):
+        if at_call:
+            raise RuntimeError("statistics unavailable")
+        return _failing_stream(_StreamFault("UNAVAILABLE"))
+    connection.statistics.stream_acquisition_output = output
+    _live_host(monkeypatch, connection)
+    live = host.run_live_stats("run-one")
+    assert live["available"] is True and live["barcodes"] == [] and live["barcodes_available"] is False
+    assert live["totals"]["read_count"] == 1000
+
+
+def test_a_quiet_barcode_stream_and_a_good_one_both_count_as_read(monkeypatch):
+    connection = _live_connection()
+    connection.statistics.stream_acquisition_output = lambda acquisition_run_id, split, _timeout: _failing_stream(_StreamFault("DEADLINE_EXCEEDED"))
+    _live_host(monkeypatch, connection)
+    assert host.run_live_stats("run-one")["barcodes_available"] is True
+    _live_host(monkeypatch, _live_connection())
+    live = host.run_live_stats("run-one")
+    assert live["barcodes_available"] is True and len(live["barcodes"]) == 2
+
+
+def test_live_stats_carry_the_share_of_reads_minknow_skipped(monkeypatch):
+    connection = _live_connection()
+    latest = connection.acquisition.get_acquisition_info("acq-seq")
+    latest.yield_summary.fraction_skipped = 0.15
+    _live_host(monkeypatch, connection)
+    latest_out = host.run_live_stats("run-one")["latest_acquisition"]
+    assert latest_out["fraction_basecalled"] == 0.8 and latest_out["fraction_skipped"] == 0.15

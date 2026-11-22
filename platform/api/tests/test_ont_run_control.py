@@ -1793,3 +1793,20 @@ async def test_live_numbers_without_graph_series_give_empty_graphs(monkeypatch) 
         "available": True, "totals": _LIVE_COUNTS, "latest_acquisition": {}, "barcodes": []})
     assert (await ont_run_control.get_instrument_run_live(run_id))["charts"] == {
         "pore_activity": [], "cumulative": [], "read_lengths": None}
+
+
+@pytest.mark.asyncio
+async def test_live_numbers_say_when_barcode_output_could_not_be_read(monkeypatch) -> None:
+    run_id, _calls = await _running_barcoded_run(monkeypatch, {
+        "available": True, "totals": _LIVE_COUNTS, "acquisition_count": 2, "barcodes": [], "barcodes_available": False,
+        "latest_acquisition": {"basecalling_enabled": True, "fraction_basecalled": 0.7, "fraction_skipped": 0.2}})
+    live = await ont_run_control.get_instrument_run_live(run_id)
+    assert live["barcodes_available"] is False and live["barcoding_enabled"] is True
+    assert live["fraction_basecalled"] == 0.7 and live["fraction_skipped"] == 0.2 and live["acquisition_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_live_numbers_from_an_older_bridge_count_barcode_output_as_read(monkeypatch) -> None:
+    run_id, _calls = await _running_barcoded_run(monkeypatch, {
+        "available": True, "totals": _LIVE_COUNTS, "latest_acquisition": {}, "barcodes": []})
+    assert (await ont_run_control.get_instrument_run_live(run_id))["barcodes_available"] is True

@@ -211,7 +211,7 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
         expect(live.textContent).toContain('12,345');
         expect(live.textContent).toContain('1,000 reads, 3.50 Mb');
         expect(live.textContent).toContain('100 reads, 400.0 kb');
-        expect(live.textContent).toContain('MinKNOW has basecalled 80% of the reads so far');
+        expect(live.textContent).toContain('Basecalling progress: 80% of reads finished, 20% still waiting.');
         expect(live.textContent).toContain('60% sequencing, 20% open pore, 20% other');
         const rows = [...live.querySelectorAll('tbody tr')].map((row) => [...row.querySelectorAll('td')].map((td) => td.textContent));
         expect(rows).toEqual([
@@ -295,6 +295,37 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
         expect(sent.mode).toBe('enrich');
         expect(sent.reference_path).toMatch(/^inputs\/ont-adaptive-sampling\/[0-9a-f-]+\/plasmids\.fasta$/);
         expect(sent.bed_path).toBe(sent.reference_path.replace('plasmids.fasta', 'targets.bed'));
+    });
+    it('separates skipped reads from waiting ones and says when barcode numbers were not read', async () => {
+        ont.fetchRuns.mockResolvedValue([
+            { run_id: 'bound-run', status: 'running', experiment_group: 'domain-experiment-test', can_stop: true },
+        ]);
+        const totals = { read_count: 100, basecalled_pass_read_count: 60, basecalled_fail_read_count: 5, basecalled_pass_bases: 300_000, basecalled_fail_bases: 20_000, estimated_selected_bases: 500_000 };
+        const reading = { run_id: 'bound-run', status: 'running', available: true, basecalling_enabled: true, barcoding_enabled: true,
+            fraction_basecalled: 0.7, fraction_skipped: 0.2, acquisition_count: 2, totals, barcodes: [] };
+        ont.fetchLive.mockResolvedValue({ data: { ...reading, barcodes_available: false } });
+        await act(async () => root.render(panel()));
+        await flush();
+        const live = () => container.querySelector('[data-testid="ont-run-live"]')!;
+        await waitUntil(() => expect(live().textContent).toContain('Basecalling progress'));
+        expect(live().textContent).toContain('Basecalling progress: 70% of reads finished, 20% skipped, 10% still waiting.');
+        expect(live().textContent).not.toContain('catch up');
+        expect(live().textContent).toContain('split this run into 2 acquisitions');
+        expect(live().querySelector('[role="status"]')!.textContent).toContain('did not return per-barcode numbers');
+        expect(live().textContent).not.toContain('No reads have been assigned');
+    });
+    it('gives no barcode message for a run without a barcoding kit', async () => {
+        ont.fetchRuns.mockResolvedValue([
+            { run_id: 'bound-run', status: 'running', experiment_group: 'domain-experiment-test', can_stop: true },
+        ]);
+        ont.fetchLive.mockResolvedValue({ data: { run_id: 'bound-run', status: 'running', available: true, basecalling_enabled: true, barcoding_enabled: false,
+            fraction_basecalled: 1, barcodes_available: true, barcodes: [],
+            totals: { read_count: 10, basecalled_pass_read_count: 10, basecalled_fail_read_count: 0, basecalled_pass_bases: 1000, basecalled_fail_bases: 0, estimated_selected_bases: 1000 } } });
+        await act(async () => root.render(panel()));
+        await flush();
+        const live = () => container.querySelector('[data-testid="ont-run-live"]')!;
+        await waitUntil(() => expect(live().textContent).toContain('Basecalling progress'));
+        expect(live().textContent).not.toContain('barcode');
     });
     it('says so when MinKNOW has no live numbers for the active run', async () => {
         ont.fetchRuns.mockResolvedValue([

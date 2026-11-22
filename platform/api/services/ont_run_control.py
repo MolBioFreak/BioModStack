@@ -1285,6 +1285,7 @@ async def get_instrument_run_live(run_id: str) -> dict[str, Any]:
         record = await _load_run(session, run_id)
         samples = {item["barcode"]: item["alias"] for item in _run_barcode_samples(await _events_for_run(session, run_id))}
         minknow_run_id, state = record.minknow_run_id, record.state
+        barcoding = record.kit in _barcoding_kits()
     empty = {"run_id": run_id, "status": state, "available": False, "fake_or_demo_devices": False}
     if not minknow_run_id:
         return empty
@@ -1312,6 +1313,10 @@ async def get_instrument_run_live(run_id: str) -> dict[str, Any]:
         "available": True,
         "basecalling_enabled": latest.get("basecalling_enabled") is True,
         "fraction_basecalled": latest.get("fraction_basecalled"),
+        "fraction_skipped": latest.get("fraction_skipped"),
+        "acquisition_count": live.get("acquisition_count"),
+        "barcoding_enabled": barcoding,
+        "barcodes_available": live.get("barcodes_available") is not False,
         "started_at": latest.get("started_at"),
         "ended_at": latest.get("ended_at"),
         "channel_count": latest.get("channel_count"),

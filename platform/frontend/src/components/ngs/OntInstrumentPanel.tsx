@@ -868,7 +868,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                 <p>MinKNOW basecalls the start of each strand and aligns it to this reference. Enrich keeps strands that match the targets and ejects the rest; deplete does the reverse. Without a BED file the whole reference is the target.</p>
                                 {adaptiveError ? <p role="alert" className="text-[var(--warning)]">{adaptiveError}</p> : null}
                             </> : null}
-                            {activeAdaptiveMode === 'barcode_balance' ? <p>MinKNOW ejects strands from barcodes that are ahead of the others, so the samples even out.</p> : null}
+                            {activeAdaptiveMode === 'barcode_balance' ? <p>MinKNOW ejects every strand whose barcode it cannot identify, from the start of the run. After 30 minutes it also ejects strands from barcodes that are ahead of the others. There is no coverage target. Leave this off to keep every strand.</p> : null}
                         </div>
                     ) : null}
                     <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">{selectedOption ? `${selectedOption.protocol_label} · basecalling ${selectedOption.basecalling_enabled ? 'on' : 'off'}` : selectedKit ? 'MinKNOW has no sequencing protocol for this kit and flow cell.' : 'Choose a kit to prepare the run.'}{blockers.length ? <div className="mt-2 text-[var(--warning)]">Not ready: {blockers.join(', ')}</div> : null}</div>

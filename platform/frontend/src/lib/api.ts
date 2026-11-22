@@ -5350,6 +5350,10 @@ export interface OntRunLive {
     available: boolean;
     basecalling_enabled?: boolean;
     fraction_basecalled?: number | null;
+    fraction_skipped?: number | null;
+    acquisition_count?: number | null;
+    barcoding_enabled?: boolean;
+    barcodes_available?: boolean;
     channel_count?: number | null;
     totals?: OntRunLiveYield;
     barcodes?: Array<OntRunLiveYield & { barcode: string; alias: string | null }>;

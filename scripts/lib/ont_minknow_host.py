@@ -835,7 +835,12 @@ def _yield_counts(summary: Any) -> dict[str, int]:
     return {field: int(_safe_get(summary, field, 0) or 0) for field in _YIELD_FIELDS}
 
 
-def _first_stream_messages(stream: Any, *, limit: int = 64) -> list[Any]:
+def _stream_deadline(error: Exception) -> bool:
+    code = getattr(error, "code", None)
+    return getattr(code() if callable(code) else None, "name", "") in {"DEADLINE_EXCEEDED", "CANCELLED"}
+
+
+def _first_stream_messages(stream: Any, *, limit: int = 64, errors: list[Exception] | None = None) -> list[Any]:
     """Messages MinKNOW sends before a live stream goes quiet; the deadline ending the wait is expected."""
     messages: list[Any] = []
     try:
@@ -843,8 +848,9 @@ def _first_stream_messages(stream: Any, *, limit: int = 64) -> list[Any]:
             messages.append(message)
             if len(messages) >= limit:
                 break
-    except Exception:  # noqa: BLE001 - a live acquisition keeps the stream open until the timeout
-        pass
+    except Exception as error:  # noqa: BLE001 - a live acquisition keeps the stream open until the timeout
+        if errors is not None and not _stream_deadline(error):
+            errors.append(error)
     finally:
         cancel = getattr(stream, "cancel", None)
         if callable(cancel):
@@ -857,7 +863,11 @@ def _acquisition_barcodes(connection: Any, acquisition_id: str, statistics: Any)
     stream = connection.statistics.stream_acquisition_output(
         acquisition_run_id=acquisition_id, split=statistics.AcquisitionOutputSplit(barcode_name=True), _timeout=3.0)
     barcodes: dict[str, dict[str, Any]] = {}
-    for message in _first_stream_messages(stream):
+    errors: list[Exception] = []
+    messages = _first_stream_messages(stream, errors=errors)
+    if errors and not messages:
+        raise errors[0]
+    for message in messages:
         for group in _safe_get(message, "snapshots", []) or []:
             keys = list(_safe_get(group, "filtering", []) or [])
             name = _string_or_none(_safe_get(keys[0], "barcode_name")) if keys else None
@@ -1105,6 +1115,7 @@ def run_live_stats(minknow_run_id: str) -> dict[str, Any]:
         totals = dict.fromkeys(_YIELD_FIELDS, 0)
         barcodes: dict[str, dict[str, Any]] = {}
         latest: dict[str, Any] | None = None
+        barcodes_available = True
         for acquisition_id in acquisition_ids:
             try:
                 acquisition = connection.acquisition.get_acquisition_info(run_id=acquisition_id)
@@ -1120,7 +1131,8 @@ def run_live_stats(minknow_run_id: str) -> dict[str, Any]:
             latest = {"acquisition_id": acquisition_id, "started_at": started or None, "ended_at": ended or None,
                       "basecalling_enabled": bool(_safe_get(config, "basecalling_enabled", False)),
                       "channel_count": int(_safe_get(config, "channel_count", 0) or 0) or None,
-                      "fraction_basecalled": float(_safe_get(summary, "fraction_basecalled", 0) or 0)}
+                      "fraction_basecalled": float(_safe_get(summary, "fraction_basecalled", 0) or 0),
+                      "fraction_skipped": float(_safe_get(summary, "fraction_skipped", 0) or 0)}
             try:
                 for name, item in _acquisition_barcodes(connection, acquisition_id, statistics).items():
                     seen = barcodes.setdefault(name, {"barcode": name, "alias": item["alias"], **dict.fromkeys(_YIELD_FIELDS, 0)})
@@ -1128,7 +1140,7 @@ def run_live_stats(minknow_run_id: str) -> dict[str, Any]:
                     for field in _YIELD_FIELDS:
                         seen[field] += item[field]
             except Exception:  # noqa: BLE001 - totals stay useful when the per-barcode stream is unavailable
-                pass
+                barcodes_available = False
         channels = None
         if latest is not None:
             try:
@@ -1145,6 +1157,7 @@ def run_live_stats(minknow_run_id: str) -> dict[str, Any]:
             "latest_acquisition": latest,
             "totals": totals,
             "barcodes": sorted(barcodes.values(), key=lambda item: item["barcode"]),
+            "barcodes_available": barcodes_available,
             "channels": channels,
             "charts": charts,
         })

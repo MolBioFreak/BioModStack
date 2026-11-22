@@ -185,6 +185,9 @@ export default function OntRunLiveStats({ runId }: { runId: string }) {
         );
     }
     const totals = data.totals;
+    const called = data.fraction_basecalled ?? 0;
+    const skipped = data.fraction_skipped ?? 0;
+    const waiting = Math.max(0, 1 - called - skipped);
     const passReads = totals.basecalled_pass_read_count;
     const barcodes = [...(data.barcodes ?? [])].sort((a, b) =>
         Number(a.barcode === 'unclassified') - Number(b.barcode === 'unclassified') || a.barcode.localeCompare(b.barcode));
@@ -200,7 +203,9 @@ export default function OntRunLiveStats({ runId }: { runId: string }) {
                 </> : <div className="sm:col-span-2"><dt>Basecalling</dt><dd className="text-[var(--text-primary)]">Off for this run.</dd></div>}
             </dl>
             {data.basecalling_enabled && typeof data.fraction_basecalled === 'number'
-                ? <p>MinKNOW has basecalled {percent(data.fraction_basecalled)} of the reads so far. A low share means basecalling is behind and will catch up after the run.</p> : null}
+                ? <p>Basecalling progress: {percent(called)} of reads finished{skipped > 0 ? `, ${percent(skipped)} skipped` : ''}, {percent(waiting)} still waiting.</p> : null}
+            {(data.acquisition_count ?? 1) > 1
+                ? <p>MinKNOW split this run into {data.acquisition_count} acquisitions. The totals and barcode table cover all of them; basecalling progress and the graphs cover the latest one.</p> : null}
             {data.channels
                 ? <p>Channel time in the latest full minute: {percent(data.channels.sequencing_fraction)} sequencing, {percent(data.channels.open_pore_fraction)} open pore, {percent(data.channels.other_fraction)} other.</p> : null}
             <div className="grid gap-3 lg:grid-cols-2" data-testid="ont-run-live-charts">
@@ -228,7 +233,10 @@ export default function OntRunLiveStats({ runId }: { runId: string }) {
                         ))}
                     </tbody>
                 </table>
-            ) : data.basecalling_enabled ? <p>No reads have been assigned to a barcode yet.</p> : null}
+            ) : !data.basecalling_enabled || data.barcoding_enabled === false ? null
+                : data.barcodes_available === false
+                    ? <p role="status">MinKNOW did not return per-barcode numbers on this reading. This is not a count of zero.</p>
+                    : <p>No reads have been assigned to a barcode yet.</p>}
         </div>
     );
 }
