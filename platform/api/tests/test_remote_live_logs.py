@@ -50,7 +50,8 @@ async def active(store, tmp_path, monkeypatch):
         calls.append(argv)
         assert kwargs['timeout'] == 30
         assert connection.host == 'worker.invalid'
-        if argv[3] == 'status':
+        if argv[-3] == 'status':
+            assert argv[1:3] == ['-Xbms_no_activity', '-B']
             return CommandResult(0, (attempt / 'status.json').read_text(), '')
         assert argv[1:3] == ['-B', '-c'], 'log reads must not prepare/start/collect/cancel'
         result = subprocess.run([sys.executable, *argv[1:]], capture_output=True, text=True, timeout=10)

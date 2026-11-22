@@ -61,7 +61,7 @@ def test_worker_continuation_rebinds_actual_budget(tmp_path, monkeypatch, denial
     worker.atomic_json(worker.envelope_path(tmp_path), {})
     status = dict(attempt_id='attempt', boot_id='boot', state='awaiting_input', quiescent=True)
     worker.atomic_json(worker.status_path(tmp_path), status)
-    monkeypatch.setattr(worker, 'status', lambda _: status)
+    monkeypatch.setattr(worker, 'status', lambda _, **kwargs: status)
     monkeypatch.setattr(worker, 'boot_id', lambda: 'boot')
     monkeypatch.setattr(worker, '_component_checkpoint_runtime', lambda _: runtime)
     monkeypatch.setattr(nextflow, 'compile_component_checkpoint_continuation', lambda *args: invocation)
@@ -164,7 +164,7 @@ def test_worker_pause_is_quiescent_not_result_ready_and_resume_is_fenced(tmp_pat
     status = worker.load_json(worker.status_path(tmp_path))
     assert status["state"] == "awaiting_input" and status["quiescent"]
     assert status["result_manifest_sha256"] is None
-    monkeypatch.setattr(worker, "status", lambda path: status)
+    monkeypatch.setattr(worker, "status", lambda path, **kwargs: status)
     kwargs = dict(attempt_id="attempt", expected_boot_id="boot", lease_id="lease", operation_id='review-op',
                   checkpoint_id="root:review", checkpoint_sha256=checkpoint["checkpoint_sha256"],
                   decision={"selected_artifacts": ["one.pdb"]}, continuation_lease_id="next-lease")

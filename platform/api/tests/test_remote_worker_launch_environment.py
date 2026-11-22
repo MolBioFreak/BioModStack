@@ -68,7 +68,7 @@ def test_checkpoint_resume_compiles_with_the_bound_nextflow_launcher(tmp_path, m
     worker.atomic_json(worker.envelope_path(tmp_path), {"environment": {"BMS_NEXTFLOW_EXECUTABLE": str(launcher)}})
     status = dict(attempt_id="attempt", boot_id="boot", state="awaiting_input", quiescent=True)
     worker.atomic_json(worker.status_path(tmp_path), status)
-    monkeypatch.setattr(worker, "status", lambda _: status)
+    monkeypatch.setattr(worker, "status", lambda _, **kwargs: status)
     monkeypatch.setattr(worker, "boot_id", lambda: "boot")
     monkeypatch.setattr(worker, "_component_checkpoint_runtime", lambda _: runtime)
     monkeypatch.setattr(worker.subprocess, "Popen", lambda *a, **kw: None)

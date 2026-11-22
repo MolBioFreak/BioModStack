@@ -243,7 +243,7 @@ async def test_public_remote_first_projection_pause_resume_http(store,retained,m
     worker.atomic_json(worker.envelope_path(attempt),envelope)
     worker.atomic_json(worker.status_path(attempt),dict(attempt_id='attempt',job_id='parent',boot_id=boot,
         state='paused',quiescent=True,generation=0))
-    monkeypatch.setattr(worker,'status',lambda path:worker.load_json(worker.status_path(path)))
+    monkeypatch.setattr(worker,'status',lambda path, **kwargs:worker.load_json(worker.status_path(path)))
     # Cold scheduler import probes metadata; keep it separate from supervisor launches.
     with monkeypatch.context() as metadata:
         metadata.setattr(worker.subprocess, 'run', lambda *a, **kw: SimpleNamespace(returncode=0, stdout=''))

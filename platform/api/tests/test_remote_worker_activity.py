@@ -145,3 +145,21 @@ def test_terminal_status_never_carries_stale_activity(activity):
     (root / 'execution-envelope.json').write_text(json.dumps(identity))
     (root / 'status.json').write_text(json.dumps(value))
     assert 'activity' not in worker().status(root)
+
+
+def test_log_status_hint_only_omits_activity(activity):
+    import os
+    import subprocess
+    import sys
+    root, identity, _, _ = activity
+    module = worker()
+    state = module.base_status(module.load_json(root / module.ENVELOPE_FILE), 'running')
+    state.update(supervisor_pid=os.getpid(), supervisor_start_ticks=module.process_start_ticks(os.getpid()))
+    module.atomic_json(root / module.STATUS_FILE, state)
+    command = [module.__file__, 'status', '--attempt-dir', str(root)]
+    def observe(*options):
+        return json.loads(subprocess.check_output([sys.executable, *options, *command]))
+    ordinary = observe()
+    assert ordinary.pop('activity')['stage'] == 'protenix'
+    assert ordinary['state'] == 'running' and not ordinary['quiescent']
+    assert observe('-Xbms_no_activity') == ordinary

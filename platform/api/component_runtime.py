@@ -812,6 +812,18 @@ class ComponentRuntime(GroupingLedger):
     Only the trusted compiler/Nextflow supervisor launches and proves stopped
     writers. There is deliberately no timeout-driven reclaim or shell executor.
     """
+    _TABLES = {
+        "components": "(component TEXT PRIMARY KEY, request BLOB NOT NULL, state TEXT NOT NULL, owner TEXT, boot TEXT, result BLOB, error TEXT)",
+        "component_native_parents": "(component TEXT PRIMARY KEY, snapshot BLOB NOT NULL)",
+        "component_events": "(sequence INTEGER PRIMARY KEY AUTOINCREMENT, component TEXT, phase TEXT NOT NULL, detail BLOB NOT NULL)",
+        "root_execution": "(singleton INTEGER PRIMARY KEY CHECK(singleton=1), state TEXT NOT NULL, owner TEXT NOT NULL, boot TEXT NOT NULL, detail BLOB NOT NULL)",
+        "component_groups": "(group_id TEXT PRIMARY KEY, children BLOB NOT NULL)",
+        "external_services": "(request_id TEXT PRIMARY KEY, request BLOB NOT NULL, result BLOB)",
+        "checkpoints": "(checkpoint TEXT PRIMARY KEY, payload BLOB NOT NULL, decision BLOB)",
+        "checkpoint_operations": "(operation TEXT PRIMARY KEY, detail BLOB NOT NULL)",
+        "component_replacements": "(original TEXT PRIMARY KEY, replacement TEXT UNIQUE NOT NULL, operation TEXT UNIQUE NOT NULL, detail BLOB NOT NULL)",
+    }
+
     def __init__(self, path: Path, *, attempt_id: str, root_job_id: str,
                  target_id: str, lease_id: str, artifact_root: Path,
                  source_identity: Mapping[str, Any] | None = None,
@@ -826,20 +838,24 @@ class ComponentRuntime(GroupingLedger):
         self.source_identity = json.loads(canonical_bytes(source_identity))
         self.plan_sha256 = plan_sha256
         self.execution_plan = json.loads(canonical_bytes(execution_plan))
-        self._initialize_authority(dict(schema_name="bms.component-attempt.v1",
+        authority = dict(schema_name="bms.component-attempt.v1",
             root_job_id=root_job_id, target_id=target_id, lease_id=lease_id,
             source_identity=self.source_identity, plan_sha256=plan_sha256,
-            execution_plan=self.execution_plan))
+            execution_plan=self.execution_plan)
+        if self.path.is_file():
+            with self._connect() as db:
+                tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if {"authority", "results", *self._TABLES} <= tables:
+                    row = db.execute("SELECT attempt,plan FROM authority WHERE singleton=1").fetchone()
+                    if row is not None:
+                        if row != (self.attempt_id, canonical_bytes(authority)):
+                            raise ValueError("ledger attempt or immutable grouping plan conflicts")
+                        return
+        # First open, older schema, or interrupted initialization.
+        self._initialize_authority(authority)
         with self._connect() as db:
-            db.execute("CREATE TABLE IF NOT EXISTS components (component TEXT PRIMARY KEY, request BLOB NOT NULL, state TEXT NOT NULL, owner TEXT, boot TEXT, result BLOB, error TEXT)")
-            db.execute("CREATE TABLE IF NOT EXISTS component_native_parents (component TEXT PRIMARY KEY, snapshot BLOB NOT NULL)")
-            db.execute("CREATE TABLE IF NOT EXISTS component_events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, component TEXT, phase TEXT NOT NULL, detail BLOB NOT NULL)")
-            db.execute("CREATE TABLE IF NOT EXISTS root_execution (singleton INTEGER PRIMARY KEY CHECK(singleton=1), state TEXT NOT NULL, owner TEXT NOT NULL, boot TEXT NOT NULL, detail BLOB NOT NULL)")
-            db.execute("CREATE TABLE IF NOT EXISTS component_groups (group_id TEXT PRIMARY KEY, children BLOB NOT NULL)")
-            db.execute("CREATE TABLE IF NOT EXISTS external_services (request_id TEXT PRIMARY KEY, request BLOB NOT NULL, result BLOB)")
-            db.execute("CREATE TABLE IF NOT EXISTS checkpoints (checkpoint TEXT PRIMARY KEY, payload BLOB NOT NULL, decision BLOB)")
-            db.execute("CREATE TABLE IF NOT EXISTS checkpoint_operations (operation TEXT PRIMARY KEY, detail BLOB NOT NULL)")
-            db.execute("CREATE TABLE IF NOT EXISTS component_replacements (original TEXT PRIMARY KEY, replacement TEXT UNIQUE NOT NULL, operation TEXT UNIQUE NOT NULL, detail BLOB NOT NULL)")
+            for table, columns in self._TABLES.items():
+                db.execute(f"CREATE TABLE IF NOT EXISTS {table} {columns}")
 
     @staticmethod
     def _active(db) -> None:

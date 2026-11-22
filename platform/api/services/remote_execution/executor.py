@@ -967,7 +967,7 @@ async def pause_md_production(session: AsyncSession, job: Job, *, operation_id: 
         runtime.publish_projection()
         await _project_local_components(job, session, local_path)
     else:
-        status = await remote_status(session, job)
+        status = await remote_status(session, job, include_activity=False)
         if status.state != 'paused' or not status.quiescent:
             raise RemoteExecutionError('MD worker outer writer ownership remains unresolved')
         remote_root = Path(attempt_dir) / 'results'
@@ -1127,7 +1127,7 @@ async def resume_md_production(session: AsyncSession, job: Job, *, operation_id:
         if (edge.get('operation_id') != operation_id or edge.get('continuation_lease_id') != intent['continuation_lease_id']
                 or edge.get('md_resume') != intent['checkpoints']):
             raise RemoteExecutionError('MD worker continuation response conflicts')
-        observed = await remote_status(session,job)
+        observed = await remote_status(session, job, include_activity=False)
         if (observed.generation != state['generation'] or observed.continuation_lease_id != intent['continuation_lease_id']
                 or observed.plan_sha256 != edge['plan_sha256']):
             raise RemoteExecutionError('MD worker continuation outer owner remains unresolved')
@@ -1913,7 +1913,8 @@ async def publish_remote_review_rows(session: AsyncSession, job: Job) -> int:
         return 0
 
 
-async def remote_status(session: AsyncSession, job: Job, *, recover_staging: bool = True) -> RemoteAttemptStatus:
+async def remote_status(session: AsyncSession, job: Job, *, recover_staging: bool = True,
+                        include_activity: bool = True) -> RemoteAttemptStatus:
     if not job.execution_target_id or not job.remote_attempt_id:
         raise RemoteExecutionError("Job has no complete remote attempt identity")
     target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
@@ -1921,10 +1922,14 @@ async def remote_status(session: AsyncSession, job: Job, *, recover_staging: boo
         raise RemoteExecutionError("Remote execution target record is missing")
     connection, attempt_dir = _connection_for_attempt(target, job)
     await session.commit()
+    argv = _worker_argv(connection, "status", attempt_dir)
+    if not include_activity:
+        # Interpreter hint: pinned workers ignore it and receive unchanged script argv.
+        argv.insert(1, "-Xbms_no_activity")
     try:
         response = await run_remote(
             connection,
-            _worker_argv(connection, "status", attempt_dir),
+            argv,
             timeout=30,
         )
     except RemoteTransportError as exc:
@@ -1969,7 +1974,7 @@ async def remote_live_logs(session: AsyncSession, job: Job, *, tail: int = 200) 
 
     receipt = deepcopy((job.provenance or {}).get('remote_execution_receipt') or {})
     ownership = (job.execution_target_id, job.remote_attempt_id, job.status)
-    observed = await remote_status(session, job, recover_staging=False)
+    observed = await remote_status(session, job, recover_staging=False, include_activity=False)
     if observed.state in TERMINAL_REMOTE_STATES:
         raise RemoteExecutionError('Remote attempt is terminal; retained result logs are not yet available')
     target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
