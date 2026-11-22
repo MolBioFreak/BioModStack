@@ -53,30 +53,26 @@ sys.exit(subprocess.run([{shutil.which('sha256sum')!r}, *sys.argv[1:]], input=pa
     checksum.chmod(0o755)
     config = tmp_path / 'config.json'
     config.write_text(json.dumps({'schema': 'bms.md.job.v1', 'engine': engine,
-                                 'execution': {'gpu_offload': 'none'}}))
+                                 'execution': {'gpu_offload': 'none', 'ntmpi': 1, 'ntomp': 2}}))
     preparation = tmp_path / 'preparation'
     preparation.mkdir()
     (preparation / 'inert.txt').write_text('staged input must remain a reference')
-    pipeline = tmp_path / 'main.nf'
-    name = f'MD_{engine.upper()}_REPLICA'
-    module = ROOT / f'modules/experimental/molecular_dynamics/{engine}_replica'
-    pipeline.write_text(f'''nextflow.enable.dsl=2
-include {{ {name} }} from '{module}'
-params.md_resume_checkpoint = null
-params.md_resume_checkpoint_sha256 = null
-workflow {{
-    {name}(Channel.of(tuple(0, file('{config}'), file('{preparation}'))))
-}}
-''')
-    (tmp_path / 'nextflow.config').write_text('trace.overwrite = true')
+    pipeline = ROOT / 'workflows/experimental/molecular_dynamics/replica.nf'
+    fixture_config = tmp_path / 'fixture.config'
+    fixture_config.write_text("""trace.overwrite = true
+trace.fields = 'name,cpus,status'
+apptainer.enabled = false
+singularity.enabled = false
+""")
     durable = tmp_path / 'result/native'
     work = tmp_path / 'work'
     invocation = ['java', '--add-opens=java.base/java.lang=ALL-UNNAMED',
         '--add-opens=java.base/java.util=ALL-UNNAMED', '--add-opens=java.base/java.nio=ALL-UNNAMED',
-        '-jar', str(JAR), '-log', str(tmp_path / 'nextflow.log'), 'run',
+        '-jar', str(JAR), '-C', f'{ROOT}/nextflow.config,{fixture_config}', '-log', str(tmp_path / 'nextflow.log'), 'run',
         str(pipeline), '-with-trace', str(tmp_path / 'trace.txt'), '-ansi-log', 'false', '-w', str(work),
         '--out_dir', str(durable.parent), '--md_resume_output_dir', str(durable),
-        '--code_root', str(ROOT), '--gpu_id', '0']
+        '--md_job_config', str(config), '--md_engine', engine, '--md_replica_index', '0',
+        '--md_preparation_bundle', str(preparation), '--code_root', str(ROOT), '--gpu_id', '0']
     env = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ['PATH'],
                NXF_OFFLINE='true', NXF_DISABLE_CHECK_LATEST='true')
     preview = subprocess.run([*invocation, '-preview'], cwd=tmp_path, env=env,
@@ -86,7 +82,8 @@ workflow {{
     result = subprocess.run(invocation, cwd=tmp_path, env=env, capture_output=True, text=True, timeout=90)
     record_property('nextflow_output', result.stdout + result.stderr)
     command_scripts = list(work.glob('*/*/.command.sh'))
-    assert len(command_scripts) == 1
+    assert len(command_scripts) == 1, result.stdout + result.stderr
+    assert (tmp_path / 'trace.txt').read_text().splitlines()[1].split('\t')[1] == '2'
     task = command_scripts[0].parent
     shell = command_scripts[0].read_text()
     assert 'cp -a' not in shell

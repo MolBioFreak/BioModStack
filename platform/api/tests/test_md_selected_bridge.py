@@ -138,14 +138,17 @@ def test_native_md_v3_declared_file_references(tmp_path, monkeypatch, field):
     assert bound['execution'] == document['execution']
 
 
-@pytest.mark.parametrize('threads', [2, 32])
-def test_native_md_v3_cpu_reservation_follows_execution(roots, tmp_path, monkeypatch, threads):
+@pytest.mark.parametrize('schema,threads', [('bms.md.job.v1', 3), ('bms.md.job.v3', 2), ('bms.md.job.v3', 32)])
+def test_md_cpu_reservation_follows_execution(roots, tmp_path, monkeypatch, schema, threads):
     import model_registry
     from scripts.lib.component_adapter import native_resource_config
     monkeypatch.setattr(model_registry, 'molecular_dynamics_feature_enabled', lambda: True)
     config = {'schema': 'bms.md.job.v3', 'engine': 'gromacs', 'replicas': 1,
               'input': {'tpr': '/managed/system.tpr'}, 'stages': [],
               'execution': {'ntmpi': 1, 'ntomp': threads}}
+    if schema == 'bms.md.job.v1':
+        config = normalize_job_config({'schema': schema, 'job_id': 'md-resource',
+            'input': {'structure': '/managed/structure.pdb'}, 'execution': {'ntomp': threads}})
     invocation = nextflow.compile_nextflow_invocation('molecular_dynamics', 'simulate',
         {'md_job_spec': config}, str(tmp_path), job_id='md-resource',
         source_identity=SourceIdentity('a'*40, 'b'*40),
