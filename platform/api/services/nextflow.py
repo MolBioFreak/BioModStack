@@ -956,19 +956,20 @@ def _write_sequence_batch_name_map(
         write_input(csv_path, handle.getvalue().encode('utf-8'))
 
 
+def _sequence_batch_prefix(params):
+    return str(
+        params.get("sequence_batch_prefix")
+        or params.get("sequence_name")
+        or params.get("job_name")
+        or params.get("name")
+        or "variant"
+    ).strip()
+
+
 def sequence_batch_roster(params):
-    batch_prefix = (
-        str(
-            params.get("sequence_batch_prefix")
-            or params.get("sequence_name")
-            or params.get("job_name")
-            or params.get("name")
-            or "variant"
-        ).strip()
-    )
     return _normalize_sequence_batch_entries(
         params.get("sequence_batch_entries", None),
-        prefix=batch_prefix,
+        prefix=_sequence_batch_prefix(params),
     )
 
 
@@ -1020,7 +1021,7 @@ def _write_sequence_batch_payloads(
 
             batch_binder_name = (
                 str(params.get("sequence_batch_component_name") or "").strip()
-                or f"{batch_prefix} binder"
+                or f"{_sequence_batch_prefix(params)} binder"
             )
             normalized_components.append(
                 {
@@ -3158,12 +3159,6 @@ async def launch_nextflow_job(
                     for key in ('protenix_prepared_msa_dir', 'protenix_prepared_msa_sha256',
                                 'boltz_prepared_msa_dir', 'boltz_prepared_msa_sha256', 'bcp_input_path')
                     if key in prepared_params}}
-            # Resolve the same command/input owner used at execution, then seal
-            # its input roster before even a workflow-adapter handoff.
-            if job.model_id == 'boltz2' and job.mode in ('predict', 'complex'):
-                from services.core_protein_scientific_contract import revision_for_job
-                if revision_for_job(job) is not None:
-                    await _persist_boltz_launch_authority(session, job, list(prepared_invocation.command))
             if job.execution_target_id:
                 if transient_runner:
                     raise ExecutionOwnershipError(
@@ -3214,6 +3209,12 @@ async def launch_nextflow_job(
                 )
 
             if workflow_adapter_enabled() and not transient_runner:
+                # Native local/remote launch seals in _compile_launch_nextflow_invocation.
+                # Only the adapter bypasses that handoff and needs a separate seal.
+                if job.model_id == 'boltz2' and job.mode in ('predict', 'complex'):
+                    from services.core_protein_scientific_contract import revision_for_job
+                    if revision_for_job(job) is not None:
+                        await _persist_boltz_launch_authority(session, job, list(prepared_invocation.command))
                 prior_run_id = str(job.nextflow_run_id or "").strip()
                 # Revalidate every immutable input at the literal adapter call
                 # boundary. A later retry re-enters this same launch path.

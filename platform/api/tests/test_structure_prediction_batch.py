@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sys
+
+import pytest
 from pathlib import Path
 
 
@@ -207,7 +209,11 @@ def test_build_nextflow_command_passes_boltz_max_parallel_samples(tmp_path: Path
     assert "--boltz_max_parallel_samples 1" in joined
 
 
-def test_write_sequence_batch_payloads_auto_inserts_binder_for_target_only_complex(tmp_path: Path) -> None:
+@pytest.mark.parametrize('name_params,expected_name', [
+    ({}, 'rbx1_scan binder'),
+    ({'sequence_batch_component_name': 'user binder'}, 'user binder'),
+])
+def test_write_sequence_batch_payloads_auto_inserts_binder_for_target_only_complex(tmp_path: Path, name_params, expected_name) -> None:
     manifest_path, batch_dir, complex_components = _write_sequence_batch_payloads(
         output_dir=str(tmp_path),
         params={
@@ -216,6 +222,7 @@ def test_write_sequence_batch_payloads_auto_inserts_binder_for_target_only_compl
                 {"name": "nb02", "sequence": "QVQLW"},
             ],
             "sequence_batch_prefix": "rbx1_scan",
+            **name_params,
         },
         complex_components=[
             {"type": "protein", "id": "A", "sequence": "TARGETSEQ", "name": "RCSB: 2LGV"},
@@ -242,6 +249,7 @@ def test_write_sequence_batch_payloads_auto_inserts_binder_for_target_only_compl
     variant_target = next(component for component in variant_payload["components"] if component["id"] == "A")
     variant_binder = next(component for component in variant_payload["components"] if component["id"] == "E")
     assert variant_target["sequence"] == "TARGETSEQ"
+    assert binder["name"] == variant_binder["name"] == expected_name
     assert variant_binder["sequence"] == "QVQLV"
     assert [component["id"] for component in variant_payload["components"] if component["type"] == "ion"] == ["B", "C", "D"]
 
