@@ -228,17 +228,9 @@ def test_gromacs_runner_stages_position_restraint_include_from_bundle(
         },
     )
 
-    class Ledger:
-        def is_complete(self, stage, required):
-            return False
+    from scripts.bms_md.runner import StageLedger
 
-        def mark_running(self, stage, command):
-            pass
-
-        def mark_completed(self, stage, required, **kwargs):
-            self.required = required
-
-    ledger = Ledger()
+    ledger = StageLedger(tmp_path / "ledger.json")
     output = tmp_path / "replica"
     _consume_preparation_bundle(
         {"chemistry": {"profile_id": "fixture", "profile_sha256": "a" * 64}},
@@ -248,7 +240,7 @@ def test_gromacs_runner_stages_position_restraint_include_from_bundle(
     )
 
     assert (output / "system" / "posre.itp").read_text(encoding="utf-8") == "posre.itp\n"
-    assert output / "system" / "posre.itp" in ledger.required
+    assert ledger.is_complete("preparation", [output / "system" / "posre.itp"])
 
 
 @pytest.mark.parametrize("settings,message", [
