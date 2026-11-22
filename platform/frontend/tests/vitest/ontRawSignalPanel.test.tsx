@@ -191,7 +191,7 @@ describe('Raw signal tab', () => {
             read_id: 'b0aa-read', state: 'ready', reason_code: 'ok', sample_count: 84356, samples: [70, 90, 110] });
         await mount();
         await waitUntil(() => expect(detail().querySelector('[aria-label="Reads opened before"]')).toBeTruthy());
-        expect(container.textContent).toContain('BLOW5 moved');
+        expect(container.textContent).toContain('Re-import needed');
         expect(detail().querySelector('[role="status"]')!.textContent).toContain('add its POD5 once more');
         expect(ont.reads).not.toHaveBeenCalled();
         expect(detail().querySelector('[aria-label="Reads in this file"]')).toBeNull();

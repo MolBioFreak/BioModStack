@@ -46,7 +46,7 @@ function failure(error: unknown, fallback: string): string {
 }
 
 function sourceState(source: OntRawSignalSource): { label: string; tone: 'ok' | 'busy' | 'bad' | 'idle' } {
-    if (source.blow5) return source.blow5.readable ? { label: 'BLOW5 ready', tone: 'ok' } : { label: 'BLOW5 moved', tone: 'bad' };
+    if (source.blow5) return source.blow5.readable ? { label: 'BLOW5 ready', tone: 'ok' } : { label: 'Re-import needed', tone: 'bad' };
     const state = source.conversion?.state;
     if (state && CONVERTING.includes(state)) return { label: CONVERSION_WORDS[state], tone: 'busy' };
     if (state === 'failed') return { label: 'Conversion failed', tone: 'bad' };
@@ -64,7 +64,7 @@ const BUTTON = 'rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-
 const PRIMARY = 'rounded-lg border border-[var(--accent-primary)] px-3 py-2 text-sm font-semibold text-[var(--accent-primary)] disabled:cursor-not-allowed disabled:opacity-50';
 const HEADING = 'text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]';
 
-const PLOT = { width: 860, height: 300, left: 58, right: 10, top: 10, bottom: 26 };
+const PLOT = { width: 720, height: 300, left: 66, right: 12, top: 12, bottom: 30 };
 
 /** One read's current trace. `samples` is the whole read, thinned evenly when it is longer than the display limit. */
 function Waveform({ wave }: { wave: OntRawSignalWaveform }) {
@@ -90,12 +90,12 @@ function Waveform({ wave }: { wave: OntRawSignalWaveform }) {
                 <line key={share} x1={PLOT.left + plot.width * share} x2={PLOT.left + plot.width * share} y1={PLOT.top} y2={PLOT.top + plot.height} stroke="var(--bg-tertiary)" />
             ))}
             <polyline points={plot.points} fill="none" stroke="var(--accent-primary)" strokeWidth="1" />
-            <g fill="var(--text-secondary)" fontSize="12">
-                <text x={PLOT.left - 6} y={PLOT.top + 10} textAnchor="end">{plot.high.toFixed(0)} pA</text>
-                <text x={PLOT.left - 6} y={PLOT.top + plot.height} textAnchor="end">{plot.low.toFixed(0)} pA</text>
-                <text x={PLOT.left} y={PLOT.height - 6}>0</text>
-                <text x={PLOT.left + plot.width / 2} y={PLOT.height - 6} textAnchor="middle">sample</text>
-                <text x={PLOT.left + plot.width} y={PLOT.height - 6} textAnchor="end">{count(total)}</text>
+            <g fill="var(--text-secondary)" fontSize="14">
+                <text x={PLOT.left - 8} y={PLOT.top + 12} textAnchor="end">{plot.high.toFixed(0)} pA</text>
+                <text x={PLOT.left - 8} y={PLOT.top + plot.height} textAnchor="end">{plot.low.toFixed(0)} pA</text>
+                <text x={PLOT.left} y={PLOT.height - 8}>0</text>
+                <text x={PLOT.left + plot.width / 2} y={PLOT.height - 8} textAnchor="middle">sample</text>
+                <text x={PLOT.left + plot.width} y={PLOT.height - 8} textAnchor="end">{count(total)}</text>
             </g>
         </svg>
     );
@@ -208,9 +208,9 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
                     <button key={item.run_id} type="button" aria-pressed={selected?.run_id === item.run_id} onClick={() => setSelectedRunId(item.run_id)}
                         className={`grid w-full grid-cols-[minmax(0,1fr)_auto] gap-x-2 gap-y-1 rounded-lg border px-3 py-2 text-left ${selected?.run_id === item.run_id
                             ? 'border-[var(--accent-primary)] bg-[var(--bg-secondary)]' : 'border-[var(--border-primary)] hover:bg-[var(--bg-secondary)]'}`}>
-                        <span className="truncate text-sm font-semibold text-[var(--text-primary)]" title={item.name}>{item.name}</span>
-                        <span className={`self-start whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] ${TONE[itemState.tone]}`}>{itemState.label}</span>
-                        <span className="col-span-2 whitespace-nowrap text-xs text-[var(--text-secondary)]">
+                        <span className="order-1 col-span-2 break-all text-sm font-semibold text-[var(--text-primary)]">{item.name}</span>
+                        <span className={`order-3 self-center whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] ${TONE[itemState.tone]}`}>{itemState.label}</span>
+                        <span className="order-2 self-center text-xs text-[var(--text-secondary)]">
                             {item.origin === 'sequenced' ? 'Sequenced' : 'Imported'} {day(item.created_at)}
                             {item.source ? ` · ${item.source.format.toUpperCase()} ${fileSize(item.source.bytes)}` : ''}
                         </span>
@@ -245,7 +245,7 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
                                     {selected.source ? `${selected.source.format.toUpperCase()} ${fileSize(selected.source.bytes)}, ${selected.source.removed ? 'removed after conversion' : 'kept'}` : 'none on record'}
                                 </dd></div>
                                 <div><dt className={HEADING}>Indexed BLOW5</dt><dd className="font-semibold">
-                                    {selected.blow5 ? `${selected.blow5.readable ? 'ready' : 'moved since it was made'}${selected.blow5.read_count != null ? `, ${count(selected.blow5.read_count)} reads` : ''}` : state.label}
+                                    {selected.blow5 ? `${selected.blow5.readable ? 'ready' : 'cannot be verified'}${selected.blow5.read_count != null ? `, ${count(selected.blow5.read_count)} reads` : ''}` : state.label}
                                 </dd></div>
                             </dl>
                             <div className="flex flex-wrap items-center gap-2">
@@ -275,7 +275,7 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
                             {notice ? <p role="alert" className="text-sm text-[var(--warning)]">{notice}</p> : null}
                             {selected.blow5 && !selected.blow5.readable ? (
                                 <p role="status" className="text-sm text-[var(--warning)]">
-                                    The BLOW5 files are no longer where BMS recorded them, so new reads cannot be opened from this entry. Reads opened before still show. To browse the file again, add its POD5 once more with Add raw signal.
+                                    BMS can no longer verify this entry's BLOW5 files against its record (they moved or changed since the conversion), so new reads cannot be opened from it. Reads opened before still show. To browse the file again, add its POD5 once more with Add raw signal.
                                 </p>
                             ) : null}
 
@@ -305,7 +305,7 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
                                         {selected.blow5.readable ? <div className="space-y-1">
                                             <h4 className={HEADING}>{readFilter ? 'Matching reads' : 'All reads'}</h4>
                                             {readsQuery.isError ? <p role="alert" className="text-xs text-[var(--warning)]">Reads could not be listed: {failure(readsQuery.error, 'unknown error')}</p> : null}
-                                            <ul aria-label="Reads in this file">
+                                            <ul aria-label="Reads in this file" className="max-h-72 overflow-y-auto">
                                                 {(readPage?.read_ids ?? []).map((readId) => (
                                                     <li key={readId}>
                                                         <button type="button" aria-pressed={shownRead === readId} onClick={() => setOpenRead({ runId: selected.run_id, readId })} title={readId}
@@ -463,7 +463,7 @@ function AddRawSignal({ projectId, onClose, onAdded }: { projectId: string; onCl
                     </div>
                 )}
                 <label className="flex items-center gap-2 text-sm" title="Saves about half the storage. The BLOW5 keeps the full signal; basecalling such a file again first restores its POD5 from the BLOW5.">
-                    <input type="checkbox" aria-label="Remove POD5 after verified BLOW5" checked={retention.data?.remove_pod5_after_verified_blow5 === true}
+                    <input type="checkbox" className="accent-[var(--accent-primary)]" aria-label="Remove POD5 after verified BLOW5" checked={retention.data?.remove_pod5_after_verified_blow5 === true}
                         disabled={!retention.data || saveRetention.isPending} onChange={(event) => saveRetention.mutate(event.target.checked ? 'blow5_only' : 'pod5_and_blow5')} />
                     Remove POD5 after a verified BLOW5 is made
                     <span aria-hidden="true" className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--text-muted)] text-[10px] text-[var(--text-muted)]">i</span>
