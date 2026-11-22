@@ -13,6 +13,7 @@ const ont = vi.hoisted(() => ({
     importRawSignal: vi.fn(),
     fetchRuns: vi.fn(),
     stopRun: vi.fn(),
+    fetchLive: vi.fn(),
 }));
 
 const deviceResponse = {
@@ -60,6 +61,7 @@ vi.mock('../../src/lib/api', async (importOriginal) => {
         fetchMolBioNgsSummaries: vi.fn().mockResolvedValue({ items: [], next_cursor: null, total: 0 }),
         fetchOntInstrumentRuns: ont.fetchRuns,
         stopOntInstrumentRun: ont.stopRun,
+        fetchOntInstrumentRunLive: ont.fetchLive,
         fetchOntInstrumentRunGeneration: vi.fn().mockResolvedValue(null),
         fetchOntRawSignalCapabilities: vi.fn().mockResolvedValue(null),
         fetchOntExternalPod5Candidates: vi.fn().mockResolvedValue({ candidates: [] }),
@@ -134,6 +136,7 @@ beforeEach(() => {
     ont.startIntent.mockReset();
     ont.fetchRuns.mockReset().mockResolvedValue([]);
     ont.stopRun.mockReset();
+    ont.fetchLive.mockReset().mockResolvedValue({ data: { run_id: 'bound-run', status: 'running', available: false } });
     ont.fetchDevice.mockResolvedValue(deviceResponse);
     ont.fetchOptions.mockResolvedValue(optionsResponse);
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -181,6 +184,51 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
         await act(async () => stop.click());
         await waitUntil(() => expect(ont.stopRun).toHaveBeenCalledWith('bound-run'));
         expect(container.textContent).toContain('Data collected so far is kept');
+    });
+    it('shows live reads, basecalled yield and per-barcode output for an active run only', async () => {
+        ont.fetchRuns.mockResolvedValue([
+            { run_id: 'bound-run', status: 'running', experiment_group: 'domain-experiment-test', can_stop: true },
+            { run_id: 'done-run', status: 'completed', experiment_group: 'domain-experiment-test', can_stop: false },
+        ]);
+        const counts = { read_count: 0, basecalled_fail_bases: 0, estimated_selected_bases: 0 };
+        ont.fetchLive.mockResolvedValue({ data: {
+            run_id: 'bound-run', status: 'running', available: true, basecalling_enabled: true, fraction_basecalled: 0.8,
+            totals: { read_count: 12345, basecalled_pass_read_count: 1000, basecalled_fail_read_count: 100,
+                basecalled_pass_bases: 3_500_000, basecalled_fail_bases: 400_000, estimated_selected_bases: 5_000_000 },
+            barcodes: [
+                { ...counts, barcode: 'unclassified', alias: null, basecalled_pass_read_count: 250, basecalled_fail_read_count: 60, basecalled_pass_bases: 900_000 },
+                { ...counts, barcode: 'barcode02', alias: null, basecalled_pass_read_count: 250, basecalled_fail_read_count: 10, basecalled_pass_bases: 1_100_000 },
+                { ...counts, barcode: 'barcode01', alias: 'plasmid_A', basecalled_pass_read_count: 500, basecalled_fail_read_count: 30, basecalled_pass_bases: 2_500_000 },
+            ],
+            channels: { sequencing_fraction: 0.6, open_pore_fraction: 0.2, other_fraction: 0.2 },
+        } });
+        await act(async () => root.render(panel()));
+        await flush();
+        await waitUntil(() => expect(container.querySelector('[aria-label="Reads per barcode"]')).toBeTruthy());
+        expect(ont.fetchLive).toHaveBeenCalledWith('bound-run');
+        expect(ont.fetchLive).not.toHaveBeenCalledWith('done-run');
+        const live = container.querySelector('[data-testid="ont-run-live"]')!;
+        expect(live.textContent).toContain('12,345');
+        expect(live.textContent).toContain('1,000 reads, 3.50 Mb');
+        expect(live.textContent).toContain('100 reads, 400.0 kb');
+        expect(live.textContent).toContain('MinKNOW has basecalled 80% of the reads so far');
+        expect(live.textContent).toContain('60% sequencing, 20% open pore, 20% other');
+        const rows = [...live.querySelectorAll('tbody tr')].map((row) => [...row.querySelectorAll('td')].map((td) => td.textContent));
+        expect(rows).toEqual([
+            ['barcode01', 'plasmid_A', '500', '2.50 Mb', '30', '50%'],
+            ['barcode02', '', '250', '1.10 Mb', '10', '25%'],
+            ['unclassified', '', '250', '900.0 kb', '60', '25%'],
+        ]);
+    });
+    it('says so when MinKNOW has no live numbers for the active run', async () => {
+        ont.fetchRuns.mockResolvedValue([
+            { run_id: 'bound-run', status: 'starting', experiment_group: 'domain-experiment-test', can_stop: true },
+        ]);
+        ont.fetchLive.mockResolvedValue({ data: { run_id: 'bound-run', status: 'starting', available: false } });
+        await act(async () => root.render(panel()));
+        await flush();
+        await waitUntil(() => expect(container.textContent).toContain('MinKNOW has no live numbers for this run yet.'));
+        expect(container.querySelector('[aria-label="Reads per barcode"]')).toBeNull();
     });
     it('opens raw-signal tools without polling MinKNOW and registers an indexed BLOW5 pair', async () => {
         ont.uploadFile.mockImplementation(async (directory: string, file: File) => ({ data: { path: `${directory}/${file.name}`, size: file.size } }));

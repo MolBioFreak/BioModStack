@@ -5318,6 +5318,31 @@ export const startOntRunIntent = (runId: string, payload: { confirm_start: boole
 export const stopOntInstrumentRun = (runId: string) =>
     api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/stop`, { confirm_stop: true });
 
+export interface OntRunLiveYield {
+    read_count: number;
+    basecalled_pass_read_count: number;
+    basecalled_fail_read_count: number;
+    basecalled_pass_bases: number;
+    basecalled_fail_bases: number;
+    estimated_selected_bases: number;
+}
+
+export interface OntRunLive {
+    run_id: string;
+    status: string;
+    available: boolean;
+    basecalling_enabled?: boolean;
+    fraction_basecalled?: number | null;
+    channel_count?: number | null;
+    totals?: OntRunLiveYield;
+    barcodes?: Array<OntRunLiveYield & { barcode: string; alias: string | null }>;
+    channels?: { sequencing_fraction: number; open_pore_fraction: number; other_fraction: number } | null;
+}
+
+/** Live reads, basecalled yield and per-barcode output MinKNOW reports for a run. Read-only. */
+export const fetchOntInstrumentRunLive = (runId: string) =>
+    api.get<OntRunLive>(`/api/ont/runs/${encodeURIComponent(runId)}/live`);
+
 export const fetchOntInstrumentRun = (runId: string) =>
     api.get<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}`);
 

@@ -814,6 +814,159 @@ def _run_info(position_name: str, minknow_run_id: str) -> dict[str, Any] | None:
     }
 
 
+_YIELD_FIELDS = (
+    "read_count", "basecalled_pass_read_count", "basecalled_fail_read_count",
+    "basecalled_pass_bases", "basecalled_fail_bases", "estimated_selected_bases",
+)
+_SEQUENCING_STATES = frozenset({"strand", "adapter"})
+_OPEN_PORE_STATES = frozenset({"pore"})
+
+
+def _yield_counts(summary: Any) -> dict[str, int]:
+    return {field: int(_safe_get(summary, field, 0) or 0) for field in _YIELD_FIELDS}
+
+
+def _first_stream_messages(stream: Any, *, limit: int = 64) -> list[Any]:
+    """Messages MinKNOW sends before a live stream goes quiet; the deadline ending the wait is expected."""
+    messages: list[Any] = []
+    try:
+        for message in stream:
+            messages.append(message)
+            if len(messages) >= limit:
+                break
+    except Exception:  # noqa: BLE001 - a live acquisition keeps the stream open until the timeout
+        pass
+    finally:
+        cancel = getattr(stream, "cancel", None)
+        if callable(cancel):
+            cancel()
+    return messages
+
+
+def _acquisition_barcodes(connection: Any, acquisition_id: str, statistics: Any) -> dict[str, dict[str, Any]]:
+    """Latest per-barcode output of one acquisition, keyed by barcode name."""
+    stream = connection.statistics.stream_acquisition_output(
+        acquisition_run_id=acquisition_id, split=statistics.AcquisitionOutputSplit(barcode_name=True), _timeout=3.0)
+    barcodes: dict[str, dict[str, Any]] = {}
+    for message in _first_stream_messages(stream):
+        for group in _safe_get(message, "snapshots", []) or []:
+            keys = list(_safe_get(group, "filtering", []) or [])
+            name = _string_or_none(_safe_get(keys[0], "barcode_name")) if keys else None
+            snapshots = list(_safe_get(group, "snapshots", []) or [])
+            if not name or not snapshots:
+                continue
+            latest = max(snapshots, key=lambda item: int(_safe_get(item, "seconds", 0) or 0))
+            seconds = int(_safe_get(latest, "seconds", 0) or 0)
+            if name in barcodes and barcodes[name]["seconds"] > seconds:
+                continue
+            barcodes[name] = {"barcode": name, "alias": _string_or_none(_safe_get(keys[0], "barcode_alias")),
+                              "seconds": seconds, **_yield_counts(_safe_get(latest, "yield_summary"))}
+    return barcodes
+
+
+def _acquisition_channels(connection: Any, acquisition_id: str, statistics: Any) -> dict[str, Any] | None:
+    """Share of channel time sequencing, open and otherwise in the latest full minute of one acquisition."""
+    stream = connection.statistics.stream_duty_time(
+        acquisition_run_id=acquisition_id, data_selection=statistics.DataSelection(step=60), _timeout=3.0)
+    messages = _first_stream_messages(stream, limit=1)
+    if not messages:
+        return None
+    ranges = list(_safe_get(messages[0], "bucket_ranges", []) or [])
+    states = {str(name): list(_safe_get(data, "state_times", []) or [])
+              for name, data in dict(_safe_get(messages[0], "channel_states", {}) or {}).items()}
+    # The newest bucket is still filling, so the one before it is the latest full minute.
+    index = len(ranges) - 2 if len(ranges) > 1 else len(ranges) - 1
+    if index < 0:
+        return None
+    times = {name: int(values[index]) for name, values in states.items() if len(values) > index}
+    total = sum(times.values())
+    if total <= 0:
+        return None
+
+    def share(names: frozenset[str]) -> float:
+        return round(sum(times.get(name, 0) for name in names) / total, 4)
+
+    return {
+        "minute_start_seconds": int(_safe_get(ranges[index], "start", 0) or 0),
+        "sequencing_fraction": share(_SEQUENCING_STATES),
+        "open_pore_fraction": share(_OPEN_PORE_STATES),
+        "other_fraction": round(1 - share(_SEQUENCING_STATES | _OPEN_PORE_STATES), 4),
+    }
+
+
+def _statistics_module():
+    from minknow_api import statistics_pb2  # noqa: PLC0415 - only present in the MinKNOW runtime
+    return statistics_pb2
+
+
+def run_live_stats(minknow_run_id: str) -> dict[str, Any]:
+    """Read-only live numbers for one run: reads, basecalled yield, per-barcode output and channel use."""
+    requested = str(minknow_run_id or "").strip()
+    result: dict[str, Any] = {"minknow_run_id": requested, "available": False, "fake_or_demo_devices": False}
+    status = discover_status()
+    if not requested or status.get("implementation_status") != MINKNOW_STATUS_CONFIGURED:
+        return result
+    statistics = _statistics_module()
+    for device in status.get("live_devices") or []:
+        position_name = _string_or_none(device.get("position"))
+        if not position_name:
+            continue
+        try:
+            _manager, connection = _connect_position(position_name)
+            info = connection.protocol.get_run_info(run_id=requested)
+        except Exception:  # noqa: BLE001 - unknown run ids and offline positions both raise
+            continue
+        if _string_or_none(_safe_get(info, "run_id")) != requested:
+            continue
+        acquisition_ids = [str(item) for item in (_safe_get(info, "acquisition_run_ids", []) or [])]
+        totals = dict.fromkeys(_YIELD_FIELDS, 0)
+        barcodes: dict[str, dict[str, Any]] = {}
+        latest: dict[str, Any] | None = None
+        for acquisition_id in acquisition_ids:
+            try:
+                acquisition = connection.acquisition.get_acquisition_info(run_id=acquisition_id)
+            except Exception:  # noqa: BLE001
+                continue
+            summary = _safe_get(acquisition, "yield_summary")
+            counts = _yield_counts(summary)
+            for field in _YIELD_FIELDS:
+                totals[field] += counts[field]
+            config = _safe_get(acquisition, "config_summary")
+            started = int(_safe_get(_safe_get(acquisition, "start_time"), "seconds", 0) or 0)
+            ended = int(_safe_get(_safe_get(acquisition, "end_time"), "seconds", 0) or 0)
+            latest = {"acquisition_id": acquisition_id, "started_at": started or None, "ended_at": ended or None,
+                      "basecalling_enabled": bool(_safe_get(config, "basecalling_enabled", False)),
+                      "channel_count": int(_safe_get(config, "channel_count", 0) or 0) or None,
+                      "fraction_basecalled": float(_safe_get(summary, "fraction_basecalled", 0) or 0)}
+            try:
+                for name, item in _acquisition_barcodes(connection, acquisition_id, statistics).items():
+                    seen = barcodes.setdefault(name, {"barcode": name, "alias": item["alias"], **dict.fromkeys(_YIELD_FIELDS, 0)})
+                    seen["alias"] = seen["alias"] or item["alias"]
+                    for field in _YIELD_FIELDS:
+                        seen[field] += item[field]
+            except Exception:  # noqa: BLE001 - totals stay useful when the per-barcode stream is unavailable
+                pass
+        channels = None
+        if latest is not None:
+            try:
+                channels = _acquisition_channels(connection, latest["acquisition_id"], statistics)
+            except Exception:  # noqa: BLE001
+                channels = None
+        raw_state = _safe_get(info, "state")
+        result.update({
+            "available": latest is not None,
+            "position": position_name,
+            "status": _protocol_state_to_status(_enum_name(info, "state", raw_state) or _string_or_none(raw_state) or ""),
+            "acquisition_count": len(acquisition_ids),
+            "latest_acquisition": latest,
+            "totals": totals,
+            "barcodes": sorted(barcodes.values(), key=lambda item: item["barcode"]),
+            "channels": channels,
+        })
+        return result
+    return result
+
+
 def observe_run(minknow_run_id: str) -> dict[str, Any]:
     """Return a bounded status snapshot and discovered outputs for one bound run."""
     requested = str(minknow_run_id or "").strip()

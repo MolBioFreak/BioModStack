@@ -212,3 +212,93 @@ def test_a_run_without_modification_models_starts_as_before(fake_instrument):
     tools.BasecallingArgs = lambda **kw: kw
     code, _ = host.start_protocol("X1", {**payload, "basecalling_enabled": True, "simplex_model": "hac@v5"})
     assert code == 201 and calls[0]["basecalling"]["modified_models"] is None and "bam_arguments" not in calls[0]
+
+
+def _live_connection(*, barcodes=True):
+    def summary(reads, passed, failed, pass_bases, fail_bases, estimated, fraction=0.0):
+        return NS(read_count=reads, basecalled_pass_read_count=passed, basecalled_fail_read_count=failed,
+                  basecalled_pass_bases=pass_bases, basecalled_fail_bases=fail_bases,
+                  estimated_selected_bases=estimated, fraction_basecalled=fraction)
+    acquisitions = {
+        "acq-mux": NS(yield_summary=summary(0, 0, 0, 0, 0, 0), start_time=NS(seconds=100), end_time=NS(seconds=160),
+                      config_summary=NS(basecalling_enabled=False, channel_count=512)),
+        "acq-seq": NS(yield_summary=summary(1000, 700, 100, 3_500_000, 400_000, 5_000_000, 0.8),
+                      start_time=NS(seconds=200), end_time=NS(seconds=0),
+                      config_summary=NS(basecalling_enabled=True, channel_count=512)),
+    }
+    def output(acquisition_run_id, split, _timeout):
+        assert split.barcode_name is True
+        if acquisition_run_id != "acq-seq" or not barcodes:
+            return iter([])
+        group = lambda name, alias, rows: NS(filtering=[NS(barcode_name=name, barcode_alias=alias)], snapshots=[
+            NS(seconds=seconds, yield_summary=summary(*values)) for seconds, values in rows])
+        return iter([NS(snapshots=[
+            group("barcode01", "plasmid_A", [(60, (100, 80, 5, 400_000, 20_000, 0)), (120, (600, 500, 40, 2_500_000, 150_000, 0))]),
+            group("unclassified", "", [(120, (300, 200, 60, 1_000_000, 250_000, 0))]),
+        ])])
+    def duty(acquisition_run_id, data_selection, _timeout):
+        assert acquisition_run_id == "acq-seq" and data_selection.step == 60
+        return iter([NS(bucket_ranges=[NS(start=0, end=60), NS(start=60, end=120), NS(start=120, end=180)],
+                        channel_states={"strand": NS(state_times=[10, 500, 1]), "adapter": NS(state_times=[0, 100, 0]),
+                                        "pore": NS(state_times=[90, 200, 1]), "zero": NS(state_times=[900, 200, 8])})])
+    return NS(
+        protocol=NS(get_run_info=lambda run_id: NS(run_id=run_id, state="PROTOCOL_RUNNING",
+                                                   acquisition_run_ids=["acq-mux", "acq-seq"])),
+        acquisition=NS(get_acquisition_info=lambda run_id: acquisitions[run_id]),
+        statistics=NS(stream_acquisition_output=output, stream_duty_time=duty),
+    )
+
+
+def _live_host(monkeypatch, connection):
+    monkeypatch.setattr(host, "discover_status", lambda: {
+        "implementation_status": host.MINKNOW_STATUS_CONFIGURED, "live_devices": [{"position": "X1"}]})
+    monkeypatch.setattr(host, "_connect_position", lambda *a, **kw: (NS(), connection))
+    monkeypatch.setattr(host, "_statistics_module", lambda: NS(
+        AcquisitionOutputSplit=lambda **kw: NS(**kw), DataSelection=lambda **kw: NS(**kw)))
+
+
+def test_live_stats_total_the_run_and_split_the_latest_output_by_barcode(monkeypatch):
+    _live_host(monkeypatch, _live_connection())
+    live = host.run_live_stats("run-one")
+    assert live["available"] is True and live["position"] == "X1" and live["acquisition_count"] == 2
+    assert live["totals"] == {"read_count": 1000, "basecalled_pass_read_count": 700, "basecalled_fail_read_count": 100,
+                              "basecalled_pass_bases": 3_500_000, "basecalled_fail_bases": 400_000,
+                              "estimated_selected_bases": 5_000_000}
+    assert live["latest_acquisition"]["acquisition_id"] == "acq-seq"
+    assert live["latest_acquisition"]["basecalling_enabled"] is True and live["latest_acquisition"]["fraction_basecalled"] == 0.8
+    # Each barcode reports its newest snapshot, not the sum of the cumulative ones.
+    assert [(item["barcode"], item["alias"], item["basecalled_pass_read_count"], item["basecalled_pass_bases"])
+            for item in live["barcodes"]] == [("barcode01", "plasmid_A", 500, 2_500_000), ("unclassified", None, 200, 1_000_000)]
+    # The last bucket is still filling, so the minute before it is reported.
+    assert live["channels"] == {"minute_start_seconds": 60, "sequencing_fraction": 0.6, "open_pore_fraction": 0.2,
+                                "other_fraction": 0.2}
+
+
+def test_live_stats_keep_totals_when_minknow_has_no_barcode_or_channel_data(monkeypatch):
+    connection = _live_connection(barcodes=False)
+    def broken(**kwargs):
+        raise RuntimeError("statistics unavailable")
+    connection.statistics.stream_duty_time = broken
+    _live_host(monkeypatch, connection)
+    live = host.run_live_stats("run-one")
+    assert live["available"] is True and live["totals"]["read_count"] == 1000
+    assert live["barcodes"] == [] and live["channels"] is None
+
+
+def test_live_stats_for_an_unknown_run_are_unavailable_and_start_nothing(monkeypatch, fake_instrument):
+    calls, _tools, _payload = fake_instrument
+    def unknown(run_id):
+        raise RuntimeError("no such run")
+    _live_host(monkeypatch, NS(protocol=NS(get_run_info=unknown)))
+    assert host.run_live_stats("missing") == {"minknow_run_id": "missing", "available": False, "fake_or_demo_devices": False}
+    assert calls == []
+
+
+def test_host_agent_serves_live_stats_on_its_own_read_only_route(monkeypatch):
+    import bms_host_agent
+    seen = []
+    monkeypatch.setattr(bms_host_agent, "ont_run_live_stats", lambda run_id: seen.append(run_id) or {"available": True})
+    monkeypatch.setattr(bms_host_agent, "observe_ont_run", lambda run_id: {"status": "active"})
+    assert bms_host_agent.ont_route_payload("/ont/runs/run-one/live") == {"available": True}
+    assert bms_host_agent.ont_route_payload("/ont/runs/run-one") == {"status": "active"}
+    assert seen == ["run-one"]

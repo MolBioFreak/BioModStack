@@ -37,6 +37,7 @@ import { jobPollingInterval } from '../../lib/queryPolling';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
 
 import { rawSignalWaveformPoints } from './RawReadInspector';
+import OntRunLiveStats from './OntRunLiveStats';
 
 const RAW_WAVEFORM_POLL_ATTEMPTS = 130;
 const RUN_HISTORY_PAGE_SIZE = 100;
@@ -848,6 +849,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                     {message ? <p className="text-xs text-[var(--text-secondary)]">{message}</p> : null}
                 </div>
             </div>
+            {activeRuns.map((run) => <OntRunLiveStats key={run.run_id} runId={run.run_id} />)}
 
             </> : null}
             <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4 text-[var(--text-primary)]">

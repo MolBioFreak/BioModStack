@@ -883,6 +883,15 @@ async def ont_get_instrument_run(run_id: str) -> dict[str, Any]:
     return record
 
 
+@router.get("/runs/{run_id}/live")
+async def ont_get_instrument_run_live(run_id: str) -> dict[str, Any]:
+    """Live reads, basecalled yield and per-barcode output from MinKNOW. Read-only."""
+    try:
+        return await ont_run_control.get_instrument_run_live(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
+
+
 @router.post("/runs/{run_id}/handoff/barcode-basecall")
 async def ont_barcode_basecall_handoff(run_id: str) -> dict[str, Any]:
     """Open a finished run in the ONT form: its POD5 folder, barcoding kit and sample names."""

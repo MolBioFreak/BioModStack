@@ -1223,6 +1223,49 @@ async def stop_instrument_run(run_id: str, *, confirm_stop: bool) -> dict[str, A
     return await reconcile_instrument_run(run_id)
 
 
+async def get_instrument_run_live(run_id: str) -> dict[str, Any]:
+    """Live reads, basecalled yield, per-barcode output and channel use for one run, read from MinKNOW."""
+    async with async_session() as session:
+        record = await _load_run(session, run_id)
+        samples = {item["barcode"]: item["alias"] for item in _run_barcode_samples(await _events_for_run(session, run_id))}
+        minknow_run_id, state = record.minknow_run_id, record.state
+    empty = {"run_id": run_id, "status": state, "available": False, "fake_or_demo_devices": False}
+    if not minknow_run_id:
+        return empty
+    try:
+        live = await asyncio.to_thread(request_host_agent, "GET", f"/ont/runs/{minknow_run_id}/live", timeout=30.0)
+    except Exception:  # noqa: BLE001 - monitoring is read-only; an unreachable MinKNOW shows as unavailable
+        return empty
+    if not isinstance(live, dict) or live.get("available") is not True:
+        return empty
+    totals = {key: int(value or 0) for key, value in (live.get("totals") or {}).items()}
+    barcodes = []
+    for item in live.get("barcodes") or []:
+        if not isinstance(item, dict) or not item.get("barcode"):
+            continue
+        name = str(item["barcode"])
+        barcodes.append({
+            "barcode": name,
+            "alias": samples.get(name) or (item.get("alias") if item.get("alias") != name else None),
+            **{key: int(item.get(key) or 0) for key in totals},
+        })
+    latest = live.get("latest_acquisition") if isinstance(live.get("latest_acquisition"), dict) else {}
+    return {
+        "run_id": run_id,
+        "status": state,
+        "available": True,
+        "basecalling_enabled": latest.get("basecalling_enabled") is True,
+        "fraction_basecalled": latest.get("fraction_basecalled"),
+        "started_at": latest.get("started_at"),
+        "ended_at": latest.get("ended_at"),
+        "channel_count": latest.get("channel_count"),
+        "totals": totals,
+        "barcodes": barcodes,
+        "channels": live.get("channels") if isinstance(live.get("channels"), dict) else None,
+        "fake_or_demo_devices": False,
+    }
+
+
 async def get_instrument_run(run_id: str) -> dict[str, Any] | None:
     async with async_session() as session:
         record = await session.get(OntInstrumentRun, run_id)
