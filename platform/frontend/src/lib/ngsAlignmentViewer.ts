@@ -169,24 +169,40 @@ export function styleIgvShadow(mount: HTMLElement): void {
     root.appendChild(style);
 }
 
-/** IGV draws each ruler label from its left edge and never checks the right edge, so the last
- *  label is cut off at the track border. Skip labels that do not fit. */
+interface IgvRulerDrawArgs {
+    context: CanvasRenderingContext2D;
+    pixelWidth: number;
+    bpStart?: number;
+    referenceFrame?: { start: number; bpPerPixel: number };
+}
+
+/** IGV paints the ruler on a canvas three viewports wide and shows the middle third, so a label
+ *  drawn across a viewport edge appears cut in half. Skip labels that straddle a visible edge;
+ *  labels wholly off-screen are kept so panning still shows them. */
 export function hideClippedIgvRulerLabels(browser: { findTracks?: (filter: (track: { type?: unknown }) => boolean) => unknown[] }): boolean {
     let found: unknown[] | undefined;
     try { found = browser.findTracks?.((track) => track?.type === 'ruler'); } catch { return false; }
     const ruler = (Array.isArray(found) ? found[0] : undefined) as
-        | { doDraw?: (args: { context: CanvasRenderingContext2D; pixelWidth: number }) => void; __bmsClipped?: boolean }
+        | { doDraw?: (args: IgvRulerDrawArgs) => void; __bmsClipped?: boolean }
         | undefined;
     if (!ruler || typeof ruler.doDraw !== 'function') return false;
     if (ruler.__bmsClipped) return true;
     const draw = ruler.doDraw.bind(ruler);
     ruler.doDraw = (args) => {
         const context = args.context;
+        const frame = args.referenceFrame;
+        const offset = frame && typeof args.bpStart === 'number' && frame.bpPerPixel > 0
+            ? (frame.start - args.bpStart) / frame.bpPerPixel
+            : 0;
+        const visibleLeft = offset > 0.5 ? offset : 0;
+        const visibleRight = offset > 0.5 ? offset + args.pixelWidth / 3 : args.pixelWidth;
         const fillText = context.fillText;
         context.fillText = function clippedFillText(text: string, x: number, y: number, maxWidth?: number) {
             const width = context.measureText(text).width;
             const left = context.textAlign === 'center' ? x - width / 2 : context.textAlign === 'right' || context.textAlign === 'end' ? x - width : x;
-            if (left < 0 || left + width > args.pixelWidth) return;
+            const right = left + width;
+            const straddles = (edge: number) => left < edge && right > edge;
+            if (straddles(visibleLeft) || straddles(visibleRight) || left < 0 || right > args.pixelWidth) return;
             if (maxWidth === undefined) fillText.call(context, text, x, y);
             else fillText.call(context, text, x, y, maxWidth);
         };

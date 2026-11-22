@@ -635,7 +635,7 @@ test('replacement acknowledges only the recovered source dialog and retains swal
     assert.equal(dialog.container.style.display, 'flex');
 });
 
-test('ruler labels that would run past either edge are skipped', () => {
+test('ruler labels cut by the visible window edge are skipped, off-screen ones kept', () => {
     const drawn: string[] = [];
     const context = {
         textAlign: 'start',
@@ -646,17 +646,18 @@ test('ruler labels that would run past either edge are skipped', () => {
     const ruler: any = {
         type: 'ruler',
         doDraw({ context: ctx }: { context: CanvasRenderingContext2D }) {
-            ctx.fillText('100 bp', 30, 10);
-            ctx.fillText('190 bp', 250, 10);
-            ctx.fillText('280 bp', 470, 10);
-            ctx.fillText('70 bp', -4, 10);
+            ctx.fillText('100 bp', 530, 10); // inside the visible third (500-1000)
+            ctx.fillText('280 bp', 980, 10); // runs across the right edge
+            ctx.fillText('70 bp', 480, 10); // runs across the left edge
+            ctx.fillText('400 bp', 1200, 10); // off-screen right, shown when panned
         },
     };
     const browser = { findTracks: (filter: (track: any) => boolean) => [ruler, { type: 'sequence' }].filter(filter) };
     assert.equal(hideClippedIgvRulerLabels(browser), true);
     assert.equal(hideClippedIgvRulerLabels(browser), true, 'wrapping twice is a no-op');
-    ruler.doDraw({ context, pixelWidth: 500 });
-    assert.deepEqual(drawn, ['100 bp', '190 bp']);
+    // 3-viewport canvas: viewport 500 px at 1 bp/px, frame starts 500 bp after the canvas.
+    ruler.doDraw({ context, pixelWidth: 1500, bpStart: 0, referenceFrame: { start: 500, bpPerPixel: 1 } });
+    assert.deepEqual(drawn, ['100 bp', '400 bp']);
     assert.equal(context.fillText, original, 'the canvas is restored after drawing');
     assert.equal(hideClippedIgvRulerLabels({ findTracks: () => [] }), false);
 });
