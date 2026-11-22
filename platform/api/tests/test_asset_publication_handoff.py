@@ -110,7 +110,7 @@ def test_generated_launcher_runner_selects_one_shared_body(installation, tmp_pat
     identity = AdapterIdentity('development', tmp_path / 'state', tmp_path / 'db',
                                tmp_path / 'work', tmp_path / 'results')
     runner = _runner_environment(identity=identity, unit_name='fixture.service',
-                                  owner_nonce='fixture', resource_handoff=None)
+                                  owner_nonce='fixture', cuda_visible_devices=None)
     assert runner[KEY] == SELECTOR
     assert 'BMS_HF_TOKEN' not in runner and 'HF_TOKEN' not in runner
     for key in tuple(os.environ):

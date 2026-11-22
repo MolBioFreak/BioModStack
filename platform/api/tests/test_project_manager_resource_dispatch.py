@@ -32,6 +32,8 @@ from services.execution_ownership import (
 )
 from services.global_experiments import launch_contexts
 import workflow_job_runner
+from test_workflow_adapter import production_adapter_identity
+from test_native_protein_launch_authority_regression import native_core_store
 
 
 def test_esmfold2_resource_admission_meets_nextflow_memory_floor() -> None:
@@ -331,8 +333,7 @@ def test_adapter_validates_scheduler_dispatch_gpu_for_unpinned_admission() -> No
 
     workflow_adapter._validate_resource_gpu_authority(  # noqa: SLF001
         job,
-        handoff,
-        assigned,
+        *resource_evidence.receive_resource_authority(handoff, assigned)[2],
         inventory={2: {"uuid": "GPU-2222"}},
     )
 
@@ -1207,3 +1208,90 @@ async def test_invalid_scheduler_authority_never_reaches_claim_sql(bad):
         pytest.fail('rejected authority reached claim SQL')
     assert await gpu_orchestrator._claim_job_for_gpu(SimpleNamespace(execute=execute),
         SimpleNamespace(id='job-1', params=params), 2, 4096, gpu_uuid=None if bad == 'uuid' else 'GPU-2') is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("gpu", "fault"), [
+    (False, None), (True, None), (False, "admission"), (True, "dispatch"),
+    (False, "binding"), (True, "inventory"),
+])
+async def test_adapter_receiver_hash_inputs(gpu, fault, native_core_store, production_adapter_identity,
+                                           tmp_path, monkeypatch):
+    import hashlib
+    import json
+    from starlette.requests import Request
+    from fastapi import HTTPException
+    import database
+    from services import execution_ownership as ownership
+
+    handoff = _handoff()
+    dispatch = _prepared_dispatch(handoff)
+    if gpu:
+        dispatch = resource_evidence.materialize_scheduler_dispatch_authority(
+            dispatch, handoff=handoff, gpu_index=2, gpu_uuid="GPU-2")
+    if fault == "admission":
+        handoff["cpu_threads"] += 1
+    elif fault == "dispatch":
+        dispatch["payload_sha256"] = "4" * 64
+    elif fault == "binding":
+        dispatch = _prepared_dispatch(_handoff(gpu_index=1, gpu_uuid="GPU-1"))
+
+    output = str(tmp_path / "job-1")
+    params = {resource_evidence.GLOBAL_RESOURCE_ADMISSION_PARAM: handoff,
+              resource_evidence.GLOBAL_DISPATCH_AUTHORITY_PARAM: dispatch}
+    async with native_core_store() as db:
+        db.add(Job(id="job-1", name="test", model_id="esmfold2", mode="predict", params=params,
+                   output_dir=output, assigned_gpu=2 if gpu else None))
+        await db.commit()
+    monkeypatch.setattr(database, "async_session", native_core_store)
+    monkeypatch.setattr("routers.gpu._query_smi_gpu_map",
+                        lambda: {2: {"uuid": "other" if fault == "inventory" else "GPU-2"}})
+    monkeypatch.setattr(workflow_adapter, "workflow_nvidia_device_allow_paths", lambda i: (f"/dev/nvidia{i}",))
+    unit = ownership.deterministic_unit_name("production", "job-1", 1)
+    commands = []
+    monkeypatch.setattr(workflow_adapter, "create_systemd_workflow_unit", lambda cmd: commands.append(cmd) or unit)
+    monkeypatch.setattr(workflow_adapter, "wait_for_unit_invocation", lambda *_: ownership.UnitProperties(
+        "active", "running", "", "42", "0", "success", ownership.workflow_slice_for_lane("production"), "inv"))
+    payload = workflow_adapter.WorkflowAdapterLaunchRequest(job_id="job-1", model_id="esmfold2", mode="predict",
+                                                           params={}, output_dir=output)
+    request = Request({"type": "http", "client": ("127.0.0.1", 1)})
+    documents = []
+    sha256 = hashlib.sha256
+
+    def record(data=b"", **kwargs):
+        if data.startswith(b"{"):
+            documents.append(json.loads(data))
+        return sha256(data, **kwargs)
+
+    monkeypatch.setattr(hashlib, "sha256", record)
+    import cProfile
+    with cProfile.Profile() as profiler:
+        if fault:
+            with pytest.raises(HTTPException) as exc:
+                await workflow_adapter.workflow_adapter_launch(payload, request)
+            assert exc.value.status_code == 409
+            assert not commands
+        else:
+            await workflow_adapter.workflow_adapter_launch(payload, request)
+            assert len(commands) == 1
+            assert f"--setenv=CUDA_VISIBLE_DEVICES={'2' if gpu else ''}" in commands[0]
+
+    assert _authority_counts(profiler) == ((1, 0, 1) if fault == "admission" else (1, 1, 2))
+
+    admission_bytes = {k: v for k, v in handoff.items() if k != "handoff_sha256"}
+    dispatch_bytes = {k: v for k, v in dispatch.items() if k != "authority_sha256"}
+    pair = [admission_bytes, dispatch_bytes]
+    assert documents == [dict(job_id="job-1", model_id="esmfold2", mode="predict", params={},
+                              output_dir=output, lane="production"), *(pair[:1] if fault == "admission" else pair)]
+    if not fault:
+        # The detached runner is a different receiver: read the committed attempt again.
+        async with native_core_store() as db:
+            job = await db.get(Job, "job-1")
+            attempt = job.params["execution_attempts"][-1]
+            monkeypatch.setenv(ownership.TRANSIENT_WORKFLOW_UNIT_NAME_ENV, unit)
+            monkeypatch.setenv(ownership.TRANSIENT_WORKFLOW_OWNER_NONCE_ENV, attempt["owner_nonce"])
+            documents.clear()
+            monitor = resource_evidence.WorkflowResourceMonitor.from_job(job)
+            assert monitor.expected_invocation_id == "inv"
+            assert (monitor.gpu_index, monitor.gpu_uuid) == ((2, "GPU-2") if gpu else (None, None))
+            assert documents == pair

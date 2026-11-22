@@ -247,15 +247,20 @@ def validate_dispatch_materialization_authority(
         raise ResourceUsageEvidenceError("global dispatch materialization authority digest is invalid")
     if expected_handoff is not None:
         handoff = validate_resource_admission_handoff(expected_handoff)
-        if handoff is None or (
-            authority["run_attempt_id"] != handoff["run_attempt_id"]
-            or authority["canonical_job_id"] != handoff["canonical_job_id"]
-            or authority["admission_handoff_sha256"] != handoff["handoff_sha256"]
-        ):
-            raise ResourceUsageEvidenceError("global dispatch materialization authority diverges from admission")
-        if schema == GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA:
-            _check_admitted_gpu(handoff, authority["gpu_index"], authority["gpu_uuid"])
+        assert handoff is not None
+        _match_dispatch(handoff, authority)
     return authority
+
+
+def _match_dispatch(handoff, authority):
+    if (
+        authority["run_attempt_id"] != handoff["run_attempt_id"]
+        or authority["canonical_job_id"] != handoff["canonical_job_id"]
+        or authority["admission_handoff_sha256"] != handoff["handoff_sha256"]
+    ):
+        raise ResourceUsageEvidenceError("global dispatch materialization authority diverges from admission")
+    if authority["schema"] == GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA:
+        _check_admitted_gpu(handoff, authority["gpu_index"], authority["gpu_uuid"])
 
 
 def _check_admitted_gpu(handoff, gpu_index, gpu_uuid):
@@ -302,23 +307,17 @@ def materialize_scheduler_dispatch_authority(
     return assigned
 
 
-def dispatch_gpu_authority(
-    authority: Mapping[str, Any],
-    *,
-    handoff: Mapping[str, Any],
-) -> tuple[int | None, str | None]:
-    """Resolve actual GPU authority while preserving historical constrained dispatches."""
-
-    validated = validate_dispatch_materialization_authority(
-        authority,
-        expected_handoff=handoff,
-    )
-    if validated["schema"] == GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA:
-        return int(validated["gpu_index"]), str(validated["gpu_uuid"])
-    admitted = validate_resource_admission_handoff(handoff)
-    if admitted is None:
+def receive_resource_authority(
+    admission: object, dispatch: object,
+) -> tuple[dict[str, Any], dict[str, Any], tuple[int | None, str | None]]:
+    """Check both independently sealed records and their binding on receipt."""
+    handoff = validate_resource_admission_handoff(admission)
+    if handoff is None:
         raise ResourceUsageEvidenceError("resource admission handoff is required")
-    return admitted["gpu_index"], admitted["gpu_uuid"]
+    authority = validate_dispatch_materialization_authority(dispatch)
+    _match_dispatch(handoff, authority)
+    source = authority if authority["schema"] == GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA else handoff
+    return handoff, authority, (source["gpu_index"], source["gpu_uuid"])
 
 
 def build_resource_admission_handoff(
@@ -649,11 +648,11 @@ class WorkflowResourceMonitor:
         cgroup/device containment. It does not allocate or change resource policy.
         The supervisor must reap/join all children before finish().
         """
-        handoff = validate_resource_admission_handoff(params.get(GLOBAL_RESOURCE_ADMISSION_PARAM))
-        if handoff is None or handoff["canonical_job_id"] != job_id:
+        handoff, authority, (gpu_index, gpu_uuid) = receive_resource_authority(
+            params.get(GLOBAL_RESOURCE_ADMISSION_PARAM), params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM),
+        )
+        if handoff["canonical_job_id"] != job_id:
             raise ResourceUsageEvidenceError("remote resource monitor lost admission authority")
-        authority = validate_dispatch_materialization_authority(
-            params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM), expected_handoff=handoff)
         owner = remote_resource_execution_owner()
         if any(execution.get(key) != value for key, value in owner.items()):
             raise ResourceUsageEvidenceError("remote resource monitor lost supervisor identity")
@@ -665,7 +664,6 @@ class WorkflowResourceMonitor:
         path = Path(checkpoint_path)
         if not path.is_absolute() or path != path.resolve():
             raise ResourceUsageEvidenceError("remote checkpoint path must be absolute and symlink-free")
-        gpu_index, gpu_uuid = dispatch_gpu_authority(authority, handoff=handoff)
         return cls(job_id=job_id, lane="remote", generation=execution["generation"],
                    attempt=execution["attempt"], unit_name="", owner_nonce="",
                    expected_invocation_id="", handoff=handoff, dispatch_authority=authority,
@@ -675,12 +673,10 @@ class WorkflowResourceMonitor:
     @classmethod
     def from_job(cls, job: Any) -> "WorkflowResourceMonitor | None":
         params = params_mapping(getattr(job, "params", {}))
-        handoff = validate_resource_admission_handoff(params.get(GLOBAL_RESOURCE_ADMISSION_PARAM))
-        if handoff is None:
+        if params.get(GLOBAL_RESOURCE_ADMISSION_PARAM) is None:
             return None
-        dispatch_authority = validate_dispatch_materialization_authority(
-            params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM),
-            expected_handoff=handoff,
+        handoff, dispatch_authority, (gpu_index, gpu_uuid) = receive_resource_authority(
+            params.get(GLOBAL_RESOURCE_ADMISSION_PARAM), params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM),
         )
         if handoff["canonical_job_id"] != str(job.id):
             raise ResourceUsageEvidenceError("resource admission handoff binds another Job")
@@ -702,10 +698,6 @@ class WorkflowResourceMonitor:
         expected_invocation_id = execution.get("invocation_id")
         if not isinstance(expected_invocation_id, str) or not expected_invocation_id:
             raise ResourceUsageEvidenceError("resource monitor execution InvocationID is absent")
-        gpu_index, gpu_uuid = dispatch_gpu_authority(
-            dispatch_authority,
-            handoff=handoff,
-        )
         return cls(
             job_id=str(job.id),
             lane=lane,
@@ -1290,13 +1282,11 @@ def attach_pre_spawn_nonexecution_receipt(
     if str(getattr(job, "nextflow_run_id", "") or "").strip():
         raise ResourceUsageEvidenceError("pre-spawn Job has an external owner identity")
     params = params_mapping(getattr(job, "params", {}))
-    handoff = validate_resource_admission_handoff(params.get(GLOBAL_RESOURCE_ADMISSION_PARAM))
-    if handoff is None or handoff["canonical_job_id"] != str(job.id):
-        raise ResourceUsageEvidenceError("pre-spawn resource admission authority is unavailable")
-    dispatch = validate_dispatch_materialization_authority(
-        params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM),
-        expected_handoff=handoff,
+    handoff, dispatch, _gpu = receive_resource_authority(
+        params.get(GLOBAL_RESOURCE_ADMISSION_PARAM), params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM),
     )
+    if handoff["canonical_job_id"] != str(job.id):
+        raise ResourceUsageEvidenceError("pre-spawn resource admission authority is unavailable")
     executions = params.get("execution_attempts")
     planning_digest: str | None = None
     owner_absence_digest: str | None = None
@@ -1554,16 +1544,10 @@ def attach_cancelled_resource_receipt_from_checkpoint(
     """Recover producer-owned accounting after the execution owner is cancelled."""
 
     params = params_mapping(getattr(job, "params", {}))
-    handoff = validate_resource_admission_handoff(params.get(GLOBAL_RESOURCE_ADMISSION_PARAM))
-    if handoff is None:
+    if params.get(GLOBAL_RESOURCE_ADMISSION_PARAM) is None:
         return None
-    dispatch_authority = validate_dispatch_materialization_authority(
-        params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM),
-        expected_handoff=handoff,
-    )
-    dispatch_gpu_index, dispatch_gpu_uuid = dispatch_gpu_authority(
-        dispatch_authority,
-        handoff=handoff,
+    handoff, dispatch_authority, (dispatch_gpu_index, dispatch_gpu_uuid) = receive_resource_authority(
+        params.get(GLOBAL_RESOURCE_ADMISSION_PARAM), params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM),
     )
     executions = params.get("execution_attempts")
     if not isinstance(executions, list) or not executions or not isinstance(executions[-1], Mapping):
@@ -1718,6 +1702,7 @@ def attach_cancelled_resource_receipt_from_checkpoint(
 def _validate_remote_producer_resource_usage(
     job: Any, receipt: dict[str, Any], handoff: Mapping[str, Any],
     dispatch_authority: Mapping[str, Any], latest: Mapping[str, Any],
+    gpu_index: int | None, gpu_uuid: str | None,
 ) -> dict[str, Any]:
     """Verify portable observation against independently persisted attempt ownership."""
     execution = receipt["execution"]
@@ -1737,7 +1722,6 @@ def _validate_remote_producer_resource_usage(
         raise ResourceUsageEvidenceError("remote resource receipt source/owner/attempt disagrees")
     if receipt["admission"] != {key: handoff[key] for key in receipt["admission"]}:
         raise ResourceUsageEvidenceError("remote resource receipt reservation differs from admission")
-    gpu_index, gpu_uuid = dispatch_gpu_authority(dispatch_authority, handoff=handoff)
     if receipt["dispatch"] != {"gpu_index": gpu_index, "gpu_uuid": gpu_uuid}:
         raise ResourceUsageEvidenceError("remote resource dispatch differs from assignment")
     observed = receipt["observed"]
@@ -1761,20 +1745,12 @@ def validate_producer_resource_usage_receipt(
 ) -> dict[str, Any]:
     """Validate one terminal producer receipt against source admission authority."""
 
-    handoff = validate_resource_admission_handoff(expected_handoff)
-    if handoff is None:
-        raise ResourceUsageEvidenceError("expected resource admission handoff is required")
     params = params_mapping(getattr(job, "params", {}))
+    handoff, dispatch_authority, (dispatch_gpu_index, dispatch_gpu_uuid) = receive_resource_authority(
+        expected_handoff, params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM),
+    )
     if params.get(GLOBAL_RESOURCE_ADMISSION_PARAM) != handoff:
         raise ResourceUsageEvidenceError("canonical Job resource admission handoff diverged")
-    dispatch_authority = validate_dispatch_materialization_authority(
-        params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM),
-        expected_handoff=handoff,
-    )
-    dispatch_gpu_index, dispatch_gpu_uuid = dispatch_gpu_authority(
-        dispatch_authority,
-        handoff=handoff,
-    )
     executions = params.get("execution_attempts")
     receipts = params.get(RESOURCE_USAGE_RECEIPTS_PARAM)
     if not isinstance(receipts, list) or any(not isinstance(item, Mapping) for item in receipts):
@@ -1842,7 +1818,9 @@ def validate_producer_resource_usage_receipt(
     latest = executions[-1]
     receipt = _validate_resource_usage_receipt_document(matches[0])
     if receipt["schema"] == REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA:
-        return _validate_remote_producer_resource_usage(job, receipt, handoff, dispatch_authority, latest)
+        return _validate_remote_producer_resource_usage(
+            job, receipt, handoff, dispatch_authority, latest, dispatch_gpu_index, dispatch_gpu_uuid,
+        )
     execution = receipt.get("execution")
     if not isinstance(execution, Mapping):
         raise ResourceUsageEvidenceError("producer resource receipt execution identity is absent")
@@ -1993,7 +1971,7 @@ __all__ = [
     "attach_resource_usage_receipt",
     "build_dispatch_materialization_authority",
     "build_resource_admission_handoff",
-    "dispatch_gpu_authority",
+    "receive_resource_authority",
     "materialize_scheduler_dispatch_authority",
     "strip_resource_execution_metadata",
     "validate_dispatch_materialization_authority",
