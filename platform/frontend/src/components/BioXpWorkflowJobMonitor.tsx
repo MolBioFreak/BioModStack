@@ -12,9 +12,9 @@ const buttonClass = 'rounded bg-cyan-700 px-3 py-2 text-sm disabled:opacity-35';
 
 /** One native readback/control owner for both prepared and saved submissions. */
 export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controlsEnabled, visible = true,
-    recoveryReport, acceptedJob = null, submitting = false, pending = false, discoveryError = false, methodsFacade = false, onObserved, busyRef, onBusyChange }: {
+    onHeld, recoveryReport, acceptedJob = null, submitting = false, pending = false, discoveryError = false, methodsFacade = false, onObserved, busyRef, onBusyChange }: {
     jobId: string | null; generation: number; connected: boolean; controlsEnabled: boolean; visible?: boolean;
-    recoveryReport?: MethodValue | null; busyRef: RefObject<boolean>; onBusyChange: (busy: boolean) => void;
+    onHeld?: () => void; recoveryReport?: MethodValue | null; busyRef: RefObject<boolean>; onBusyChange: (busy: boolean) => void;
     onObserved?: (job: unknown) => void; methodsFacade?: boolean; acceptedJob?: BioXpWorkflowJob | null; submitting?: boolean; pending?: boolean; discoveryError?: boolean;
 }) {
     const [abortConfirmed, setAbortConfirmed] = useState(false);
@@ -161,7 +161,9 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
                 <button className={buttonClass} disabled={!mutable} onClick={() => void send({ action: 'safe_stop' })}>Request safe-state stop</button>
             </div>
             {methodsFacade && !command.terminal && workflow.phase === 'waiting' && gateId && (gate === 'error_hold' || gate === 'ordinary_pause') && <BioXpRecoveryDecision
-                key={JSON.stringify([generation, jobId, command.ownership_generation, gateId, workflow.native_action_id, workflow.attempt])} jobId={job.job_id} gateId={gateId} generation={generation}
+                key={JSON.stringify([generation, jobId, command.ownership_generation, gateId, workflow.native_action_id, workflow.source_occurrence_id, workflow.attempt])} jobId={job.job_id} gateId={gateId} generation={generation}
+                onHeld={onHeld} held={connected && gate === 'error_hold' && workflow.native_action_id && workflow.source_occurrence_id && workflow.attempt
+                    ? { actionId: workflow.native_action_id, occurrence: workflow.source_occurrence_id, attempt: workflow.attempt } : undefined}
                 disabled={!mutable || pendingControl || query.isError} report={recoveryReport?.job_id === jobId && objectGate(recoveryReport) === gateId ? recoveryReport : null} send={send} />}
             {gate === 'review' && <div className="space-y-2">
                 <p>{pendingReview?.reason}</p>
