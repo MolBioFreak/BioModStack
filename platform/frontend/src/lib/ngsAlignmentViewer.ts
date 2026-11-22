@@ -169,8 +169,8 @@ export function styleIgvShadow(mount: HTMLElement): void {
     root.appendChild(style);
 }
 
-/** IGV centres each ruler label on its tick and draws it even when half falls outside the track.
- *  Skip labels that do not fit, as desktop IGV does. */
+/** IGV draws each ruler label from its left edge and never checks the right edge, so the last
+ *  label is cut off at the track border. Skip labels that do not fit. */
 export function hideClippedIgvRulerLabels(browser: { findTracks?: (filter: (track: { type?: unknown }) => boolean) => unknown[] }): boolean {
     let found: unknown[] | undefined;
     try { found = browser.findTracks?.((track) => track?.type === 'ruler'); } catch { return false; }
@@ -184,8 +184,9 @@ export function hideClippedIgvRulerLabels(browser: { findTracks?: (filter: (trac
         const context = args.context;
         const fillText = context.fillText;
         context.fillText = function clippedFillText(text: string, x: number, y: number, maxWidth?: number) {
-            const half = context.measureText(text).width / 2;
-            if (x - half < 0 || x + half > args.pixelWidth) return;
+            const width = context.measureText(text).width;
+            const left = context.textAlign === 'center' ? x - width / 2 : context.textAlign === 'right' || context.textAlign === 'end' ? x - width : x;
+            if (left < 0 || left + width > args.pixelWidth) return;
             if (maxWidth === undefined) fillText.call(context, text, x, y);
             else fillText.call(context, text, x, y, maxWidth);
         };

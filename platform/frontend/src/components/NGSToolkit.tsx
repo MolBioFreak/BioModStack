@@ -3994,7 +3994,8 @@ export function NGSToolkit() {
                 });
                 if (!igvBrowser) return;
                 styleIgvShadow(igvMount);
-                if (hideClippedIgvRulerLabels(igvBrowser)) igvBrowser.repaintViews?.();
+                // Takes effect on the next ruler draw; repainting here interrupts IGV setup.
+                hideClippedIgvRulerLabels(igvBrowser);
                 igvLibraryRef.current = igvAny;
                 ensureIgvThemeStyles(igvMount);
                 patchIgvRulerContrast(igvBrowser);

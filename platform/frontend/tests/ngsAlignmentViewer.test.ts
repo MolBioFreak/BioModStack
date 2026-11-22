@@ -638,6 +638,7 @@ test('replacement acknowledges only the recovered source dialog and retains swal
 test('ruler labels that would run past either edge are skipped', () => {
     const drawn: string[] = [];
     const context = {
+        textAlign: 'start',
         measureText: (text: string) => ({ width: text.length * 6 }),
         fillText(text: string) { drawn.push(text); },
     } as unknown as CanvasRenderingContext2D;
@@ -647,8 +648,8 @@ test('ruler labels that would run past either edge are skipped', () => {
         doDraw({ context: ctx }: { context: CanvasRenderingContext2D }) {
             ctx.fillText('100 bp', 30, 10);
             ctx.fillText('190 bp', 250, 10);
-            ctx.fillText('280 bp', 495, 10);
-            ctx.fillText('70 bp', 4, 10);
+            ctx.fillText('280 bp', 470, 10);
+            ctx.fillText('70 bp', -4, 10);
         },
     };
     const browser = { findTracks: (filter: (track: any) => boolean) => [ruler, { type: 'sequence' }].filter(filter) };
