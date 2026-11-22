@@ -11,7 +11,7 @@ import json
 import operator
 from typing import NoReturn
 
-from bioxp_method_model import validate_method, HOLDER_TARGETS
+from bioxp_method_model import validate_method, workflow_pressure_streaming, HOLDER_TARGETS
 from bioxp_workflow_authoring import WorkflowPreviewRequest, preview, native_intent, _NATIVE
 
 VERSION = 'bms-method-compiler.v1'
@@ -571,6 +571,10 @@ def compile_method(request):
                 fail('Compile request must be an object')
             method = request.get('method')
             validate_method(method)
+            try:
+                pressure_streaming = workflow_pressure_streaming(method)
+            except ValueError as exc:
+                fail(str(exc), '/method/workflow_pressure_streaming')
             from bioxp_method_deck import check_deck
             result['issues'].extend(check_deck(method))
             dependencies = deepcopy(request.get('dependencies', {}))
@@ -794,6 +798,7 @@ def compile_method(request):
             result['digest'] = hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
             document['protocol_id'] = 'method-' + result['digest']
             document['metadata']['bms_method'] = {'compiler': VERSION, 'digest': result['digest'],
+                'workflow_pressure_streaming': pressure_streaming,
                 'method': deepcopy(method), 'bindings': deepcopy(request.get('bindings', {})), 'dependencies': dependencies,
                 'native_source_commit': EXPORT['source_commit'], 'resolved_liquids': deepcopy(result['resolved'].get('liquids', [])),
                 'water_substitutions': deepcopy(result['water_substitutions']), 'initial_state': deepcopy(request.get('initial_state'))}

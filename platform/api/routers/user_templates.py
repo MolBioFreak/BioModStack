@@ -77,6 +77,12 @@ def _validate_bioxp_workflow_draft(
     if model_id is not None or base_template_id is not None:
         raise HTTPException(422, "BioXP workflow drafts have no model or base template")
     schema = params.get("schema") if isinstance(params, dict) else None
+    if schema == "bms.bioxp-method.v1":
+        from bioxp_method_model import workflow_pressure_streaming
+        try:
+            workflow_pressure_streaming(params)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     if schema in REVISIONED_SCHEMAS:
         try:
             json.dumps(params, allow_nan=False)

@@ -28,6 +28,14 @@ def liquid_detection_schema():
             'sensing': {'enum': ['hybrid', 'pressure', 'capacitive'], 'default': 'hybrid'}}}
 
 
+def workflow_pressure_streaming(method):
+    """Resolve the saved preference without materializing a default in the draft."""
+    choice = method.get('workflow_pressure_streaming', True)
+    if type(choice) is not bool:
+        raise ValueError('workflow_pressure_streaming must be a boolean')
+    return choice
+
+
 def validate_method(raw):
     """Persistence validation only: incomplete/unknown scientific fields survive."""
     if not isinstance(raw, dict) or raw.get('schema') != SCHEMA:
@@ -70,6 +78,8 @@ def method_schema():
             'steps': {'type': 'array', 'items': {'$ref': '#/$defs/node'}}, 'deck_plan': deck_schema(),
             'on_error': {'enum': ['stop', 'pause_for_operator'], 'description': (
                 'If omitted, recoverable pipetting steps hold for the operator; other steps stop.')},
+            'workflow_pressure_streaming': {'type': 'boolean', 'default': True,
+                'description': 'Capture pipette pressure during workflow execution.'},
             'tip_policy': {}, 'editor_state': {}},
         '$defs': {'expression': expression, 'value': {'description': 'Raw JSON or {expr: versioned typed AST}; no executable text'},
             'parameter': {'type': 'object', 'required': ['id', 'type'], 'properties': {
