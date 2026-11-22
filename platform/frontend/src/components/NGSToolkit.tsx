@@ -5847,7 +5847,7 @@ export function NGSToolkit() {
                                             }
                                         }}
                                         onOpenRawSignal={barcodeSignalJobId ? read => openBarcodeSignal(read.read_id)
-                                            : rawSignalRunId && rawSignalObservedGeneration && rawSignalRepresentationId ? read => void openSignalWorkbenchForRead(read) : undefined}
+                                            : signalDatasetId && rawSignalRunId && rawSignalObservedGeneration ? read => void openSignalWorkbenchForRead(read) : undefined}
                                     />
                                 )}
                             </div>
