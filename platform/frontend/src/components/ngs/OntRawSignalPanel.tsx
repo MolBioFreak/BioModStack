@@ -424,7 +424,7 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
                                             {(bamCandidates.data?.items.length ?? 0) > 0 ? (
                                                 <div className="flex flex-wrap items-center gap-2">
                                                     <select aria-label="Move-tagged BAM" value={bamChoice} onChange={(event) => setBamChoice(event.target.value)}
-                                                        className="min-w-0 flex-1 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2 py-1.5 text-sm">
+                                                        className="min-w-0 flex-1 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2 py-2 text-sm">
                                                         <option value="">Choose a BAM on this computer…</option>
                                                         {bamCandidates.data!.items.map((item) => <option key={item.candidate_id} value={item.candidate_id}>{item.display_name} · {fileSize(item.size_bytes)}</option>)}
                                                     </select>
@@ -439,7 +439,7 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
                                         usableReferences.length ? (
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <select aria-label="Reference for alignment" value={referenceChoice} onChange={(event) => setReferenceChoice(event.target.value)}
-                                                    className="min-w-0 flex-1 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2 py-1.5 text-sm">
+                                                    className="min-w-0 flex-1 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2 py-2 text-sm">
                                                     <option value="">Choose a reference…</option>
                                                     {usableReferences.map((item) => <option key={item.id} value={item.current_revision_id as string}>{item.name}</option>)}
                                                 </select>

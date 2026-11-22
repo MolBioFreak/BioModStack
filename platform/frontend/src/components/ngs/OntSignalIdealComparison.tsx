@@ -37,6 +37,10 @@ export interface OntSignalIdealComparisonProps {
 }
 
 const TERMINAL = new Set(['ready', 'failed', 'cancelled']);
+const JOB_WORDS: Record<string, string> = { requested: 'waiting to start', running: 'simulating and drawing…', ready: 'ready', failed: 'failed', cancelled: 'cancelled' };
+const OUTCOME_WORDS: Record<string, string> = { approve: 'Approved', reject: 'Rejected', record_only: 'Recorded' };
+const FIELD = 'flex items-center gap-2';
+const INPUT = 'rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1';
 const PROFILES: Array<{ id: OntSignalComparisonProfileId; label: string; approximate: boolean }> = [
     { id: 'dna-r9-min', label: 'DNA R9.4.1 MinION', approximate: false },
     { id: 'dna-r9-prom', label: 'DNA R9.4.1 PromethION', approximate: false },
@@ -339,39 +343,30 @@ export function OntSignalIdealComparison({
         finally { if (generation === generationRef.current) setBusy(false); }
     };
 
-    return <section className="space-y-2 rounded border border-[var(--border-primary)] p-2 text-[10px]">
-        <div className="flex items-center justify-between"><h3 className="text-xs font-semibold">Ideal comparison</h3><span>{viewerSession.run_id} · generation {viewerSession.observed_generation}</span></div>
-        <div>Real acquired signal: <code>{selectedReadId || 'no read'}</code> · reference <code>{viewerSession.reference_revision_id || 'unbound'}</code> · {contig}:{start ?? '?'}-{end ?? '?'}</div>
-        <div className="grid grid-cols-2 gap-2">
-            <label>Simulation profile<select aria-label="Simulation profile" disabled={busy} value={profileId} onChange={(event) => setProfileId(event.target.value as OntSignalComparisonProfileId)} className="ml-1 rounded border bg-transparent p-1">{PROFILES.map((profile) => <option key={profile.id} value={profile.id}>{profile.label}</option>)}</select></label>
-            <label>Seed<input aria-label="Simulation seed" type="number" min={1} max={2147483647} disabled={busy} value={seed} onChange={(event) => setSeed(Number(event.target.value))} className="ml-1 w-24 rounded border bg-transparent p-1" /></label>
+    return <section data-testid="ont-ideal-comparison" className="space-y-3 rounded border border-[var(--border-primary)] p-3 text-xs">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="text-sm font-semibold">Ideal comparison</h3>
+            <span className="text-[var(--text-secondary)]">
+                {selectedReadId ? <>Read <code title={selectedReadId} className="text-[var(--text-primary)]">{selectedReadId.slice(0, 8)}</code></> : 'No read picked'} · {contig || 'no contig'} {start ?? '?'}–{end ?? '?'}
+            </span>
         </div>
-        <div className="grid grid-cols-2 gap-1 md:grid-cols-3">
-            <label>Scale<select aria-label="Comparison scale" disabled={busy} value={comparisonRenderParams.scale} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, scale: event.target.value as OntSignalComparisonRenderParams['scale'] }))}><option value="none">none</option><option value="medmad">medmad</option><option value="znorm">znorm</option></select></label>
-            <label>Point size<select aria-label="Comparison point size" disabled={busy} value={comparisonRenderParams.point_size} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, point_size: Number(event.target.value) as OntSignalComparisonPointSize }))}>{POINT_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}</select></label>
-            <label><input aria-label="Comparison fixed width" type="checkbox" disabled={busy} checked={comparisonRenderParams.fixed_width} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, fixed_width: event.target.checked }))} /> fixed width</label>
-            <label>Base width<input aria-label="Comparison base width" type="number" min={1} max={100} disabled={busy || !comparisonRenderParams.fixed_width} value={comparisonRenderParams.base_width} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, base_width: Number(event.target.value) }))} /></label>
-            <label>Base limit<input aria-label="Comparison base limit" type="number" min={1} max={1000} disabled={busy} value={comparisonRenderParams.base_limit} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, base_limit: Number(event.target.value) }))} /></label>
-            <label>Signal samples<input aria-label="Comparison signal sample limit" type="number" min={1} max={2000000} disabled={busy} value={comparisonRenderParams.signal_sample_limit} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, signal_sample_limit: Number(event.target.value) }))} /></label>
-            <label><input aria-label="Comparison show samples" type="checkbox" disabled={busy} checked={comparisonRenderParams.show_samples} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, show_samples: event.target.checked }))} /> samples</label>
-            <label><input aria-label="Comparison show base colours" type="checkbox" disabled={busy} checked={comparisonRenderParams.show_base_colours} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, show_base_colours: event.target.checked }))} /> base colours</label>
-            <label><input aria-label="Comparison remove outliers" type="checkbox" disabled={busy} checked={comparisonRenderParams.remove_signal_outliers} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, remove_signal_outliers: event.target.checked }))} /> remove outliers</label>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <label className={FIELD}>Simulation profile<select aria-label="Simulation profile" disabled={busy} value={profileId} onChange={(event) => setProfileId(event.target.value as OntSignalComparisonProfileId)} className={INPUT}>{PROFILES.map((profile) => <option key={profile.id} value={profile.id}>{profile.label}</option>)}</select></label>
+            <label className={FIELD}>Seed<input aria-label="Simulation seed" type="number" min={1} max={2147483647} disabled={busy} value={seed} onChange={(event) => setSeed(Number(event.target.value))} className={`${INPUT} w-24`} /></label>
         </div>
-        <details><summary>Profile-fixed values</summary>{effectiveProfile ? <dl className="grid grid-cols-2 gap-x-2">
-            <dt>Molecule</dt><dd>{effectiveProfile.molecule_type}</dd><dt>Flow-cell generation</dt><dd>{effectiveProfile.flow_cell_generation}</dd>
-            <dt>Device class</dt><dd>{effectiveProfile.device_class}</dd><dt>Pore model</dt><dd>{effectiveProfile.pore_model_identity}</dd>
-            <dt>K-mer length</dt><dd>{effectiveProfile.kmer_length}</dd><dt>Digitisation</dt><dd>{effectiveProfile.digitisation}</dd>
-            <dt>Sample rate</dt><dd>{effectiveProfile.sample_rate} Hz</dd><dt>Translocation speed</dt><dd>{effectiveProfile.translocation_speed} bases/s</dd>
-            <dt>Range</dt><dd>{effectiveProfile.range}</dd><dt>Offset mean ± SD</dt><dd>{effectiveProfile.offset_mean} ± {effectiveProfile.offset_standard_deviation}</dd>
-            <dt>Median-before mean ± SD</dt><dd>{effectiveProfile.median_before_mean} ± {effectiveProfile.median_before_standard_deviation}</dd>
-            <dt>Dwell mean ± SD</dt><dd>{effectiveProfile.dwell_mean} ± {effectiveProfile.dwell_standard_deviation}</dd>
-            <dt>Compatibility floor</dt><dd>{effectiveProfile.compatibility_floor}</dd><dt>Model warning</dt><dd>{effectiveProfile.model_quality_warning || 'None'}</dd>
-        </dl> : <div>Preview to load the exact pinned profile constants.</div>}<div>One full-contig record · one thread · deterministic seed · ideal reference only</div></details>
-        {currentProfile.approximate && <div className="rounded border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-1 text-[var(--warning)]">R10/RNA004 models are approximation profiles; simulated signal is model-derived and is not instrument-acquired evidence.</div>}
-        {preview && <div className="space-y-1 rounded border p-1"><div>Derived context {contig}:{preview.derived_window.start}-{preview.derived_window.end} · {preview.simulation_orientation}</div><div>Reference FASTA digest <code>{preview.reference_fasta_sha256}</code></div><div>Preview digest <code>{preview.preview_digest}</code></div>{preview.warnings.map((warning) => <div key={warning} className="text-[var(--warning)]">{warning}</div>)}</div>}
+        {currentProfile.approximate && <p className="text-[var(--warning)]">R10 and RNA004 models are approximate: the simulated trace is a model, not measured signal.</p>}
+        <div className="flex flex-wrap items-center gap-2">
+            <button type="button" disabled={busy} onClick={() => void runPreview()} className="rounded border border-[var(--border-primary)] px-3 py-1">Preview</button>
+            <button type="button" disabled={busy || !previewCurrent} onClick={() => void create()} className="rounded bg-[var(--accent-primary)] px-3 py-1 text-[var(--text-on-accent)] disabled:opacity-40">Generate and compare</button>
+            {preview ? <span className="text-[var(--text-secondary)]">Simulates {contig} {preview.derived_window.start}–{preview.derived_window.end}, {preview.simulation_orientation} strand.</span> : null}
+        </div>
+        {preview?.warnings.map((warning) => <p key={warning} className="text-[var(--warning)]">{warning}</p>)}
         {error && <div role="alert" className="text-[var(--error)]">{error}</div>}
-        <div className="flex gap-2"><button type="button" disabled={busy} onClick={() => void runPreview()} className="rounded border px-2 py-1">Preview</button><button type="button" disabled={busy || !previewCurrent} onClick={() => void create()} className="rounded border px-2 py-1">Generate and compare</button></div>
-        {job && <div className="space-y-1"><div>Comparison {job.comparison_job_id} · attempt {job.attempt_number} · {job.state}: {job.reason_code}</div>{!TERMINAL.has(job.state) && <button type="button" disabled={busy} onClick={() => void applyLifecycle(cancelOntSignalIdealComparison(job.comparison_job_id))} className="rounded border px-2 py-1">Cancel comparison</button>}{(job.state === 'failed' || job.state === 'cancelled') && job.attempt_number < 3 && <button type="button" disabled={busy} onClick={() => void applyLifecycle(createFreshOntSignalIdealComparisonAttempt(job.comparison_job_id))} className="rounded border px-2 py-1">Create fresh attempt</button>}</div>}
+        {job && <div data-comparison-job={job.comparison_job_id} data-state={job.state} data-reason={job.reason_code} title={job.reason_code} className="flex flex-wrap items-center gap-2">
+            <span>Comparison: {JOB_WORDS[job.state] ?? job.state}{job.attempt_number > 1 ? ` (attempt ${job.attempt_number})` : ''}{job.state === 'failed' && job.failure_message ? `. ${job.failure_message}` : ''}</span>
+            {!TERMINAL.has(job.state) && <button type="button" disabled={busy} onClick={() => void applyLifecycle(cancelOntSignalIdealComparison(job.comparison_job_id))} className="rounded border border-[var(--border-primary)] px-2 py-1">Cancel comparison</button>}
+            {(job.state === 'failed' || job.state === 'cancelled') && job.attempt_number < 3 && <button type="button" disabled={busy} onClick={() => void applyLifecycle(createFreshOntSignalIdealComparisonAttempt(job.comparison_job_id))} className="rounded border border-[var(--border-primary)] px-2 py-1">Create fresh attempt</button>}
+        </div>}
         {artifactUrl ? <div
             ref={comparisonFullscreenRef}
             data-comparison-fullscreen-owner
@@ -384,8 +379,47 @@ export function OntSignalIdealComparison({
                 </button>
             </div>
             <iframe title="Real acquired signal and ideal simulated reference" src={artifactUrl} sandbox="allow-scripts" referrerPolicy="no-referrer" className={`${comparisonIsFullscreen ? 'h-full min-h-0 flex-1' : 'h-[360px]'} w-full rounded border bg-white`} />
-        </div> : <div className="flex h-24 items-center justify-center rounded border border-dashed">No ready ideal comparison.</div>}
-        {job?.state === 'ready' && <div className="space-y-1 rounded border p-1"><div className="font-semibold">Manual trace review</div><div>Does the real trace visually agree with the ideal expectation?</div><select aria-label="Review required outcome" disabled={busy} value={outcome} onChange={(event) => setOutcome(event.target.value as OntSignalComparisonReview['required_outcome'])}><option value="approve">Approve</option><option value="reject">Reject</option><option value="record_only">Record only</option></select><textarea aria-label="Review note" disabled={busy} value={note} onChange={(event) => setNote(event.target.value)} /><button type="button" onClick={() => void saveReview()} disabled={busy || !note.trim()}>Record review revision</button>{reviews.map((review) => <div key={review.review_id}>{review.created_at}: {review.required_outcome} · {review.note}</div>)}</div>}
-        <details><summary>Complete provenance</summary><pre className="max-h-52 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify({ preview, job }, null, 2)}</pre></details>
+        </div> : <div className="flex h-24 items-center justify-center rounded border border-dashed border-[var(--border-primary)] px-3 text-center text-[var(--text-secondary)]">{job && !TERMINAL.has(job.state) ? 'Drawing the comparison…' : 'Preview, then Generate and compare, to draw this read above its ideal trace.'}</div>}
+        {job?.state === 'ready' && <div className="space-y-2 rounded border border-[var(--border-primary)] p-2">
+            <div className="font-semibold">Manual trace review</div>
+            <label className="flex flex-col gap-1">Does the real trace match the ideal one?
+                <select aria-label="Review required outcome" disabled={busy} value={outcome} onChange={(event) => setOutcome(event.target.value as OntSignalComparisonReview['required_outcome'])} className={INPUT}><option value="approve">Approve</option><option value="reject">Reject</option><option value="record_only">Record only</option></select></label>
+            <textarea aria-label="Review note" placeholder="Note (required)" rows={2} disabled={busy} value={note} onChange={(event) => setNote(event.target.value)} className={`${INPUT} w-full`} />
+            <button type="button" onClick={() => void saveReview()} disabled={busy || !note.trim()} className="rounded border border-[var(--border-primary)] px-3 py-1 disabled:opacity-40">Record review revision</button>
+            {reviews.length ? <ul className="space-y-0.5 text-[var(--text-secondary)]">{reviews.map((review) => <li key={review.review_id}>{new Date(review.created_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}: {OUTCOME_WORDS[review.required_outcome] ?? review.required_outcome} · {review.note}</li>)}</ul> : null}
+        </div>}
+        <details className="rounded border border-[var(--border-primary)] px-2 py-1"><summary className="cursor-pointer text-[var(--text-secondary)]">Display settings</summary>
+        <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2">
+            <label className={FIELD}>Scale<select aria-label="Comparison scale" className={INPUT} disabled={busy} value={comparisonRenderParams.scale} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, scale: event.target.value as OntSignalComparisonRenderParams['scale'] }))}><option value="none">none</option><option value="medmad">medmad</option><option value="znorm">znorm</option></select></label>
+            <label className={FIELD}>Point size<select aria-label="Comparison point size" className={INPUT} disabled={busy} value={comparisonRenderParams.point_size} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, point_size: Number(event.target.value) as OntSignalComparisonPointSize }))}>{POINT_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}</select></label>
+            <label className={FIELD}><input aria-label="Comparison fixed width" type="checkbox" disabled={busy} checked={comparisonRenderParams.fixed_width} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, fixed_width: event.target.checked }))} /> fixed width</label>
+            <label className={FIELD}>Base width<input aria-label="Comparison base width" className={INPUT} type="number" min={1} max={100} disabled={busy || !comparisonRenderParams.fixed_width} value={comparisonRenderParams.base_width} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, base_width: Number(event.target.value) }))} /></label>
+            <label className={FIELD}>Base limit<input aria-label="Comparison base limit" className={INPUT} type="number" min={1} max={1000} disabled={busy} value={comparisonRenderParams.base_limit} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, base_limit: Number(event.target.value) }))} /></label>
+            <label className={FIELD}>Signal samples<input aria-label="Comparison signal sample limit" className={INPUT} type="number" min={1} max={2000000} disabled={busy} value={comparisonRenderParams.signal_sample_limit} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, signal_sample_limit: Number(event.target.value) }))} /></label>
+            <label className={FIELD}><input aria-label="Comparison show samples" type="checkbox" disabled={busy} checked={comparisonRenderParams.show_samples} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, show_samples: event.target.checked }))} /> samples</label>
+            <label className={FIELD}><input aria-label="Comparison show base colours" type="checkbox" disabled={busy} checked={comparisonRenderParams.show_base_colours} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, show_base_colours: event.target.checked }))} /> base colours</label>
+            <label className={FIELD}><input aria-label="Comparison remove outliers" type="checkbox" disabled={busy} checked={comparisonRenderParams.remove_signal_outliers} onChange={(event) => setComparisonRenderParams((current) => ({ ...current, remove_signal_outliers: event.target.checked }))} /> remove outliers</label>
+        </div>
+        </details>
+        <details className="rounded border border-[var(--border-primary)] px-2 py-1"><summary className="cursor-pointer text-[var(--text-secondary)]">Model constants</summary>{effectiveProfile ? <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5">
+            <dt>Molecule</dt><dd>{effectiveProfile.molecule_type}</dd><dt>Flow-cell generation</dt><dd>{effectiveProfile.flow_cell_generation}</dd>
+            <dt>Device class</dt><dd>{effectiveProfile.device_class}</dd><dt>Pore model</dt><dd>{effectiveProfile.pore_model_identity}</dd>
+            <dt>K-mer length</dt><dd>{effectiveProfile.kmer_length}</dd><dt>Digitisation</dt><dd>{effectiveProfile.digitisation}</dd>
+            <dt>Sample rate</dt><dd>{effectiveProfile.sample_rate} Hz</dd><dt>Translocation speed</dt><dd>{effectiveProfile.translocation_speed} bases/s</dd>
+            <dt>Range</dt><dd>{effectiveProfile.range}</dd><dt>Offset mean ± SD</dt><dd>{effectiveProfile.offset_mean} ± {effectiveProfile.offset_standard_deviation}</dd>
+            <dt>Median-before mean ± SD</dt><dd>{effectiveProfile.median_before_mean} ± {effectiveProfile.median_before_standard_deviation}</dd>
+            <dt>Dwell mean ± SD</dt><dd>{effectiveProfile.dwell_mean} ± {effectiveProfile.dwell_standard_deviation}</dd>
+            <dt>Compatibility floor</dt><dd>{effectiveProfile.compatibility_floor}</dd><dt>Model warning</dt><dd>{effectiveProfile.model_quality_warning || 'None'}</dd>
+        </dl> : <p className="mt-1 text-[var(--text-secondary)]">Shown after Preview.</p>}</details>
+        <details className="rounded border border-[var(--border-primary)] px-2 py-1"><summary className="cursor-pointer text-[var(--text-secondary)]">Technical details</summary>
+            <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5">
+                <dt>Run</dt><dd className="break-all font-mono">{viewerSession.run_id} · generation {viewerSession.observed_generation}</dd>
+                <dt>Read</dt><dd className="break-all font-mono">{selectedReadId || 'none'}</dd>
+                <dt>Reference revision</dt><dd className="break-all font-mono">{viewerSession.reference_revision_id || 'none'}</dd>
+                {preview ? <><dt>Reference FASTA digest</dt><dd className="break-all font-mono">{preview.reference_fasta_sha256}</dd><dt>Preview digest</dt><dd className="break-all font-mono">{preview.preview_digest}</dd></> : null}
+                {job ? <><dt>Comparison job</dt><dd className="break-all font-mono">{job.comparison_job_id} · {job.state}: {job.reason_code}</dd></> : null}
+            </dl>
+            <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-all text-[11px]">{JSON.stringify({ preview, job }, null, 2)}</pre>
+        </details>
     </section>;
 }

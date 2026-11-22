@@ -2260,6 +2260,7 @@ export function NGSToolkit() {
     const [motifMinCoverage, setMotifMinCoverage] = useState<number>(DEFAULT_MOTIF_MIN_COVERAGE);
     const [requireStrandConcordance, setRequireStrandConcordance] = useState(true);
     const igvContainerRef = useRef<HTMLDivElement | null>(null);
+    const [igvContainerNode, setIgvContainerNode] = useState<HTMLDivElement | null>(null);
     const igvFullscreenShellRef = useRef<HTMLDivElement | null>(null);
     const runInspectorRef = useRef<HTMLDivElement | null>(null);
     const igvLoadTokenRef = useRef(0);
@@ -2297,6 +2298,21 @@ export function NGSToolkit() {
     useEffect(() => {
         setSignalViewerSession(requestedViewerSessionQuery.data || null);
     }, [requestedViewerSessionId, requestedViewerSessionQuery.data]);
+
+    // IGV only relays itself out on a window resize; opening the signal panel narrows its box.
+    useEffect(() => {
+        if (!igvContainerNode || typeof ResizeObserver === 'undefined') return undefined;
+        let width = igvContainerNode.clientWidth;
+        let frame = 0;
+        const observer = new ResizeObserver(() => {
+            if (igvContainerNode.clientWidth === width) return;
+            width = igvContainerNode.clientWidth;
+            window.cancelAnimationFrame(frame);
+            frame = window.requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+        });
+        observer.observe(igvContainerNode);
+        return () => { observer.disconnect(); window.cancelAnimationFrame(frame); };
+    }, [igvContainerNode]);
 
     const openIgvModal = useCallback(() => {
         setIgvInspectorOpen(false);
@@ -5623,7 +5639,7 @@ export function NGSToolkit() {
                                             setIgvRangeError(null);
                                         }}
                                         placeholder={selectedAlignmentSession?.reference?.contig
-                                            ? `${selectedAlignmentSession.reference.contig}:3400-3600`
+                                            ? `${selectedAlignmentSession.reference.contig}:start-end`
                                             : 'contig:start-end'}
                                         className="w-[210px] rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--text-primary)]"
                                     />
@@ -5772,7 +5788,7 @@ export function NGSToolkit() {
                         <div className="flex-1 overflow-hidden min-h-0">
                             <div className="relative w-full h-full">
                                 <div
-                                    ref={igvContainerRef}
+                                    ref={(node) => { igvContainerRef.current = node; setIgvContainerNode(node); }}
                                     className={`ngs-readable-igv absolute inset-y-0 left-0 bg-[var(--bg-primary)] ${signalWorkbenchRequested ? 'right-0 lg:right-[560px]' : igvInspectorOpen ? 'right-0 lg:right-[600px]' : 'right-0'}`}
                                 />
                                 {igvLoading && (
