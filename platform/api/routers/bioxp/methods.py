@@ -17,7 +17,7 @@ from routers import user_templates
 from services.user_template_revisions import exact_revision
 from services.bioxp.protocol_models import (
     ProtocolSubmission, ProtocolControlRequest, ProtocolReviewRequest, ProtocolJob,
-    ProtocolJobObservation, ProtocolControlResponse,
+    ProtocolJobObservation, ProtocolControlResponse, RequestedRecovery,
 )
 from services.bioxp.method_report import occurrence_outcomes, application_report, duration_report
 from services.bioxp.method_recovery import resolve_occurrence, original_occurrences
@@ -364,6 +364,18 @@ async def clone_run(job_id: str, expected_connection_generation: int | None = Qu
     result = {key: deepcopy(snapshot[key]) for key in ("method", "bindings", "dependencies", "initial_state") if key in snapshot}
     return {**result, "original_job_id": job_id, "submitted": False,
             "snapshot_evidence": _evidence(job, snapshot)}
+
+
+@router.post("/runs/{job_id}/recovery-preview")
+async def recovery_preview(job_id: str, data: RequestedRecovery,
+                           expected_connection_generation: int | None = Query(None, ge=0),
+                           runtime=Depends(get_bioxp_runtime)):
+    from services.bioxp.method_recovery import preview_recovery
+    job = await protocols.get_protocol_job(job_id, expected_connection_generation, False, runtime)
+    try:
+        return await run_in_threadpool(preview_recovery, job, _snapshot(job), data)
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
 
 
 @router.post("/runs/{job_id}/recovery-draft")

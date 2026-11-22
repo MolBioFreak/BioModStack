@@ -88,7 +88,27 @@ class AbortControl(ControlBinding):
     action: Literal["abort"]
 
 
-ProtocolControlRequest = Annotated[PauseControl | WakeControl | ContinueControl | SafeStopControl | AbortControl, Field(discriminator="action")]
+class RequestedRecovery(ProtocolWireModel):
+    action: Literal["recover"]
+    decision: Literal["retry", "repeat", "skip", "manual_complete"]
+    gate_id: Identity
+    source_occurrence_id: Identity
+    native_action_id: Identity
+    expected_attempt: Annotated[StrictInt, Field(ge=1)]
+    overrides: dict[Literal["aspiration_delay_ms", "submerge_steps", "on_contact_delay_ms"], Annotated[StrictInt, Field(ge=0)]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_edits(self):
+        if self.overrides and self.decision not in ("retry", "repeat"):
+            raise ValueError("Only an executing decision accepts overrides")
+        return self
+
+
+class RecoveryControl(ControlBinding, RequestedRecovery):
+    pass
+
+
+ProtocolControlRequest = Annotated[RecoveryControl | PauseControl | WakeControl | ContinueControl | SafeStopControl | AbortControl, Field(discriminator="action")]
 
 
 class ProtocolReviewRequest(ControlBinding):
@@ -159,7 +179,12 @@ class RequestedTermination(ProtocolWireModel):
     action: Literal["safe_stop", "abort"]
 
 
-RequestedControl = Annotated[RequestedPause | RequestedWake | RequestedContinue | RequestedTermination, Field(discriminator="action")]
+class ObservedRecovery(ProtocolWireModel):
+    action: Literal["recover"]
+    gate_id: Identity
+
+
+RequestedControl = Annotated[ObservedRecovery | RequestedPause | RequestedWake | RequestedContinue | RequestedTermination, Field(discriminator="action")]
 
 
 class ProtocolWorkflowState(ProtocolWireModel):
@@ -168,6 +193,8 @@ class ProtocolWorkflowState(ProtocolWireModel):
     gate: WorkflowGate | None
     gate_id: Identity | None
     source_occurrence_id: Identity | None
+    native_action_id: Identity | None = None
+    attempt: Annotated[StrictInt, Field(ge=1)] | None = None
     requested_control: RequestedControl | None
     last_control_id: Identity | None
     reached_control_id: Identity | None
