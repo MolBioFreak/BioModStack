@@ -34,6 +34,7 @@ from database import (
     InputFile,
     OntInstrumentRun,
     OntInstrumentRunEvent,
+    OntMoveTableSource,
     OntRawSignalDerivationEvent,
     OntRawSignalDerivationJob,
     OntRawSignalLookup,
@@ -4795,6 +4796,12 @@ async def list_signal_sources(session: AsyncSession, *, experiment_group: str) -
         .order_by(OntRawSignalDerivationJob.created_at, OntRawSignalDerivationJob.id)
     )).scalars():
         conversions[(job.run_id, job.observed_generation)] = job
+    moves: dict[tuple[str, int], OntMoveTableSource] = {}
+    for move in (await session.execute(
+        select(OntMoveTableSource).where(OntMoveTableSource.run_id.in_(run_ids))
+        .order_by(OntMoveTableSource.created_at, OntMoveTableSource.id)
+    )).scalars():
+        moves[(move.run_id, move.observed_generation)] = move
     source_run = func.json_extract(Job.params, "$.source_instrument_run_id")
     results: dict[str, list[dict[str, Any]]] = {}
     for job_id, name, params, created_at in (await session.execute(
@@ -4817,6 +4824,7 @@ async def list_signal_sources(session: AsyncSession, *, experiment_group: str) -
         blow5 = next((item for item in held if item.format == "blow5" and item.state == _READY
                       and (item.validation_receipts or {}).get("adjacent_index")), None)
         conversion = conversions.get((run.id, generation))
+        move = moves.get((run.id, generation))
         source_manifest = source.artifact_manifest if source is not None and isinstance(source.artifact_manifest, dict) else {}
         sources.append({
             "run_id": run.id,
@@ -4836,6 +4844,12 @@ async def list_signal_sources(session: AsyncSession, *, experiment_group: str) -
             if blow5 is not None else None,
             "conversion": {"job_id": conversion.id, "state": conversion.state,
                            "reason_code": conversion.failure_code or conversion.reason_code} if conversion is not None else None,
+            # The newest basecalls (move-tagged BAM) registered against this signal, if any.
+            "basecalls": {
+                "move_source_id": move.id, "state": move.validation_state, "reason_code": move.reason_code,
+                "basecall_model_id": move.basecall_model_id, "read_count": move.unique_read_count,
+                "external": move.external_registration_receipt_id is not None,
+            } if move is not None else None,
             "results": results.get(run.id, []),
         })
     return sources

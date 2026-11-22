@@ -8,6 +8,7 @@ const ont = vi.hoisted(() => ({
     sources: vi.fn(), reads: vi.fn(), opened: vi.fn(), requestWaveform: vi.fn(), fetchWaveform: vi.fn(), restoreStatus: vi.fn(),
     restore: vi.fn(), convert: vi.fn(), candidates: vi.fn(), retention: vi.fn(), saveRetention: vi.fn(), uploadFile: vi.fn(),
     importUpload: vi.fn(), registerCandidate: vi.fn(), handoff: vi.fn(),
+    bamCandidates: vi.fn(), registerBam: vi.fn(), references: vi.fn(), domainState: vi.fn(), align: vi.fn(), job: vi.fn(),
 }));
 
 vi.mock('../../src/lib/api', async (importOriginal) => {
@@ -20,6 +21,9 @@ vi.mock('../../src/lib/api', async (importOriginal) => {
         fetchOntExternalPod5Candidates: ont.candidates, fetchOntRawSignalRetention: ont.retention, saveOntRawSignalRetention: ont.saveRetention,
         uploadFile: ont.uploadFile, importOntRawSignalUpload: ont.importUpload, registerOntExternalPod5Candidate: ont.registerCandidate,
         requestOntBarcodeBasecallHandoff: ont.handoff,
+        fetchOntExternalMoveBamCandidates: ont.bamCandidates, registerOntExternalMoveBamCandidate: ont.registerBam,
+        fetchMolBioNgsReferences: ont.references, fetchMolBioNgsDomainState: ont.domainState,
+        createOntExternalAlignmentJob: ont.align, fetchJobById: ont.job,
     };
 });
 
@@ -37,11 +41,12 @@ const imported = {
     run_id: 'run-imported', observed_generation: 1, origin: 'imported', name: 'lib_A.pod5', status: 'completed', created_at: '2026-08-21T16:16:06',
     source: { representation_id: 'src-a', format: 'pod5', bytes: 3_627_362_144, removed: false },
     blow5: { representation_id: 'b5-a', read_count: 60784, readable: true }, conversion: { job_id: 'job-a', state: 'ready', reason_code: 'indexed_blow5_ready' },
+    basecalls: null,
     results: [{ job_id: 'result-1', name: 'lib A basecall', created_at: '2026-08-29T00:00:00', signal_workbench: true }],
 };
 const sequenced = {
     run_id: 'ont-run-1', observed_generation: 2, origin: 'sequenced', name: 'ont-run-1', status: 'completed', created_at: '2026-11-22T10:00:00',
-    source: { representation_id: 'src-s', format: 'pod5', bytes: 900_000_000, removed: false }, blow5: null, conversion: null, results: [],
+    source: { representation_id: 'src-s', format: 'pod5', bytes: 900_000_000, removed: false }, blow5: null, conversion: null, basecalls: null, results: [],
 };
 
 let container: HTMLDivElement;
@@ -81,6 +86,9 @@ describe('Raw signal tab', () => {
         ont.restoreStatus.mockResolvedValue({ representation_id: 'b5-a', state: 'not_requested' });
         ont.retention.mockResolvedValue({ policy: 'pod5_and_blow5', remove_pod5_after_verified_blow5: false, installation_default: 'pod5_and_blow5' });
         ont.candidates.mockResolvedValue({ candidates: [{ candidate_id: 'cand-1', display_name: 'run.pod5', size_bytes: 2e9, modified_at_ns: 1 }] });
+        ont.bamCandidates.mockResolvedValue({ items: [{ candidate_id: 'bam-1', display_name: 'lib_A.bam', size_bytes: 6e8, modified_at_ns: 1 }] });
+        ont.references.mockResolvedValue([{ id: 'ref-1', name: 'eGFP plasmid', current_revision_id: 'ref-rev-1', archived_at: null }]);
+        ont.domainState.mockResolvedValue({ current_state_revision_id: 'state-9' });
         analyze = vi.fn();
         container = document.createElement('div');
         document.body.appendChild(container);
@@ -199,6 +207,33 @@ describe('Raw signal tab', () => {
         await waitUntil(() => expect(detail().querySelector('svg[aria-label="Raw electrical signal waveform"] polyline')).toBeTruthy());
         expect(ont.fetchWaveform).toHaveBeenCalledWith('l1');
         expect(ont.requestWaveform).not.toHaveBeenCalled();
+    });
+
+    it('adds move-tagged basecalls to a converted file, then aligns them to a Project reference', async () => {
+        ont.registerBam.mockResolvedValue({ move_source_id: 'moves-1', state: 'requested' });
+        await mount('?run_id=run-imported');
+        await waitUntil(() => expect(container.querySelector('select[aria-label="Move-tagged BAM"] option[value="bam-1"]')).toBeTruthy());
+        expect(container.querySelector('[data-testid="ont-raw-signal-basecalls"]')!.textContent).toContain('--emit-moves');
+        const bam = container.querySelector<HTMLSelectElement>('select[aria-label="Move-tagged BAM"]')!;
+        await act(async () => { bam.value = 'bam-1'; bam.dispatchEvent(new Event('change', { bubbles: true })); });
+        await act(async () => button('Add basecalls').click());
+        await waitUntil(() => expect(ont.registerBam).toHaveBeenCalledWith('run-imported', 1, { candidate_id: 'bam-1', raw_representation_id: 'b5-a', molecule_type: 'dna' }));
+
+        await act(async () => root.unmount());
+        root = createRoot(container);
+        ont.sources.mockResolvedValue({ sources: [{ ...imported, basecalls: { move_source_id: 'moves-1', state: 'ready', reason_code: 'ok', basecall_model_id: 'sup@v4.3.0', read_count: 61708, external: true } }] });
+        ont.align.mockResolvedValue({ job_id: 'align-1', status: 'queued' });
+        ont.job.mockResolvedValue({ data: { id: 'align-1', status: 'completed' } });
+        await mount('?run_id=run-imported');
+        await waitUntil(() => expect(container.querySelector('[data-testid="ont-raw-signal-basecalls"]')!.textContent).toContain('Ready, 61,708 reads with move tables (sup@v4.3.0).'));
+        // The Project's only reference is chosen already.
+        await waitUntil(() => expect(container.querySelector<HTMLSelectElement>('select[aria-label="Reference for alignment"]')!.value).toBe('ref-rev-1'));
+        await act(async () => button('Align to reference').click());
+        await waitUntil(() => expect(ont.align).toHaveBeenCalledWith({
+            move_source_id: 'moves-1', reference_revision_id: 'ref-rev-1', global_domain_experiment_id: 'project-1',
+            molbio_ngs_state_revision_id: 'state-9', name: 'lib_A aligned to eGFP plasmid',
+        }));
+        await waitUntil(() => expect(container.textContent).toContain('Aligned. Open its squiggle views below.'));
     });
 
     it('says what to do in a Project that has no raw signal', async () => {

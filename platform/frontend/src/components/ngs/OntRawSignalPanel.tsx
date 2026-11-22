@@ -2,6 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import {
+    createOntExternalAlignmentJob,
+    fetchJobById,
+    fetchMolBioNgsDomainState,
+    fetchMolBioNgsReferences,
+    fetchOntExternalMoveBamCandidates,
     fetchOntExternalPod5Candidates,
     fetchOntPod5Restore,
     fetchOntRawSignalOpenedReads,
@@ -10,6 +15,7 @@ import {
     fetchOntRawSignalSources,
     fetchOntRawSignalWaveform,
     importOntRawSignalUpload,
+    registerOntExternalMoveBamCandidate,
     registerOntExternalPod5Candidate,
     requestOntBarcodeBasecallHandoff,
     requestOntBlow5Preparation,
@@ -25,6 +31,7 @@ import { useGlobalExperimentContext } from '../experiments/GlobalExperimentConte
 const READ_PAGE = 50;
 const WAVEFORM_POLL_ATTEMPTS = 130;
 const CONVERTING = ['requested', 'running', 'publishing', 'deferred'];
+const CHECKING = ['requested', 'running'];
 const CONVERSION_WORDS: Record<string, string> = {
     requested: 'Waiting to convert', running: 'Converting…', publishing: 'Finishing conversion…',
     deferred: 'Waiting for free resources', failed: 'Conversion failed', cancelled: 'Conversion cancelled',
@@ -193,6 +200,58 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
         onError: (error) => setNotice(failure(error, 'The run could not be opened for basecalling.')),
     });
 
+    const basecalls = selected?.basecalls ?? null;
+    const [bamChoice, setBamChoice] = useState('');
+    const [referenceChoice, setReferenceChoice] = useState('');
+    const [alignmentJobId, setAlignmentJobId] = useState<string | null>(null);
+    useEffect(() => { setBamChoice(''); setReferenceChoice(''); setAlignmentJobId(null); }, [selected?.run_id]);
+    const wantsBasecalls = Boolean(selected?.blow5?.readable && (!basecalls || basecalls.state === 'failed'));
+    const bamCandidates = useQuery({
+        queryKey: ['ont-external-move-bam-candidates'], queryFn: fetchOntExternalMoveBamCandidates, retry: false, enabled: wantsBasecalls,
+    });
+    const references = useQuery({
+        queryKey: ['molbio-ngs-references', projectId], queryFn: () => fetchMolBioNgsReferences(projectId as string),
+        retry: false, enabled: Boolean(projectId && basecalls?.state === 'ready'),
+    });
+    const usableReferences = (references.data ?? []).filter((item) => !item.archived_at && item.current_revision_id);
+    useEffect(() => {
+        if (!referenceChoice && usableReferences.length === 1) setReferenceChoice(usableReferences[0].current_revision_id as string);
+    }, [referenceChoice, usableReferences]);
+    useEffect(() => { if (basecalls && CHECKING.includes(basecalls.state)) { const handle = window.setInterval(refreshSources, 4000); return () => window.clearInterval(handle); } return undefined; },
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [basecalls?.state, basecalls?.move_source_id]);
+    const addBasecalls = useMutation({
+        mutationFn: () => registerOntExternalMoveBamCandidate(selected!.run_id, selected!.observed_generation, {
+            candidate_id: bamChoice, raw_representation_id: selected!.blow5!.representation_id, molecule_type: 'dna',
+        }),
+        onSuccess: () => { setNotice(''); refreshSources(); },
+        onError: (error) => setNotice(failure(error, 'The basecalls could not be added.')),
+    });
+    const align = useMutation({
+        mutationFn: async () => {
+            const state = await fetchMolBioNgsDomainState(projectId as string);
+            if (!state.current_state_revision_id) throw new Error('This Project has no saved sequence state yet.');
+            const reference = usableReferences.find((item) => item.current_revision_id === referenceChoice);
+            return createOntExternalAlignmentJob({
+                move_source_id: basecalls!.move_source_id, reference_revision_id: referenceChoice,
+                global_domain_experiment_id: projectId as string, molbio_ngs_state_revision_id: state.current_state_revision_id,
+                name: `${selected!.name.replace(/\.(pod5|blow5|slow5)$/i, '')} aligned to ${reference?.name ?? 'reference'}`.slice(0, 128),
+            });
+        },
+        onSuccess: (job) => { setNotice(''); setAlignmentJobId(job.job_id); },
+        onError: (error) => setNotice(failure(error, 'The alignment could not be started.')),
+    });
+    const alignmentQuery = useQuery({
+        queryKey: ['ont-raw-signal-alignment', alignmentJobId],
+        queryFn: async () => (await fetchJobById(alignmentJobId as string)).data,
+        enabled: Boolean(alignmentJobId),
+        refetchInterval: (query) => (['completed', 'failed', 'cancelled'].includes(query.state.data?.status ?? '') ? false : 4000),
+    });
+    const alignmentStatus = alignmentQuery.data?.status ?? (alignmentJobId ? 'queued' : null);
+    useEffect(() => { if (alignmentStatus === 'completed') refreshSources(); },
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [alignmentStatus]);
+
     const state = selected ? sourceState(selected) : null;
     const converting = Boolean(selected?.conversion && CONVERTING.includes(selected.conversion.state));
     const restored = restoreQuery.data;
@@ -347,6 +406,60 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
                                 </p>
                             )}
 
+                            {selected.blow5?.readable ? (
+                                <div data-testid="ont-raw-signal-basecalls" className="space-y-2 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-sm">
+                                    <h3 className={HEADING}>Basecalls for squiggle views</h3>
+                                    {basecalls && basecalls.state === 'ready' ? (
+                                        <p className="text-[var(--text-primary)]">
+                                            Ready{basecalls.read_count != null ? `, ${count(basecalls.read_count)} reads with move tables` : ''}{basecalls.basecall_model_id ? ` (${basecalls.basecall_model_id})` : ''}.
+                                        </p>
+                                    ) : basecalls && CHECKING.includes(basecalls.state) ? (
+                                        <p className="text-[var(--text-secondary)]">Checking the basecalls against this file's reads…</p>
+                                    ) : (
+                                        <>
+                                            <p className="text-[var(--text-secondary)]">
+                                                {basecalls?.state === 'failed' ? `The last basecalls could not be used: ${basecalls.reason_code.replace(/_/g, ' ')}. ` : ''}
+                                                Squiggle views need basecalls with move tables for this file: a BAM from Dorado run with --emit-moves.
+                                            </p>
+                                            {(bamCandidates.data?.items.length ?? 0) > 0 ? (
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <select aria-label="Move-tagged BAM" value={bamChoice} onChange={(event) => setBamChoice(event.target.value)}
+                                                        className="min-w-0 flex-1 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2 py-1.5 text-sm">
+                                                        <option value="">Choose a BAM on this computer…</option>
+                                                        {bamCandidates.data!.items.map((item) => <option key={item.candidate_id} value={item.candidate_id}>{item.display_name} · {fileSize(item.size_bytes)}</option>)}
+                                                    </select>
+                                                    <button type="button" disabled={!bamChoice || addBasecalls.isPending} onClick={() => addBasecalls.mutate()} className={PRIMARY}>Add basecalls</button>
+                                                </div>
+                                            ) : bamCandidates.isFetched ? (
+                                                <p className="text-xs text-[var(--text-muted)]">No BAM is waiting in the import folder. {selected.source && !selected.source.removed ? 'Use Basecall below to make one from this file.' : ''}</p>
+                                            ) : null}
+                                        </>
+                                    )}
+                                    {basecalls?.state === 'ready' ? (
+                                        usableReferences.length ? (
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <select aria-label="Reference for alignment" value={referenceChoice} onChange={(event) => setReferenceChoice(event.target.value)}
+                                                    className="min-w-0 flex-1 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2 py-1.5 text-sm">
+                                                    <option value="">Choose a reference…</option>
+                                                    {usableReferences.map((item) => <option key={item.id} value={item.current_revision_id as string}>{item.name}</option>)}
+                                                </select>
+                                                <button type="button" disabled={!referenceChoice || align.isPending || alignmentStatus === 'queued' || alignmentStatus === 'running'}
+                                                    onClick={() => align.mutate()} className={PRIMARY}>Align to reference</button>
+                                            </div>
+                                        ) : references.isFetched ? (
+                                            <p className="text-xs text-[var(--text-muted)]">Add the expected sequence as a reference in this Project to align these reads.</p>
+                                        ) : null
+                                    ) : null}
+                                    {alignmentStatus ? (
+                                        <p role="status" className={alignmentStatus === 'failed' ? 'text-[var(--warning)]' : 'text-[var(--text-secondary)]'}>
+                                            {alignmentStatus === 'completed' ? 'Aligned. Open its squiggle views below.'
+                                                : alignmentStatus === 'failed' ? `Alignment failed${alignmentQuery.data?.error_message ? `: ${alignmentQuery.data.error_message}` : ''}.`
+                                                : alignmentStatus === 'cancelled' ? 'Alignment cancelled.' : 'Aligning the reads to the reference…'}
+                                        </p>
+                                    ) : null}
+                                </div>
+                            ) : null}
+
                             <div className="space-y-2">
                                 <h3 className={HEADING}>Results from this signal</h3>
                                 {selected.results.length ? (
@@ -361,7 +474,7 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
                                             </li>
                                         ))}
                                     </ul>
-                                ) : <p className="text-sm text-[var(--text-secondary)]">None yet. Squigualiser views (bases over the signal) open from a basecalled or aligned result of this file.</p>}
+                                ) : <p className="text-sm text-[var(--text-secondary)]">None yet. Squiggle views (bases over the signal) open from an aligned result of this file.</p>}
                             </div>
                         </div>
                     ) : !sourcesQuery.isLoading ? (

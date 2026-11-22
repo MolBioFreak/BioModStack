@@ -8,7 +8,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import (
-    Base, Job, OntInstrumentRun, OntRawSignalDerivationJob, OntRawSignalLookup, OntRawSignalRepresentation,
+    Base, InputFile, Job, OntInstrumentRun, OntMoveTableSource, OntRawSignalDerivationJob, OntRawSignalLookup, OntRawSignalRepresentation,
     _canonical_sqlite_json,
 )
 from services import ont_raw_signal as raw
@@ -69,6 +69,13 @@ async def test_a_project_lists_its_sequenced_runs_and_imported_files_with_their_
             Job(id="result-2", name="lib A failed", status="failed", model_id="nanopore", mode="ont", params={"source_instrument_run_id": "run-imported"}),
             Job(id="result-3", name="unrelated", status="completed", model_id="nanopore", mode="ont", params={"source_instrument_run_id": "run-other"}),
         ])
+        session.add(InputFile(id="bam-a", filename="lib_A.bam", file_type="bam", directory="/x"))
+        await session.flush()
+        session.add(OntMoveTableSource(
+            id="moves-a", input_file_id="bam-a", run_id="run-imported", observed_generation=1, raw_representation_id="b5-a", artifact_sha256="f" * 64,
+            artifact_size_bytes=10, unique_read_count=1100, basecall_model_id="dna_r10.4.1_e8.2_400bps_sup@v4.3.0", molecule_type="dna",
+            external_registration_receipt_id="receipt-a", source_runtime_identity={}, validation_state="ready",
+            reason_code="move_source_exact_read_set_ready", validation_receipt={}, attempt_number=1))
         await session.commit()
         sources = await raw.list_signal_sources(session, experiment_group="project-a")
 
@@ -76,7 +83,9 @@ async def test_a_project_lists_its_sequenced_runs_and_imported_files_with_their_
     assert [(item["run_id"], item["origin"], item["name"]) for item in sources] == [
         ("run-sequenced", "sequenced", "run-sequenced"), ("run-imported", "imported", "lib_A.pod5")]
     sequenced, imported = sources
-    assert sequenced["source"] is None and sequenced["blow5"] is None and sequenced["results"] == []
+    assert sequenced["source"] is None and sequenced["blow5"] is None and sequenced["results"] == [] and sequenced["basecalls"] is None
+    assert imported["basecalls"] == {"move_source_id": "moves-a", "state": "ready", "reason_code": "move_source_exact_read_set_ready",
+                                     "basecall_model_id": "dna_r10.4.1_e8.2_400bps_sup@v4.3.0", "read_count": 1100, "external": True}
     assert imported["source"] == {"representation_id": "src-a", "format": "pod5", "bytes": 3_000_000_000, "removed": False}
     # Its BLOW5 files are not where the record says, so it is reported as not readable rather than failing later.
     assert imported["blow5"] == {"representation_id": "b5-a", "read_count": 1200, "readable": False}

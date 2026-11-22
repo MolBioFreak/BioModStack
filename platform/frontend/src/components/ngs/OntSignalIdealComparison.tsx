@@ -107,7 +107,9 @@ export function OntSignalIdealComparison({
     const currentProfile = PROFILES.find((item) => item.id === profileId)!;
     const effectiveProfile = preview?.effective_request?.effective_settings?.profile || job?.simulation_settings?.profile;
     const settings = useMemo<OntSignalComparisonSimulationSettings>(() => ({ profile_id: profileId, seed }), [profileId, seed]);
-    const identity = `${datasetId}:${viewerSession.viewer_session_id}:${viewerSession.revision}:${selectedReadId}:${contig}:${start}:${end}:${mappingJobId}:${mappingArtifactId}`;
+    // The saved revision is not part of this: Preview saves the session itself, and Generate
+    // checks that the preview was made against the session as it is now.
+    const identity = `${datasetId}:${viewerSession.viewer_session_id}:${selectedReadId}:${contig}:${start}:${end}:${mappingJobId}:${mappingArtifactId}`;
     const settingsIdentity = `${JSON.stringify(comparisonRenderParams)}:${profileId}:${seed}`;
 
     const replaceUrl = (next: string | null) => {
@@ -166,12 +168,12 @@ export function OntSignalIdealComparison({
         }
     };
 
-    const request = () => {
-        if (!selectedReadId || !contig || !start || !end || end < start) throw new Error('Select one exact mapped read and bounded reference interval.');
-        if (!mappingJobId || !mappingArtifactId) throw new Error('A ready signal-to-reference mapping artifact is required.');
+    const request = (session: OntSignalViewerSession = viewerSession) => {
+        if (!selectedReadId || !contig || !start || !end || end < start) throw new Error('Pick a read and a reference region (start and end) first.');
+        if (!mappingJobId || !mappingArtifactId) throw new Error('Prepare reference views first.');
         return {
-            viewer_session_id: viewerSession.viewer_session_id,
-            expected_viewer_revision: viewerSession.revision,
+            viewer_session_id: session.viewer_session_id,
+            expected_viewer_revision: session.revision,
             mapping_artifact_id: mappingArtifactId,
             selected_read_id: selectedReadId,
             reference_contig: contig,
@@ -183,10 +185,31 @@ export function OntSignalIdealComparison({
     };
     const runPreview = async () => {
         const generation = generationRef.current; setBusy(true); setError(null); setPreview(null);
-        try { const next = await previewOntSignalIdealComparison(request()); if (generation === generationRef.current) setPreview(next); }
+        try {
+            const draft = request();
+            let session = viewerSession;
+            if (session.selected_read_id !== selectedReadId || session.contig !== contig
+                || session.locus_start !== start || session.locus_end !== end) {
+                // The comparison is checked against the saved read and region, so save what is on screen first.
+                const mutation = beginViewerMutation();
+                session = await updateOntSignalViewerSession(session.viewer_session_id, {
+                    expected_revision: session.revision, contig, locus_start: start, locus_end: end,
+                    selected_read_id: selectedReadId, igv_state: session.igv_state as never,
+                    signal_state: { mode: 'ideal_comparison', render_params: renderParams, view_job_id: null,
+                        read_mapping_job_id: session.signal_state.read_mapping_job_id || null,
+                        reference_mapping_job_id: mappingJobId },
+                }, mutation.signal);
+                if (generation !== generationRef.current || mutation.signal.aborted) return;
+                if (viewerMutationRef.current === mutation) viewerMutationRef.current = null;
+                onViewerSessionChange(session);
+            }
+            const next = await previewOntSignalIdealComparison({ ...draft, viewer_session_id: session.viewer_session_id, expected_viewer_revision: session.revision });
+            if (generation === generationRef.current) setPreview(next);
+        }
         catch (reason) { if (generation === generationRef.current) setError(errorText(reason)); }
         finally { if (generation === generationRef.current) setBusy(false); }
     };
+    const previewCurrent = Boolean(preview && preview.viewer_session_revision === viewerSession.revision);
     const create = async () => {
         if (!preview) return;
         const generation = generationRef.current; setBusy(true); setError(null);
@@ -347,7 +370,7 @@ export function OntSignalIdealComparison({
         {currentProfile.approximate && <div className="rounded border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-1 text-[var(--warning)]">R10/RNA004 models are approximation profiles; simulated signal is model-derived and is not instrument-acquired evidence.</div>}
         {preview && <div className="space-y-1 rounded border p-1"><div>Derived context {contig}:{preview.derived_window.start}-{preview.derived_window.end} · {preview.simulation_orientation}</div><div>Reference FASTA digest <code>{preview.reference_fasta_sha256}</code></div><div>Preview digest <code>{preview.preview_digest}</code></div>{preview.warnings.map((warning) => <div key={warning} className="text-[var(--warning)]">{warning}</div>)}</div>}
         {error && <div role="alert" className="text-[var(--error)]">{error}</div>}
-        <div className="flex gap-2"><button type="button" disabled={busy} onClick={() => void runPreview()} className="rounded border px-2 py-1">Preview</button><button type="button" disabled={busy || !preview} onClick={() => void create()} className="rounded border px-2 py-1">Generate and compare</button></div>
+        <div className="flex gap-2"><button type="button" disabled={busy} onClick={() => void runPreview()} className="rounded border px-2 py-1">Preview</button><button type="button" disabled={busy || !previewCurrent} onClick={() => void create()} className="rounded border px-2 py-1">Generate and compare</button></div>
         {job && <div className="space-y-1"><div>Comparison {job.comparison_job_id} · attempt {job.attempt_number} · {job.state}: {job.reason_code}</div>{!TERMINAL.has(job.state) && <button type="button" disabled={busy} onClick={() => void applyLifecycle(cancelOntSignalIdealComparison(job.comparison_job_id))} className="rounded border px-2 py-1">Cancel comparison</button>}{(job.state === 'failed' || job.state === 'cancelled') && job.attempt_number < 3 && <button type="button" disabled={busy} onClick={() => void applyLifecycle(createFreshOntSignalIdealComparisonAttempt(job.comparison_job_id))} className="rounded border px-2 py-1">Create fresh attempt</button>}</div>}
         {artifactUrl ? <div
             ref={comparisonFullscreenRef}

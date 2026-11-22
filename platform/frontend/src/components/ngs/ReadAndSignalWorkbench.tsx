@@ -400,18 +400,35 @@ export function ReadAndSignalWorkbench({
         if (current) URL.revokeObjectURL(current);
     }, []);
 
+    // A session opens on its saved region; after that only an IGV move changes the region.
+    // Saving must not pull the region back to wherever IGV happens to be (often the whole contig).
+    const currentLocusKey = currentLocus ? `${currentLocus.contig}:${currentLocus.start}:${currentLocus.end}` : '';
+    const lastIgvLocusRef = useRef<string | null>(null);
     useEffect(() => {
-        const locus = currentLocus || (viewerSession?.contig && viewerSession.locus_start && viewerSession.locus_end ? {
+        const saved = viewerSession?.contig && viewerSession.locus_start && viewerSession.locus_end ? {
             contig: viewerSession.contig,
             start: viewerSession.locus_start,
             end: viewerSession.locus_end,
-        } : null);
+        } : null;
+        const locus = saved || currentLocus;
         if (locus) {
             setContig(locus.contig);
             setStart(String(locus.start));
             setEnd(String(locus.end));
         }
-    }, [currentLocus, identityKey, viewerSession?.contig, viewerSession?.locus_end, viewerSession?.locus_start]);
+        lastIgvLocusRef.current = saved ? (currentLocusKey || 'pending') : currentLocusKey;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [identityKey]);
+    useEffect(() => {
+        if (!currentLocus) return;
+        const previous = lastIgvLocusRef.current;
+        lastIgvLocusRef.current = currentLocusKey;
+        if (previous === currentLocusKey || previous === 'pending') return;
+        setContig(currentLocus.contig);
+        setStart(String(currentLocus.start));
+        setEnd(String(currentLocus.end));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentLocusKey]);
 
     useEffect(() => {
         if (!viewerSession) return;
@@ -786,6 +803,44 @@ export function ReadAndSignalWorkbench({
             if (generation === identityRef.current) setBusy(false);
         }
     };
+
+    // One plain button walks the preparation: calibration, then (after the operator accepts it)
+    // signal-to-read, then signal-to-reference against this result's alignment.
+    const chainReferenceRef = useRef(false);
+    const canPrepareReference = Boolean(referenceRevisionId && alignmentSession?.ready);
+    const running = (job: { state: string } | null) => Boolean(job && !TERMINAL_STATES.has(job.state));
+    const squiggleStep: { text: string; action: OntSignalMappingMode | null; button?: string } | null = (() => {
+        if (!activeRawRepresentationId || !compatibleSource) {
+            return capabilities ? { text: 'Squiggle views need this file as indexed BLOW5 and its basecalls with move tables.', action: null } : null;
+        }
+        if (running(calibration)) return { text: `Measuring signal timing on ${calibration!.sample_count} reads…`, action: null };
+        if (running(readMapping)) return { text: 'Lining the signal up with each read…', action: null };
+        if (running(referenceMapping)) return { text: 'Lining the signal up with the reference…', action: null };
+        if (readMapping?.state !== 'ready') {
+            if (!compatibleProfile && calibration?.state === 'ready' && calibration.artifact) {
+                return {
+                    text: `Signal timing measured on ${calibration.artifact.sample_selection.selected_count.toLocaleString()} reads (k-mer ${calibration.artifact.recommended_kmer_length}, offset ${calibration.artifact.recommended_signal_move_offset}).`,
+                    action: 'signal_to_read', button: 'Use it and prepare squiggle views',
+                };
+            }
+            return { text: 'Squiggle views are not prepared for this file yet.', action: 'signal_to_read', button: 'Prepare squiggle views' };
+        }
+        if (referenceMapping?.state !== 'ready' && canPrepareReference) {
+            return { text: 'Read views are ready. Reference and pileup views need one more step.', action: 'signal_to_reference', button: 'Prepare reference views' };
+        }
+        return null;
+    })();
+    const startSquiggleStep = (action: OntSignalMappingMode) => {
+        chainReferenceRef.current = action === 'signal_to_read';
+        void prepareMapping(action);
+    };
+    useEffect(() => {
+        if (!chainReferenceRef.current || readMapping?.state !== 'ready' || referenceMapping || !canPrepareReference || busy) return;
+        chainReferenceRef.current = false;
+        void prepareMapping('signal_to_reference');
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [readMapping?.state, referenceMapping, canPrepareReference, busy]);
+    useEffect(() => { chainReferenceRef.current = false; }, [identityKey]);
 
     const mappingForMode = mode === 'raw_waveform' ? null : mode === 'read' ? readMapping : referenceMapping;
     const mappingArtifact = mappingForMode?.artifacts.find((item) => (
@@ -1236,6 +1291,15 @@ export function ReadAndSignalWorkbench({
                 </details>
 
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
+                    {squiggleStep ? (
+                        <div data-testid="ont-squiggle-prepare" className="flex flex-wrap items-center justify-between gap-2 rounded border border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] px-2 py-1.5 text-xs">
+                            <span className="text-[var(--text-secondary)]">{squiggleStep.text}</span>
+                            {squiggleStep.action ? (
+                                <button type="button" disabled={busy} onClick={() => startSquiggleStep(squiggleStep.action!)}
+                                    className="rounded bg-[var(--accent-primary)] px-3 py-1 text-xs text-[var(--text-on-accent)] disabled:opacity-40">{squiggleStep.button}</button>
+                            ) : null}
+                        </div>
+                    ) : null}
                     <div className="flex flex-wrap items-center gap-1">
                         {([
                             { value: 'raw_waveform', label: 'Raw waveform', disabled: capabilities?.modes.raw_waveform.state !== 'ready' },
@@ -1316,7 +1380,7 @@ export function ReadAndSignalWorkbench({
                             className="h-[360px] w-full rounded border border-[var(--border-primary)] bg-white"
                         />
                     ) : (
-                        <div className="flex h-40 items-center justify-center rounded border border-dashed border-[var(--border-primary)] text-xs text-[var(--text-secondary)]">Open Diagnostics to prepare an aligned signal view.</div>
+                        <div className="flex h-40 items-center justify-center rounded border border-dashed border-[var(--border-primary)] text-xs text-[var(--text-secondary)]">{mappingArtifact ? `Pick a read, then press Render ${mode}.` : 'Prepare squiggle views above to draw this view.'}</div>
                     ))}
                 </section>
 

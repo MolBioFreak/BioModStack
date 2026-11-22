@@ -2738,6 +2738,40 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
     });
 
+    it('keeps the typed region when the session is saved, and follows IGV only when IGV moves', async () => {
+        const persisted = viewerSession({ selected_read_id: 'read-42', contig: 'chr7', locus_start: 1, locus_end: 5570 });
+        await renderWorkbench({ viewerSession: persisted, currentLocus: { contig: 'chr7', start: 1, end: 5570 } });
+        await waitUntil(() => expect(input('Start').value).toBe('1'));
+        const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+        await act(async () => {
+            setValue.call(input('Start'), '40'); input('Start').dispatchEvent(new Event('input', { bubbles: true }));
+            setValue.call(input('End'), '239'); input('End').dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        const saved = { ...persisted, locus_start: 40, locus_end: 239, revision: 8 };
+        apiMocks.updateViewerSession.mockResolvedValue(saved);
+        await act(async () => { button('Save session').click(); await Promise.resolve(); });
+        await settlePromises();
+        expect(apiMocks.updateViewerSession).toHaveBeenCalledWith('viewer-session-1', expect.objectContaining({ locus_start: 40, locus_end: 239 }));
+        // The parent hands back the saved session while IGV still shows the whole plasmid.
+        await renderWorkbench({ viewerSession: saved, currentLocus: { contig: 'chr7', start: 1, end: 5570 } });
+        await settlePromises();
+        expect([input('Start').value, input('End').value]).toEqual(['40', '239']);
+        await renderWorkbench({ viewerSession: saved, currentLocus: { contig: 'chr7', start: 500, end: 560 } });
+        await waitUntil(() => expect([input('Start').value, input('End').value]).toEqual(['500', '560']));
+    });
+
+    it('offers one plain button to prepare squiggle views outside Diagnostics', async () => {
+        apiMocks.fetchCapabilities.mockResolvedValue(capabilities({ signal_to_read_mapping_job_id: null, signal_to_reference_mapping_job_id: null, calibration_job_id: null }));
+        await renderWorkbench();
+        await waitUntil(() => expect(container.querySelector('[data-testid="ont-squiggle-prepare"]')?.textContent).toContain('Squiggle views are not prepared for this file yet.'));
+        const prepare = container.querySelector('[data-testid="ont-squiggle-prepare"] button') as HTMLButtonElement;
+        expect(prepare.textContent).toBe('Prepare squiggle views');
+        expect(prepare.closest('details')).toBeNull();
+        await act(async () => { prepare.click(); await Promise.resolve(); });
+        await settlePromises();
+        expect(apiMocks.createCalibration).toHaveBeenCalledWith('run-1', 3, expect.objectContaining({ sample_count: 100 }));
+    });
+
     it('clears a persisted view artifact when switching viewer sessions within the same dataset authority', async () => {
         const sessionA = viewerSession({
             viewer_session_id: 'viewer-session-a',
@@ -2760,7 +2794,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         await settlePromises();
 
         expect(container.querySelector('iframe')).toBeNull();
-        expect(container.textContent).toContain('Open Diagnostics to prepare an aligned signal view.');
+        expect(container.textContent).toMatch(/Prepare squiggle views above to draw this view\.|Pick a read, then press Render reference\./);
         expect(apiMocks.fetchView).toHaveBeenCalledTimes(1);
         expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:bounded-signal-view');
     });

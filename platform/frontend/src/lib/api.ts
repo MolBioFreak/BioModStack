@@ -6432,6 +6432,8 @@ export interface OntRawSignalSource {
     /** `readable` is false when the BLOW5 files no longer match what BMS recorded, so nothing new can be read from them. */
     blow5: { representation_id: string; read_count: number | null; readable: boolean } | null;
     conversion: { job_id: string; state: string; reason_code: string } | null;
+    /** Newest move-tagged basecalls registered against this signal; squiggle views are built from them. */
+    basecalls: { move_source_id: string; state: string; reason_code: string; basecall_model_id: string | null; read_count: number | null; external: boolean } | null;
     results: Array<{ job_id: string; name: string; created_at: string | null; signal_workbench: boolean }>;
 }
 /** Runs and imported files of one Project that hold raw signal. */
@@ -7092,6 +7094,24 @@ export interface OntSignalViewerSessionUpdate {
 }
 
 const signalWorkbenchRoot = '/api/ont/signal-workbench';
+export interface OntExternalAlignmentJob {
+    job_id: string;
+    name: string;
+    status: string;
+    dataset_id: string;
+    run_id: string;
+    observed_generation: number;
+    move_source_id: string;
+    reference_revision_id: string;
+}
+/** Aligns an imported file's basecalls (a validated move BAM) to one Project reference, so its squiggle views can open. */
+export const createOntExternalAlignmentJob = (request: {
+    move_source_id: string;
+    reference_revision_id: string;
+    global_domain_experiment_id: string;
+    molbio_ngs_state_revision_id: string;
+    name: string;
+}) => apiData(api.post<OntExternalAlignmentJob>(`${signalWorkbenchRoot}/external-alignment-jobs`, request));
 export const fetchOntSignalWorkbenchCapabilities = (
     runId: string,
     observedGeneration: number,
