@@ -147,26 +147,39 @@ def validate_remote_stage_receipts(*, output_root: Path, job_id: str,
     if actual != receipt_names:
         raise ValueError("remote stage receipt set is not integrity manifested")
 
-    def verified_bytes(name: str) -> bytes:
+    output_digests = {}
+
+    def verified_bytes(name: str, *, receipt: bool = False) -> bytes:
         record = records.get(name)
         if record is None or record.link_target is not None:
             raise ValueError("remote stage output is not integrity manifested")
         path = _confined(root, name)
-        if path.stat().st_size != record.size_bytes:
+        stat = path.stat()
+        if stat.st_size != record.size_bytes:
             raise ValueError("remote stage artifact size mismatch")
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        if digest.hexdigest() != record.sha256:
+        encoded = b""
+        if receipt:
+            # Parse exactly the bounded bytes whose digest we check below.
+            with path.open("rb") as handle:
+                encoded = handle.read(record.size_bytes + 1)
+            if len(encoded) != record.size_bytes:
+                raise ValueError("remote stage artifact size mismatch")
+            digest = hashlib.sha256(encoded).hexdigest()
+        else:
+            key = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+            if key not in output_digests:
+                with path.open("rb") as handle:
+                    output_digests[key] = hashlib.file_digest(handle, "sha256").hexdigest()
+            digest = output_digests[key]
+        if digest != record.sha256:
             raise ValueError("remote stage artifact digest mismatch")
-        return path.read_bytes() if name in receipt_names else b""
+        return encoded
 
     receipts = []
     for name in receipt_names:
         if records[name].size_bytes > 16 * 1024 * 1024:
             raise ValueError("remote stage receipt is too large")
-        encoded = verified_bytes(name)
+        encoded = verified_bytes(name, receipt=True)
         payload = _validate(json.loads(encoded), job_id=job_id, attempt_id=attempt_id)
         if encoded != canonical_bytes(payload) or name != f"{RECEIPT_DIRECTORY}/{_filename(payload)}":
             raise ValueError("remote stage receipt is not canonical")

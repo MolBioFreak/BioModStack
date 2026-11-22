@@ -40,3 +40,27 @@ def package(job, *, state="succeeded"):
     (incoming / "first.txt").write_bytes(b"first")
     (incoming / "second.txt").write_bytes(b"second")
     return manifest, incoming, status.model_copy(update={"result_manifest_sha256": digest})
+
+
+@pytest.mark.parametrize("new_bytes", [b"old", b"new"])
+def test_cleanup_hashes_only_distinct_files(tmp_path, monkeypatch, new_bytes):
+    backup, output = tmp_path / "old", tmp_path / "current"
+    for directory in (backup, output):
+        directory.mkdir()
+    (backup / "shared").write_bytes(b"shared")
+    os.link(backup / "shared", output / "shared")
+    (backup / "private").write_bytes(b"old")
+    (output / "private").write_bytes(new_bytes)
+    hashed = []
+    digest = hashlib.file_digest
+
+    def count(handle, algorithm):
+        hashed.append(Path(handle.name))
+        return digest(handle, algorithm)
+
+    monkeypatch.setattr(hashlib, "file_digest", count)
+    gen._retire_redundant_previous(backup, output)
+    assert hashed == [backup / "private", output / "private"]
+    assert backup.exists() == (new_bytes != b"old")
+    if backup.exists():
+        assert (backup / "shared").samefile(output / "shared")
