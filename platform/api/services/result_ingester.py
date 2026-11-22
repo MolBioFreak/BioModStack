@@ -1831,7 +1831,7 @@ async def ingest_esmfold2_results(
         persisted_job = await session.get(Job, job_id)
     strict = revision_for_job(persisted_job) == 1
     from services.esmfold2_scientific_consumer import _resolve_esmfold2_final_root
-    final_root = _resolve_esmfold2_final_root(output_path)
+    final_root = _resolve_esmfold2_final_root(output_path, persisted_job if strict else None)
     if final_root is None:
         if strict:
             raise CandidateIntegrityError("missing_candidate_declaration", "ESMFold2 producer manifest is missing")
@@ -1874,6 +1874,7 @@ async def ingest_esmfold2_results(
         sample_id = str(entry.get("sample_id") or entry.get("id") or entry.get("name") or "").strip()
         if strict:
             sample_id = entry['sample_id']
+            manifest_path = prepared[sample_id]["manifest_path"]
             combined_payload = prepared[sample_id]["payload"]
             metrics_path = Path(prepared[sample_id]["artifacts"]["metrics"]["path"])
             structure_path = Path(prepared[sample_id]["artifacts"]["structure"]["path"])

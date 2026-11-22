@@ -956,6 +956,22 @@ def _write_sequence_batch_name_map(
         write_input(csv_path, handle.getvalue().encode('utf-8'))
 
 
+def sequence_batch_roster(params):
+    batch_prefix = (
+        str(
+            params.get("sequence_batch_prefix")
+            or params.get("sequence_name")
+            or params.get("job_name")
+            or params.get("name")
+            or "variant"
+        ).strip()
+    )
+    return _normalize_sequence_batch_entries(
+        params.get("sequence_batch_entries", None),
+        prefix=batch_prefix,
+    )
+
+
 def _write_sequence_batch_payloads(
     *,
     output_dir: str,
@@ -966,19 +982,8 @@ def _write_sequence_batch_payloads(
 ) -> Tuple[Optional[Path], Optional[Path], Optional[List[Dict[str, Any]]]]:
     from component_runtime import durable_write
     write_input = write_input or durable_write
-    batch_prefix = (
-        str(
-            params.get("sequence_batch_prefix")
-            or params.get("sequence_name")
-            or params.get("job_name")
-            or params.get("name")
-            or "variant"
-        ).strip()
-    )
-    batch_entries = _normalize_sequence_batch_entries(
-        params.pop("sequence_batch_entries", None),
-        prefix=batch_prefix,
-    )
+    batch_entries = sequence_batch_roster(params)
+    params.pop('sequence_batch_entries', None)
     if not batch_entries:
         return None, None, complex_components
 

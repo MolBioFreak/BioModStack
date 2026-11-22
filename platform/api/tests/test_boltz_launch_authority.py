@@ -11,14 +11,18 @@ KEY = 'boltz_launch_authority'
 
 
 @pytest.mark.asyncio
-async def test_real_launcher_commits_authority_before_adapter_handoff(tmp_path, monkeypatch):
+@pytest.mark.parametrize('batch,primary', [(False, 'AAA:AA:A'), (True, ''), (True, 'WWWW')])
+async def test_real_launcher_commits_authority_before_adapter_handoff(tmp_path, monkeypatch, batch, primary):
     import database
     factory, engine = await setup(tmp_path)
     try:
         async with factory() as session:
             current = job(tmp_path)
             current.model_id, current.mode = 'boltz2', 'predict'
-            current.params = {'sequence': 'AAA:AA:A', 'sequence_name': 'sample', 'boltz_use_msa': False}
+            current.params = {'sequence': primary, 'sequence_name': 'sample', 'boltz_use_msa': False}
+            if batch:
+                current.params.update(num_parallel_jobs=2, sequence_batch_entries=[
+                    dict(name='alpha', sequence='ACDE'), dict(name='beta', sequence='FGHI')])
             current.status = 'queued'
             session.add(current)
             await session.commit()
@@ -44,7 +48,8 @@ async def test_real_launcher_commits_authority_before_adapter_handoff(tmp_path, 
         monkeypatch.setattr(nextflow, 'launch_via_workflow_adapter', boundary)
         await nextflow.launch_nextflow_job('job', 'boltz2', 'predict', current.params, str(tmp_path))
         assert len(observed) == 1
-        assert observed[0]['tasks'][0]['namespace'] == 'sample'
+        assert {task['namespace']: task['metadata']['producer_sequence'] for task in observed[0]['tasks']} == (
+            {'sample_001_alpha': 'ACDE', 'sample_002_beta': 'FGHI'} if batch else {'sample': primary})
     finally:
         await engine.dispose()
 

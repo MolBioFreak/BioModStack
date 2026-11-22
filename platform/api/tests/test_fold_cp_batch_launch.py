@@ -13,7 +13,8 @@ from test_fold_cp_input_msa_metadata import provider_double
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_named_fold_cp_batch(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_named_fold_cp_batch(tmp_path, monkeypatch):
     supplied = tmp_path / 'fixed.a3m'
     supplied.write_text('>q\nGGGG\n')
     rows = [('alpha', 'ACDE'), ('beta', 'FGHI')]
@@ -38,13 +39,36 @@ def test_named_fold_cp_batch(tmp_path, monkeypatch):
     assert [sequences for sequences, _ in calls] == [[s] for _,s in rows]
     run_fixture(tmp_path, native)
     published = out / 'cif_files/predictions'
-    files = sorted(published.rglob('model.cif'))
+    files = sorted(published.rglob('model_0.cif'))
     assert len(files) == 2
     for path in files:
         name = path.relative_to(published).parts[0]
         receipt = json.loads(path.read_text())
         assert receipt == [name, expected.pop(name), '4', '2', '2', '3']
     assert not expected
+    from test_core_protein_candidates import setup, job
+    from services.result_ingester import ingest_job_results
+    from sqlalchemy import select
+    from database import Design
+    factory, engine = await setup(tmp_path)
+    try:
+        async with factory() as session:
+            current = job(out, marked=False)
+            current.model_id, current.mode, current.params = inv.model_id, 'design', params
+            session.add(current)
+            await session.commit()
+            assert await ingest_job_results(current.id, str(out), session) == 2
+        async with factory() as session:
+            designs = list((await session.scalars(select(Design))).all())
+            assert {Path(d.pdb_path) for d in designs} == set(files)
+            for design in designs:
+                variant = Path(design.pdb_path).relative_to(published).parts[0]
+                assert design.producer_model_id == inv.model_id
+                assert Path(design.json_path).relative_to(out/'json_files/predictions').parts[0] == variant
+                assert design.ptm == (0.7 if variant.endswith('alpha') else 0.8)
+            assert await ingest_job_results(current.id, str(out), session) == 0
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.parametrize('batch', [False, True])
@@ -59,9 +83,9 @@ def test_unaligned_fold_cp_inputs(tmp_path, batch):
     published = out / 'cif_files/predictions'
     expected = ({'variant_001_alpha': 'ACDE', 'variant_002_beta': 'FGHI'}
                 if batch else {'boltz_cp_input': 'ACDE'})
-    for path in published.rglob('model.cif'):
+    for path in published.rglob('model_0.cif'):
         name, seq, *settings = json.loads(path.read_text())
-        assert path.relative_to(published) == (Path(name if batch else '') / 'predictions_dp0_cp0/sample/model.cif')
+        assert path.relative_to(published) == (Path(name if batch else '') / 'predictions_dp0_cp0/sample/model_0.cif')
         assert expected.pop(name) == seq
         assert settings == ['1', '1', '1', '1']
     assert not expected
@@ -90,7 +114,8 @@ else:
     assert b['msa']=='empty'
 d=Path(arg('--out_dir'))/'boltz_results_inert/predictions_dp0_cp0/sample'
 d.mkdir(parents=True)
-(d/'model.cif').write_text(json.dumps([p.stem,b['sequence'],arg('--nproc_per_node'),arg('--size_dp'),arg('--size_cp'),arg('--diffusion_samples')]))
+(d.parent/'confidence_model_0.json').write_text(json.dumps({'ptm':0.7 if p.stem.endswith('alpha') else 0.8}))
+(d/'model_0.cif').write_text(json.dumps([p.stem,b['sequence'],arg('--nproc_per_node'),arg('--size_dp'),arg('--size_cp'),arg('--diffusion_samples')]))
 """)
     params = tmp / 'params.json'
     params.write_text(json.dumps({**native, 'bcp_repo_path': str(tmp), 'code_root': str(ROOT)}))

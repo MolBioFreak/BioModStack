@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.mark.parametrize('method,mode', [(method, mode) for method in ('boltz', 'protenix', 'esmfold2')
     for mode in ('batch', 'batch+primary', 'replicas')] + [('esmfold2', 'complex-batch')])
-def test_standalone_rows(tmp_path, method, mode, monkeypatch):
+@pytest.mark.asyncio
+async def test_standalone_rows(tmp_path, method, mode, monkeypatch):
     from services import nextflow
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
@@ -31,13 +32,22 @@ def test_standalone_rows(tmp_path, method, mode, monkeypatch):
         request.update(complex_components=[dict(type='protein', id='A', sequence='PPPP'),
             dict(type='protein', id='B', sequence='GGGG')], sequence_batch_component_id='A')
     output = tmp_path/'out'
-    invocation = nextflow.compile_nextflow_invocation('boltz2' if method == 'boltz' else method,
-        'predict', request, str(output), job_id='rows')
-    invocation.materialize_inputs(output)
+    from database import Job
+    monkeypatch.syspath_prepend(str(ROOT / 'platform/api/tests'))
+    from test_core_protein_candidates import setup, job
+    factory, engine = await setup(tmp_path)
+    async with factory() as session:
+        current = job(output)
+        current.model_id = 'boltz2' if method == 'boltz' else method
+        current.params = request
+        current.provenance = {**current.provenance, "core_protein_requested_params": request}
+        session.add(current)
+        await session.commit()
+        invocation = await nextflow._compile_launch_nextflow_invocation(session, current, request, str(output))
+    await engine.dispose()
     assert 'workflows/structure_prediction.nf' in ' '.join(invocation.command)
-    params = dict(invocation.native_parameters, out_dir=str(output), code_root=str(ROOT), job_id='rows')
-    if method == 'esmfold2':
-        params['core_protein_scientific_contract'] = 1
+    params = dict(invocation.native_parameters, out_dir=str(output), code_root=str(ROOT), job_id=current.id)
+    assert params['core_protein_scientific_contract'] == 1
     if mode == 'replicas':
         expected = {'parent_job0': 'WWWW', 'parent_job1': 'WWWW'}
     else:
@@ -70,7 +80,7 @@ exec {python} "$@"
     entry.write_text(source.replace(anchor, anchor + "\n        structure_prediction_wf.out.canonical_structures.view { m, p -> 'ROW=' + JsonOutput.toJson([m, p.toString()]) }"))
     env = dict(os.environ, PATH=str(binary)+':'+os.environ['PATH'], NXF_OFFLINE='true', NXF_ANSI_LOG='false',
                NXF_HOME=str(tmp_path/'nxf'), NXF_PLUGINS_DEFAULT='', NXF_DISABLE_CHECK_LATEST='true',
-               JAVA_TOOL_OPTIONS='-XX:ActiveProcessorCount=2', BMS_NVIDIA_SMI='/bin/false')
+               BMS_TEST_ROW_PUBLICATION='1', JAVA_TOOL_OPTIONS='-XX:ActiveProcessorCount=2', BMS_NVIDIA_SMI='/bin/false')
     result = subprocess.run(['java', '-jar', str(jar), '-C', str(config), 'run', str(entry), '-params-file', str(pf)],
                             env=env, cwd=tmp_path, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -102,4 +112,45 @@ exec {python} "$@"
         assert meta['producer_artifact_sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
         observed[name] = sequence
     assert observed == expected
+    if method == 'boltz':
+        from services.result_ingester import ingest_job_results
+        async with factory() as session:
+            loaded = await session.get(Job, current.id)
+            tasks = loaded.provenance['boltz_launch_authority']['tasks']
+            assert {t['namespace']: t['metadata']['producer_sequence'] for t in tasks} == expected
+            assert await ingest_job_results(current.id, str(output), session) == len(expected)
+            assert await ingest_job_results(current.id, str(output), session) == 0
+        await engine.dispose()
+    if method == 'protenix':
+        from services.result_ingester import ingest_job_results
+        from sqlalchemy import select
+        from database import Design
+        async with factory() as session:
+            assert await ingest_job_results(current.id, str(output), session) == len(expected)
+            assert await ingest_job_results(current.id, str(output), session) == 0
+            designs = (await session.scalars(select(Design))).all()
+            producers = [d.provenance['native_producer'] for d in designs]
+            assert {p['producer_sample']: p['producer_sequence'] for p in producers} == expected
+        await engine.dispose()
+    if method == 'esmfold2':
+        from services.result_ingester import ingest_job_results
+        from services.esmfold2_scientific_consumer import verified_esmfold2_design
+        from sqlalchemy import select
+        from database import Design
+        async with factory() as session:
+            assert await ingest_job_results(current.id, str(output), session) == len(expected)
+            assert await ingest_job_results(current.id, str(output), session) == 0
+            designs = (await session.scalars(select(Design))).all()
+            assert {d.name for d in designs} == {n + '_000' for n in expected}
+            for design in designs:
+                verified = await verified_esmfold2_design(design, session)
+                assert verified['payload']['sequence_name'] == design.name[:-4]
+            if mode == 'batch':
+                # A missing second producer must not turn replay into a successful single-row import.
+                from services.core_protein_result_contract import CandidateIntegrityError
+                manifest = Path(designs[-1].json_path).parent / 'manifest.json'
+                manifest.rename(manifest.with_suffix('.missing'))
+                with pytest.raises(CandidateIntegrityError):
+                    await ingest_job_results(current.id, str(output), session)
+        await engine.dispose()
     (tmp_path/'output-metadata.json').write_text(json.dumps(outputs, indent=2))

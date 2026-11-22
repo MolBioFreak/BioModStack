@@ -125,8 +125,14 @@ def build_authority(job, command):
     else:
         sequence = params.get('sequence_input', '')
         name = params.get('sequence_name', 'predicted')
-        for index in range(count):
-            task_name = name + (f'_job{index}' if count > 1 else '')
+        if params.get('sequence_batch_json_path'):
+            entries = json.loads(snapshot(params['sequence_batch_json_path']))
+            if not isinstance(entries, list) or not 1 <= len(entries) <= 10000:
+                raise ValueError('invalid Boltz sequence batch inventory')
+            roster = [(row['name'], row['sequence']) for row in entries]
+        else:
+            roster = [(name + (f'_job{index}' if count > 1 else ''), sequence) for index in range(count)]
+        for task_name, sequence in roster:
             metadata = sequence_metadata(sequence, task_name)
             tasks.append(dict(namespace=task_name, owner='BoltzFromSequenceWithMSATask' if params.get('boltz_use_msa') == 'true' else 'BoltzFromSequenceTask',
                 metadata=metadata, input_sha256=digest(metadata['producer_sequence'].encode())))
