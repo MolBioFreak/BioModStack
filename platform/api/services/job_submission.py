@@ -201,7 +201,7 @@ def _md_contained_file(root: Path, raw_path: Any, *, code: str, label: str) -> P
     return resolved
 
 
-async def _validate_md_analysis_child(job_data: JobCreate, session: AsyncSession) -> None:
+async def _validate_md_analysis_child(job_data: JobCreate, session: AsyncSession) -> tuple[str | None, str | None]:
     """Bind one internal CPU analysis attempt to immutable completed parent dynamics."""
 
     if job_data.child_stage != "md_analysis" or not job_data.parent_job_id:
@@ -314,6 +314,7 @@ async def _validate_md_analysis_child(job_data: JobCreate, session: AsyncSession
             "md_analysis_implementation_sha256": expected_analysis_implementation_sha256(),
         }
     )
+    return parent.nextflow_run_id, parent.remote_attempt_id
 
 
 def _managed_resume_output_dir(value: Any) -> str | None:
@@ -1626,8 +1627,9 @@ async def _create_job(
     _validate_protenix_checkpoint_requirements(job_data.model_id, job_data.params)
     _validate_fampnn_checkpoint_requirements(job_data.model_id, job_data.params)
     _validate_antibody_runtime_paths(job_data.model_id, job_data.params)
+    md_parent_attempt = None
     if normalized_model_id == "molecular_dynamics" and normalized_mode == "analyze":
-        await _validate_md_analysis_child(job_data, session)
+        md_parent_attempt = await _validate_md_analysis_child(job_data, session)
 
     try:
         scientific_revision = scientific_contract.admission_revision(
@@ -2043,6 +2045,8 @@ async def _create_job(
             "selected_input_schema_version": provenance_selected_input_schema_version,
             "iteration_action": job_params.get("iteration_action") if isinstance(job_params, dict) else None,
         }
+        if md_parent_attempt is not None:
+            provenance_payload["md_parent_attempt"] = list(md_parent_attempt)
         if job_data.model_id == "nanopore":
             provenance_payload[alignment_access.PROVENANCE_DIGEST_KEY] = capability_digest
             provenance_payload[alignment_access.PROVENANCE_SCHEME_KEY] = alignment_access.SCHEME

@@ -54,7 +54,8 @@ def _publish_barrier(root, job_id):
     publish_json_immutable(barrier, root / "md_completion_barrier.json")
 
 
-async def reconcile_md_analysis_parent(parent_job_id: str, session: AsyncSession) -> dict[str, Any]:
+async def reconcile_md_analysis_parent(parent_job_id: str, session: AsyncSession, *,
+                                       expected_attempt: tuple[str | None, str | None] | None = None) -> dict[str, Any]:
     parent = (await session.execute(select(Job).where(Job.id == parent_job_id))).scalar_one_or_none()
     if parent is None or parent.model_id != "molecular_dynamics" or parent.mode != "simulate":
         raise MDResultError("MD_PARENT_INVALID", "MD analysis parent is unavailable", 404)
@@ -62,7 +63,10 @@ async def reconcile_md_analysis_parent(parent_job_id: str, session: AsyncSession
     await session.refresh(parent)
     if parent.status == "cancelled" or parent.awaiting_input or parent.paused:
         return {"status": "cancelled" if parent.status == "cancelled" else "waiting"}
-    expected_attempt = (parent.nextflow_run_id, parent.remote_attempt_id)
+    current_attempt = (parent.nextflow_run_id, parent.remote_attempt_id)
+    if expected_attempt is not None and expected_attempt != current_attempt:
+        return {"status": "preserved"}
+    expected_attempt = current_attempt
     status, queue_status = parent.status, parent.queue_status
 
     children = list(

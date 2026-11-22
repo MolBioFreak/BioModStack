@@ -4015,7 +4015,7 @@ async def launch_nextflow_job(
                         # concurrent cancellation remains authoritative even when
                         # the terminal CAS loses its race.
                         session.expire_all()
-                        await reconcile_md_analysis_parent_if_current(md_analysis_parent_id, session)
+                        await reconcile_md_analysis_parent_if_current(md_analysis_parent_id, session, child=job)
                         await session.commit()
                 try:
                     await _publish_local_review_rows(session, job_id)
@@ -4095,11 +4095,11 @@ async def launch_nextflow_job(
                             stale_log_message="Skipped stale Nextflow exception publication for job %s",
                         )
                         if published and is_md_analysis:
-                            await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session)
+                            await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session, child=job)
                             await session.commit()
 
 
-async def reconcile_md_analysis_parent_if_current(parent_job_id, session):
+async def reconcile_md_analysis_parent_if_current(parent_job_id, session, *, child=None):
     """Hand off a fresh parent, never a cancelled/review-owned ORM snapshot.
 
     The lifecycle finalizer still owns the publication fence and transaction.
@@ -4116,6 +4116,13 @@ async def reconcile_md_analysis_parent_if_current(parent_job_id, session):
         or (run is not None and run.phase in {'cancelling', 'cancelled'})
     ):
         return {'status': 'preserved'}
+    if child is not None:
+        # Only child-driven writes require an admission-time association. Never
+        # grant an unbound callback authority by reading the current parent.
+        origin = (child.provenance or {}).get('md_parent_attempt')
+        if not isinstance(origin, list) or len(origin) != 2:
+            return {'status': 'preserved'}
+        return await reconcile_md_analysis_parent(str(parent_job_id), session, expected_attempt=tuple(origin))
     return await reconcile_md_analysis_parent(str(parent_job_id), session)
 
 

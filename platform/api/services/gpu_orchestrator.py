@@ -991,7 +991,7 @@ async def _finalize_recovered_success(
         if is_md and mode == "analyze" and getattr(job, "parent_job_id", None):
             from services.nextflow import reconcile_md_analysis_parent_if_current
 
-            await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session)
+            await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session, child=job)
             await session.commit()
     try:
         if finalization is not None:
@@ -3834,7 +3834,7 @@ class GPUOrchestrator:
                                         await _commit_reconciled_job_mutations(session)
                                         from services.nextflow import reconcile_md_analysis_parent_if_current
 
-                                        await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session)
+                                        await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session, child=job)
                                         await session.commit()
                                     except Exception as exc:
                                         logger.warning("[COMPLETION] MD analysis failure reconciliation deferred for %s: %s", job.name, exc)
