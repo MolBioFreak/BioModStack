@@ -173,6 +173,7 @@ async def _persist_pre_spawn_launch_failure(
         update(Job)
         .where(
             Job.id == str(job.id),
+            Job.started_at == getattr(job, "started_at", None),
             Job.status == original["status"],
             Job.queue_status == original["queue_status"],
             Job.completed_at == original["completed_at"],
@@ -193,8 +194,7 @@ async def _persist_pre_spawn_launch_failure(
         .execution_options(synchronize_session=False)
     )
     if int(transition.rowcount or 0) != 1:
-        await session.rollback()
-        await session.refresh(job)
+        await session.commit()
         return None
     await session.commit()
     await session.refresh(job)
@@ -1465,8 +1465,6 @@ async def _claim_job_for_gpu(
     gpu_uuid: str | None = None,
 ) -> Dict[str, Any] | None:
     """Atomically claim a queued job before crossing into the launch boundary."""
-    from sqlalchemy import update
-    from database import Job
     from services.execution_ownership import attach_scheduler_gpu_assignment
 
     original = _normalize_job_params(getattr(job, "params", None))
@@ -1492,6 +1490,18 @@ async def _claim_job_for_gpu(
     except (ExecutionOwnershipError, ResourceUsageEvidenceError) as exc:
         logger.warning("[CLAIM SKIPPED] %s: %s", getattr(job, "id", ""), exc)
         return None
+    return await _claim_local_job(session, job, gpu_id, vram_estimate_mb, scheduler_params)
+
+
+async def _claim_local_job(session, job, gpu_id, vram_estimate_mb, scheduler_params, *, conditions=()):
+    """Publish the exclusive Job owner before either local handoff."""
+    from sqlalchemy import update, func
+    from database import Job
+
+    if cancellation_intent_requested(job):
+        return None
+    original = _normalize_job_params(job.params)
+    started_at = datetime.utcnow()
     provenance = dict(getattr(job, 'provenance', None) or {})
     pending = provenance.get('component_checkpoint_resume')
     checkpoint_values = {}
@@ -1502,7 +1512,15 @@ async def _claim_job_for_gpu(
     transition = await session.execute(
         update(Job)
         .where(
-            *([Job.provenance == provenance] if pending else []),
+            *conditions,
+            (Job.provenance == provenance if getattr(job, "provenance", None) is not None
+             else func.json_extract(Job.provenance, '$').is_(None)),
+            Job.execution_target_id.is_(None),
+            Job.model_id == getattr(job, "model_id", None),
+            Job.mode == getattr(job, "mode", None),
+            Job.batch_id == getattr(job, "batch_id", None),
+            Job.sequence_length == getattr(job, "sequence_length", None),
+            Job.vram_estimate_mb == getattr(job, 'vram_estimate_mb', None),
             Job.id == str(job.id),
             Job.status == "queued",
             Job.queue_status == "queued",
@@ -1516,26 +1534,16 @@ async def _claim_job_for_gpu(
         .values(
             status="running",
             queue_status="running",
-            started_at=datetime.utcnow(),
-            assigned_gpu=int(gpu_id),
+            started_at=started_at,
+            assigned_gpu=gpu_id,
             vram_estimate_mb=int(vram_estimate_mb),
             params=scheduler_params,
             **checkpoint_values,
         )
-        .execution_options(synchronize_session=False)
+        .execution_options(synchronize_session="fetch")
     )
     if int(transition.rowcount or 0) != 1:
-        await session.rollback()
-        await session.refresh(job)
         return None
-    if checkpoint_values:
-        job.provenance = checkpoint_values['provenance']
-    job.params = scheduler_params
-    job.assigned_gpu = int(gpu_id)
-    job.vram_estimate_mb = int(vram_estimate_mb)
-    job.status = "running"
-    job.queue_status = "running"
-    job.started_at = job.started_at or datetime.utcnow()
     return scheduler_params
 
 
@@ -2919,13 +2927,10 @@ class GPUOrchestrator:
             # Multiple MSA jobs in parallel can cause DRAM pressure.
             # Concurrency is configurable via scheduler global.msa_concurrency_limit.
             # ═══════════════════════════════════════════════════════════════════
-            running_msa_count_result = await session.execute(
-                select(func.count()).where(
-                    Job.model_id == 'msa_batch',
-                    Job.queue_status == 'running'
-                )
-            )
-            running_msa_count = running_msa_count_result.scalar() or 0
+            msa_count_query = select(func.count()).select_from(Job).where(
+                Job.model_id == 'msa_batch', Job.queue_status.in_(('running', 'cancelling', 'canceling'))
+            ).correlate(None)
+            running_msa_count = await session.scalar(msa_count_query)
             msa_concurrency_limit = config.get("global", {}).get("msa_concurrency_limit", 1)
             try:
                 msa_concurrency_limit = max(1, int(msa_concurrency_limit))
@@ -3190,49 +3195,23 @@ class GPUOrchestrator:
             gpu_jobs = [j for j in pending_jobs if j.vram_estimate_mb != 0]
             
             for job in cpu_only_jobs:
-                try:
-                    provenance = dict(job.provenance or {})
-                    pending = provenance.get('component_checkpoint_resume')
-                    if pending:
-                        from sqlalchemy import update
-                        import uuid
-                        claimed_provenance = {**provenance, 'component_checkpoint_resume': {
-                            **pending, 'continuation_lease_id': uuid.uuid4().hex}}
-                        claim = await session.execute(update(Job).where(Job.id == job.id,
-                            Job.status == 'queued', Job.queue_status == 'queued',
-                            Job.provenance == provenance, Job.paused.is_(False),
-                            Job.assigned_gpu.is_(None), Job.nextflow_run_id.is_(None)
-                        ).values(provenance=claimed_provenance, queue_status='running').execution_options(synchronize_session=False))
-                        if claim.rowcount != 1:
-                            await session.rollback()
-                            continue
-                        job.provenance = claimed_provenance
-                        await session.commit()
-                    await self.launch_nextflow_job(
-                        job_id=job.id,
-                        model_id=job.model_id,
-                        mode=job.mode,
-                        params={**job.params},  # No gpu_id injected
-                        output_dir=job.child_output_dir or job.output_dir
-                    )
-                    if pending or job.model_id in {'family_msa_protein', 'family_msa_nucleic'}:
-                        await session.refresh(job)
-                    if (not pending and job.model_id not in {'family_msa_protein', 'family_msa_nucleic'}) or (
-                        job.status not in {'awaiting_input', 'completed', 'failed', 'cancelled'}
-                        and job.queue_status != 'cancelling'
-                    ):
-                        job.queue_status = "running"
-                        job.assigned_gpu = None
-                        job.started_at = datetime.utcnow()
-                    logger.info(f"[LAUNCH CPU] {job.name} (no GPU, vram_estimate=0)")
-                except Exception as e:
-                    logger.error(f"[LAUNCH CPU FAILED] {job.name}: {e}")
-                    job.queue_status = "failed"
-                    job.error_message = str(e)
-            
-            if cpu_only_jobs:
+                conditions = (msa_count_query.scalar_subquery() < msa_concurrency_limit,) if job.model_id == 'msa_batch' else ()
+                params = await _claim_local_job(session, job, None, 0, _normalize_job_params(job.params),
+                                                conditions=conditions)
                 await session.commit()
-            
+                if params is None:
+                    continue
+                try:
+                    await self.launch_nextflow_job(
+                        job_id=job.id, model_id=job.model_id, mode=job.mode, params=dict(params),
+                        output_dir=job.child_output_dir or job.output_dir,
+                    )
+                    logger.info("[LAUNCH CPU] %s", job.name)
+                except Exception as exc:
+                    logger.error("[LAUNCH CPU FAILED] %s: %s", job.name, exc)
+                    # Use the claimed snapshot, not a refreshed successor.
+                    await _persist_pre_spawn_launch_failure(session, job, error=exc, completed_at=datetime.utcnow())
+
             pending_jobs = gpu_jobs
             if not pending_jobs:
                 return  # Only CPU jobs were queued
@@ -3279,159 +3258,25 @@ class GPUOrchestrator:
                     gpu_memory_mb=capacity_requirements.get("gpu_memory_mb", 0),
                 ))
             
-            # 3. Get GPU state
-            gpu_stats = self.get_gpu_stats()
-            if not gpu_stats:
-                logger.warning("[ORCHESTRATOR] No GPU stats available; skipping scheduling cycle")
-                return
-
-            # ═══════════════════════════════════════════════════════════════════════
-            # Live-aware VRAM projection and running-job metadata
-            # ═══════════════════════════════════════════════════════════════════════
-            running_jobs_result = await session.execute(
-                select(Job).where(
-                    Job.queue_status == 'running',
-                    Job.execution_target_id.is_(None),
-                    Job.assigned_gpu.isnot(None),
-                    Job.vram_estimate_mb.isnot(None)
-                )
-            )
-            running_jobs = running_jobs_result.scalars().all()
-
-            live_vram_by_job = _collect_live_vram_by_job_for_scheduler(running_jobs, gpu_stats)
-            observed_live_by_model: Dict[str, List[int]] = {}
-            running_jobs_per_gpu: Dict[int, int] = {}
-            running_by_model: Dict[str, int] = {}
-            gpu_last_launch_at: Dict[int, datetime] = {}
-            for rj in running_jobs:
-                effective_model = _effective_job_model_type(rj)
-                running_by_model[effective_model] = running_by_model.get(effective_model, 0) + 1
-                if rj.assigned_gpu is not None and job_uses_assigned_gpu(rj):
-                    running_jobs_per_gpu[rj.assigned_gpu] = running_jobs_per_gpu.get(rj.assigned_gpu, 0) + 1
-                    started_at = getattr(rj, "started_at", None)
-                    if isinstance(started_at, datetime):
-                        previous = gpu_last_launch_at.get(rj.assigned_gpu)
-                        if previous is None or started_at > previous:
-                            gpu_last_launch_at[rj.assigned_gpu] = started_at
-                live_vram = live_vram_by_job.get(rj.id)
-                if live_vram and live_vram > 0:
-                    observed_live_by_model.setdefault(effective_model, []).append(live_vram)
-
-            for job_info in job_infos:
-                job_info.scheduler_reservation_mb = _pending_job_reservation_mb(job_info, observed_live_by_model)
-
-            reservation_shortfall_by_gpu: Dict[int, int] = {}
-            for rj in running_jobs:
-                gpu_idx = rj.assigned_gpu
-                if gpu_idx is None or not job_uses_assigned_gpu(rj):
-                    continue
-                live_vram = live_vram_by_job.get(rj.id)
-                shortfall = _reservation_shortfall_mb(rj, live_vram)
-                if shortfall > 0:
-                    reservation_shortfall_by_gpu[gpu_idx] = reservation_shortfall_by_gpu.get(gpu_idx, 0) + shortfall
-
-            if reservation_shortfall_by_gpu:
-                logger.debug(f"[ORCHESTRATOR] Reservation shortfall by GPU: {reservation_shortfall_by_gpu}")
-
-            gpu_states = []
-            for g in gpu_stats:
-                effective_used = g.memory_used_mb + reservation_shortfall_by_gpu.get(g.index, 0)
-                gpu_states.append(GPUState(
-                    index=g.index,
-                    name=g.name,
-                    memory_used_mb=effective_used,
-                    memory_total_mb=g.memory_total_mb,
-                    memory_free_mb=g.memory_total_mb - effective_used,
-                    utilization=g.utilization,
-                    temperature=g.temperature
-                ))
-
-            # ═══════════════════════════════════════════════════════════════════════
-            # CONCURRENCY LIMITS: Filter jobs by per-model concurrent limits
-            # ═══════════════════════════════════════════════════════════════════════
-            concurrency_limits = config.get("concurrency_limits", {})
-            if concurrency_limits:
-                # Precompute auto limits
-                auto_limits = {}
-                for model_id, limit in concurrency_limits.items():
-                    if isinstance(limit, str) and limit.lower() == "auto":
-                        auto_limit = _compute_auto_limit(
-                            model_id,
-                            job_infos,
-                            gpu_states,
-                            config,
-                            running_jobs_per_gpu=running_jobs_per_gpu,
-                        )
-                        auto_limits[model_id] = auto_limit
-
-                # Filter pending jobs based on limits
-                pending_by_id = {job.id: job for job in pending_jobs}
-                filtered_infos = []
-                skipped_by_limit = {}
-                for job_info in job_infos:
-                    limit = concurrency_limits.get(job_info.model_type)
-                    if isinstance(limit, str) and limit.lower() == "auto":
-                        limit = auto_limits.get(job_info.model_type)
-                    if isinstance(limit, str):
-                        limit = None
-                    if limit is not None:
-                        running_count = running_by_model.get(job_info.model_type, 0)
-                        if running_count >= limit:
-                            skipped_by_limit[job_info.model_type] = skipped_by_limit.get(job_info.model_type, 0) + 1
-                            continue
-                        filtered_for_model = len([j for j in filtered_infos if j.model_type == job_info.model_type])
-                        if running_count + filtered_for_model >= limit:
-                            skipped_by_limit[job_info.model_type] = skipped_by_limit.get(job_info.model_type, 0) + 1
-                            continue
-                    filtered_infos.append(job_info)
-
-                if skipped_by_limit:
-                    logger.info(f"[CONCURRENCY] Skipped jobs due to limits: {skipped_by_limit}")
-
-                job_infos = filtered_infos
-                pending_jobs = [pending_by_id[j.id] for j in job_infos]
-
-                if not job_infos:
-                    return  # All jobs blocked by concurrency limits
-            
-            # 4. Run bin-packing
-            assignments = pack_jobs_to_gpus(
-                job_infos,
-                gpu_states,
-                target_fill,
-                config,
-                running_jobs_per_gpu=running_jobs_per_gpu,
-                gpu_last_launch_at=gpu_last_launch_at,
-            )
-            
-            if not assignments:
-                return  # No jobs could be packed
-            
-            # ═══════════════════════════════════════════════════════════════════════
-            # CRITICAL: Limit launches per cycle to prevent RAM/VRAM overload
-            # When many jobs queue at once (e.g., 40 FAMPNN children), launching them
-            # all simultaneously causes system RAM exhaustion before GPU allocation.
-            # Limit to 3 per cycle (~9 seconds), allowing VRAM to allocate before more.
-            # ═══════════════════════════════════════════════════════════════════════
-            max_launches_per_cycle = config.get("global", {}).get("max_launches_per_cycle", 3)
-            assignments = assignments[:max_launches_per_cycle]
-            
-            if len(assignments) < len(job_infos):
-                logger.info(f"[ORCHESTRATOR] Throttled to {len(assignments)}/{len(job_infos)} launches this cycle")
-
-            # 5. Launch assigned jobs with stagger to prevent GPU initialization OOM
-            used_quick_enable_gpu_ids = set()
-            for i, (job_info, gpu_id) in enumerate(assignments):
-                # Find the actual Job object
-                job = next((j for j in pending_jobs if j.id == job_info.id), None)
-                if not job:
-                    continue
-                
-                # Stagger launches to prevent GPU memory racing (0.5 second delay between)
-                # Reduced from 2.0s for faster throughput
-                if i > 0:
-                    await asyncio.sleep(0.5)
-                
+            from sqlalchemy import text
+            candidates = {j.id: j for j in pending_jobs}
+            launch_limit = config.get("global", {}).get("max_launches_per_cycle", 3)
+            launched = 0
+            await session.commit()
+            while job_infos and launched < launch_limit:
+                # The writer lock covers the reservation read, placement and Job CAS,
+                # never a stagger, launcher or worker. No speculative budget ledger.
+                await session.execute(text("BEGIN IMMEDIATE"))
+                eligible = job_infos
+                if any(info.model_type == 'msa_batch' for info in eligible):
+                    if await session.scalar(msa_count_query) >= msa_concurrency_limit:
+                        eligible = [info for info in eligible if info.model_type != 'msa_batch']
+                assignments = await self._pack_local_gpu_jobs(session, eligible, config, target_fill)
+                if not assignments:
+                    break
+                job_info, gpu_id = assignments[0]
+                job = candidates[job_info.id]
+                job_infos = [info for info in job_infos if info.id != job_info.id]
                 original_params = _normalize_job_params(getattr(job, "params", None))
                 claim_gpu_uuid = (
                     _scheduler_gpu_uuid(int(gpu_id))
@@ -3445,10 +3290,12 @@ class GPUOrchestrator:
                     int(job_info.vram_estimate_mb),
                     gpu_uuid=claim_gpu_uuid,
                 )
+                await session.commit()
                 if scheduler_params is None:
                     logger.info("[LAUNCH SKIPPED] %s lost its queued-to-running claim", job.name)
                     continue
-                await session.commit()
+                launched += 1
+                claim_started_at = job.started_at
                 try:
                     await self.launch_nextflow_job(
                         job_id=job.id,
@@ -3458,22 +3305,11 @@ class GPUOrchestrator:
                         output_dir=job.child_output_dir or job.output_dir
                     )
 
-                    # The adapter may have appended an execution receipt in a
-                    # separate session. Refresh before publishing scheduler state
-                    # so this session cannot overwrite that receipt.
-                    await session.refresh(job)
-                    if str(job.status or "").strip().lower() not in {
-                        "completed",
-                        "failed",
-                        "cancelled",
-                        "awaiting_input",
-                    }:
-                        job.queue_status = "running"
-                        job.started_at = datetime.utcnow()
-
                     if _gpu_quick_enable(gpu_id, config):
-                        used_quick_enable_gpu_ids.add(gpu_id)
-                    
+                        def consume_quick_enable(latest):
+                            latest.setdefault('overrides', {}).setdefault(str(gpu_id), {})['quick_enable'] = False
+                        mutate_scheduler_config(consume_quick_enable)
+                        consume_quick_enable(config)
                     logger.info(f"[LAUNCH] {job.name} on GPU {gpu_id}")
                     
                 except Exception as e:
@@ -3482,8 +3318,6 @@ class GPUOrchestrator:
                     # lock. A cancellation or input gate that committed first
                     # remains authoritative; one that starts later serializes
                     # after this terminal publication.
-                    await session.rollback()
-                    from sqlalchemy import text
 
                     await session.execute(text("BEGIN IMMEDIATE"))
                     failed_result = await session.execute(
@@ -3492,7 +3326,8 @@ class GPUOrchestrator:
                         .execution_options(populate_existing=True)
                     )
                     job = failed_result.scalar_one_or_none()
-                    if job is None:
+                    if job is None or job.started_at != claim_started_at:
+                        await session.commit()
                         continue
                     published = await _persist_pre_spawn_launch_failure(
                         session,
@@ -3506,16 +3341,101 @@ class GPUOrchestrator:
                             job.id,
                         )
 
-            if used_quick_enable_gpu_ids:
-                def consume_quick_enable_tokens(latest_config: Dict[str, Any]) -> None:
-                    overrides = latest_config.setdefault("overrides", {})
-                    for gpu_id in used_quick_enable_gpu_ids:
-                        overrides.setdefault(str(gpu_id), {})["quick_enable"] = False
+                    await session.commit()
+                if job_infos and launched < launch_limit:
+                    await asyncio.sleep(0.5)
 
-                mutate_scheduler_config(consume_quick_enable_tokens)
-            
-            await session.commit()
-    
+    async def _pack_local_gpu_jobs(self, session, job_infos, config, target_fill):
+        from sqlalchemy import select
+        from database import Job
+
+        # 3. Get GPU state
+        gpu_stats = self.get_gpu_stats()
+        if not gpu_stats:
+            logger.warning("[ORCHESTRATOR] No GPU stats available; skipping scheduling cycle")
+            return []
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # Live-aware VRAM projection and running-job metadata
+        # ═══════════════════════════════════════════════════════════════════════
+        running_jobs_result = await session.execute(
+            select(Job).execution_options(populate_existing=True).where(
+                Job.queue_status.in_(('running', 'cancelling', 'canceling')),
+                Job.execution_target_id.is_(None),
+                Job.assigned_gpu.isnot(None),
+                Job.vram_estimate_mb.isnot(None)
+            )
+        )
+        running_jobs = running_jobs_result.scalars().all()
+
+        live_vram_by_job = _collect_live_vram_by_job_for_scheduler(running_jobs, gpu_stats)
+        observed_live_by_model: Dict[str, List[int]] = {}
+        running_jobs_per_gpu: Dict[int, int] = {}
+        running_by_model: Dict[str, int] = {}
+        gpu_last_launch_at: Dict[int, datetime] = {}
+        for rj in running_jobs:
+            effective_model = _effective_job_model_type(rj)
+            running_by_model[effective_model] = running_by_model.get(effective_model, 0) + 1
+            if rj.assigned_gpu is not None and job_uses_assigned_gpu(rj):
+                running_jobs_per_gpu[rj.assigned_gpu] = running_jobs_per_gpu.get(rj.assigned_gpu, 0) + 1
+                started_at = getattr(rj, "started_at", None)
+                if isinstance(started_at, datetime):
+                    previous = gpu_last_launch_at.get(rj.assigned_gpu)
+                    if previous is None or started_at > previous:
+                        gpu_last_launch_at[rj.assigned_gpu] = started_at
+            live_vram = live_vram_by_job.get(rj.id)
+            if live_vram and live_vram > 0:
+                observed_live_by_model.setdefault(effective_model, []).append(live_vram)
+
+        for job_info in job_infos:
+            job_info.scheduler_reservation_mb = _pending_job_reservation_mb(job_info, observed_live_by_model)
+
+        reservation_shortfall_by_gpu: Dict[int, int] = {}
+        for rj in running_jobs:
+            gpu_idx = rj.assigned_gpu
+            if gpu_idx is None or not job_uses_assigned_gpu(rj):
+                continue
+            live_vram = live_vram_by_job.get(rj.id)
+            shortfall = _reservation_shortfall_mb(rj, live_vram)
+            if shortfall > 0:
+                reservation_shortfall_by_gpu[gpu_idx] = reservation_shortfall_by_gpu.get(gpu_idx, 0) + shortfall
+
+        if reservation_shortfall_by_gpu:
+            logger.debug(f"[ORCHESTRATOR] Reservation shortfall by GPU: {reservation_shortfall_by_gpu}")
+
+        gpu_states = []
+        for g in gpu_stats:
+            effective_used = g.memory_used_mb + reservation_shortfall_by_gpu.get(g.index, 0)
+            gpu_states.append(GPUState(
+                index=g.index,
+                name=g.name,
+                memory_used_mb=effective_used,
+                memory_total_mb=g.memory_total_mb,
+                memory_free_mb=g.memory_total_mb - effective_used,
+                utilization=g.utilization,
+                temperature=g.temperature
+            ))
+
+        limits = config.get("concurrency_limits", {})
+        allowed = []
+        auto_limits = {model: _compute_auto_limit(model, job_infos, gpu_states, config,
+                       running_jobs_per_gpu=running_jobs_per_gpu)
+                       for model, limit in limits.items() if str(limit).lower() == 'auto'}
+        for info in job_infos:
+            limit = auto_limits.get(info.model_type, limits.get(info.model_type))
+            if isinstance(limit, (float, int)) and running_by_model.get(info.model_type, 0) >= limit:
+                continue
+            allowed.append(info)
+        # 4. Run bin-packing
+        return pack_jobs_to_gpus(
+            allowed,
+            gpu_states,
+            target_fill,
+            config,
+            running_jobs_per_gpu=running_jobs_per_gpu,
+            gpu_last_launch_at=gpu_last_launch_at,
+        )
+
     async def _reconcile_remote_job(self, remote_id: str) -> None:
         """One control task per Job; a slow sibling cannot block its target."""
         from services.remote_execution.executor import reconcile_remote_job

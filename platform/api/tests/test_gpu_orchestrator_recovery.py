@@ -181,6 +181,116 @@ async def test_unknown_vram_is_estimated_and_pinned_while_explicit_zero_stays_cp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mb,devices,model,expected", [
+    (20000, [2], 'example', 1),
+    (4096, [2], 'example', 2),
+    (20000, [2, 3], 'example', 2),
+    (4096, [2, 3], 'msa_batch', 1),
+    (0, [], 'msa_batch', 1),
+])
+async def test_overlapping_local_cycles(tmp_path, monkeypatch, mb, devices, model, expected):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'overlap.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(gpu_module, 'read_scheduler_config', lambda: {'global': {
+        'max_launches_per_cycle': 1, 'target_vram_fill': .9, 'msa_concurrency_limit': 1}})
+    gpus = [SimpleNamespace(index=i, name='gpu', memory_used_mb=0, memory_total_mb=32607,
+                            utilization=0, temperature=30) for i in devices]
+    async def seed(key, priority):
+        async with factory() as s:
+            s.add(Job(id=key, name=key, model_id=model, mode='run', params={},
+                      output_dir=str(tmp_path / key), status='queued', queue_status='queued',
+                      priority=priority, vram_estimate_mb=mb))
+            await s.commit()
+
+    launches = []
+    async def launch(job_id, **kwargs):
+        async with factory() as reader:
+            owner = await reader.get(Job, job_id)
+            launches.append((job_id, owner.status, owner.queue_status, owner.assigned_gpu))
+
+    # Pause A after reading its queue. B then sees a different priority winner.
+    # Neither the packer nor the actual claim or reservation query is stubbed.
+    selected, resume = asyncio.Event(), asyncio.Event()
+    lock_held, contender = asyncio.Event(), asyncio.Event()
+    class DelayedSession(AsyncSession):
+        async def execute(self, statement, *args, **kwargs):
+            result = await super().execute(statement, *args, **kwargs)
+            if not selected.is_set() and 'ORDER BY jobs.priority DESC' in str(statement):
+                selected.set()
+                await asyncio.wait_for(resume.wait(), 5)
+            if str(statement) == 'BEGIN IMMEDIATE' and not lock_held.is_set():
+                lock_held.set()
+                await asyncio.wait_for(contender.wait(), 5)
+            return result
+
+    class ContendingSession(AsyncSession):
+        async def execute(self, statement, *args, **kwargs):
+            if str(statement) == 'BEGIN IMMEDIATE':
+                contender.set()
+            return await super().execute(statement, *args, **kwargs)
+
+    delayed = sessionmaker(engine, class_=DelayedSession, expire_on_commit=False)
+    await seed('first', 1)
+    task = asyncio.create_task(GPUOrchestrator(delayed, lambda: gpus, launch)._process_cycle())
+    try:
+        await asyncio.wait_for(selected.wait(), 5)
+        await seed('second', 2)
+        peer = factory
+        if mb:
+            resume.set()
+            await asyncio.wait_for(lock_held.wait(), 5)
+            peer = sessionmaker(engine, class_=ContendingSession, expire_on_commit=False)
+        await GPUOrchestrator(peer, lambda: gpus, launch)._process_cycle()
+    finally:
+        resume.set()
+        await task
+    assert len(launches) == expected
+    assert {row[0] for row in launches} == (
+        {'first', 'second'} if expected == 2 else {'first' if mb else 'second'})
+    assert all(row[1:3] == ('running', 'running') for row in launches)
+    if len(devices) == expected == 2:
+        assert {row[3] for row in launches} == set(devices)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('outcome', ['success', 'failure', 'cancel_then_fail', 'successor_then_fail'])
+async def test_ordinary_cpu_handoff_has_one_owner(tmp_path, monkeypatch, outcome):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cpu.db'}")
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with factory() as seed:
+        seed.add(Job(id='cpu', name='cpu', model_id='example', mode='run', params={},
+                     output_dir=str(tmp_path), vram_estimate_mb=0, status='queued', queue_status='queued'))
+        await seed.commit()
+    calls = []
+    async def launch(job_id, **kwargs):
+        async with factory() as peer:
+            job = await peer.get(Job, job_id)
+            calls.append((job.status, job.queue_status, job.started_at is not None))
+            if outcome == 'cancel_then_fail':
+                job.queue_status = job.status = 'cancelled'
+            elif outcome == 'successor_then_fail':
+                job.started_at = datetime(2030, 1, 1)
+            await peer.commit()
+        if outcome != 'success':
+            raise RuntimeError('inert failure')
+
+    monkeypatch.setattr(gpu_module, 'read_scheduler_config', lambda: {})
+    await asyncio.gather(*(GPUOrchestrator(factory, lambda: [], launch)._process_cycle() for _ in range(2)))
+    assert calls == [('running', 'running', True)]
+    async with factory() as reader:
+        job = await reader.get(Job, 'cpu')
+        status = {'cancel_then_fail': 'cancelled', 'failure': 'failed'}.get(outcome, 'running')
+        assert job.status == job.queue_status == status
+        assert job.error_message == ('inert failure' if outcome == 'failure' else None)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_gpu_claim_loses_to_second_session_cancellation_without_launch(tmp_path: Path) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'claim.db'}")
     async with engine.begin() as connection:
