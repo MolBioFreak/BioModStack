@@ -1472,9 +1472,6 @@ input[type="range"]::-webkit-slider-thumb {
   min-height: 40px;
 }
 
-.ngs-readable-igv .igv-windowsize-panel-container {
-  white-space: nowrap;
-}
 
 /* Text accents need a different luminance from filled controls. The source
    palettes remain color encodings; only UI text and sequence glyphs adapt. */

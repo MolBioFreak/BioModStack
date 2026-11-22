@@ -16,6 +16,7 @@ import {
     buildLocalIgvConfig,
     createGenerationBoundResourceWithTimeout,
     createIgvGenerationMount,
+    styleIgvShadow,
     ownsIgvLoadTerminalState,
     parseLocalIgvRange,
     loadMissingTracksById,
@@ -3991,6 +3992,7 @@ export function NGSToolkit() {
                     timeoutMessage: `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s`,
                 });
                 if (!igvBrowser) return;
+                styleIgvShadow(igvMount);
                 igvLibraryRef.current = igvAny;
                 ensureIgvThemeStyles(igvMount);
                 patchIgvRulerContrast(igvBrowser);

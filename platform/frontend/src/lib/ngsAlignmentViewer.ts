@@ -151,6 +151,22 @@ export function createIgvGenerationMount(container: HTMLElement): HTMLDivElement
     return mount;
 }
 
+/** IGV draws inside a shadow root, so page CSS cannot reach it. Keep its width readout on one line
+ *  and let its toolbar wrap rather than run under a side panel. */
+export function styleIgvShadow(mount: HTMLElement): void {
+    const host = mount.shadowRoot ? mount : mount.querySelector<HTMLElement>('*');
+    const root = mount.shadowRoot ?? Array.from(mount.querySelectorAll<HTMLElement>('*')).find((item) => item.shadowRoot)?.shadowRoot ?? host?.shadowRoot;
+    if (!root || root.querySelector('style[data-bms-igv]')) return;
+    const style = mount.ownerDocument.createElement('style');
+    style.setAttribute('data-bms-igv', '');
+    style.textContent = [
+        '.igv-windowsize-panel-container { white-space: nowrap; }',
+        '.igv-navbar { flex-wrap: wrap; height: auto; min-height: 32px; row-gap: 4px; }',
+        '.igv-navbar-right-container { flex-wrap: wrap; justify-content: flex-end; }',
+    ].join('\n');
+    root.appendChild(style);
+}
+
 export function removeIgvGenerationMount(container: HTMLElement, mount: HTMLElement): void {
     if (mount.parentElement === container) container.removeChild(mount);
 }
