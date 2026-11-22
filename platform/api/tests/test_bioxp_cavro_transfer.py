@@ -31,7 +31,7 @@ def request(multi=False, final_empty=False, pairs=1):
             'aliquots': [{'before': [], 'segments': [{'volume_ul': 10, 'speed_ul_s': 30}], 'after': []} for _ in range(2)]})
     inputs['recipe'] = raw
     inputs['liquid'] = {'context': {**CONTEXT, 'mode': 'multi-dispense' if multi else 'single-dispense'}, 'requested': {}}
-    fixture['method']['steps'] = [node('transfer', inputs, on_error='pause_for_operator')]
+    fixture['method']['steps'] = [node('transfer', inputs)]
     return fixture
 
 
@@ -81,6 +81,14 @@ def test_positioned_transfer_native_recipe_and_final_lift(multi, final_empty, pa
                 assert all(p['destination'] is not None for p in phases if p['recipe_phase'] == 'aliquot')
                 assert all(p['kind'] == 'air' for p in phases if p['recipe_phase'] == 'reaspiration')
     export_case(f'transfer-{multi}-{final_empty}-{pairs}', req, result)
+
+
+def test_explicit_method_stop_reaches_recipe_and_generated_lift():
+    req = request(final_empty=True)
+    req['method']['on_error'] = 'stop'
+    aa = actions(compile_method(req))
+    assert [a['params']['operation'] for a in aa] == ['cavro_liquid_recipe', 'lift']
+    assert all(a['on_error'] == 'stop' and 'default_error_hold' not in a['metadata']['bms_method'] for a in aa)
 
 
 def test_authored_search_retract_and_postdispense_order_retained():

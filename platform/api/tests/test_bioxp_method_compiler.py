@@ -35,7 +35,7 @@ def actions(result):
 
 def test_native_emitter_equivalence_and_snapshot():
     row = move()
-    m = method(row)
+    m = method(row, on_error='stop')  # compare against the legacy native emitter
     original = deepcopy(m)
     result = compile_method({'method': m})
     expected = preview(WorkflowPreviewRequest.model_validate({'protocol_id': 'x', 'draft': {
@@ -163,16 +163,35 @@ def test_native_mix_resource_limit_and_policy_not_review_alias():
     assert compile(move(), tip_policy='per_transfer')['document'] is not None  # no liquid needs no tips
 
 
-def test_method_error_policy_inherits_without_altering_planned_review_or_legacy_default():
+def test_method_error_policy_inherits_without_altering_planned_review():
     grouped = {'type': 'group', 'step_id': 'block', 'steps': [move('inherited'), {**move('explicit'), 'on_error': 'stop'}]}
     configured = method(grouped, on_error='pause_for_operator')
     original = deepcopy(configured)
     emitted = actions(compile_method({'method': configured}))
     assert [(a['on_error'], a['review_required']) for a in emitted] == [('pause_for_operator', False), ('stop', False)]
     assert configured == original
-    assert [a['on_error'] for a in actions(compile(grouped))] == ['stop', 'stop']
+    assert [a['on_error'] for a in actions(compile(grouped))] == ['pause_for_operator', 'stop']
+    assert [a['on_error'] for a in actions(compile(grouped, on_error='stop'))] == ['stop', 'stop']
     assert actions(compile({**grouped, 'on_error': 'stop'}, on_error='pause_for_operator'))[0]['on_error'] == 'stop'
     assert compile(move(), on_error='retry_automatically')['document'] is None
+
+
+def test_default_hold_is_limited_to_addressable_pipetting_and_keeps_raw_omission():
+    fast = move('fast')
+    fast['inputs']['movement'] = 'fast'
+    steps = [move('full'), fast,
+             {'type': 'action', 'step_id': 'park', 'action': 'park', 'inputs': {}},
+             {'type': 'action', 'step_id': 'review', 'action': 'checkpoint', 'inputs': {'message': 'check'}}]
+    draft = method(*steps)
+    result = compile_method({'method': draft})
+    emitted = actions(result)
+    assert [a['on_error'] for a in emitted] == ['pause_for_operator', 'stop', 'stop', 'stop']
+    assert [a['metadata']['bms_method'].get('default_error_hold') for a in emitted] == [True, None, None, None]
+    assert [a['review_required'] for a in emitted] == [False, False, False, True]
+    assert 'on_error' not in result['document']['metadata']['bms_method']['method']
+    assert all('on_error' not in s for s in draft['steps'])
+    assert compile(move(), on_error=None)['document'] is None
+    assert compile({**move(), 'on_error': None})['document'] is None
 
 
 def test_discovery_examples_are_unbound_and_raw_roundtrip():

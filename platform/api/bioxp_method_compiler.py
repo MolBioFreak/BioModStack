@@ -225,6 +225,14 @@ def semantic(value):
     return value
 
 
+# Only ordinary pipetting occurrences default to operator recovery. Do not opt
+# service/mechanism actions or indivisible fast-move batches into a redo gate.
+_DEFAULT_HOLD_ACTIONS = frozenset({
+    'aspirate', 'dispense', 'mix', 'transfer', 'liquid_recipe', 'cavro_liquid_recipe',
+    'move', 'lift', 'lower', 'tip_pickup', 'load_tip', 'tip_eject', 'eject_tip', 'fluid_search',
+})
+
+
 def _lower(method, dependencies, params):
     procedures = {}
     procedure_paths = {}
@@ -283,7 +291,7 @@ def _lower(method, dependencies, params):
                 if not node.get('enabled', True):
                     continue
                 on_error = node.get('on_error', policy)
-                if on_error not in ('stop', 'pause_for_operator'):
+                if 'on_error' in node and on_error not in ('stop', 'pause_for_operator'):
                     fail('Unknown on_error policy')
                 typ = node.get('type')
                 if typ == 'action':
@@ -344,8 +352,8 @@ def _lower(method, dependencies, params):
                 raise
         return count
     scope = {'param': params, 'arg': {}}
-    policy = method.get('on_error', 'stop')
-    if policy not in ('stop', 'pause_for_operator'):
+    policy = method.get('on_error')
+    if 'on_error' in method and policy not in ('stop', 'pause_for_operator'):
         fail('Unknown on_error policy', '/method/on_error')
     count = walk(method['steps'], scope, '/method/steps', [], [], policy, None)
     occurrences = []
@@ -577,6 +585,13 @@ def compile_method(request):
             for occurrence in occurrences:
                 occurrence['inputs'] = native_values(occurrence['inputs'])
             occurrences, liquid_records, substitutions, planning_issues = prepare_occurrences(occurrences, method, dependencies)
+            for occurrence in occurrences:
+                if occurrence['on_error'] is None:
+                    hold = (occurrence['action'] in _DEFAULT_HOLD_ACTIONS and
+                            not (occurrence['action'] == 'move' and occurrence['inputs'].get('movement') == 'fast'))
+                    occurrence['on_error'] = 'pause_for_operator' if hold else 'stop'
+                    if hold:
+                        occurrence['default_error_hold'] = True
             result['resolved']['occurrences'] = json_value(occurrences)
             result['resolved']['liquids'] = liquid_records
             result['water_substitutions'] = substitutions
@@ -680,6 +695,8 @@ def compile_method(request):
                 action['source_occurrence_id'] = o['occurrence_id']
                 action['on_error'] = o['on_error']
                 action['metadata']['bms_method'] = {k: deepcopy(o[k]) for k in ('occurrence_id', 'step_id', 'path', 'call_path', 'loop_path', 'group_path')}
+                if o.get('default_error_hold'):
+                    action['metadata']['bms_method']['default_error_hold'] = True
                 if 'labware_id' in o['inputs']:
                     action['metadata']['bms_method']['labware_id'] = deepcopy(o['inputs']['labware_id'])
                 if 'generated_by' in o:
