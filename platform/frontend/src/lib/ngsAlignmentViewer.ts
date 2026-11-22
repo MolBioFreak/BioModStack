@@ -160,9 +160,11 @@ export function styleIgvShadow(mount: HTMLElement): void {
     const style = mount.ownerDocument.createElement('style');
     style.setAttribute('data-bms-igv', '');
     style.textContent = [
-        '.igv-windowsize-panel-container { white-space: nowrap; }',
-        '.igv-navbar { flex-wrap: wrap; height: auto; min-height: 32px; row-gap: 4px; }',
-        '.igv-navbar-right-container { flex-wrap: wrap; justify-content: flex-end; }',
+        // IGV's own rules are more specific, hence !important.
+        '.igv-windowsize-panel-container { white-space: nowrap !important; }',
+        '.igv-navbar { flex-wrap: wrap !important; height: auto !important; min-height: 32px; row-gap: 4px; }',
+        '.igv-navbar-left-container, .igv-navbar-right-container { flex-wrap: wrap !important; min-width: 0; }',
+        '.igv-navbar-right-container { margin-left: auto; justify-content: flex-end !important; }',
     ].join('\n');
     root.appendChild(style);
 }
