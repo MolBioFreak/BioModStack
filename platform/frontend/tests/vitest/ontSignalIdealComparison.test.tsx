@@ -158,7 +158,7 @@ describe('OntSignalIdealComparison', () => {
         expect(visible).not.toMatch(/[0-9a-f]{64}/);
         expect(visible).not.toContain('comparison_requested');
         expect(visible).not.toContain('reference-7');
-        const technical = Array.from(container.querySelectorAll('details')).find((item) => item.querySelector('summary')?.textContent === 'Technical details')!;
+        const technical = Array.from(container.querySelectorAll('details')).find((item) => item.querySelector('summary')?.textContent === 'Comparison records')!;
         expect(technical.textContent).toContain('b'.repeat(64));
         expect(technical.textContent).toContain('comparison-1 · requested: comparison_requested');
     });

@@ -411,7 +411,7 @@ export function OntSignalIdealComparison({
             <dt>Dwell mean ± SD</dt><dd>{effectiveProfile.dwell_mean} ± {effectiveProfile.dwell_standard_deviation}</dd>
             <dt>Compatibility floor</dt><dd>{effectiveProfile.compatibility_floor}</dd><dt>Model warning</dt><dd>{effectiveProfile.model_quality_warning || 'None'}</dd>
         </dl> : <p className="mt-1 text-[var(--text-secondary)]">Shown after Preview.</p>}</details>
-        <details className="rounded border border-[var(--border-primary)] px-2 py-1"><summary className="cursor-pointer text-[var(--text-secondary)]">Technical details</summary>
+        <details className="rounded border border-[var(--border-primary)] px-2 py-1"><summary className="cursor-pointer text-[var(--text-secondary)]">Comparison records</summary>
             <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5">
                 <dt>Run</dt><dd className="break-all font-mono">{viewerSession.run_id} · generation {viewerSession.observed_generation}</dd>
                 <dt>Read</dt><dd className="break-all font-mono">{selectedReadId || 'none'}</dd>
