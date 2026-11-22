@@ -1,3 +1,4 @@
+import { predictionSequences } from '../lib/predictionSequences';
 import { BoltzChemistryControls, type BoltzConstraint, type BoltzProperty } from './BoltzChemistryControls';
 import type { ContinuationRecipe } from '../lib/deNovoContinuation';
 import { ProtenixChemistryControls } from './ProtenixChemistryControls';
@@ -246,8 +247,10 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
     const [continuationChain, setContinuationChain] = useState(initialValues?._continuation_chain ?? '');
     const continuationRecipe = initialValues?._continuation_recipe as ContinuationRecipe | undefined;
     const continuationChains = initialValues?._continuation_chains as Array<{ model_number: number; id: string; auth_asym_id?: string; sequence: string; component?: ProtenixComponent }> | undefined;
-    const [sequence, setSequence] = useState(initialPrimarySequence);
-    const [sequenceName, setSequenceName] = useState(initialPrimaryName);
+    const [primaryInput, setSequence] = useState<string>(initialPrimarySequence);
+    const primaryRecord = useMemo(() => predictionSequences(primaryInput, 'primary'), [primaryInput]);
+    const sequence = primaryRecord.entries[0]?.sequence ?? '';
+    const [sequenceName, setSequenceName] = useState(primaryRecord.entries[0]?.name || initialPrimaryName);
     const [sequenceHandoffError, setSequenceHandoffError] = useState('');
     const [sequenceHandoffLoading, setSequenceHandoffLoading] = useState(Boolean(sourceSequenceId));
     useEffect(() => {
@@ -560,52 +563,6 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
 
     const sanitizeSequenceInput = (value: string) => value.toUpperCase().replace(/[^A-Z]/g, '');
 
-    const parseSequenceBatchInput = (raw: string, prefix: string) => {
-        const trimmed = raw.trim();
-        if (!trimmed) return [];
-
-        const entries: Array<{ name: string; sequence: string }> = [];
-        const safePrefix = (prefix.trim() || 'variant').replace(/[^A-Za-z0-9._-]+/g, '_');
-        if (trimmed.includes('>')) {
-            const blocks = trimmed.split(/^>/m).map((block) => block.trim()).filter(Boolean);
-            blocks.forEach((block, index) => {
-                const [header, ...rest] = block.split(/\n/);
-                const sequenceValue = sanitizeSequenceInput(rest.join(''));
-                if (!sequenceValue) return;
-                const headerName = (header || '').trim().split(/\s+/)[0];
-                const name = (headerName || `${safePrefix}_${String(index + 1).padStart(3, '0')}`).replace(/[^A-Za-z0-9._-]+/g, '_');
-                entries.push({ name, sequence: sequenceValue });
-            });
-            return entries;
-        }
-
-        trimmed
-            .split(/\n+/)
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .forEach((line, index) => {
-                let name = '';
-                let sequenceValue = '';
-                const colonIndex = line.indexOf(':');
-                if (colonIndex > 0) {
-                    name = line.slice(0, colonIndex).trim();
-                    sequenceValue = sanitizeSequenceInput(line.slice(colonIndex + 1));
-                } else {
-                    const tokens = line.split(/\s+/);
-                    if (tokens.length > 1) {
-                        name = tokens[0];
-                        sequenceValue = sanitizeSequenceInput(tokens.slice(1).join(''));
-                    } else {
-                        sequenceValue = sanitizeSequenceInput(line);
-                    }
-                }
-                if (!sequenceValue) return;
-                const resolvedName = (name || `${safePrefix}_${String(index + 1).padStart(3, '0')}`).replace(/[^A-Za-z0-9._-]+/g, '_');
-                entries.push({ name: resolvedName, sequence: sequenceValue });
-            });
-        return entries;
-    };
-
     const canonicalTargetSourceName = (target: SelectedTarget | null) => {
         const raw = (target?.name?.trim() || 'target').replace(/[^A-Za-z0-9._-]+/g, '_');
         return raw.toLowerCase().endsWith('.pdb') || raw.toLowerCase().endsWith('.cif') || raw.toLowerCase().endsWith('.mmcif')
@@ -623,7 +580,7 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
         return candidate;
     };
 
-    const batchEntriesPreview = parseSequenceBatchInput(sequenceBatchInput, sequenceBatchPrefix);
+    const { entries: batchEntriesPreview, error: batchError } = useMemo(() => predictionSequences(sequenceBatchInput, 'batch', sequenceBatchPrefix), [sequenceBatchInput, sequenceBatchPrefix]);
     const hasBatchEntries = batchEntriesPreview.length > 0;
     const hasProteinBinderComponents = ligands.some((ligand) => ligand.type === 'protein' || ligand.type === 'peptide');
     const autoBatchBinderMode = hasBatchEntries && fixedTargetAvailable && !hasProteinBinderComponents;
@@ -670,6 +627,9 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
         proteinBatchTargets.find((entry) => entry.role === 'Additional')?.id ||
         proteinBatchTargets[0]?.id ||
         '';
+    const replacementError = hasBatchEntries && complexMode && proteinBatchTargets.filter(target => target.id === resolvedSequenceBatchComponentId).length !== 1
+        ? 'Select an existing, unambiguous protein component to replace.' : undefined;
+    const sequenceError = primaryRecord.error || batchError || replacementError;
     const predictionMode: StructurePredictionMode = complexMode ? 'complex' : 'predict';
     const activePredictorSelection = predictor;
     const resolvedPredictorSelection = resolveStructurePredictorSelection(predictionMode, activePredictorSelection);
@@ -710,6 +670,15 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
         setProtenixBonds(remapped.bonds);
         setProtenixConstraint(remapped.constraint);
     }
+    const changeChemistryComponent = (id: string, patch: Partial<ProtenixComponent>) => {
+        if (patch.id !== undefined && chemistryComponents.find(c => protenixEntityKey(c) === id)?.id === sequenceBatchComponentId) setSequenceBatchComponentId(patch.id);
+        if (id === protenixEntityKey(primaryChemistry)) {
+            setPrimaryChemistry(updateProtenixComponent(updateProtenixComponent(primaryChemistry, { sequence: sequence.trim() }), patch));
+            if (patch.id !== undefined) setPrimaryChainId(patch.id);
+            if (patch.name !== undefined) setSequenceName(patch.name);
+            if (patch.sequence !== undefined) setSequence(patch.sequence);
+        } else setLigands(previous => previous.map(component => protenixEntityKey(component) === id ? { ...updateProtenixComponent(component, patch), name: patch.name ?? component.name } : component));
+    };
     const chemistryErrors = usesProtenix ? protenixEndpointErrors(chemistryComponents.map(c => c.id), protenixBonds, protenixConstraint) : [];
 
     const usesEsmFold2 = predictorFamilies.includes('esmfold2');
@@ -782,7 +751,7 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
             _continuation_chains: continuationChains, _continuation_chain: continuationChain,
             primary_chain_id: continuationChain ? primaryChainId : undefined,
             execution_target_id: executionTargetId ?? null,
-            sequence: sequence.trim(),
+            sequence: primaryRecord.error ? primaryInput : sequence,
             sequence_name: sequenceName,
             pred_method: resolvedPredictorSelection.requestedSelection,
             num_parallel_jobs: launchConfig.showParallelJobs && !isBoltzCpLaunch ? numParallelJobs : 1,
@@ -900,8 +869,8 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
             }
         }
 
-        if (batchEntriesPreview.length > 0) {
-            params.sequence_batch_entries = batchEntriesPreview;
+        if (sequenceBatchInput) {
+            if (!batchError) params.sequence_batch_entries = batchEntriesPreview;
             params.sequence_batch_input = sequenceBatchInput;
             params.sequence_batch_prefix = sequenceBatchPrefix;
             if (complexMode) {
@@ -912,7 +881,7 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [esmComponents, esmBonds, esmDistograms, sequenceAnnotationOrigins, boltzSeed, boltzConstraints, boltzProperties, protenixUseTemplate, protenixBonds, protenixConstraint, continuationSource, continuationChain, initialValues, executionTargetId, jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Settings, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpCpTopology, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [primaryInput, primaryRecord.error, batchError, esmComponents, esmBonds, esmDistograms, sequenceAnnotationOrigins, boltzSeed, boltzConstraints, boltzProperties, protenixUseTemplate, protenixBonds, protenixConstraint, continuationSource, continuationChain, initialValues, executionTargetId, jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Settings, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpCpTopology, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     const targetPreview = targetSource
         ? resolveTargetPreviewSource({
             previewUrl: targetPreviewUrl,
@@ -998,12 +967,9 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
         }
         const batchEntries = batchEntriesPreview;
 
+        if (sequenceError) throw new Error(sequenceError);
         if (!sequence.trim() && batchEntries.length === 0) {
             throw new Error('Please enter an amino acid sequence');
-        }
-
-        if (batchEntries.length > 0 && complexMode && !resolvedSequenceBatchComponentId) {
-            throw new Error('Sequence matrix mode requires a target protein component to replace.');
         }
 
         if (!resolvedPredictorSelection.valid) {
@@ -1710,13 +1676,19 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
                         </div>
                     </div>
                     <textarea
-                        value={sequence}
-                        onChange={(e) => setSequence(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
+                        value={primaryInput}
+                        onChange={(e) => {
+                            const raw = e.target.value;
+                            const record = predictionSequences(raw, 'primary').entries[0];
+                            setSequence(record?.sequence ?? raw);
+                            if (record?.name) setSequenceName(record.name);
+                        }}
                         placeholder="Enter amino acid sequence (A-Z)..."
                         rows={5}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
                     />
-                    {sequence && (
+                    {sequenceError && <p role="alert">{sequenceError}</p>}
+                    {primaryInput && (
                         <div className="mt-2 flex justify-between items-center text-xs text-slate-500">
                             <span>{sequence.length} aa</span>
                             <button onClick={() => setSequence('')} className="text-red-400 hover:text-red-300">Clear</button>
@@ -1774,7 +1746,7 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
                                     placeholder="variant"
                                 />
                             </div>
-                            {complexMode && proteinBatchTargets.length > 1 && (
+                            {complexMode && (proteinBatchTargets.length > 1 || replacementError) && (
                                 <div>
                                     <label className="text-xs text-slate-400 block mb-1">Replace Protein Component</label>
                                     <select
@@ -2758,14 +2730,7 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
                 {chemistryErrors.map(error => <p role="alert" key={error}>{error}</p>)}
                 {(usesBoltz || usesFoldCp) && !isBoltzApi && <BoltzChemistryControls
                     components={chemistryComponents}
-                    onComponentChange={(id, patch) => {
-                        if (id === protenixEntityKey(primaryChemistry)) {
-                            setPrimaryChemistry(updateProtenixComponent(updateProtenixComponent(primaryChemistry, { sequence: sequence.trim() }), patch));
-                            if (patch.id !== undefined) setPrimaryChainId(patch.id);
-                            if (patch.name !== undefined) setSequenceName(patch.name);
-                            if (patch.sequence !== undefined) setSequence(patch.sequence);
-                        } else setLigands(previous => previous.map(component => protenixEntityKey(component) === id ? { ...updateProtenixComponent(component, patch), name: patch.name ?? component.name } : component));
-                    }}
+                    onComponentChange={changeChemistryComponent}
                     constraints={boltzConstraints} onConstraintsChange={setBoltzConstraints}
                     properties={boltzProperties} onPropertiesChange={setBoltzProperties}
                     seed={boltzSeed} onSeedChange={setBoltzSeed}
@@ -2779,14 +2744,7 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
                     bonds={esmBonds} onBondsChange={setEsmBonds} distograms={esmDistograms} onDistogramsChange={setEsmDistograms} />}
                 {usesProtenix && <ProtenixChemistryControls
                     components={buildComplexComponents(batchEntriesPreview, true).components as ProtenixComponent[]}
-                    onComponentChange={(id, patch) => {
-                        if (id === protenixEntityKey(primaryChemistry)) {
-                            setPrimaryChemistry(updateProtenixComponent(updateProtenixComponent(primaryChemistry, { sequence: sequence.trim() }), patch));
-                            if (patch.id !== undefined) setPrimaryChainId(patch.id);
-                            if (patch.name !== undefined) setSequenceName(patch.name);
-                            if (patch.sequence !== undefined) setSequence(patch.sequence);
-                        } else setLigands(previous => previous.map(component => protenixEntityKey(component) === id ? { ...updateProtenixComponent(component, patch), name: patch.name ?? component.name } : component));
-                    }}
+                    onComponentChange={changeChemistryComponent}
                     bonds={protenixBonds} onBondsChange={setProtenixBonds}
                     constraint={protenixConstraint} onConstraintChange={setProtenixConstraint}
                 />}
@@ -2844,7 +2802,7 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
                     {/* Right side: Submit button */}
                     <button
                         onClick={handleSubmit}
-                        disabled={!resolvedPredictorSelection.valid || !sequence.trim() || submitMutation.isPending || boltzApiSubmitMutation.isPending || boltzApiEstimating || (isBoltzApi && (!boltzApiStatus || boltzApiStatus.available === false))}
+                        disabled={!resolvedPredictorSelection.valid || Boolean(sequenceError) || (!sequence && !hasBatchEntries) || submitMutation.isPending || boltzApiSubmitMutation.isPending || boltzApiEstimating || (isBoltzApi && (!boltzApiStatus || boltzApiStatus.available === false))}
                         className="px-6 py-3 bg-gradient-to-r from-blue-600 to-accent-secondary hover:from-blue-500 hover:to-accent disabled:opacity-50 disabled:grayscale text-white font-bold rounded-lg shadow-lg shadow-accent/20 transition-all transform active:scale-95"
                     >
                         {isBoltzApi
