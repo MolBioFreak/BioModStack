@@ -1,3 +1,5 @@
+import { BioXpRecoveryDecision } from './BioXpRecoveryDecision';
+import type { MethodValue } from '../lib/bioxpMethods';
 import { BioXpMeasurementReview } from './BioXpMeasurementReview';
 import { BioXpCopyId } from './BioXpCopyId';
 import { definiteMethodRefusal } from '../lib/bioxpMethods';
@@ -5,13 +7,14 @@ import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { bioXpErrorText, useBioXpWorkflowJobObservation, useControlBioXpWorkflow, useReviewBioXpWorkflow,
     type BioXpWorkflowAction, type BioXpWorkflowJob, type BioXpWorkflowReviewRequest } from '../lib/bioxpClient';
+const objectGate = (report: MethodValue) => (report.workflow as { gate_id?: unknown } | null)?.gate_id;
 const buttonClass = 'rounded bg-cyan-700 px-3 py-2 text-sm disabled:opacity-35';
 
 /** One native readback/control owner for both prepared and saved submissions. */
 export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controlsEnabled, visible = true,
-    acceptedJob = null, submitting = false, pending = false, discoveryError = false, methodsFacade = false, onObserved, busyRef, onBusyChange }: {
+    recoveryReport, acceptedJob = null, submitting = false, pending = false, discoveryError = false, methodsFacade = false, onObserved, busyRef, onBusyChange }: {
     jobId: string | null; generation: number; connected: boolean; controlsEnabled: boolean; visible?: boolean;
-    busyRef: RefObject<boolean>; onBusyChange: (busy: boolean) => void;
+    recoveryReport?: MethodValue | null; busyRef: RefObject<boolean>; onBusyChange: (busy: boolean) => void;
     onObserved?: (job: unknown) => void; methodsFacade?: boolean; acceptedJob?: BioXpWorkflowJob | null; submitting?: boolean; pending?: boolean; discoveryError?: boolean;
 }) {
     const [abortConfirmed, setAbortConfirmed] = useState(false);
@@ -63,6 +66,7 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
     const wakeReached = workflow?.gate === 'deferred_pause' && workflow.requested_control === null
         && workflow.reached_control_id != null && workflow.reached_control_id !== workflow.gate_id
         && workflow.reached_control_id === workflow.last_control_id;
+    const recoveryKeys = useRef(new Map<string, { key: string; body: string }>());
     async function send(action: BioXpWorkflowAction, always = false) {
         const owner = command ?? (knownCommand.current?.jobId === jobId ? knownCommand.current.command : null);
         if (!jobId || busyRef.current || !always && (!mutable || !command)) return;
@@ -72,9 +76,15 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
         try {
             // Without any readback the canonical command is the job itself; the
             // robot checks ownership and reports a mismatch rather than acting.
-            await control.mutateAsync({ jobId, request: { ...action, command_id: owner?.command_id ?? jobId,
+            const recoveryIdentity = action.action === 'recover' ? JSON.stringify([generation, owner?.ownership_generation, jobId, action.gate_id]) : null;
+            const frozen = recoveryIdentity && recoveryKeys.current.get(recoveryIdentity);
+            if (frozen && frozen.body !== JSON.stringify(action)) throw new Error('A decision is already pending reconciliation for this hold.');
+            const key: string = frozen ? frozen.key : crypto.randomUUID();
+            if (recoveryIdentity) recoveryKeys.current.set(recoveryIdentity, { key, body: JSON.stringify(action) });
+            const receipt = await control.mutateAsync({ jobId, request: { ...action, command_id: owner?.command_id ?? jobId,
                 expected_ownership_generation: owner?.ownership_generation ?? 0,
-                expected_connection_generation: generation, idempotency_key: crypto.randomUUID() } });
+                expected_connection_generation: generation, idempotency_key: key } });
+            if (recoveryIdentity && receipt.accepted === false && receipt.idempotency_key === key && receipt.command_id === jobId && receipt.ownership_generation === owner?.ownership_generation) recoveryKeys.current.delete(recoveryIdentity);
             void query.refetch();
         } catch (error) {
             if (identity.current.jobId === jobId && identity.current.generation === generation) setLocalError(bioXpErrorText(error));
@@ -139,6 +149,7 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
         {!controlsEnabled && connected && <p className="text-sm">Workflow controls unavailable until current connection status recovers; passive readback continues.</p>}
         {canonical && <>
             {gate && <p role="status">Waiting at: {gate.replaceAll('_', ' ')}</p>}
+            {workflow.native_action_id && <p>Native action: {workflow.native_action_id}{workflow.attempt != null && ` · Attempt ${workflow.attempt}`}</p>}
             {workflow.held_reason && <p className="text-amber-200">Held reason: {workflow.held_reason}</p>}
             {workflow.requested_control && <p>Requested control: {workflow.requested_control.action} — acceptance is not a reached boundary.</p>}
             <details className="text-xs"><summary>Run identifiers</summary><BioXpCopyId label="step reference" value={workflow.source_occurrence_id} /> <BioXpCopyId label="reached control" value={workflow.reached_control_id} /> State version {command.state_version}</details>
@@ -149,6 +160,9 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
                 {(gate === 'ordinary_pause' || gate === 'deferred_pause' || gate === 'delaypoint') && gateId && <button className={buttonClass} disabled={!mutable || pendingControl || workflow.phase !== 'waiting' || gate === 'deferred_pause' && !wakeReached} onClick={() => void send({ action: 'continue', gate, gate_id: gateId })}>{gate === 'delaypoint' ? 'Start now' : 'Continue workflow'}</button>}
                 <button className={buttonClass} disabled={!mutable} onClick={() => void send({ action: 'safe_stop' })}>Request safe-state stop</button>
             </div>
+            {methodsFacade && workflow.attempt != null && workflow.native_action_id && !command.terminal && workflow.phase === 'waiting' && gateId && (gate === 'error_hold' || gate === 'ordinary_pause') && <BioXpRecoveryDecision
+                key={JSON.stringify([generation, jobId, command.ownership_generation, gateId, workflow.native_action_id, workflow.attempt])} jobId={job.job_id} gateId={gateId} generation={generation}
+                disabled={!mutable || pendingControl || query.isError} report={recoveryReport?.job_id === jobId && objectGate(recoveryReport) === gateId ? recoveryReport : null} send={send} />}
             {gate === 'review' && <div className="space-y-2">
                 <p>{pendingReview?.reason}</p>
                 {pendingReview?.measurement_form && <BioXpMeasurementReview form={pendingReview.measurement_form} values={measurements} onChange={values => setMeasurementDrafts(previous => ({ ...previous, [reviewIdentity]: values }))} />}

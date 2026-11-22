@@ -686,3 +686,51 @@ it('keeps the newly submitted original identity when discovery still lists an ol
     expect(reads().at(-1)?.url).toContain(lastRun().jobId);
     expect(submits()).toHaveLength(1);
 });
+
+it('keeps stop/hold an explicit step edit and preserves inherited omission', async () => {
+    await mount(); await openOriginal();
+    const policy = 'On error move-original';
+    expect(host.querySelector<HTMLSelectElement>(`[aria-label="${policy}"]`)?.value).toBe('');
+    for (const value of ['pause_for_operator', 'stop', '']) {
+        await input(policy, value); await click('Save');
+        const node = requests.filter(r => r.method === 'put').at(-1)!.body.method.steps[0];
+        if (value) expect(node.on_error).toBe(value); else expect(node).not.toHaveProperty('on_error');
+        expect(node.inputs).toEqual(sourceMethod.steps[0].inputs);
+    }
+    expect(submits()).toHaveLength(0);
+});
+
+it.each(['retry', 'repeat', 'skip', 'manual_complete'])('previews and submits only the addressed same-run %s decision', async decision => {
+    const id = `protocol-live-${'f'.repeat(64)}`;
+    const gate = decision === 'repeat' ? 'ordinary_pause' : 'error_hold';
+    const wf = { ...job(id).execution.runtime_state.workflow, phase: 'waiting', attempt: 2, native_action_id: 'a1', gate, gate_id: 'hold-A', held_reason: gate === 'error_hold' ? 'source_error_hold' : null };
+    const selected = { source_occurrence_id: provenance[0].occurrence_id, action_id: 'a1', attempt: 2, hold_id: 'hold-A', ok: decision === 'repeat', unresolved_attempt: decision !== 'repeat', physical_effect_verified: false };
+    records[id] = { ...job(id), dry_run: false, protocol_id: 'external', created_at: '' };
+    const transport = api.defaults.adapter as AxiosAdapter;
+    const controls: any[] = []; const previews: any[] = [];
+    api.defaults.adapter = async config => {
+        const reply = (data: unknown) => ({ config, data: JSON.stringify(data), status: 200, statusText: 'OK', headers: {} });
+        if (config.url?.endsWith(`/${id}`)) return reply({ ...job(id), execution: { dry_run: false, runtime_state: { workflow: wf } } });
+        if (config.url?.endsWith('/report')) return reply({ job_id: id, workflow: wf, action_results: [selected], events: [{ event: 'recovery_decision', detail: { decision: 'retry', native_action_id: 'a1', expected_attempt: 1 } }] });
+        if (config.url?.endsWith('/recovery-preview')) { const body = JSON.parse(config.data); previews.push(body); return reply({ ...body, job_id: id, submitted: false, attempt_results: [selected], sibling_results: [{ status: 'partial', liquid_amount: null }], editable_settings: ['aspiration_delay_ms'], previous_settings: { aspiration_delay_ms: 8 }, proposed_settings: { aspiration_delay_ms: 8, ...body.overrides } }); }
+        if (config.url?.endsWith('/control')) { controls.push(JSON.parse(config.data)); throw new Error('Lost control response'); }
+        return transport(config);
+    };
+    await mount(); await settle(); await settle();
+    expect(host.querySelector('.bxw-toolbar')?.textContent).toContain(gate === 'error_hold' ? 'Held after error' : 'Waiting: ordinary pause');
+    expect(host.querySelector('.bxw-toolbar')?.textContent).toContain('Attempt 2');
+    expect(button('Preview decision').disabled).toBe(true);
+    if (gate === 'error_hold') expect(host.textContent).not.toContain('Continue workflow');
+    await click('Load method report'); expect(host.textContent).toContain('Operator decision: retry');
+    await input('Reported attempt', 'a1'); await input('Recovery decision', decision); await click('Preview decision');
+    expect(host.textContent).toContain('"liquid_amount":null');
+    if (decision === 'retry') { await input('aspiration_delay_ms', '0'); expect(button('Submit recovery decision').disabled).toBe(true); await click('Preview decision'); }
+    expect(controls).toHaveLength(0); expect(submits()).toHaveLength(0);
+    const expected = { action: 'recover', decision, gate_id: 'hold-A', expected_attempt: 2, native_action_id: 'a1', source_occurrence_id: provenance[0].occurrence_id, overrides: decision === 'retry' ? { aspiration_delay_ms: 0 } : {} };
+    expect(previews.at(-1)).toEqual(expected);
+    await act(async () => { const submit = button('Submit recovery decision'); submit.click(); submit.click(); }); await settle();
+    expect(controls).toEqual([{ ...expected, command_id: id, expected_ownership_generation: 7, expected_connection_generation: generation, idempotency_key: expect.any(String) }]);
+    await click('Submit recovery decision'); expect(controls[1]).toEqual(controls[0]);
+    wf.gate_id = 'hold-B'; await act(async () => { await client.invalidateQueries({ predicate: q => q.queryKey.includes('observation') }); }); await settle();
+    expect(host.textContent).not.toContain('Submit recovery decision'); expect(button('Preview decision').disabled).toBe(true);
+});
