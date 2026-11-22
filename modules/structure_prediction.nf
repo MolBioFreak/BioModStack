@@ -282,7 +282,7 @@ def normalizeSequenceProducerInputs(inputChannel, complexDocument = null) {
             def metadata
             def sequence
             def sequenceName
-            if (values.size() == 3 && values[0] instanceof Map) {
+            if (values.size() in [3, 4] && values[0] instanceof Map) {
                 metadata = values[0]
                 sequence = values[1]
                 sequenceName = values[2]
@@ -299,7 +299,13 @@ def normalizeSequenceProducerInputs(inputChannel, complexDocument = null) {
             else {
                 throw new IllegalArgumentException('sequence predictor input must be a typed triple or legacy pair')
             }
-            tuple(validateSequenceProducerMetadata(metadata, sequence, sequenceName), sequence.toString(), sequenceName.toString())
+            metadata = validateSequenceProducerMetadata(metadata, sequence, sequenceName)
+            if (values.size() == 4) {
+                metadata.remove('producer_sequence')
+                metadata.producer_components = values[3]
+                sequence = ''
+            }
+            tuple(metadata, sequence.toString(), sequenceName.toString())
         }
         def artifactIds = normalized.collect { it[0].producer_artifact_id }
         def artifactKeys = normalized.collect { it[0].producer_artifact_key }
@@ -1789,16 +1795,11 @@ workflow structure_prediction_wf {
                 canonical_structures = canonical_structures.mix(protenix_canonical_outputs)
             }
         } else {
-            // STEP 1: Generate MSA ONCE per unique sequence
-            def base_seq = typed_inputs
-                .first()
-                .map { _producer_meta, seq, _name -> tuple(seq, "base_msa") }
-
-            GenerateLocalMSA(base_seq)
-
-            // STEP 2: Combine the single MSA with all job inputs
-            def msa_ch = GenerateLocalMSA.out.msa.map { _seq, _name, msa_file -> msa_file }
-            def inputs_with_msa = typed_inputs.combine(msa_ch)
+            def queries = typed_inputs.map { meta, seq, name -> tuple(seq, name) }.unique { it[0] }
+            GenerateLocalMSA(queries)
+            def alignments = GenerateLocalMSA.out.msa.map { seq, name, msa -> tuple(seq, msa) }
+            def inputs_with_msa = typed_inputs.map { meta, seq, name -> tuple(seq, meta, name) }
+                .combine(alignments, by: 0).map { seq, meta, name, msa -> tuple(meta, seq, name, msa) }
 
             // STEP 3: Run predictions with cached MSA
             if (pred_method == 'boltz' || pred_method == 'boltz_protenix') {

@@ -18,6 +18,8 @@ import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import java.util.Arrays
 
+include { normalizeProteinDesignSequenceBatchEntries } from '../modules/sequence_submission.nf'
+include { esmfold2ComponentDocument } from '../modules/esmfold2_experimental.nf'
 include { structure_prediction_wf } from '../modules/structure_prediction.nf'
 include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
 include { RemoteCanonicalFrustraMPNN } from '../modules/frustrampnn_remote.nf'
@@ -369,9 +371,9 @@ workflow STRUCTURE_PREDICTION {
 // Entry point for direct invocation
 workflow {
     // Validate inputs
-    def esmComplexComponents = params.esmf_complex_components ?: params.complex_components ?: []
-    def hasEsmComplexInput = (esmComplexComponents instanceof Collection && !esmComplexComponents.isEmpty()) || params.esmf_complex_components_file
-    if (!params.sequence_input && !(params.pred_method == 'esmfold2' && hasEsmComplexInput)) {
+    def manifest = params.sequence_batch_json_path
+    def hasEsmComplexInput = params.pred_method == 'esmfold2' && esmfold2ComponentDocument(params)
+    if (!manifest && !params.sequence_input && !hasEsmComplexInput) {
         error("--sequence_input is required. ESMFold2 complex jobs may instead provide --complex_components or --esmf_complex_components_file.")
     }
 
@@ -393,12 +395,28 @@ workflow {
     println("* Frustration analysis (FrustraMPNN): ${params.run_frustrampnn}")
     println("=" * 60)
     
-    // Create parallel job channels
-    def job_indices = Channel.from(0..<numJobs)
-    def input_ch = job_indices.map { idx ->
-        def jobName = numJobs > 1 ? "${name}_job${idx}" : name
-        tuple(seq, jobName)
+    def input_ch
+    if (manifest) {
+        def entries = new JsonSlurper().parse(file(manifest, checkIfExists: true).toFile())
+        def rows = normalizeProteinDesignSequenceBatchEntries(entries)
+        input_ch = Channel.fromList(rows.withIndex().collect { row, index ->
+            if (!(row[1] ==~ /[A-Za-z]+(:[A-Za-z]+)*/)) error('Invalid sequence in batch manifest')
+            def source = entries[index].complex_json
+            if (!source) {
+                if (hasEsmComplexInput) error('ESMFold2 complex manifest row missing complex_json')
+                return row
+            }
+            if (params.pred_method != 'esmfold2') error('Complex rows require the complex prediction workflow')
+            def document = esmfold2ComponentDocument([esmf_complex_components_file: source])
+            if (!document) error('Empty complex manifest row document')
+            tuple(row[0], row[1], row[2], document)
+        })
+    } else {
+        input_ch = Channel.from(0..<numJobs).map { idx ->
+            def jobName = numJobs > 1 ? "${name}_job${idx}" : name
+            tuple(seq, jobName)
+        }
     }
-    
+
     STRUCTURE_PREDICTION(input_ch)
 }

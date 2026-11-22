@@ -14,16 +14,15 @@ def boolString(value) {
 
 // Share native document parsing between producer identity and task input.
 def esmfold2ComponentDocument(settings) {
-    def components = settings.get('esmf_complex_components') ?: settings.get('complex_components') ?: []
-    def componentsFile = settings.get('esmf_complex_components_file')
-    if (componentsFile) {
-        components = new groovy.json.JsonSlurper().parse(new File(componentsFile.toString()))
+    def candidates = ['esmf_complex_components', 'complex_components'].collect { settings.get(it) }.findAll { it }
+    ['esmf_complex_components_json', 'complex_components_json'].each { key ->
+        if (settings.get(key)) candidates << new groovy.json.JsonSlurper().parseText(settings.get(key).toString())
     }
-    def raw = settings.get('esmf_complex_components_json') ?: settings.get('complex_components_json')
-    if (raw) {
-        if (components) throw new IllegalArgumentException('conflicting component sources')
-        components = new groovy.json.JsonSlurper().parseText(raw.toString())
+    if (settings.get('esmf_complex_components_file')) {
+        candidates << new groovy.json.JsonSlurper().parse(file(settings.get('esmf_complex_components_file'), checkIfExists: true).toFile())
     }
+    def components = candidates ? candidates.first() : []
+    if (candidates.any { it != components }) throw new IllegalArgumentException('conflicting component sources')
     return components
 }
 
@@ -33,60 +32,36 @@ def esmfold2ContractInputs(inputs, settings) {
     if (!(marker instanceof Integer) || marker != 1) {
         throw new IllegalArgumentException('core_protein_scientific_contract must be integer 1')
     }
-    def request = new LinkedHashMap(settings as Map)
-    def components = esmfold2ComponentDocument(request)
-    if (components) request.esmf_complex_components = components
-    request.remove('esmf_complex_components_file')
-    def sources = []
-    ['msa_path', 'pdb_sequence_path'].each { key ->
-        def a = request.get(key)
-        def b = request.get('esmf_' + key)
-        if (a != null && b != null && a != b) throw new IllegalArgumentException("conflicting aliases: ${key}")
-        if (a ?: b) sources << (a ?: b).toString()
-    }
-    def componentRows = components instanceof Map ? (components.components ?: components.sequences) : components
-    componentRows.each { component -> if (component.msa_path) sources << component.msa_path.toString() }
-    sources = sources.unique()
-    def files = sources.collect { source ->
-        def resolved = source
-        if (System.getenv('BMS_PORTABLE_INPUT_BINDINGS')) {
-            def process = new ProcessBuilder('python3', "${params.code_root}/scripts/lib/portable_inputs.py",
-                'resolve', source).start()
-            resolved = process.inputStream.text.trim()
-            def error = process.errorStream.text
-            if (process.waitFor() != 0) throw new IllegalArgumentException("ESMFold2 portable input binding failed: ${error}")
+    def defaultDocument = esmfold2ComponentDocument(settings)
+    return inputs.map { meta, sequence, name ->
+        def request = new LinkedHashMap(settings as Map)
+        def components = meta.producer_components ?: defaultDocument
+        ['esmf_complex_components_file', 'complex_components', 'complex_components_json', 'esmf_complex_components_json'].each { request.remove(it) }
+        if (components) request.esmf_complex_components = components
+        request.esmf_sequence = request.sequence = components ? '' : sequence.toString()
+        request.esmf_sequence_name = request.sequence_name = name.toString()
+        def sources = []
+        ['msa_path', 'pdb_sequence_path'].each { key ->
+            def a = request.get(key)
+            def b = request.get('esmf_' + key)
+            if (a != null && b != null && a != b) throw new IllegalArgumentException("conflicting aliases: ${key}")
+            if (a ?: b) sources << (a ?: b).toString()
         }
-        file(resolved, checkIfExists: true)
-    }
-    def batch = settings.get('sequence_batch_json_path')
-    def rows = batch ? new groovy.json.JsonSlurper().parse(file(batch.toString()).toFile()) : null
-    return inputs.flatMap { meta, sequence, name ->
-        def entries = rows ?: [[name: name, sequence: sequence]]
-        entries.collect { row ->
-            def payload = new LinkedHashMap(request)
-            def rowSources = new ArrayList(sources)
-            def rowFiles = new ArrayList(files)
-            if (row.complex_json) {
-                def document = new groovy.json.JsonSlurper().parse(file(row.complex_json.toString()).toFile())
-                payload.remove('complex_components')
-                payload.remove('complex_components_json')
-                payload.remove('esmf_complex_components_json')
-                payload.esmf_complex_components = document
-                payload.esmf_sequence = ''
-                def roster = document instanceof Map ? (document.components ?: document.sequences) : document
-                roster.each { c ->
-                    if (c.msa_path && !rowSources.contains(c.msa_path.toString())) {
-                        rowSources << c.msa_path.toString()
-                        rowFiles << file(c.msa_path.toString(), checkIfExists: true)
-                    }
-                }
-            } else if (!components || rows) payload.esmf_sequence = row.sequence.toString()
-            def rowName = rows && (settings.get('num_parallel_jobs') ?: 1) > 1 ? "${row.name}_${name}" : row.name.toString()
-            payload.esmf_sequence_name = rowName
-            def rowMeta = new LinkedHashMap(meta)
-            if (rows) rowMeta.id = rowName
-            tuple(rowMeta, payload, rowSources, rowFiles)
+        def componentRows = components instanceof Map ? (components.components ?: components.sequences) : components
+        componentRows.each { component -> if (component.msa_path) sources << component.msa_path.toString() }
+        sources = sources.unique()
+        def files = sources.collect { source ->
+            def resolved = source
+            if (System.getenv('BMS_PORTABLE_INPUT_BINDINGS')) {
+                def process = new ProcessBuilder('python3', "${params.code_root}/scripts/lib/portable_inputs.py",
+                    'resolve', source).start()
+                resolved = process.inputStream.text.trim()
+                def error = process.errorStream.text
+                if (process.waitFor() != 0) throw new IllegalArgumentException("ESMFold2 portable input binding failed: ${error}")
+            }
+            file(resolved, checkIfExists: true)
         }
+        tuple(meta, request, sources, files)
     }
 }
 
@@ -215,12 +190,7 @@ SHAPE_ESMF
     def numDiffusionSamples = shapeMode ? 1 : (params.get('esmf_num_diffusion_samples') ?: params.get('num_diffusion_samples') ?: 1)
     def seed = shapeMode ? params.get('shape_seed') : (params.get('esmf_seed') != null ? params.get('esmf_seed') : params.get('seed'))
     def device = params.get('esmf_device') ?: params.get('device') ?: 'cuda'
-    def complexComponents = params.get('esmf_complex_components') ?: params.get('complex_components') ?: []
-    def complexComponentsFile = params.get('esmf_complex_components_file')
-    if (!(complexComponents instanceof Collection && !complexComponents.isEmpty()) && complexComponentsFile) {
-        def parsedComplexComponents = new groovy.json.JsonSlurper().parse(new File(complexComponentsFile.toString()))
-        complexComponents = parsedComplexComponents
-    }
+    def complexComponents = producer_meta.producer_components ?: esmfold2ComponentDocument(params)
     def normalizedName = (sequence_name ?: 'esmfold2_prediction').toString().replaceAll(/[^A-Za-z0-9._-]+/, '_')
     def componentRows = complexComponents instanceof Map ? (complexComponents.components ?: complexComponents.sequences) : complexComponents
     def hasComplexComponents = componentRows instanceof Collection && !componentRows.isEmpty()
