@@ -34,7 +34,18 @@ workflow BOLTZ_CP_EXPERIMENTAL {
             error("Boltz-CP input path not found: ${params.bcp_input_path}")
         }
 
-        RunBoltzCPExperimental(inputTarget)
+        def rosterPath = params.get('sequence_batch_json_path')
+        def tasks = rosterPath ? new groovy.json.JsonSlurper().parse(file(rosterPath).toFile()).collect { row ->
+            def name = row.name
+            if (name in ['.', '..'] || !(name ==~ /[\p{L}\p{N}_.-]+/) || !inputTarget.resolve(name + '.yaml').isFile()) {
+                error("Missing or invalid Fold-CP variant: ${name}")
+            }
+            tuple(name, inputTarget)
+        } : [tuple('', inputTarget)]
+        if (!tasks || tasks.collect { it[0] }.toSet().size() != tasks.size()) {
+            error('Fold-CP requires a nonempty roster of unique native inputs')
+        }
+        RunBoltzCPExperimental(Channel.fromList(tasks))
         FinalizeBoltzCPExperimental(RunBoltzCPExperimental.out.results_dir)
 
         if (params.run_frustrampnn != false) {
@@ -75,7 +86,7 @@ workflow BOLTZ_CP_EXPERIMENTAL {
         }
 
     emit:
-        prediction_dir = RunBoltzCPExperimental.out.results_dir
+        prediction_dir = RunBoltzCPExperimental.out.results_dir.map { name, directory -> directory }
         processed_dir = RunBoltzCPExperimental.out.processed_dir
         pdbs = FinalizeBoltzCPExperimental.out.pdbs
         cifs = FinalizeBoltzCPExperimental.out.cifs

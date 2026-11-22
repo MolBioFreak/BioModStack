@@ -1260,6 +1260,7 @@ def _write_boltz_cp_input_yaml(
     params: Dict[str, Any],
     complex_components: Optional[List[Dict[str, Any]]],
     write_input=None,
+    filename="boltz_cp_input.yaml",
 ) -> Optional[Path]:
     if params.get("bcp_input_path") or params.get("input_path"):
         return None
@@ -1291,7 +1292,7 @@ def _write_boltz_cp_input_yaml(
         sequences = [{"protein": protein_payload}]
 
     out_root = Path(output_dir)
-    yaml_path = out_root / "boltz_cp_input.yaml"
+    yaml_path = out_root / filename
     from component_runtime import durable_write
     (write_input or durable_write)(yaml_path,
         yaml.safe_dump({"version": 1, "sequences": sequences}, sort_keys=False).encode('utf-8'))
@@ -6985,7 +6986,26 @@ def compile_nextflow_invocation(
             DEFAULT_BOLTZ_CP_COMPAT_CONTAINER, Path(explicit_container_dir), params,
         ))
 
-        if not params.get('bcp_input_path'):
+        if sequence_batch_json_path:
+            if params.get('bcp_input_path') or params['bcp_input_format'] != 'config_files':
+                raise ValueError('Named Fold-CP variants require generated config_files inputs')
+            # Use the batch writer's actual replacement and invalidation decisions,
+            # including during side-effect-free preview (nothing is on disk yet).
+            planned = {Path(output_dir) / item.relative_path: item.payload for item in generated_inputs}
+            batch_root = Path(output_dir) / 'boltz_cp_variants'
+            for row in json.loads(planned[sequence_batch_json_path]):
+                components = (json.loads(planned[Path(row['complex_json'])])['components']
+                              if row.get('complex_json') else None)
+                variant = {**params, 'sequence': row['sequence']}
+                if row['sequence'] != _normalize_boltz_cp_sequence(params.get('sequence') or params.get('sequence_input')):
+                    variant.pop('msa_path', None)
+                _write_boltz_cp_input_yaml(output_dir=str(batch_root), params=variant,
+                    complex_components=components, write_input=plan_input, filename=row['name'] + '.yaml')
+            params['bcp_input_path'] = str(batch_root)
+            complex_components = None
+            for key in ('sequence', 'sequence_input', 'primary_chain_id', 'target_chains', 'binder_chains'):
+                params.pop(key, None)
+        elif not params.get('bcp_input_path'):
             staged_bcp_input = _write_boltz_cp_input_yaml(
                 output_dir=output_dir,
                 params=params,

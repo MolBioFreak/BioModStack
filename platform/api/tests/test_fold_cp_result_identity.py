@@ -33,7 +33,7 @@ def test_native_finalizer_keeps_duplicate_names_and_publishes_nested_paths(tmp_p
         (sample / 'same_model_0.cif').write_text(content)
         (root / shard / 'confidence_same_model_0.json').write_text(json.dumps({'shard': content}))
     script = finalizer.split("python3 - <<'PY'\n", 1)[1].split("\nPY", 1)[0]
-    script = script.replace('${results_dir}', str(root))
+    script = script.replace('${results_dir}', str(root)).replace('${variant}', '')
     subprocess.run(['python3', '-c', script], cwd=tmp_path, check=True)
     assert [(tmp_path / 'published' / s / 'sample' / 'same_model_0.cif').read_text()
             for s in ('predictions_dp0_cp0', 'predictions_dp1_cp0')] == ['one', 'two']

@@ -13,18 +13,19 @@ def boltzcpexperimentalPublishMode(workDir, outputDir) {
 }
 
 process RunBoltzCPExperimental {
+    maxForks 1  // Each invocation owns the entire reserved GPU group.
     label 'BoltzCP'
     label 'gpu'
 
-    publishDir "${params.out_dir}/run/boltz_cp_experimental", mode: 'copy', pattern: '*.log'
-    publishDir "${params.out_dir}/inputs/boltz_cp", mode: "${boltzcpexperimentalPublishMode(workflow.workDir, params.out_dir)}", pattern: 'staged_input/**', saveAs: { filename -> filename.replace('staged_input/', '') }
-    publishDir "${params.out_dir}/processed/boltz_cp", mode: 'copy', pattern: 'cp_results/processed/**', saveAs: { filename -> filename.replace('cp_results/processed/', '') }
+    publishDir "${params.out_dir}/run/boltz_cp_experimental${variant ? "/${variant}" : ''}", mode: 'copy', pattern: '*.log'
+    publishDir "${params.out_dir}/inputs/boltz_cp${variant ? "/${variant}" : ''}", mode: "${boltzcpexperimentalPublishMode(workflow.workDir, params.out_dir)}", pattern: 'staged_input/**', saveAs: { filename -> filename.replace('staged_input/', '') }
+    publishDir "${params.out_dir}/processed/boltz_cp${variant ? "/${variant}" : ''}", mode: 'copy', pattern: 'cp_results/processed/**', saveAs: { filename -> filename.replace('cp_results/processed/', '') }
 
     input:
-    path input_config
+    tuple val(variant), path(input_config)
 
     output:
-    path 'cp_results', emit: results_dir, optional: true
+    tuple val(variant), path('cp_results'), emit: results_dir, optional: true
     path 'cp_results/processed', emit: processed_dir, optional: true
     path '*.log'
 
@@ -148,7 +149,7 @@ PY
 
     mkdir -p staged_input
     if [ -d ${inputConfigPath} ]; then
-        python3 - ${inputConfigPath} ${shellQuote(params.get('boltz_prepared_msa_sha256') ?: '')} <<'PY'
+        python3 - ${inputConfigPath} ${shellQuote(params.get('boltz_prepared_msa_sha256') ?: '')} ${shellQuote(variant)} <<'PY'
 import errno
 import json
 import os
@@ -158,10 +159,15 @@ from pathlib import Path
 source = Path(sys.argv[1]).resolve(strict=True)
 leaves = set()
 selected = set()
+variant_file = Path(sys.argv[3] + '.yaml') if sys.argv[3] else None
+if variant_file:
+    selected.add(variant_file)
 manifest = source / 'msa-inputs.json'
 if sys.argv[2] and manifest.is_file():
     selected.add(Path('msa-inputs.json'))
     for config in json.loads(manifest.read_text())['configs']:
+        if variant_file and Path(config['path']) != variant_file:
+            continue
         selected.add(Path(config['path']))
         for chain in config['chains']:
             alignment = chain['alignment']
@@ -353,7 +359,7 @@ process FinalizeBoltzCPExperimental {
     publishDir "${params.out_dir}/npz_files/predictions", mode: 'copy', pattern: 'published/**/*.npz', saveAs: { filename -> filename.replaceFirst('^published/', '') }
 
     input:
-    path results_dir
+    tuple val(variant), path(results_dir)
 
     output:
     path 'published/**/*.pdb', emit: pdbs, optional: true
@@ -370,7 +376,7 @@ from pathlib import Path
 import shutil
 
 root = Path('${results_dir}')
-published = Path('published')
+published = Path('published') / '${variant}'
 for pattern in ('*.pdb', '*.cif', '*.json', '*.npz'):
     for src in sorted(root.rglob(pattern)):
         target = published / src.relative_to(root)

@@ -283,7 +283,8 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path, *, native
     if (model_id == 'boltz_cp_experimental'
             and effective.get('bcp_input_format', 'config_files') == 'config_files'
             and (effective.get('bcp_input_path') or effective.get('input_path'))):
-        fold_cp_config_proteins(Path(effective.get('bcp_input_path') or effective['input_path']))
+        for config in fold_cp_config_files(Path(effective.get('bcp_input_path') or effective['input_path']), effective):
+            fold_cp_config_proteins(config)
     if is_boltz and not enabled(params.get('boltz_use_msa')):
         return effective
     if not is_boltz:
@@ -593,6 +594,18 @@ def _fold_cp_native_config(source: Path) -> tuple[Path, Path]:
         raise ValueError('Boltz-CP config_files requires a native YAML config')
     return source, source.parent
 
+def fold_cp_config_files(source: Path, params: dict) -> list[Path]:
+    roster = params.get('sequence_batch_json_path')
+    if not roster:
+        return [_fold_cp_native_config(source)[0]]
+    names = [row['name'] + '.yaml' for row in json.loads(Path(roster).read_bytes())]
+    actual = {p.relative_to(source).as_posix() for p in source.rglob('*') if p.suffix in {'.yaml', '.yml'}}
+    if (not names or len(set(names)) != len(names) or set(names) != actual
+            or any(Path(name).name != name for name in names)):
+        raise ValueError('Fold-CP batch config roster mismatch')
+    return [source / name for name in names]
+
+
 def fold_cp_config_proteins(source: Path) -> tuple[Path, dict, list[dict]]:
     """Inspect the one executable native config before any provider operation."""
     import yaml
@@ -655,13 +668,11 @@ def bind_prepared_fold_cp_plan(invocation, supplied):
     records = manifest.get('configs', [])
     names = [r['path'] for r in records]
     actual = sorted(str(p.relative_to(root)) for p in root.rglob('*') if p.suffix in {'.yaml', '.yml'})
-    if (len(names) != 1 or Path(names[0]).parent != Path('.')
-            or sorted(names) != actual):
+    source = Path(native['bcp_input_path'])
+    files = fold_cp_config_files(source, native)
+    if names != [p.name for p in files] or sorted(names) != actual:
         raise ValueError('Prepared Fold-CP native config roster mismatch')
     if services[0].operation_identity is None:
-        source = Path(native['bcp_input_path'])
-        file, _ = _fold_cp_native_config(source)
-        files = [file]
         expected = {str(p.relative_to(source)) if source.is_dir() else p.name: digest(p.read_bytes()) for p in files}
         if {r['path']: r['source_sha256'] for r in records} != expected:
             raise ValueError('Prepared Fold-CP native source identity mismatch')
@@ -690,14 +701,14 @@ def bind_prepared_fold_cp_plan(invocation, supplied):
 
 
 def prepare_boltz_cp_bundle(params: dict, destination: Path) -> dict:
-    """Package the single executable config, retaining file and chain identity."""
+    """Package each executable config, retaining file and chain identity."""
     import yaml
     if params.get('bcp_input_format', 'config_files') != 'config_files':
         return copy.deepcopy(params)
     source = Path(params.get('bcp_input_path') or params['input_path']).resolve()
     # Validate the complete roster before requesting even the first MSA.
-    file, base = _fold_cp_native_config(source)
-    files = [file]
+    files = fold_cp_config_files(source, params)
+    base = source if source.is_dir() else source.parent
     configs = []
     # Validate every declared config before any provider operation.
     for path in files:

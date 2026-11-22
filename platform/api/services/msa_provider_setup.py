@@ -229,7 +229,7 @@ def inspect_msa_cache(model_id: str, params: dict) -> dict:
         return {'state': 'disabled'}
     from biomodstack_msa_api import MSACacheMiss, validate_settings
     from services.model_msa_handoff import (
-        _boltz_roster, _boltz_task_proteins, fold_cp_config_proteins,
+        _boltz_roster, _boltz_task_proteins, fold_cp_config_files, fold_cp_config_proteins,
     )
     from services.msa_preparation import replay_model_msa
     import json
@@ -244,8 +244,8 @@ def inspect_msa_cache(model_id: str, params: dict) -> dict:
     native_roster = False
     if model_id == 'boltz_cp_experimental' and params.get('bcp_input_format', 'config_files') == 'config_files' and (params.get('bcp_input_path') or params.get('input_path')):
         native_roster = True
-        _, _, proteins = fold_cp_config_proteins(Path(params.get('bcp_input_path') or params['input_path']))
-        groups = [[p['sequence'] for p in proteins if p.get('msa') not in ('empty',) and not p.get('msa')]]
+        files = fold_cp_config_files(Path(params.get('bcp_input_path') or params['input_path']), params)
+        groups = [[p['sequence'] for p in fold_cp_config_proteins(path)[2] if not p.get('msa')] for path in files]
     elif model_id == 'boltz2':
         native_roster = True
         groups = [[p['sequence'] for p in _boltz_task_proteins(task, params)
