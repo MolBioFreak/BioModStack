@@ -851,8 +851,8 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                     className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)]"
                                 >
                                     <option value="">Off</option>
-                                    <option value="enrich">Enrich: keep strands matching the targets</option>
-                                    <option value="deplete">Deplete: eject strands matching the targets</option>
+                                    <option value="enrich">Enrich targets</option>
+                                    <option value="deplete">Deplete targets</option>
                                     {barcodingKit ? <option value="barcode_balance">Balance barcodes</option> : null}
                                 </select>
                             </label>
@@ -865,7 +865,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                     <input aria-label="Adaptive sampling target regions" type="file" accept=".bed"
                                         onChange={(event) => setAdaptiveBed(event.target.files?.[0] ?? null)} className="mt-1 block w-full font-normal" />
                                 </label>
-                                <p>MinKNOW basecalls the start of each strand and aligns it to this reference. Without a BED file the whole reference is the target.</p>
+                                <p>MinKNOW basecalls the start of each strand and aligns it to this reference. Enrich keeps strands that match the targets and ejects the rest; deplete does the reverse. Without a BED file the whole reference is the target.</p>
                                 {adaptiveError ? <p role="alert" className="text-[var(--warning)]">{adaptiveError}</p> : null}
                             </> : null}
                             {activeAdaptiveMode === 'barcode_balance' ? <p>MinKNOW ejects strands from barcodes that are ahead of the others, so the samples even out.</p> : null}

@@ -30,7 +30,7 @@ const ACTIVITY = [
 
 const W = 560;
 const H = 170;
-const PAD = { left: 44, right: 8, top: 8, bottom: 22 };
+const PAD = { left: 62, right: 8, top: 12, bottom: 22 };
 const plotW = W - PAD.left - PAD.right;
 const plotH = H - PAD.top - PAD.bottom;
 
