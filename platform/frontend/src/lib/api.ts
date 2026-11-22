@@ -6421,6 +6421,48 @@ export const requestOntRawSignalWaveform = (
 ));
 export const fetchOntRawSignalWaveform = (lookupId: string) =>
     apiData(api.get<OntRawSignalWaveform>(`/api/ont/raw-signal/waveforms/${encodeURIComponent(lookupId)}`));
+export interface OntRawSignalSource {
+    run_id: string;
+    observed_generation: number;
+    origin: 'sequenced' | 'imported';
+    name: string;
+    status: string;
+    created_at: string;
+    source: { representation_id: string; format: 'pod5' | 'slow5' | 'blow5'; bytes: number; removed: boolean } | null;
+    blow5: { representation_id: string; read_count: number | null } | null;
+    conversion: { job_id: string; state: string; reason_code: string } | null;
+    results: Array<{ job_id: string; name: string; created_at: string | null; signal_workbench: boolean }>;
+}
+/** Runs and imported files of one Project that hold raw signal. */
+export const fetchOntRawSignalSources = (experimentGroup: string) =>
+    apiData(api.get<{ sources: OntRawSignalSource[] }>('/api/ont/raw-signal/sources', { params: { experiment_group: experimentGroup } }));
+export interface OntRawSignalReadPage {
+    representation_id: string;
+    total: number;
+    matched: number;
+    offset: number;
+    read_ids: string[];
+}
+/** Read IDs in one ready indexed BLOW5, sorted and paged; `query` matches any part of the ID. */
+export const fetchOntRawSignalReads = (
+    runId: string, observedGeneration: number, representationId: string,
+    options: { offset?: number; limit?: number; query?: string } = {},
+) => apiData(api.get<OntRawSignalReadPage>(
+    `/api/ont/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/raw-signal/${encodeURIComponent(representationId)}/reads`,
+    { params: { offset: options.offset ?? 0, limit: options.limit ?? 50, ...(options.query ? { q: options.query } : {}) } },
+));
+export interface OntRawSignalOpenedRead {
+    lookup_id: string;
+    representation_id: string;
+    read_id: string;
+    state: OntRawSignalWaveform['state'];
+    sample_count: number | null;
+}
+/** Reads whose waveform was already opened for this file, newest first. */
+export const fetchOntRawSignalOpenedReads = (runId: string, observedGeneration: number) =>
+    apiData(api.get<{ lookups: OntRawSignalOpenedRead[] }>(
+        `/api/ont/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/raw-signal/waveform-lookups`,
+    ));
 export interface OntBasecallDeviceOptions {
     default: string;
     cuda_available: boolean | null;

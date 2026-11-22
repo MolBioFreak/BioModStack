@@ -4658,3 +4658,169 @@ async def recover_expired_derivations(session: AsyncSession) -> int:
     if recovered_count:
         await session.commit()
     return recovered_count
+
+
+# --- Raw signal tab: what a Project holds, which reads a file has, and which were opened ---
+
+_READ_ID_CACHE: dict[tuple[str, str], tuple[str, ...]] = {}
+_BLOW5_INDEX_MAX_BYTES = 512 * 1024 * 1024
+
+
+def _read_confined_bytes(artifact: Mapping[str, Any], *, authority: str, maximum: int) -> bytes:
+    if int(artifact.get("bytes", 0) or 0) > maximum:
+        raise ValueError(f"{authority} exceeds bounded policy")
+    _path, descriptor = _open_descriptor_confined_artifact(artifact, authority=authority)
+    try:
+        data = b""
+        while chunk := os.read(descriptor, 1024 * 1024):
+            data += chunk
+    finally:
+        os.close(descriptor)
+    if hashlib.sha256(data).hexdigest() != artifact.get("sha256"):
+        raise ValueError(f"{authority} digest diverged")
+    return data
+
+
+def _blow5_index_read_ids(data: bytes) -> list[str]:
+    """Read IDs from a slow5tools index: 64-byte header, then (length, id, offset, size) records, then a trailer."""
+    if data[:8] != b"SLOW5IDX" or data[-8:] != b"XDI5WOLS":
+        raise ValueError("BLOW5 index could not be read")
+    ids: list[str] = []
+    offset, end = 64, len(data) - 8
+    while offset < end:
+        length = int.from_bytes(data[offset:offset + 2], "little")
+        offset += 2
+        ids.append(data[offset:offset + length].decode("ascii"))
+        offset += length + 16
+    if offset != end:
+        raise ValueError("BLOW5 index could not be read")
+    return ids
+
+
+def _representation_read_ids(representation: Any) -> tuple[str, ...]:
+    """Every read ID in one ready indexed BLOW5, sorted. Reads the routing table or the index, never the signal."""
+    if representation.format != "blow5" or representation.state != _READY:
+        raise ValueError("reads can be listed once the indexed BLOW5 is ready")
+    manifest = representation.artifact_manifest if isinstance(representation.artifact_manifest, dict) else {}
+    if _digest(manifest) != representation.manifest_sha256:
+        raise ValueError("raw-signal representation manifest authority is invalid")
+    key = (str(representation.manifest_sha256), str(representation.format))
+    if key in _READ_ID_CACHE:
+        return _READ_ID_CACHE[key]
+    artifacts = [item for item in manifest.get("artifacts") or [] if isinstance(item, dict) and item.get("path")]
+    routing = next((item for item in artifacts if item.get("kind") == "read_routing"), None)
+    if routing is not None:
+        table = json.loads(_read_confined_bytes(routing, authority="routing artifact", maximum=_BLOW5_INDEX_MAX_BYTES))
+        ids = [str(read_id) for read_id in (table.get("read_to_group") or {})]
+    else:
+        ids = []
+        for index in (item for item in artifacts if item.get("kind") == "blow5_index"):
+            ids.extend(_blow5_index_read_ids(
+                _read_confined_bytes(index, authority="BLOW5 index artifact", maximum=_BLOW5_INDEX_MAX_BYTES)))
+    if len(_READ_ID_CACHE) >= 4:
+        _READ_ID_CACHE.pop(next(iter(_READ_ID_CACHE)))
+    _READ_ID_CACHE[key] = tuple(sorted(ids))
+    return _READ_ID_CACHE[key]
+
+
+async def list_representation_reads(
+    session: AsyncSession, *, run_id: str, observed_generation: int, representation_id: str,
+    offset: int = 0, limit: int = 50, query: str | None = None,
+) -> dict[str, Any]:
+    representation = await session.get(OntRawSignalRepresentation, representation_id)
+    if representation is None or representation.run_id != run_id or representation.observed_generation != observed_generation:
+        raise KeyError(representation_id)
+    ids = await asyncio.to_thread(_representation_read_ids, _representation_files_view(representation))
+    needle = (query or "").strip().lower()
+    matched = [read_id for read_id in ids if needle in read_id.lower()] if needle else ids
+    return {"representation_id": representation_id, "total": len(ids), "matched": len(matched),
+            "offset": offset, "read_ids": list(matched[offset:offset + limit])}
+
+
+async def list_waveform_lookups(session: AsyncSession, *, run_id: str, observed_generation: int, limit: int = 50) -> list[dict[str, Any]]:
+    """Reads already opened for this file, newest first, without their samples."""
+    records = (await session.execute(
+        select(OntRawSignalLookup).where(
+            OntRawSignalLookup.run_id == run_id, OntRawSignalLookup.observed_generation == observed_generation,
+        ).order_by(OntRawSignalLookup.updated_at.desc(), OntRawSignalLookup.id).limit(limit)
+    )).scalars()
+    return [{"lookup_id": item.id, "representation_id": item.representation_id, "read_id": item.read_id,
+             "state": item.state, "sample_count": item.sample_count} for item in records]
+
+
+def _source_display_name(run: OntInstrumentRun, source: OntRawSignalRepresentation | None) -> str:
+    if run.external_source_relative_path:
+        return Path(run.external_source_relative_path).name
+    manifest = source.artifact_manifest if source is not None and isinstance(source.artifact_manifest, dict) else {}
+    files = [item for item in manifest.get("artifacts") or [] if isinstance(item, dict) and item.get("path")]
+    if run.minknow_run_id is None and len(files) >= 1:
+        return Path(str(files[0]["path"])).name
+    return run.sample_id or run.id
+
+
+async def list_signal_sources(session: AsyncSession, *, experiment_group: str) -> list[dict[str, Any]]:
+    """Every run and imported file of one Project that holds raw signal, with its POD5, BLOW5 and results."""
+    from sqlalchemy import func  # noqa: PLC0415
+    from database import Job  # noqa: PLC0415
+
+    runs = list((await session.execute(
+        select(OntInstrumentRun).where(OntInstrumentRun.experiment_group == experiment_group)
+        .order_by(OntInstrumentRun.created_at.desc(), OntInstrumentRun.id)
+    )).scalars())
+    if not runs:
+        return []
+    run_ids = [run.id for run in runs]
+    representations: dict[str, list[OntRawSignalRepresentation]] = {}
+    for record in (await session.execute(
+        select(OntRawSignalRepresentation).where(OntRawSignalRepresentation.run_id.in_(run_ids))
+        .order_by(OntRawSignalRepresentation.created_at, OntRawSignalRepresentation.id)
+    )).scalars():
+        representations.setdefault(record.run_id, []).append(record)
+    conversions: dict[tuple[str, int], OntRawSignalDerivationJob] = {}
+    for job in (await session.execute(
+        select(OntRawSignalDerivationJob).where(OntRawSignalDerivationJob.run_id.in_(run_ids))
+        .order_by(OntRawSignalDerivationJob.created_at, OntRawSignalDerivationJob.id)
+    )).scalars():
+        conversions[(job.run_id, job.observed_generation)] = job
+    source_run = func.json_extract(Job.params, "$.source_instrument_run_id")
+    results: dict[str, list[dict[str, Any]]] = {}
+    for job_id, name, params, created_at in (await session.execute(
+        select(Job.id, Job.name, Job.params, Job.created_at)
+        .where(Job.status == "completed", source_run.in_(run_ids)).order_by(Job.created_at.desc())
+    )).all():
+        params = params if isinstance(params, dict) else {}
+        results.setdefault(str(params.get("source_instrument_run_id")), []).append({
+            "job_id": job_id, "name": name, "created_at": created_at.isoformat() if created_at else None,
+            "signal_workbench": bool(params.get("dataset_id")) and bool(params.get("source_instrument_observed_generation")),
+        })
+    sources = []
+    for run in runs:
+        held = representations.get(run.id, [])
+        if not held and run.minknow_run_id is None:
+            continue
+        generation = max((item.observed_generation for item in held), default=run.observed_generation)
+        held = [item for item in held if item.observed_generation == generation]
+        source = next((item for item in held if item.role == "source"), None)
+        blow5 = next((item for item in held if item.format == "blow5" and item.state == _READY
+                      and (item.validation_receipts or {}).get("adjacent_index")), None)
+        conversion = conversions.get((run.id, generation))
+        source_manifest = source.artifact_manifest if source is not None and isinstance(source.artifact_manifest, dict) else {}
+        sources.append({
+            "run_id": run.id,
+            "observed_generation": generation,
+            "origin": "sequenced" if run.minknow_run_id is not None else "imported",
+            "name": _source_display_name(run, source),
+            "status": run.state,
+            "created_at": run.created_at.isoformat(),
+            "source": {
+                "representation_id": source.id, "format": source.format,
+                "bytes": sum(int(item.get("bytes") or 0) for item in source_manifest.get("artifacts") or []
+                             if isinstance(item, dict) and item.get("kind") in {"pod5", "slow5", "blow5"}),
+                "removed": bool((source.validation_receipts or {}).get("source_removed")),
+            } if source is not None else None,
+            "blow5": {"representation_id": blow5.id, "read_count": blow5.read_count} if blow5 is not None else None,
+            "conversion": {"job_id": conversion.id, "state": conversion.state,
+                           "reason_code": conversion.failure_code or conversion.reason_code} if conversion is not None else None,
+            "results": results.get(run.id, []),
+        })
+    return sources

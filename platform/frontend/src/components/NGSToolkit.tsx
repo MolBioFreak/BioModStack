@@ -63,6 +63,7 @@ import { normalizeNanoporeCloneState } from '../lib/nanoporeCloneState';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { NanoporeTemplate } from './NanoporeTemplate';
 import { OntInstrumentPanel } from './ngs/OntInstrumentPanel';
+import { OntRawSignalPanel } from './ngs/OntRawSignalPanel';
 import { RawReadInspector } from './ngs/RawReadInspector';
 import { ReadAndSignalWorkbench } from './ngs/ReadAndSignalWorkbench';
 import { NgsArtifactDownloads } from './ngs/NgsArtifactDownloads';
@@ -4472,7 +4473,7 @@ export function NGSToolkit() {
                                 ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
                                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'}`}
                         >
-                            Raw signal tools
+                            Raw signal
                         </button>
                         <button
                             onClick={() => selectView('runs')}
@@ -4508,8 +4509,10 @@ export function NGSToolkit() {
                     onBack={() => selectView('runs')}
                     initialValues={initialValues}
                 />
-            ) : view === 'instrument' || view === 'raw-signal' ? (
-                <OntInstrumentPanel rawSignalOnly={view === 'raw-signal'} onAnalyzeExistingData={(values) => { if (values) setInitialValues(values); selectView('launch'); }} />
+            ) : view === 'raw-signal' ? (
+                <OntRawSignalPanel onAnalyzeExistingData={(values) => { if (values) setInitialValues(values); selectView('launch'); }} />
+            ) : view === 'instrument' ? (
+                <OntInstrumentPanel onAnalyzeExistingData={(values) => { if (values) setInitialValues(values); selectView('launch'); }} />
             ) : (
                 <section className="space-y-4">
                     <div className="flex items-center gap-3" aria-label="Jobs pagination">

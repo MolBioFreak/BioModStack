@@ -106,11 +106,11 @@ async function flush() {
     });
 }
 
-function panel(rawSignalOnly = false) {
+function panel() {
     return (
         <MemoryRouter>
             <QueryClientProvider client={client}>
-                <OntInstrumentPanel rawSignalOnly={rawSignalOnly} onAnalyzeExistingData={() => undefined} />
+                <OntInstrumentPanel onAnalyzeExistingData={() => undefined} />
             </QueryClientProvider>
         </MemoryRouter>
     );
@@ -337,34 +337,6 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
         await waitUntil(() => expect(container.textContent).toContain('MinKNOW has no live numbers for this run yet.'));
         expect(container.querySelector('[aria-label="Reads per barcode"]')).toBeNull();
     });
-    it('opens raw-signal tools without polling MinKNOW and registers an indexed BLOW5 pair', async () => {
-        ont.uploadFile.mockImplementation(async (directory: string, file: File) => ({ data: { path: `${directory}/${file.name}`, size: file.size } }));
-        ont.importRawSignal.mockResolvedValue({ run_id: 'external-native', observed_generation: 1, already_registered: false });
-        await act(async () => root.render(panel(true)));
-        await flush();
-        expect(container.textContent).toContain('Raw signal tools');
-        expect(container.textContent).toContain('Squigualiser');
-        expect(container.textContent).toContain('Squigulator');
-        expect(container.textContent).not.toContain('ONT instrument control');
-        expect(ont.fetchDevice).not.toHaveBeenCalled();
-        expect(ont.fetchOptions).not.toHaveBeenCalled();
-        const source = container.querySelector<HTMLInputElement>('input[aria-label="Raw-signal file"]')!;
-        Object.defineProperty(source, 'files', { value: [new File(['blow5 bytes'], 'reads.blow5')], configurable: true });
-        await act(async () => source.dispatchEvent(new Event('change', { bubbles: true })));
-        const index = container.querySelector<HTMLInputElement>('input[aria-label="BLOW5 index"]')!;
-        Object.defineProperty(index, 'files', { value: [new File(['index bytes'], 'reads.blow5.idx')], configurable: true });
-        await act(async () => index.dispatchEvent(new Event('change', { bubbles: true })));
-        const button = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Import raw signal')!;
-        expect(button.disabled).toBe(false);
-        await act(async () => button.click());
-        await waitUntil(() => expect(ont.importRawSignal).toHaveBeenCalledTimes(1));
-        const request = ont.importRawSignal.mock.calls[0][0];
-        expect(request).toMatchObject({ format: 'blow5', experiment_group: 'domain-experiment-test', sample_id: null });
-        expect(request.file_path).toMatch(/^inputs\/ont-raw-signal\/[0-9a-f-]+\/source.blow5$/);
-        expect(request.index_file_path).toBe(request.file_path + '.idx');
-        expect(request).not.toHaveProperty('source_fidelity');
-    });
-
     it('sends a sample name per barcode when the run uses a barcoding kit', async () => {
         ont.fetchOptions.mockResolvedValue({ data: { ...optionsResponse.data, available_kits: ['SQK-LSK114', 'SQK-RBK114-24'] } });
         ont.createIntent.mockResolvedValue({ data: intent });
@@ -531,25 +503,5 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
         expect([...container.querySelectorAll('button')].some((b) => b.textContent === 'Load older runs')).toBe(false);
         const options = [...container.querySelectorAll('option')].map((option) => option.textContent);
         expect(options).toContain('project-run-101 · completed · version 1');
-    });
-    it('offers upload and existing-POD5 registration as two choices in one Add raw signal card', async () => {
-        const fetchCandidates = (await import('../../src/lib/api')).fetchOntExternalPod5Candidates as unknown as ReturnType<typeof vi.fn>;
-        fetchCandidates.mockResolvedValueOnce({ candidates: [{ candidate_id: 'pod5-candidate-1', display_name: 'run.pod5', size_bytes: 1024 ** 3 }] });
-        await act(async () => root.render(panel(true)));
-        await flush();
-        const headings = [...container.querySelectorAll('h3')].map((h) => h.textContent);
-        expect(headings).toContain('Add raw signal');
-        expect(headings).not.toContain('Upload raw signal');
-        expect(headings).not.toContain('Register existing POD5');
-        const choices = [...container.querySelectorAll('[role="radiogroup"][aria-label="Raw-signal source"] [role="radio"]')];
-        expect(choices.map((choice) => choice.getAttribute('aria-checked'))).toEqual(['true', 'false']);
-        expect(container.querySelector('input[aria-label="Raw-signal file"]')).not.toBeNull();
-        expect(container.querySelector('select[aria-label="Existing POD5 candidate"]')).toBeNull();
-        await act(async () => (choices[1] as HTMLButtonElement).click());
-        expect(container.querySelector('input[aria-label="Raw-signal file"]')).toBeNull();
-        const select = container.querySelector<HTMLSelectElement>('select[aria-label="Existing POD5 candidate"]')!;
-        expect(select).not.toBeNull();
-        expect([...select.options].map((option) => option.value)).toContain('pod5-candidate-1');
-        expect([...container.querySelectorAll('button')].some((b) => b.textContent === 'Register selected POD5')).toBe(true);
     });
 });

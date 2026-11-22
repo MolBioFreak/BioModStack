@@ -1148,6 +1148,41 @@ async def ont_get_raw_signal_waveform(
         raise HTTPException(status_code=404, detail="unknown raw-signal waveform lookup") from exc
 
 
+@router.get("/raw-signal/sources")
+async def ont_list_raw_signal_sources(
+    experiment_group: str = Query(min_length=1, max_length=256),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Runs and imported files of one Project that hold raw signal. Reads BMS records only."""
+    return {"sources": await ont_raw_signal.list_signal_sources(session, experiment_group=experiment_group)}
+
+
+@router.get("/runs/{run_id}/generations/{observed_generation}/raw-signal/waveform-lookups")
+async def ont_list_raw_signal_waveform_lookups(
+    run_id: str, observed_generation: int, session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    return {"lookups": await ont_raw_signal.list_waveform_lookups(
+        session, run_id=run_id, observed_generation=observed_generation)}
+
+
+@router.get("/runs/{run_id}/generations/{observed_generation}/raw-signal/{representation_id}/reads")
+async def ont_list_raw_signal_reads(
+    run_id: str, observed_generation: int, representation_id: str,
+    offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=500),
+    q: str | None = Query(None, max_length=128, pattern=r"^[A-Za-z0-9_.-]*$"),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Read IDs held by one ready indexed BLOW5, sorted and paged."""
+    try:
+        return await ont_raw_signal.list_representation_reads(
+            session, run_id=run_id, observed_generation=observed_generation,
+            representation_id=representation_id, offset=offset, limit=limit, query=q)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="unknown raw-signal file") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/raw-signal/derivations/{job_id}/cancel", status_code=202)
 async def ont_cancel_raw_signal_derivation(
     job_id: str,

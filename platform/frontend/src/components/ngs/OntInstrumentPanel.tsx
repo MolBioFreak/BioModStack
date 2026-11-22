@@ -8,17 +8,8 @@ import {
     fetchMolBioNgsSampleRevision,
     fetchMolBioNgsSummaries,
     fetchOntDeviceStatus,
-    fetchOntExternalPod5Candidates,
     fetchOntInstrumentRunGeneration,
     fetchOntInstrumentRuns,
-    fetchOntRawSignalCapabilities,
-    fetchOntRawSignalWaveform,
-    requestOntBlow5Preparation,
-    fetchOntRawSignalRetention,
-    saveOntRawSignalRetention,
-    requestOntRawSignalWaveform,
-    registerOntExternalPod5Candidate,
-    importOntRawSignalUpload,
     uploadFile,
     fetchOntProtocolOptions,
     requestMk1dReconnect,
@@ -27,24 +18,17 @@ import {
     type OntInstrumentRun,
     type OntLiveDevice,
     type OntProtocolOption,
-    type OntRawSignalPreference,
-    type OntRawSignalWaveform,
     type OntRunSummary,
-    fetchOntPod5Restore,
-    requestOntPod5Restore,
 } from '../../lib/api';
 import { jobPollingInterval } from '../../lib/queryPolling';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
 
-import { rawSignalWaveformPoints } from './RawReadInspector';
 import OntRunLiveStats from './OntRunLiveStats';
 
-const RAW_WAVEFORM_POLL_ATTEMPTS = 130;
 const RUN_HISTORY_PAGE_SIZE = 100;
 
 interface OntInstrumentPanelProps {
     onAnalyzeExistingData: (values?: Record<string, unknown>) => void;
-    rawSignalOnly?: boolean;
 }
 
 interface SelectedRunGeneration {
@@ -121,7 +105,7 @@ function runSelectionKey(run: { run_id: string; observed_generation: number }): 
     return `${run.run_id}\u0000${run.observed_generation}`;
 }
 
-export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = false }: OntInstrumentPanelProps) {
+export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanelProps) {
     const {
         selectedDomainExperiment,
         contextHref,
@@ -179,18 +163,6 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
         ? 'Use one line per barcode: barcode01, then a comma or tab, then a name of letters, numbers, _ or -.' : '';
     const [sampleSelection, setSampleSelection] = useState<{ domainId: string; sampleId: string } | null>(null);
     const [selectedRunGeneration, setSelectedRunGeneration] = useState<SelectedRunGeneration | null>(null);
-    const [selectedExternalPod5CandidateId, setSelectedExternalPod5CandidateId] = useState('');
-    const [rawSourceMode, setRawSourceMode] = useState<'upload' | 'existing'>('upload');
-    const [rawUpload, setRawUpload] = useState<File | null>(null);
-    const [rawIndexUpload, setRawIndexUpload] = useState<File | null>(null);
-    const uploadedRawFiles = useRef(new Map<File, string>());
-    const rawUploadDirectory = useRef('');
-    if (!rawUploadDirectory.current) rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`;
-    const [rawSignalPreference, setRawSignalPreference] = useState<OntRawSignalPreference>('auto');
-    const [waveformReadId, setWaveformReadId] = useState('');
-    const [waveform, setWaveform] = useState<OntRawSignalWaveform | null>(null);
-    const [waveformError, setWaveformError] = useState<string | null>(null);
-    const [waveformLoading, setWaveformLoading] = useState(false);
     const [message, setMessage] = useState('');
 
     useEffect(() => {
@@ -200,7 +172,6 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
     const deviceStatus = useQuery({
         queryKey: ['ont-device-status'],
         queryFn: async () => (await fetchOntDeviceStatus()).data,
-        enabled: !rawSignalOnly,
         refetchInterval: (query) => jobPollingInterval(10000, query),
     });
     const data = deviceStatus.isError ? undefined : deviceStatus.data;
@@ -211,7 +182,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
     const protocolOptions = useQuery({
         queryKey: ['ont-protocol-options', selectedPositionForQuery, selectedKit, runHours],
         queryFn: async () => (await fetchOntProtocolOptions(selectedPositionForQuery, { kit: selectedKit, run_hours: runHours })).data,
-        enabled: !rawSignalOnly && Boolean(selectedPositionForQuery),
+        enabled: Boolean(selectedPositionForQuery),
         refetchInterval: (query) => jobPollingInterval(10000, query),
     });
     const instrumentEvidenceError = deviceStatus.isError || protocolOptions.isError;
@@ -325,11 +296,6 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
             run.experiment_group === exactDomainExperimentId && ['starting', 'running', 'stopping', 'unknown'].includes(run.status)))
             ? jobPollingInterval(3000, query) : false,
     });
-    const externalPod5CandidatesQuery = useQuery({
-        queryKey: ['ont-external-pod5-candidates'],
-        queryFn: fetchOntExternalPod5Candidates,
-        retry: false,
-    });
     const durableRuns = useMemo(
         () => exactDomainExperimentId
             ? (durableRunsQuery.data?.pages.flat() ?? []).filter((run) => run.experiment_group === exactDomainExperimentId)
@@ -357,172 +323,12 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
         enabled: exactDomainExperimentId !== null && effectiveSelectedRunGeneration !== null,
         retry: false,
     });
-    const rawSignalQuery = useQuery({
-        queryKey: [
-            'ont-raw-signal-capabilities',
-            effectiveSelectedRunGeneration?.runId,
-            effectiveSelectedRunGeneration?.observedGeneration,
-            rawSignalPreference,
-        ],
-        queryFn: () => fetchOntRawSignalCapabilities(
-            effectiveSelectedRunGeneration?.runId as string,
-            effectiveSelectedRunGeneration?.observedGeneration as number,
-            rawSignalPreference,
-        ),
-        enabled: effectiveSelectedRunGeneration !== null,
-        retry: false,
-        refetchInterval: (query) => query.state.data?.representations.some((item) => item.format === 'blow5' && item.state === 'ready')
-            ? false
-            : query.state.data?.representations.some((item) => item.format === 'pod5' || item.format === 'blow5')
-                ? jobPollingInterval(2000, query) : false,
-    });
-
     const refreshDurableRuns = (run?: OntInstrumentRun) => {
         if (run) {
             setSelectedRunGeneration({ runId: run.id, observedGeneration: run.observed_generation });
         }
         void queryClient.invalidateQueries({ queryKey: ['ont-instrument-runs', exactDomainExperimentId] });
         void durableRunsQuery.refetch();
-    };
-
-    const registerExternalPod5 = useMutation({
-        mutationFn: async () => {
-            if (!exactDomainExperimentId) throw new Error('Select an exact Domain Experiment.');
-            if (!selectedExternalPod5CandidateId) throw new Error('Select one existing POD5 candidate.');
-            return registerOntExternalPod5Candidate(
-                selectedExternalPod5CandidateId,
-                exactDomainExperimentId,
-                selectedSample?.id,
-            );
-        },
-        onSuccess: (registration) => {
-            setSelectedRunGeneration({
-                runId: registration.run_id,
-                observedGeneration: registration.observed_generation,
-            });
-            setMessage(registration.already_registered
-                ? 'Existing POD5 registration reopened.'
-                : 'Existing POD5 registered as one sealed run generation.');
-            void queryClient.invalidateQueries({ queryKey: ['ont-instrument-runs', exactDomainExperimentId] });
-        },
-        onError: (error) => setMessage(errorMessage(error, 'Existing POD5 registration failed.')),
-    });
-
-    const importRawSignal = useMutation({
-        onMutate: () => ({ domainId: exactDomainExperimentId }),
-        mutationFn: async () => {
-            if (!exactDomainExperimentId || !rawUpload) throw new Error('Choose a Project and a raw-signal file.');
-            const format = rawUpload.name.split('.').pop()?.toLowerCase();
-            if (format !== 'pod5' && format !== 'slow5' && format !== 'blow5') throw new Error('Select POD5, SLOW5 or BLOW5.');
-            if (format === 'blow5' && !rawIndexUpload) throw new Error('Select the matching BLOW5 index.');
-            const directory = rawUploadDirectory.current;
-            const uploaded = uploadedRawFiles.current;
-            const upload = async (file: File, name: string) => {
-                let path = uploaded.get(file);
-                if (!path) {
-                    path = (await uploadFile(directory, new File([file], name))).data.path;
-                    uploaded.set(file, path);
-                }
-                return path;
-            };
-            const name = `source.${format}`;
-            return importOntRawSignalUpload({
-                file_path: await upload(rawUpload, name), format,
-                index_file_path: format === 'blow5' && rawIndexUpload ? await upload(rawIndexUpload, name + '.idx') : null,
-                experiment_group: exactDomainExperimentId, sample_id: selectedSample?.id ?? null,
-            });
-        },
-        onSuccess: (registration, _variables, context) => {
-            void queryClient.invalidateQueries({ queryKey: ['ont-instrument-runs', context?.domainId] });
-            if (currentDomainId.current !== context?.domainId) return;
-            setSelectedRunGeneration({ runId: registration.run_id, observedGeneration: registration.observed_generation });
-            setMessage('Raw-signal source registered. Its validation and readiness are shown below.');
-        },
-    });
-
-    useEffect(() => {
-        setRawUpload(null);
-        setRawIndexUpload(null);
-        setMessage('');
-        importRawSignal.reset();
-        uploadedRawFiles.current = new Map();
-        rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`;
-    }, [exactDomainExperimentId, importRawSignal.reset]);
-
-    const retentionQuery = useQuery({
-        queryKey: ['ont-raw-signal-retention'],
-        queryFn: fetchOntRawSignalRetention,
-        staleTime: 60_000,
-    });
-    const saveRetention = useMutation({
-        mutationFn: saveOntRawSignalRetention,
-        onSuccess: (settings) => queryClient.setQueryData(['ont-raw-signal-retention'], settings),
-    });
-    const removePod5 = retentionQuery.data?.remove_pod5_after_verified_blow5 === true;
-
-    const readyBlow5Id = rawSignalQuery.data?.representations.find(
-        (representation) => representation.format === 'blow5' && representation.state === 'ready',
-    )?.representation_id ?? null;
-    const pod5RestoreQuery = useQuery({
-        queryKey: ['ont-pod5-restore', effectiveSelectedRunGeneration?.runId, effectiveSelectedRunGeneration?.observedGeneration, readyBlow5Id],
-        queryFn: () => fetchOntPod5Restore(
-            effectiveSelectedRunGeneration!.runId, effectiveSelectedRunGeneration!.observedGeneration, readyBlow5Id!,
-        ),
-        enabled: Boolean(effectiveSelectedRunGeneration && readyBlow5Id),
-        refetchInterval: (query) => (query.state.data?.state === 'running' ? 5000 : false),
-    });
-    const restorePod5 = useMutation({
-        mutationFn: async () => {
-            if (!effectiveSelectedRunGeneration || !readyBlow5Id) throw new Error('Select a run with a ready BLOW5.');
-            return requestOntPod5Restore(
-                effectiveSelectedRunGeneration.runId, effectiveSelectedRunGeneration.observedGeneration, readyBlow5Id,
-            );
-        },
-        onSuccess: () => void pod5RestoreQuery.refetch(),
-        onError: (error) => setMessage(`POD5 restore failed: ${error instanceof Error ? error.message : String(error)}`),
-    });
-
-    const prepareBlow5 = useMutation({
-        mutationFn: async (sourceRepresentationId: string) => {
-            if (!effectiveSelectedRunGeneration) throw new Error('Select an exact ONT generation.');
-            return requestOntBlow5Preparation(
-                effectiveSelectedRunGeneration.runId,
-                effectiveSelectedRunGeneration.observedGeneration,
-                sourceRepresentationId,
-                rawSignalPreference === 'blow5' ? 'blow5' : 'auto',
-            );
-        },
-        onSuccess: (result) => {
-            setMessage(`Raw-signal request ${result.job_id}: ${result.state} (${result.reason_code})`);
-            void rawSignalQuery.refetch();
-        },
-    });
-
-    const waveformPoints = useMemo(() => rawSignalWaveformPoints(waveform), [waveform]);
-
-    const inspectWaveform = async (representationId: string) => {
-        if (!effectiveSelectedRunGeneration || !waveformReadId.trim()) return;
-        setWaveformLoading(true);
-        setWaveform(null);
-        setWaveformError(null);
-        try {
-            let current = await requestOntRawSignalWaveform(
-                effectiveSelectedRunGeneration.runId,
-                effectiveSelectedRunGeneration.observedGeneration,
-                representationId,
-                waveformReadId.trim(),
-            );
-            for (let attempt = 0; attempt < RAW_WAVEFORM_POLL_ATTEMPTS && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
-                await new Promise((resolve) => window.setTimeout(resolve, 1000));
-                current = await fetchOntRawSignalWaveform(current.lookup_id);
-            }
-            setWaveform(current);
-            if (current.state !== 'ready') setWaveformError(current.reason_code);
-        } catch (error) {
-            setWaveformError(errorMessage(error, 'Raw waveform lookup failed.'));
-        } finally {
-            setWaveformLoading(false);
-        }
     };
 
     const reconnectMk1d = useMutation({
@@ -621,8 +427,6 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
 
     return (
         <section className="space-y-5 rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 shadow-lg shadow-black/10">
-            {rawSignalOnly ? <div className="space-y-2 text-[var(--text-primary)]"><h2 className="text-xl font-semibold">Raw signal tools</h2><p className="text-sm text-[var(--text-secondary)]">POD5 and indexed BLOW5: source registration, SLOW5tools conversion, read lookup and waveform inspection. Open an alignment result’s Read &amp; Signal Workbench for Squigualiser views, mapping, calibration and Squigulator ideal trace comparison.</p><button type="button" onClick={() => onAnalyzeExistingData()} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--accent-primary)]">Open data analysis</button></div> : null}
-            {!rawSignalOnly ? <>
             <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
@@ -901,87 +705,6 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
             </div>
             {activeRuns.map((run) => <OntRunLiveStats key={run.run_id} runId={run.run_id} />)}
 
-            </> : null}
-            <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4 text-[var(--text-primary)]">
-                <div>
-                    <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Add raw signal</h3>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Register POD5, SLOW5 or indexed BLOW5 in the selected Project. File provenance and validation stay in the ONT ledger. SLOW5 and POD5 are kept as uploaded and can be converted to indexed BLOW5, which the waveform and Squigualiser views read.</p>
-                </div>
-                <label className="flex items-start gap-2 text-xs text-[var(--text-secondary)]">
-                    <input
-                        type="checkbox"
-                        aria-label="Remove POD5 after verified BLOW5"
-                        checked={removePod5}
-                        disabled={!retentionQuery.data || saveRetention.isPending}
-                        onChange={(event) => saveRetention.mutate(event.target.checked ? 'blow5_only' : 'pod5_and_blow5')}
-                        className="mt-0.5"
-                    />
-                    <span>
-                        <span className="font-semibold text-[var(--text-primary)]">Remove POD5 after a verified BLOW5 is made</span>
-                        {' '}Saves roughly half the raw-signal storage. Applies to conversions that finish after this is turned on. The BLOW5 keeps the full signal for waveform and squiggle views; basecalling reads POD5, so re-basecalling a removed run needs its POD5 restored from the BLOW5.
-                    </span>
-                </label>
-                {saveRetention.isError ? <p role="alert" className="text-xs text-[var(--error)]">Could not save the POD5 setting.</p> : null}
-                {!exactDomainExperimentId && rawSignalOnly ? <p role="status" className="text-sm text-[var(--text-secondary)]">Choose a Project (Projects button above) to import raw signal.</p> : null}
-                <div role="radiogroup" aria-label="Raw-signal source" className="flex flex-wrap gap-2">
-                    {([
-                        ['upload', 'Upload a file', 'POD5, SLOW5 or BLOW5 (with its .idx index)'],
-                        ['existing', 'Use a POD5 on this computer', 'Registered in place instead of uploading; the file is not moved or changed'],
-                    ] as const).map(([value, label, detail]) => (
-                        <button
-                            key={value}
-                            type="button"
-                            role="radio"
-                            aria-checked={rawSourceMode === value}
-                            onClick={() => setRawSourceMode(value)}
-                            className={`rounded-lg border px-3 py-2 text-left text-sm ${rawSourceMode === value
-                                ? 'border-[var(--accent-primary)] bg-[var(--bg-secondary)] font-semibold text-[var(--text-primary)]'
-                                : 'border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]'}`}
-                        >
-                            <span className="block">{label}</span>
-                            <span className="block text-xs font-normal text-[var(--text-secondary)]">{detail}</span>
-                        </button>
-                    ))}
-                </div>
-                {rawSourceMode === 'upload' ? (
-                    <div className="space-y-3">
-                        <fieldset disabled={importRawSignal.isPending} className="grid gap-3 sm:grid-cols-2">
-                            <label className="text-xs">Raw-signal file<input key={exactDomainExperimentId ?? 'no-project'} aria-label="Raw-signal file" type="file" accept=".pod5,.slow5,.blow5" onChange={(e) => { setRawUpload(e.target.files?.[0] ?? null); setRawIndexUpload(null); uploadedRawFiles.current.clear(); rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`; }} className="mt-1 block w-full text-sm" /></label>
-                            {rawUpload?.name.toLowerCase().endsWith('.blow5') ? <label className="text-xs">Matching BLOW5 index<input aria-label="BLOW5 index" type="file" accept=".idx" onChange={(e) => { setRawIndexUpload(e.target.files?.[0] ?? null); uploadedRawFiles.current = new Map(); rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`; }} className="mt-1 block w-full text-sm" /></label> : null}
-                        </fieldset>
-                        <button type="button" disabled={!exactDomainExperimentId || !rawUpload || importRawSignal.isPending || (rawUpload.name.toLowerCase().endsWith('.blow5') && !rawIndexUpload)} onClick={() => importRawSignal.mutate()} className="rounded-lg border border-[var(--accent-primary)] px-3 py-2 text-sm font-semibold text-[var(--accent-primary)] disabled:opacity-50">{importRawSignal.isPending ? 'Importing raw signal…' : 'Import raw signal'}</button>
-                        {importRawSignal.isError ? <p role="alert" className="text-sm text-[var(--text-primary)]">{errorMessage(importRawSignal.error, 'Raw-signal import failed.')}</p> : null}
-                        {importRawSignal.isSuccess ? <p role="status" className="text-sm text-[var(--text-secondary)]">{message}</p> : null}
-                    </div>
-                ) : (
-                    <div className="space-y-3">
-                        {externalPod5CandidatesQuery.isError ? <p role="alert" className="text-sm text-[var(--warning)]">Existing POD5 candidates are unavailable: {errorMessage(externalPod5CandidatesQuery.error, 'unknown candidate-list failure')}</p> : null}
-                        <select
-                            aria-label="Existing POD5 candidate"
-                            value={selectedExternalPod5CandidateId}
-                            onChange={(event) => setSelectedExternalPod5CandidateId(event.target.value)}
-                            disabled={externalPod5CandidatesQuery.isLoading || registerExternalPod5.isPending}
-                            className="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] disabled:opacity-50"
-                        >
-                            <option value="">Select one existing POD5…</option>
-                            {(externalPod5CandidatesQuery.data?.candidates ?? []).map((candidate) => (
-                                <option key={candidate.candidate_id} value={candidate.candidate_id}>
-                                    {candidate.display_name} · {(candidate.size_bytes / (1024 ** 3)).toFixed(2)} GiB
-                                </option>
-                            ))}
-                        </select>
-                        <button
-                            type="button"
-                            disabled={!exactDomainExperimentId || !selectedExternalPod5CandidateId || registerExternalPod5.isPending}
-                            onClick={() => registerExternalPod5.mutate()}
-                            className="rounded-lg border border-[color-mix(in_srgb,var(--accent-primary)_50%,transparent)] px-3 py-2 text-sm font-semibold text-[var(--accent-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                            {registerExternalPod5.isPending ? 'Registering POD5…' : 'Register selected POD5'}
-                        </button>
-                    </div>
-                )}
-            </div>
-
             <div className="space-y-4 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
@@ -1037,156 +760,12 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                         </div>
                         <div>Terminal manifest SHA-256: <span className="break-all font-mono text-[var(--text-primary)]">{selectedGeneration.terminal_manifest_sha256 ?? 'not published'}</span></div>
 
-                        <div className="space-y-3 rounded-lg border border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_5%,transparent)] p-3">
-                            <div className="flex flex-wrap items-end justify-between gap-3">
-                                <div>
-                                    <div className="font-semibold text-[var(--text-primary)]">Raw-signal representations</div>
-                                    <div>Readiness is exact-generation scoped. IGV stays independent.</div>
-                                </div>
-                                <label className="text-xs font-semibold text-[var(--text-secondary)]">Representation preference
-                                    <select
-                                        value={rawSignalPreference}
-                                        onChange={(event) => setRawSignalPreference(event.target.value as OntRawSignalPreference)}
-                                        className="ml-2 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-[var(--text-primary)]"
-                                    >
-                                        <option value="auto">Auto</option>
-                                        <option value="blow5">Indexed BLOW5</option>
-                                    </select>
-                                </label>
-                            </div>
-                            {rawSignalQuery.isLoading ? <div>Loading raw-signal capability state…</div> : null}
-                            {rawSignalQuery.isError ? <div role="alert" className="text-[var(--warning)]">Raw-signal state unavailable: {errorMessage(rawSignalQuery.error, 'unknown capability failure')}</div> : null}
-                            {rawSignalQuery.data ? (
-                                <>
-                                    <div>Selected: <span className="font-mono text-[var(--text-primary)]">{rawSignalQuery.data.selected_format ?? 'none'}</span> · {rawSignalQuery.data.selection_reason_code}</div>
-                                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                                        {Object.entries(rawSignalQuery.data.modes).map(([mode, capability]) => (
-                                            <div key={mode} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2">
-                                                <div className="font-mono text-[var(--text-primary)]">{mode}</div>
-                                                <div className={capability.state === 'ready' ? 'text-[var(--success)]' : capability.state === 'preparable' ? 'text-[var(--warning)]' : 'text-[var(--text-secondary)]'}>{capability.state}</div>
-                                                <div className="break-words">{capability.reason_code}</div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                    {rawSignalQuery.data.representations.map((representation) => {
-                                        const semantic = representation.validation_receipts.semantic;
-                                        const containerDigest = typeof representation.runtime_identity.container_digest === 'string'
-                                            ? representation.runtime_identity.container_digest
-                                            : null;
-                                        return (
-                                            <div key={representation.representation_id} className="space-y-2 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2">
-                                                <div>
-                                                    <span className="font-semibold text-[var(--text-primary)]">{representation.format.toUpperCase()}</span>
-                                                    {' '}· {representation.role} · {representation.state} · {representation.reason_code}{representation.source_removed ? ' · POD5 removed (signal kept in BLOW5)' : ''}
-                                                </div>
-                                                <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)]">
-                                                    <summary className="cursor-pointer select-none px-3 py-2 font-semibold text-[var(--text-secondary)]">
-                                                        Technical details
-                                                    </summary>
-                                                    <div className="space-y-2 border-t border-[var(--border-primary)] p-3" aria-label="Raw-signal technical details">
-                                                        <div className="break-all font-mono">{representation.representation_id} · manifest {representation.manifest_sha256}</div>
-                                                        {representation.role === 'derived' ? (
-                                                            <div className="space-y-2 rounded border border-[color-mix(in_srgb,var(--success)_30%,transparent)] bg-[color-mix(in_srgb,var(--success)_5%,transparent)] p-2" aria-label="Raw-signal publication receipt">
-                                                                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Publication</span><div>{representation.published_at ?? 'not published'}</div></div>
-                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Reads</span><div>{representation.read_count ?? 'unknown'}</div></div>
-                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Partitions</span><div>{semantic?.partition_count ?? 'unknown'}</div></div>
-                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Indexed lookups</span><div>{semantic?.indexed_lookup_count ?? 'unknown'}</div></div>
-                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Semantic receipt</span><div>{semantic?.status ?? 'missing'}</div></div>
-                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Signal contract</span><div>{semantic?.signal_samples ?? 'unknown'}</div></div>
-                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Duplicate reads</span><div>{semantic?.duplicate_read_ids ?? 'unknown'}</div></div>
-                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Compared samples</span><div>{semantic?.total_signal_samples_compared ?? 'unknown'}</div></div>
-                                                                </div>
-                                                                <div>Adjacent indexes: <span className="font-semibold text-[var(--text-primary)]">{representation.validation_receipts.adjacent_index ? 'validated' : 'not validated'}</span></div>
-                                                                <div>Mapping contract: <span className="break-all font-mono text-[var(--text-primary)]">{semantic?.mapping_contract ?? 'unknown'}</span></div>
-                                                                <div>Parent representation: <span className="break-all font-mono text-[var(--text-primary)]">{representation.parent_representation_ids.join(', ') || 'none'}</span></div>
-                                                                <div>Parent manifest: <span className="break-all font-mono text-[var(--text-primary)]">{representation.parent_manifest_sha256s.join(', ') || 'none'}</span></div>
-                                                                <div>Runtime: <span className="break-all font-mono text-[var(--text-primary)]">{representation.profile_id ?? 'unknown'}{containerDigest ? ` · ${containerDigest}` : ''}</span></div>
-                                                                <div className="space-y-1">
-                                                                    <div className="font-semibold text-[var(--text-primary)]">Published artifacts ({representation.artifact_count})</div>
-                                                                    {representation.artifacts.map((artifact) => (
-                                                                        <div key={artifact.artifact_id ?? `${artifact.kind}-${artifact.sha256}`} className="rounded border border-[var(--border-primary)] p-2">
-                                                                            <div><span className="font-semibold text-[var(--text-primary)]">{artifact.kind ?? 'artifact'}</span>{artifact.read_count !== undefined ? ` · ${artifact.read_count} reads` : ''}{artifact.bytes !== undefined ? ` · ${artifact.bytes} bytes` : ''}</div>
-                                                                            {artifact.partition_fingerprint ? <div>Partition: <span className="break-all font-mono text-[var(--text-primary)]">{artifact.partition_fingerprint}</span></div> : null}
-                                                                            <div>SHA-256: <span className="break-all font-mono text-[var(--text-primary)]">{artifact.sha256 ?? 'missing'}</span></div>
-                                                                        </div>
-                                                                    ))}
-                                                                </div>
-                                                            </div>
-                                                        ) : null}
-                                                    </div>
-                                                </details>
-                                                {representation.state !== 'ready' && !representation.source_removed && (representation.format === 'pod5' || representation.format === 'slow5' || representation.format === 'blow5') ? (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => prepareBlow5.mutate(representation.representation_id)}
-                                                        disabled={prepareBlow5.isPending}
-                                                        className="mt-2 rounded border border-[color-mix(in_srgb,var(--accent-primary)_50%,transparent)] px-2 py-1 font-semibold text-[var(--accent-primary)] disabled:opacity-40"
-                                                    >
-                                                        {representation.format === 'blow5' ? 'Validate indexed BLOW5' : representation.format === 'slow5' ? 'Convert SLOW5 to indexed BLOW5' : 'Prepare indexed BLOW5'}
-                                                    </button>
-                                                ) : null}
-                                            </div>
-                                        );
-                                    })}
-                                    {(() => {
-                                        const readyBlow5 = rawSignalQuery.data.representations.find(
-                                            (representation) => representation.format === 'blow5' && representation.state === 'ready',
-                                        );
-                                        if (!readyBlow5) return null;
-                                        return (
-                                            <div className="space-y-2 rounded border border-[color-mix(in_srgb,var(--success)_40%,transparent)] bg-[color-mix(in_srgb,var(--success)_5%,transparent)] p-3">
-                                                <div className="font-semibold text-[var(--text-primary)]">Indexed BLOW5 waveform inspection</div>
-                                                <div className="flex flex-wrap gap-2">
-                                                    <input
-                                                        aria-label="Raw waveform read ID"
-                                                        value={waveformReadId}
-                                                        onChange={(event) => setWaveformReadId(event.target.value)}
-                                                        placeholder="Exact read ID"
-                                                        className="min-w-[20rem] flex-1 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-xs text-[var(--text-primary)]"
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => void inspectWaveform(readyBlow5.representation_id)}
-                                                        disabled={!waveformReadId.trim() || waveformLoading}
-                                                        className="rounded border border-[color-mix(in_srgb,var(--success)_50%,transparent)] px-2 py-1 font-semibold text-[var(--success)] disabled:opacity-40"
-                                                    >
-                                                        {waveformLoading ? 'Inspecting…' : 'Inspect raw waveform'}
-                                                    </button>
-                                                </div>
-                                                <div className="flex flex-wrap items-center gap-2" data-pod5-restore>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => restorePod5.mutate()}
-                                                        disabled={restorePod5.isPending || pod5RestoreQuery.data?.state === 'running'}
-                                                        className="rounded border border-[var(--border-primary)] px-2 py-1 text-[var(--text-primary)] disabled:opacity-40"
-                                                        title="Rebuild POD5 from this BLOW5 so the reads can be basecalled again"
-                                                    >
-                                                        {pod5RestoreQuery.data?.state === 'running' ? 'Restoring POD5…' : 'Restore POD5 for basecalling'}
-                                                    </button>
-                                                    {pod5RestoreQuery.data?.state === 'ready' ? (
-                                                        <span>POD5 restored ({pod5RestoreQuery.data.restored_read_count} reads) in <span className="font-mono break-all">{pod5RestoreQuery.data.directory}</span></span>
-                                                    ) : null}
-                                                    {pod5RestoreQuery.data?.state === 'failed' ? (
-                                                        <span role="alert" className="text-[var(--warning)]">Restore failed: {pod5RestoreQuery.data.error}</span>
-                                                    ) : null}
-                                                </div>
-                                                {waveformError ? <div role="alert" className="text-[var(--warning)]">Waveform unavailable: {waveformError}</div> : null}
-                                                {waveform?.state === 'ready' && waveformPoints ? (
-                                                    <div className="space-y-1">
-                                                        <div>Read <span className="font-mono text-[var(--text-primary)]">{waveform.read_id}</span> · {waveform.sample_count} source samples · {waveform.samples?.length ?? 0} displayed</div>
-                                                        <svg aria-label="Raw electrical signal waveform" viewBox="0 0 600 120" className="h-36 w-full rounded bg-[var(--bg-tertiary)]" preserveAspectRatio="none">
-                                                            <polyline points={waveformPoints} fill="none" stroke="var(--success)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-                                                        </svg>
-                                                    </div>
-                                                ) : null}
-                                            </div>
-                                        );
-                                    })()}
-                                </>
-                            ) : null}
-                        </div>
-
+                        <Link
+                            to={contextHref('/ngs', { section: 'raw-signal', run_id: selectedGeneration.run_id })}
+                            className="mr-2 inline-flex rounded-lg border border-[var(--border-primary)] px-3 py-2 font-semibold text-[var(--text-action)] hover:bg-[var(--bg-tertiary)]"
+                        >
+                            Raw signal for this run
+                        </Link>
                         {['completed', 'stopped'].includes(selectedGeneration.status) && selectedGeneration.output_counts.pod5 > 0 ? (
                             <button type="button" disabled={openBarcodeBasecall.isPending} onClick={() => openBarcodeBasecall.mutate(selectedGeneration.run_id)}
                                 className="mr-2 inline-flex rounded-lg bg-[var(--accent-primary)] px-3 py-2 font-semibold text-[var(--text-on-accent)] disabled:opacity-50">
