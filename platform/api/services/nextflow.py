@@ -5367,6 +5367,9 @@ def compile_nextflow_invocation(
         raise ValueError('native preview cannot carry physical GPU bindings')
     requested_snapshot = deepcopy(params if requested_params is None else requested_params)
     params = deepcopy(params)
+    if (model_id, mode) == ('template_structure_prediction', 'structure_prediction'):
+        from services.job_requests import structure_template_target
+        model_id, mode, params = structure_template_target(params)
     if execution_context is not None:
         if not isinstance(execution_context, NativeCompilerExecutionContext):
             raise ValueError('native compiler requires typed execution context')
@@ -5929,7 +5932,7 @@ def compile_nextflow_invocation(
     uses_protenix = (
         model_id == 'protenix'
         or effective_profile == 'protenix'
-        or str(params.get('pred_method') or '').strip().lower() == 'protenix'
+        or str(params.get('pred_method') or '').strip().lower() in {'protenix', 'boltz_protenix'}
         or str(params.get('structure_validator') or '').strip().lower() == 'protenix'
         or str(params.get('predictor') or '').strip().lower() == 'protenix'
     )
@@ -5940,7 +5943,10 @@ def compile_nextflow_invocation(
                 'Protenix is pinned to V2 weights; protenix_model_weights must be protenix-v2'
             )
         params['protenix_model_weights'] = 'protenix-v2'
-        params['pred_method'] = 'protenix'
+        if model_id in {'boltz2', 'protenix'} and mode in {'predict', 'complex'}:
+            params.setdefault('pred_method', 'protenix')
+        elif params.get('pred_method') != 'boltz_protenix':
+            params['pred_method'] = 'protenix'
 
     if model_id == 'nanopore' or str(effective_profile).startswith('ont_') or effective_profile == 'nanopore_methylation':
         effective_profile = resolve_ont_workflow_alias(effective_profile)

@@ -417,6 +417,25 @@ def _default_structure_prediction_pred_method(model_id: str) -> str:
     return "boltz"
 
 
+def _canonical_structure_method(method):
+    return {'both': 'boltz_protenix', 'all': 'boltz_protenix', 'boltz2': 'boltz'}.get(method, method)
+
+
+def structure_template_target(params):
+    """Resolve only local model owners. Paid submissions require their own approval path."""
+    method = _canonical_structure_method(str(params.get('pred_method') or 'boltz').strip().lower())
+    owners = {'boltz': 'boltz2', 'boltz_protenix': 'boltz2', 'protenix': 'protenix',
+              'esmfold2': 'esmfold2', 'fold_cp': 'boltz_cp_experimental'}
+    if method not in owners:
+        raise ValueError(f'Unsupported structure template predictor: {method}; use a supported model-owned route')
+    complex_input = any(params.get(key) for key in ('complex_components', 'complex_json_path', 'complex_batch_dir'))
+    mode = 'design' if method == 'fold_cp' else 'complex' if complex_input and method != 'esmfold2' else 'predict'
+    native_params = {**params, 'pred_method': method}
+    if method == 'fold_cp':
+        native_params.pop('pred_method')  # The dedicated design route owns the predictor.
+    return owners[method], mode, native_params
+
+
 def _normalize_structure_prediction_pred_method(
     model_id: str,
     mode: str,
@@ -434,15 +453,17 @@ def _normalize_structure_prediction_pred_method(
     if normalized_mode not in structure_modes and normalized_model_id not in structure_models:
         return normalized
 
-    requested_pred_method = str(normalized.get("pred_method") or "").strip().lower()
-    if requested_pred_method == "boltz2":
-        requested_pred_method = "boltz"
+    requested_pred_method = _canonical_structure_method(str(normalized.get("pred_method") or "").strip().lower())
     if not requested_pred_method:
         requested_pred_method = _default_structure_prediction_pred_method(normalized_model_id)
 
-    if requested_pred_method not in {"boltz", "protenix", "esmfold2", "rf3", "both", "all", "boltz_protenix"}:
+    if requested_pred_method not in {"boltz", "protenix", "esmfold2", "rf3", "boltz_protenix"}:
         raise HTTPException(status_code=422, detail={"validation_errors": [
             f"Unsupported structure predictor: {requested_pred_method}; explicit selections are never replaced"
+        ]})
+    if normalized_model_id in {"esmfold2", "esmfold2_experimental"} and requested_pred_method == "boltz_protenix":
+        raise HTTPException(status_code=422, detail={"validation_errors": [
+            "ESMFold2 cannot execute boltz_protenix; use the Boltz or Protenix prediction route"
         ]})
     if normalized_mode != "complex" and (normalized_model_id == "rf3" or requested_pred_method == "rf3"):
         raise HTTPException(status_code=422, detail={"validation_errors": [
@@ -456,14 +477,6 @@ def _normalize_structure_prediction_pred_method(
                 status_code=422,
                 detail={"validation_errors": [STRUCTURE_PREDICTION_COMPLEX_RF3_ERROR]},
             )
-        if requested_pred_method in {"both", "all", "boltz_protenix"}:
-            normalized["pred_method"] = "boltz_protenix"
-            return normalized
-        if requested_pred_method in {"protenix", "esmfold2"}:
-            normalized["pred_method"] = requested_pred_method
-            return normalized
-        normalized["pred_method"] = "boltz"
-        return normalized
 
     normalized["pred_method"] = requested_pred_method
     return normalized
@@ -1006,6 +1019,12 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     md_input_resolver = md_input_resolver or _resolve_md_input_path_for_runtime
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if (normalized_model_id, normalized_mode) == ('template_structure_prediction', 'structure_prediction'):
+        try:
+            job_data.model_id, job_data.mode, job_data.params = structure_template_target(job_data.params)
+        except ValueError as exc:
+            raise HTTPException(422, detail={'validation_errors': [str(exc)]}) from exc
+        normalized_model_id, normalized_mode = job_data.model_id, job_data.mode
     if normalized_model_id in {'family_msa_protein', 'family_msa_nucleic'}:
         from services.family_msa.requests import MODE, prepare_request
         from services.resource_usage_evidence import strip_resource_execution_metadata
