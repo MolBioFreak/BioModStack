@@ -61,12 +61,16 @@ it.skipIf(!process.env.BMS_RECOVERY_NATIVE_SRC).each(['action', 'occurrence'])('
         for (const reload of [false, true]) {
             if (reload) { await act(async () => root.unmount()); client.clear(); root = createRoot(host); client = new QueryClient(); }
             await render(); await until(() => host.textContent!.includes('Attempt 1'));
+            // Both discovery and reload must open the failed step without operator clicks.
+            await until(() => host.textContent!.includes('Simulated aspirate did not complete') &&
+                host.querySelector<HTMLInputElement>('[aria-label="aspiration_delay_ms"]')?.value === String(initial.delays[0]));
+            expect(seen.filter(r => r.url.endsWith('/control'))).toHaveLength(0);
         }
         for (const observation of [false, true]) {
             const held = await rpc({ url, method: 'get', params: { observation } });
             expect(held.status).toBe(200); expect(held.data.execution.runtime_state.workflow).toMatchObject({ attempt: 1, gate: 'error_hold', source_occurrence_id: 'occ', native_action_id: 'recipe-1' });
         }
-        await click('Load method report'); await field('Reported attempt', 'recipe-1'); await field('Recovery decision', 'retry'); if (scope === 'occurrence') await field('Redo scope', scope); await click('Preview decision');
+        if (scope === 'occurrence') { await field('Redo scope', scope); await click('Preview decision'); }
         await field('aspiration_delay_ms', '123'); await click('Preview decision');
         await until(() => seen.some(r => r.res.data.proposed_settings?.aspiration_delay_ms === 123));
         const preview = seen.filter(r => r.url.endsWith('/recovery-preview')).at(-1).res.data;

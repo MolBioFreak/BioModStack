@@ -37,7 +37,8 @@ def serve(root, patch):
         calls.append(action.action_id)
         if action.kind == K.PIPETTE_MANUAL_PHYSICAL:
             delays.append(action.params['recipe']['aspiration_delay_ms'])
-            return {'ok': len(delays) > 1, 'partial': {'amount': None}, 'physical_effect_verified': False}
+            return {'ok': len(delays) > 1, **({'error': 'Simulated aspirate did not complete'} if len(delays) == 1 else {}),
+                    'partial': {'amount': None}, 'physical_effect_verified': False}
         return {'ok': True}
 
     def wait(predicate):
