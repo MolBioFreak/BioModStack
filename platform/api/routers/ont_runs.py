@@ -312,6 +312,16 @@ class OntRunBasecallingChoice(BaseModel):
     min_qscore: float | None = Field(default=None, ge=0, le=30)
 
 
+class OntRunAdaptiveSampling(BaseModel):
+    """Adaptive sampling run by MinKNOW: the mode, and files already uploaded to BMS."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    mode: Literal["enrich", "deplete", "barcode_balance"]
+    reference_path: str | None = Field(default=None, max_length=500)
+    bed_path: str | None = Field(default=None, max_length=500)
+
+
 class OntRunIntentRequest(BaseModel):
     """Bounded browser input: only server-issued option handles and metadata."""
 
@@ -323,6 +333,7 @@ class OntRunIntentRequest(BaseModel):
     experiment_group: str | None = Field(default=None, max_length=255)
     barcode_samples: list[dict[str, str]] | None = Field(default=None, max_length=96)
     basecalling: OntRunBasecallingChoice | None = None
+    adaptive_sampling: OntRunAdaptiveSampling | None = None
 
 
 class OntIntentStartRequest(BaseModel):

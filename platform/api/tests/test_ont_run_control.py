@@ -1702,3 +1702,94 @@ def test_live_route_returns_the_numbers_and_404s_an_unknown_run(monkeypatch) -> 
     monkeypatch.setattr(ont_run_control, "get_instrument_run_live", live)
     assert client.get("/api/ont/runs/ont-run-x/live").json() == {"run_id": "ont-run-x", "available": True}
     assert client.get("/api/ont/runs/nope/live").status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_adaptive_sampling_choice_reaches_the_minknow_start_with_resolved_files(monkeypatch, tmp_path) -> None:
+    import paths
+    (tmp_path / "ont-adaptive-sampling").mkdir()
+    (tmp_path / "ont-adaptive-sampling" / "ref.fa").write_text(">p\nACGT\n")
+    (tmp_path / "ont-adaptive-sampling" / "targets.bed").write_text("p\t0\t4\n")
+    monkeypatch.setattr(paths, "get_allowed_roots", lambda: {"inputs": tmp_path})
+    catalog = await _kit_catalog(monkeypatch)
+    option = catalog["options"][0]
+    intent = await ont_run_control.create_run_intent("X1", {
+        "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"],
+        "adaptive_sampling": {"mode": "enrich", "reference_path": "inputs/ont-adaptive-sampling/ref.fa",
+                              "bed_path": "inputs/ont-adaptive-sampling/targets.bed"}})
+    sent = {}
+
+    def host(method, path, payload=None, *, query=None, timeout=None):
+        if path == "/ont/positions/X1/protocol-runs":
+            sent.update(payload)
+            return {"minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000011", "position": "X1"}
+        return {"status": "running", "minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000011",
+                "output_files": {"fastq": [], "pod5": [], "bam": []}}
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", host)
+    await ont_run_control.validate_armed_intent_start(
+        intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]})
+    assert sent["adaptive_sampling"] == {
+        "mode": "enrich", "reference_path": str((tmp_path / "ont-adaptive-sampling" / "ref.fa").resolve()),
+        "bed_path": str((tmp_path / "ont-adaptive-sampling" / "targets.bed").resolve())}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("choice, message", [
+    ({"mode": "enrich"}, "need a reference FASTA"),
+    ({"mode": "enrich", "reference_path": "/etc/passwd"}, "uploaded to BMS first"),
+    ({"mode": "enrich", "reference_path": "inputs/../../etc/passwd"}, "escapes|not found"),
+    ({"mode": "enrich", "reference_path": "inputs/missing.fa"}, "not found"),
+    ({"mode": "sideways"}, "mode must be"),
+    ({"mode": "enrich", "reference_path": "inputs/x.fa", "args": "--x"}, "adaptive_sampling accepts"),
+])
+async def test_adaptive_sampling_outside_uploaded_files_is_refused_before_arming(monkeypatch, tmp_path, choice, message) -> None:
+    import paths
+    monkeypatch.setattr(paths, "get_allowed_roots", lambda: {"inputs": tmp_path})
+    catalog = await _kit_catalog(monkeypatch)
+    option = catalog["options"][0]
+    with pytest.raises(ValueError, match=message):
+        await ont_run_control.create_run_intent("X1", {
+            "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"], "adaptive_sampling": choice})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adaptive, expected", [({"mode": "barcode_balance"}, {"mode": "barcode_balance"}), (None, None)])
+async def test_barcode_balancing_and_plain_runs(monkeypatch, adaptive, expected) -> None:
+    catalog = await _kit_catalog(monkeypatch)
+    option = catalog["options"][0]
+    intent = await ont_run_control.create_run_intent("X1", {
+        "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"],
+        **({"adaptive_sampling": adaptive} if adaptive else {})})
+    sent = {}
+
+    def host(method, path, payload=None, *, query=None, timeout=None):
+        if path == "/ont/positions/X1/protocol-runs":
+            sent.update(payload)
+            return {"minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000012", "position": "X1"}
+        return {"status": "running", "minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000012",
+                "output_files": {"fastq": [], "pod5": [], "bam": []}}
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", host)
+    await ont_run_control.validate_armed_intent_start(
+        intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]})
+    assert sent.get("adaptive_sampling") == expected
+
+
+@pytest.mark.asyncio
+async def test_live_numbers_carry_the_graph_series(monkeypatch) -> None:
+    charts = {"pore_activity": [{"start_seconds": 0, "sequencing": 0.6, "pore": 0.2, "recovering": 0.1, "inactive": 0.05, "unclassified": 0.05}],
+              "cumulative": [{"seconds": 60, **_LIVE_COUNTS}],
+              "read_lengths": {"n50": 5500.0, "buckets": [{"start": 0, "end": 100, "value": 10}]}}
+    run_id, _calls = await _running_barcoded_run(monkeypatch, {
+        "available": True, "totals": _LIVE_COUNTS, "latest_acquisition": {"basecalling_enabled": True}, "barcodes": [],
+        "charts": charts})
+    assert (await ont_run_control.get_instrument_run_live(run_id))["charts"] == charts
+
+
+@pytest.mark.asyncio
+async def test_live_numbers_without_graph_series_give_empty_graphs(monkeypatch) -> None:
+    run_id, _calls = await _running_barcoded_run(monkeypatch, {
+        "available": True, "totals": _LIVE_COUNTS, "latest_acquisition": {}, "barcodes": []})
+    assert (await ont_run_control.get_instrument_run_live(run_id))["charts"] == {
+        "pore_activity": [], "cumulative": [], "read_lengths": None}

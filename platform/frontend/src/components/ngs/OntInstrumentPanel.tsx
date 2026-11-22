@@ -165,6 +165,10 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
     const [basecallQuality, setBasecallQuality] = useState('');
     const [basecallModifications, setBasecallModifications] = useState<string[]>([]);
     const [basecallMinQscore, setBasecallMinQscore] = useState('');
+    // Adaptive sampling is run by MinKNOW; BMS hands it the mode, a reference and optional target regions.
+    const [adaptiveMode, setAdaptiveMode] = useState<'' | 'enrich' | 'deplete' | 'barcode_balance'>('');
+    const [adaptiveReference, setAdaptiveReference] = useState<File | null>(null);
+    const [adaptiveBed, setAdaptiveBed] = useState<File | null>(null);
     // The barcoding kits BMS demultiplexes; a run on one can carry a sample name per barcode.
     const barcodingKit = /^SQK-(RBK|NBD)114-(24|96)$/.test(selectedKit);
     const barcodeSamples = barcodingKit ? barcodeSampleText.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
@@ -225,6 +229,11 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
         // MinKNOW runs one modification model per base, so a second choice for the same base replaces the first.
         return [...activeModifications.filter(item => (activeBasecalling?.modified_bases.find(other => other.id === item)?.canonical_base ?? item) !== base), id];
     });
+    const activeAdaptiveMode = activeBasecalling && (adaptiveMode !== 'barcode_balance' || barcodingKit) ? adaptiveMode : '';
+    const adaptiveNeedsReference = activeAdaptiveMode === 'enrich' || activeAdaptiveMode === 'deplete';
+    const adaptiveError = adaptiveNeedsReference && !adaptiveReference ? 'Adaptive sampling needs a reference FASTA.' : '';
+    const adaptiveSummary = activeAdaptiveMode
+        ? ` Adaptive sampling: ${activeAdaptiveMode === 'barcode_balance' ? 'balance barcodes' : activeAdaptiveMode}.` : '';
     const basecallingSummary = activeBasecalling
         ? ` Basecalling ${activeBasecalling.quality.toUpperCase()}${activeModifications.length ? `, calling ${activeModifications.join(', ')}` : ''}, minimum Q${basecallMinQscore !== '' ? basecallMinQscore : activeBasecalling.default_min_qscore ?? '?'}.`
         : '';
@@ -527,6 +536,16 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
             if (!selectedDevice?.position || !selectedOption) throw new Error('No server-issued protocol option is available');
             if (barcodeSampleError) throw new Error(barcodeSampleError);
             if (minQscoreError) throw new Error(minQscoreError);
+            if (adaptiveError) throw new Error(adaptiveError);
+            let adaptiveSampling: { mode: 'enrich' | 'deplete' | 'barcode_balance'; reference_path?: string; bed_path?: string } | undefined;
+            if (activeAdaptiveMode) {
+                adaptiveSampling = { mode: activeAdaptiveMode };
+                if (adaptiveNeedsReference && adaptiveReference) {
+                    const directory = `inputs/ont-adaptive-sampling/${crypto.randomUUID()}`;
+                    adaptiveSampling.reference_path = (await uploadFile(directory, adaptiveReference)).data.path;
+                    if (adaptiveBed) adaptiveSampling.bed_path = (await uploadFile(directory, adaptiveBed)).data.path;
+                }
+            }
             const intent = await createOntRunIntent(selectedDevice.position, {
                 option_id: selectedOption.option_id,
                 option_receipt_id: selectedOption.option_receipt_id,
@@ -540,6 +559,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                     modified_bases: activeModifications,
                     ...(basecallMinQscore !== '' ? { min_qscore: Number(basecallMinQscore) } : {}),
                 } } : {}),
+                ...(adaptiveSampling ? { adaptive_sampling: adaptiveSampling } : {}),
             });
             // Select and refresh the durable BMS ledger immediately. The subsequent
             // physical-start revalidation never becomes the sole run-history authority.
@@ -821,13 +841,43 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                             {minQscoreError ? <p role="alert" className="text-[var(--warning)]">{minQscoreError}</p> : <p>Reads below this go to MinKNOW's fail output. Raw signal is kept for every read, so the run can be basecalled again in Data Analysis.</p>}
                         </div>
                     ) : null}
+                    {activeBasecalling ? (
+                        <div className="space-y-2 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]" data-testid="ont-adaptive-sampling">
+                            <label className="block font-semibold">Adaptive sampling
+                                <select
+                                    aria-label="Adaptive sampling"
+                                    value={activeAdaptiveMode}
+                                    onChange={(event) => setAdaptiveMode(event.target.value as typeof adaptiveMode)}
+                                    className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)]"
+                                >
+                                    <option value="">Off</option>
+                                    <option value="enrich">Enrich: keep strands matching the targets</option>
+                                    <option value="deplete">Deplete: eject strands matching the targets</option>
+                                    {barcodingKit ? <option value="barcode_balance">Balance barcodes</option> : null}
+                                </select>
+                            </label>
+                            {adaptiveNeedsReference ? <>
+                                <label className="block font-semibold">Reference FASTA
+                                    <input aria-label="Adaptive sampling reference" type="file" accept=".fasta,.fa,.fna,.mmi"
+                                        onChange={(event) => setAdaptiveReference(event.target.files?.[0] ?? null)} className="mt-1 block w-full font-normal" />
+                                </label>
+                                <label className="block font-semibold">Target regions, BED (optional)
+                                    <input aria-label="Adaptive sampling target regions" type="file" accept=".bed"
+                                        onChange={(event) => setAdaptiveBed(event.target.files?.[0] ?? null)} className="mt-1 block w-full font-normal" />
+                                </label>
+                                <p>MinKNOW basecalls the start of each strand and aligns it to this reference. Without a BED file the whole reference is the target.</p>
+                                {adaptiveError ? <p role="alert" className="text-[var(--warning)]">{adaptiveError}</p> : null}
+                            </> : null}
+                            {activeAdaptiveMode === 'barcode_balance' ? <p>MinKNOW ejects strands from barcodes that are ahead of the others, so the samples even out.</p> : null}
+                        </div>
+                    ) : null}
                     <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">{selectedOption ? `${selectedOption.protocol_label} · basecalling ${selectedOption.basecalling_enabled ? 'on' : 'off'}` : selectedKit ? 'MinKNOW has no sequencing protocol for this kit and flow cell.' : 'Choose a kit to prepare the run.'}{blockers.length ? <div className="mt-2 text-[var(--warning)]">Not ready: {blockers.join(', ')}</div> : null}</div>
                     <button
                         type="button"
                         disabled={!canStart}
                         title={domainIntentBlocker ?? undefined}
                         onClick={() => {
-                            if (window.confirm(`Start sequencing on ${selectedDevice?.position} with ${selectedKit} for ${runHours} h?${basecallingSummary} This uses the flow cell.`)) startRun.mutate();
+                            if (window.confirm(`Start sequencing on ${selectedDevice?.position} with ${selectedKit} for ${runHours} h?${basecallingSummary}${adaptiveSummary} This uses the flow cell.`)) startRun.mutate();
                         }}
                         className="rounded-lg bg-[var(--accent-primary)] px-4 py-2 text-sm font-semibold text-[var(--text-on-accent)] disabled:cursor-not-allowed disabled:opacity-50"
                     >

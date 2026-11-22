@@ -302,3 +302,91 @@ def test_host_agent_serves_live_stats_on_its_own_read_only_route(monkeypatch):
     assert bms_host_agent.ont_route_payload("/ont/runs/run-one/live") == {"available": True}
     assert bms_host_agent.ont_route_payload("/ont/runs/run-one") == {"status": "active"}
     assert seen == ["run-one"]
+
+
+def test_adaptive_sampling_files_are_copied_where_minknow_can_read_and_passed_to_the_start(monkeypatch, fake_instrument, tmp_path):
+    calls, tools, payload = fake_instrument
+    tools.BasecallingArgs = lambda **kw: kw
+    tools.ReadUntilArgs = lambda **kw: kw
+    monkeypatch.setenv("BMS_ONT_ADAPTIVE_SAMPLING_DIR", str(tmp_path / "shared"))
+    reference = tmp_path / "upload.fa"; reference.write_text(">p\nACGT\n")
+    bed = tmp_path / "upload.bed"; bed.write_text("p\t0\t4\n")
+    code, _ = host.start_protocol("X1", {
+        **payload, "basecalling_enabled": True, "simplex_model": "hac@v5",
+        "adaptive_sampling": {"mode": "enrich", "reference_path": str(reference), "bed_path": str(bed)}})
+    assert code == 201
+    sent = calls[0]["read_until"]
+    folder = tmp_path / "shared" / REQUEST_ID
+    assert sent == {"filter_type": "enrich", "reference_files": [str(folder / "reference.fa")],
+                    "bed_file": str(folder / "targets.bed"), "first_channel": None, "last_channel": None}
+    assert (folder / "reference.fa").read_text() == ">p\nACGT\n" and (folder / "targets.bed").read_text() == "p\t0\t4\n"
+    assert (folder / "reference.fa").stat().st_mode & 0o044 == 0o044
+
+
+def test_barcode_balancing_needs_no_files_and_a_plain_run_sends_no_adaptive_sampling(fake_instrument):
+    calls, tools, payload = fake_instrument
+    tools.BasecallingArgs = lambda **kw: kw
+    tools.ReadUntilArgs = lambda **kw: kw
+    base = {**payload, "basecalling_enabled": True, "simplex_model": "hac@v5"}
+    assert host.start_protocol("X1", {**base, "adaptive_sampling": {"mode": "barcode_balance"}})[0] == 201
+    assert calls[0]["read_until"]["filter_type"] == "barcode_balance" and calls[0]["read_until"]["reference_files"] is None
+    assert host.start_protocol("X1", {**base, "start_request_id": "ont-run-" + "b" * 32})[0] == 201
+    assert "read_until" not in calls[1]
+
+
+@pytest.mark.parametrize("adaptive", [{"mode": "enrich"}, {"mode": "sideways"},
+                                      {"mode": "deplete", "reference_path": "/nonexistent/reference.fa"}])
+def test_adaptive_sampling_that_cannot_be_set_up_is_rejected_before_minknow_starts(fake_instrument, adaptive):
+    calls, tools, payload = fake_instrument
+    tools.BasecallingArgs = lambda **kw: kw
+    tools.ReadUntilArgs = lambda **kw: kw
+    code, body = host.start_protocol("X1", {**payload, "basecalling_enabled": True, "simplex_model": "hac@v5",
+                                             "adaptive_sampling": adaptive})
+    assert code == 400 and "Adaptive sampling could not be set up" in body["detail"] and calls == []
+
+
+def _chart_connection():
+    histogram = NS(bucket_ranges=[NS(start=i * 100, end=(i + 1) * 100) for i in range(4)],
+                   histogram_data=[NS(n50=250.0, filtering=[], bucket_values=[10, 600, 300, 1])])
+    split = NS(bucket_ranges=histogram.bucket_ranges, histogram_data=[
+        NS(n50=0.0, filtering=[NS(read_end_reason=5)], bucket_values=[0, 100, 300, 1]),
+        NS(n50=0.0, filtering=[NS(read_end_reason=7)], bucket_values=[10, 500, 0, 0])])
+    def lengths(**kw):
+        return iter([split if kw.get("split") is not None else histogram])
+    def duty(acquisition_run_id, data_selection, _timeout):
+        return iter([NS(bucket_ranges=[NS(start=0, end=60), NS(start=60, end=120)],
+                        channel_states={"strand": NS(state_times=[50, 60]), "adapter": NS(state_times=[10, 0]),
+                                        "pore": NS(state_times=[20, 20]), "unavailable": NS(state_times=[10, 0]),
+                                        "zero": NS(state_times=[5, 10]), "saturated": NS(state_times=[0, 5]),
+                                        "unclassified": NS(state_times=[5, 5])})])
+    def output(acquisition_run_id, _timeout, **kw):
+        row = lambda seconds, reads, passed: NS(seconds=seconds, yield_summary=NS(
+            read_count=reads, basecalled_pass_read_count=passed, basecalled_fail_read_count=0,
+            basecalled_pass_bases=passed * 1000, basecalled_fail_bases=0, estimated_selected_bases=reads * 1100))
+        return iter([NS(snapshots=[NS(filtering=[], snapshots=[row(60, 100, 80), row(120, 250, 200)])])])
+    return NS(statistics=NS(stream_read_length_histogram=lengths, stream_duty_time=duty, stream_acquisition_output=output))
+
+
+def test_run_graph_series_follow_minknows_pore_activity_output_and_read_lengths():
+    stats = NS(DataSelection=lambda **kw: NS(**kw), ReadLengthHistogramSplit=lambda **kw: NS(**kw),
+               EstimatedBases=1, ReadLengths=1)
+    charts = host._acquisition_charts(_chart_connection(), {"acquisition_id": "acq", "started_at": 100, "ended_at": 220}, stats)
+    assert charts["pore_activity"] == [
+        {"start_seconds": 0, "sequencing": 0.6, "pore": 0.2, "recovering": 0.1, "inactive": 0.05, "unclassified": 0.05},
+        {"start_seconds": 60, "sequencing": 0.6, "pore": 0.2, "recovering": 0.0, "inactive": 0.15, "unclassified": 0.05}]
+    assert [(p["seconds"], p["read_count"], p["basecalled_pass_bases"]) for p in charts["cumulative"]] == [
+        (60, 100, 80_000), (120, 250, 200_000)]
+    # The far tail (last 0.5% of bases) is trimmed; ejected strands are reported beside the totals.
+    assert charts["read_lengths"] == {"n50": 250.0, "buckets": [
+        {"start": 0, "end": 100, "value": 10, "rejected": 10}, {"start": 100, "end": 200, "value": 600, "rejected": 500},
+        {"start": 200, "end": 300, "value": 300, "rejected": 0}]}
+
+
+def test_one_unavailable_graph_series_leaves_the_others():
+    connection = _chart_connection()
+    def broken(**kw):
+        raise RuntimeError("no histogram yet")
+    connection.statistics.stream_read_length_histogram = broken
+    stats = NS(DataSelection=lambda **kw: NS(**kw), ReadLengthHistogramSplit=lambda **kw: NS(**kw), EstimatedBases=1, ReadLengths=1)
+    charts = host._acquisition_charts(connection, {"acquisition_id": "acq", "started_at": 100, "ended_at": 220}, stats)
+    assert charts["read_lengths"] is None and len(charts["pore_activity"]) == 2 and len(charts["cumulative"]) == 2

@@ -219,6 +219,82 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
             ['barcode02', '', '250', '1.10 Mb', '10', '25%'],
             ['unclassified', '', '250', '900.0 kb', '60', '25%'],
         ]);
+        expect(live.textContent).toContain('Share of passed reads');
+    });
+    it('draws the run graphs MinKNOW has data for, with ejected strands marked on the read lengths', async () => {
+        ont.fetchRuns.mockResolvedValue([
+            { run_id: 'bound-run', status: 'running', experiment_group: 'domain-experiment-test', can_stop: true },
+        ]);
+        const y = { read_count: 100, basecalled_pass_read_count: 80, basecalled_fail_read_count: 5, basecalled_pass_bases: 400_000, basecalled_fail_bases: 20_000, estimated_selected_bases: 500_000 };
+        ont.fetchLive.mockResolvedValue({ data: {
+            run_id: 'bound-run', status: 'running', available: true, basecalling_enabled: true, totals: y,
+            barcodes: [{ ...y, barcode: 'barcode01', alias: 'plasmid_A' }, { ...y, barcode: 'unclassified', alias: null }],
+            charts: {
+                pore_activity: [
+                    { start_seconds: 0, sequencing: 0.5, pore: 0.3, recovering: 0.1, inactive: 0.05, unclassified: 0.05 },
+                    { start_seconds: 60, sequencing: 0.7, pore: 0.2, recovering: 0.05, inactive: 0.03, unclassified: 0.02 },
+                ],
+                cumulative: [{ ...y, seconds: 60 }, { ...y, seconds: 120, estimated_selected_bases: 900_000 }],
+                read_lengths: { n50: 5600, buckets: [{ start: 0, end: 500, value: 100, rejected: 90 }, { start: 500, end: 6000, value: 400, rejected: 0 }] },
+            },
+        } });
+        await act(async () => root.render(panel()));
+        await flush();
+        await waitUntil(() => expect(container.querySelector('[aria-label="Pore activity over time"]')).toBeTruthy());
+        const svg = (label: string) => container.querySelector(`svg[aria-label="${label}"]`)!;
+        expect(svg('Pore activity over time').querySelectorAll('rect[data-state="sequencing"]')).toHaveLength(2);
+        expect(svg('Pore activity over time').parentElement!.textContent).toContain('70% sequencing now');
+        expect(svg('Cumulative output over time').querySelectorAll('path[data-series]')).toHaveLength(3);
+        expect(svg('Read length histogram').querySelectorAll('rect[data-kind="kept"]')).toHaveLength(2);
+        expect(svg('Read length histogram').querySelectorAll('rect[data-kind="rejected"]')).toHaveLength(1);
+        expect(svg('Read length histogram').parentElement!.textContent).toContain('Estimated N50 5.6 kb');
+        expect(svg('Read length histogram').parentElement!.textContent).toContain('Ejected by adaptive sampling');
+        expect(svg('Reads per barcode chart').querySelectorAll('rect[data-barcode]')).toHaveLength(2);
+    });
+    it('shows no empty graphs when MinKNOW has no series yet', async () => {
+        ont.fetchRuns.mockResolvedValue([
+            { run_id: 'bound-run', status: 'running', experiment_group: 'domain-experiment-test', can_stop: true },
+        ]);
+        ont.fetchLive.mockResolvedValue({ data: { run_id: 'bound-run', status: 'running', available: true, basecalling_enabled: true,
+            totals: { read_count: 0, basecalled_pass_read_count: 0, basecalled_fail_read_count: 0, basecalled_pass_bases: 0, basecalled_fail_bases: 0, estimated_selected_bases: 0 },
+            barcodes: [], charts: { pore_activity: [], cumulative: [], read_lengths: null } } });
+        await act(async () => root.render(panel()));
+        await flush();
+        await waitUntil(() => expect(container.querySelector('[data-testid="ont-run-live-charts"]')).toBeTruthy());
+        expect(container.querySelectorAll('[data-testid="ont-run-live-charts"] svg')).toHaveLength(0);
+    });
+    it('uploads the adaptive sampling reference and targets and sends the mode with the run', async () => {
+        ont.fetchOptions.mockResolvedValue({ data: { ...optionsResponse.data, available_kits: ['SQK-RBK114-24'],
+            options: [{ ...optionsResponse.data.options[0], basecalling_choices: [{ quality: 'hac', default: true, default_min_qscore: 9, modified_bases: [] }] }] } });
+        ont.createIntent.mockResolvedValue({ data: intent });
+        ont.startIntent.mockResolvedValue({ data: intent });
+        ont.uploadFile.mockImplementation(async (directory: string, file: File) => ({ data: { path: `${directory}/${file.name}` } }));
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+        await act(async () => { root.render(panel()); });
+        await flush();
+        const mode = () => container.querySelector<HTMLSelectElement>('[aria-label="Adaptive sampling"]')!;
+        await waitUntil(() => expect(mode()).toBeTruthy());
+        expect(mode().value).toBe('');
+        expect(container.querySelector('[aria-label="Adaptive sampling reference"]')).toBeNull();
+        await act(async () => { mode().value = 'enrich'; mode().dispatchEvent(new Event('change', { bubbles: true })); });
+        expect(container.querySelector('[role="alert"]')?.textContent).toContain('needs a reference FASTA');
+        const pick = async (label: string, file: File) => {
+            const input = container.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
+            Object.defineProperty(input, 'files', { value: [file], configurable: true });
+            await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+        };
+        await pick('Adaptive sampling reference', new File(['>p\nACGT\n'], 'plasmids.fasta'));
+        await pick('Adaptive sampling target regions', new File(['p\t0\t4\n'], 'targets.bed'));
+        const start = Array.from(container.querySelectorAll('button')).find((element) => element.textContent === 'Start sequencing') as HTMLButtonElement;
+        await waitUntil(() => expect(start.disabled).toBe(false));
+        await act(async () => start.click());
+        await flush();
+        await waitUntil(() => expect(ont.createIntent).toHaveBeenCalled());
+        expect(confirm.mock.calls.at(-1)![0]).toContain('Adaptive sampling: enrich.');
+        const sent = ont.createIntent.mock.calls[0][1].adaptive_sampling;
+        expect(sent.mode).toBe('enrich');
+        expect(sent.reference_path).toMatch(/^inputs\/ont-adaptive-sampling\/[0-9a-f-]+\/plasmids\.fasta$/);
+        expect(sent.bed_path).toBe(sent.reference_path.replace('plasmids.fasta', 'targets.bed'));
     });
     it('says so when MinKNOW has no live numbers for the active run', async () => {
         ont.fetchRuns.mockResolvedValue([

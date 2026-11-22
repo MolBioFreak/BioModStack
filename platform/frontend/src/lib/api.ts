@@ -5298,6 +5298,7 @@ export const createOntRunIntent = (position: string, payload: {
     experiment_group?: string;
     barcode_samples?: Array<{ barcode: string; alias: string }>;
     basecalling?: { quality?: string; modified_bases?: string[]; min_qscore?: number };
+    adaptive_sampling?: { mode: 'enrich' | 'deplete' | 'barcode_balance'; reference_path?: string; bed_path?: string };
 }) => api.post<OntInstrumentRun>(`/api/ont/positions/${encodeURIComponent(position)}/run-intents`, payload);
 
 export interface OntBarcodeBasecallHandoff {
@@ -5327,6 +5328,22 @@ export interface OntRunLiveYield {
     estimated_selected_bases: number;
 }
 
+export interface OntRunLiveActivity {
+    start_seconds: number;
+    sequencing: number;
+    pore: number;
+    recovering: number;
+    inactive: number;
+    unclassified: number;
+}
+
+export type OntRunLiveCumulative = OntRunLiveYield & { seconds: number };
+
+export interface OntRunLiveReadLengths {
+    n50: number;
+    buckets: Array<{ start: number; end: number; value: number; rejected?: number }>;
+}
+
 export interface OntRunLive {
     run_id: string;
     status: string;
@@ -5337,6 +5354,11 @@ export interface OntRunLive {
     totals?: OntRunLiveYield;
     barcodes?: Array<OntRunLiveYield & { barcode: string; alias: string | null }>;
     channels?: { sequencing_fraction: number; open_pore_fraction: number; other_fraction: number } | null;
+    charts?: {
+        pore_activity: OntRunLiveActivity[];
+        cumulative: OntRunLiveCumulative[];
+        read_lengths: OntRunLiveReadLengths | null;
+    };
 }
 
 /** Live reads, basecalled yield and per-barcode output MinKNOW reports for a run. Read-only. */
