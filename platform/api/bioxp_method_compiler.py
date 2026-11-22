@@ -344,9 +344,12 @@ def _lower(method, dependencies, params):
                 raise
         return count
     scope = {'param': params, 'arg': {}}
-    count = walk(method['steps'], scope, '/method/steps', [], [], 'stop', None)
+    policy = method.get('on_error', 'stop')
+    if policy not in ('stop', 'pause_for_operator'):
+        fail('Unknown on_error policy', '/method/on_error')
+    count = walk(method['steps'], scope, '/method/steps', [], [], policy, None)
     occurrences = []
-    walk(method['steps'], scope, '/method/steps', [], [], 'stop', occurrences)
+    walk(method['steps'], scope, '/method/steps', [], [], policy, occurrences)
     assert count == len(occurrences)
     return occurrences
 

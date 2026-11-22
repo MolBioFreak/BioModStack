@@ -163,6 +163,18 @@ def test_native_mix_resource_limit_and_policy_not_review_alias():
     assert compile(move(), tip_policy='per_transfer')['document'] is not None  # no liquid needs no tips
 
 
+def test_method_error_policy_inherits_without_altering_planned_review_or_legacy_default():
+    grouped = {'type': 'group', 'step_id': 'block', 'steps': [move('inherited'), {**move('explicit'), 'on_error': 'stop'}]}
+    configured = method(grouped, on_error='pause_for_operator')
+    original = deepcopy(configured)
+    emitted = actions(compile_method({'method': configured}))
+    assert [(a['on_error'], a['review_required']) for a in emitted] == [('pause_for_operator', False), ('stop', False)]
+    assert configured == original
+    assert [a['on_error'] for a in actions(compile(grouped))] == ['stop', 'stop']
+    assert actions(compile({**grouped, 'on_error': 'stop'}, on_error='pause_for_operator'))[0]['on_error'] == 'stop'
+    assert compile(move(), on_error='retry_automatically')['document'] is None
+
+
 def test_discovery_examples_are_unbound_and_raw_roundtrip():
     schema = method_schema()
     Draft202012Validator.check_schema(schema)

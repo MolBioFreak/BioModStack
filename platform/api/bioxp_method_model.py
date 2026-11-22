@@ -68,6 +68,7 @@ def method_schema():
                 'id': {'type': 'string'}, 'parameters': {'type': 'array', 'items': {'$ref': '#/$defs/parameter'}},
                 'steps': {'type': 'array', 'items': {'$ref': '#/$defs/node'}}}}},
             'steps': {'type': 'array', 'items': {'$ref': '#/$defs/node'}}, 'deck_plan': deck_schema(),
+            'on_error': {'enum': ['stop', 'pause_for_operator'], 'default': 'stop'},
             'tip_policy': {}, 'editor_state': {}},
         '$defs': {'expression': expression, 'value': {'description': 'Raw JSON or {expr: versioned typed AST}; no executable text'},
             'parameter': {'type': 'object', 'required': ['id', 'type'], 'properties': {
