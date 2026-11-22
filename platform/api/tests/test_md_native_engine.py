@@ -258,3 +258,63 @@ def test_legacy_guided_native_dispatch_preserves_authored_stages(tmp_path, monke
     pipeline.run_gromacs_job(tmp_path / "unused", tmp_path, _prepared_config=cfg)
     assert seen == [original] and cfg == original
     assert [Path(c[c.index("-f") + 1]).stem for c in native_double if c[1] == "grompp"] == ["warmup", "sample"]
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_guided_authored_preparation_restart(tmp_path, native_double, monkeypatch, legacy):
+    from scripts.bms_md.runner import StageLedger
+
+    cfg = config(tmp_path)
+    cfg['input'] = {'structure': cfg['input']['coordinates']}
+    cfg['chemistry'] = {'profile_id': 'gmx_amber99sb_ildn_tip3p_smoke_v1'}
+    cfg['preparation'] = {}
+    cfg['stages'][0]['name'] = 'preparation'
+    out = tmp_path / 'out'
+    ledger = StageLedger(out / 'stage_state.json')
+    original = pipeline._run_command
+
+    def inert(command, **kwargs):
+        if command[1] in {'pdb2gmx', 'solvate', 'genion'}:
+            native_double.append(command)
+            for flag in ('-o', '-p'):
+                if flag in command:
+                    Path(command[command.index(flag) + 1]).write_text('inert')
+            return ''
+        return original(command, **kwargs)
+
+    monkeypatch.setattr(pipeline, '_run_command', inert)
+    if legacy:
+        # Write the old record through the real preparation and ledger owners.
+        pipeline._prepare_system({**cfg, 'schema': 'bms.md.job.v1'}, config_path=tmp_path / 'cfg',
+                                 output_dir=out, gmx_binary='fixture-gmx', ledger=ledger)
+        assert set(ledger.snapshot()['stages']) == {'preparation'}
+        native_double.clear()
+    def run(**kwargs):
+        return pipeline.run_gromacs_job(tmp_path / 'cfg', out, _prepared_config=cfg,
+                                        gmx_binary='fixture-gmx', **kwargs)
+    run()
+    assert len([c for c in native_double if c[1] == 'genion']) == int(not legacy)
+    assert [Path(c[c.index('-deffnm') + 1]).name for c in native_double if '-deffnm' in c] == ['preparation', 'sample']
+    assert ledger.is_complete('internal:preparation', [out / 'system/topol.top'])
+    assert ledger.is_complete('preparation', [out / 'preparation/preparation.tpr'])
+    native_double.clear()
+    run()
+    assert not any('-deffnm' in c or c[1] in {'pdb2gmx', 'grompp'} for c in native_double)
+    ledger.mark_failed('preparation', 'interrupted')
+    native_double.clear()
+    run(resume_checkpoint=out / 'preparation/preparation.cpt')
+    resumed, = [c for c in native_double if '-deffnm' in c]
+    assert '-append' in resumed and resumed[resumed.index('-cpi') + 1] == str(out / 'preparation/preparation.cpt')
+    assert not any(c[1] == 'grompp' for c in native_double)
+
+
+def test_old_prep_artifacts_are_not_authored_completion(tmp_path, native_double):
+    from scripts.bms_md.runner import StageLedger
+
+    cfg = config(tmp_path)
+    cfg['stages'][0]['name'] = 'preparation'
+    ledger = StageLedger(tmp_path / 'stage_state.json')
+    ledger.mark_completed('preparation', [Path(cfg['input']['coordinates']), Path(cfg['input']['topology'])])
+    pipeline.run_gromacs_job(tmp_path / 'unused', tmp_path, _prepared_config=cfg, gmx_binary='fixture-gmx')
+    compiled = [Path(c[c.index('-o') + 1]).name for c in native_double if c[1] == 'grompp']
+    assert compiled == ['preparation.tpr', 'sample.tpr']

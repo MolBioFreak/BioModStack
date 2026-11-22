@@ -116,7 +116,8 @@ def _prepare_system(
     topology = system_dir / "topol.top"
     coordinates = system_dir / "solvated_ions.gro"
     required = [topology, coordinates]
-    if ledger.is_complete("preparation", required):
+    key = ledger.preparation_key(config)
+    if ledger.is_complete(key, required):
         return coordinates, topology, required
 
     input_config = config["input"]
@@ -236,7 +237,7 @@ def _prepare_system(
         genion.append("-neutral")
     commands.append(("genion", genion, f"{preparation['solvent_group']}\n"))
 
-    ledger.mark_running("preparation", [item for _, command, _ in commands for item in command])
+    ledger.mark_running(key, [item for _, command, _ in commands for item in command])
     try:
         for label, command, stdin_text in commands:
             _run_command(
@@ -245,9 +246,9 @@ def _prepare_system(
                 log_path=prep_dir / f"{label}.command.log",
                 stdin_text=stdin_text,
             )
-        ledger.mark_completed("preparation", required)
+        ledger.mark_completed(key, required)
     except Exception as exc:
-        ledger.mark_failed("preparation", str(exc))
+        ledger.mark_failed(key, str(exc))
         raise
     return coordinates, topology, required
 
@@ -276,14 +277,15 @@ def _consume_preparation_bundle(
     )
     position_restraints = [system_dir / name for name in restraint_names]
     required = [coordinates, topology, *position_restraints]
-    if not ledger.is_complete("preparation", required):
-        ledger.mark_running("preparation", ["consume-immutable-bundle", manifest["bundle_sha256"]])
+    key = ledger.preparation_key(config)
+    if not ledger.is_complete(key, required):
+        ledger.mark_running(key, ["consume-immutable-bundle", manifest["bundle_sha256"]])
         retain_prepared_file(Path(bundle) / "system.gro", coordinates)
         retain_prepared_file(Path(bundle) / "system.top", topology)
         for source_name, destination_path in zip(restraint_names, position_restraints, strict=True):
             retain_prepared_file(Path(bundle) / source_name, destination_path)
         ledger.mark_completed(
-            "preparation", required,
+            key, required,
             performance={"bundle_sha256": manifest["bundle_sha256"]},
         )
     return coordinates, topology, required

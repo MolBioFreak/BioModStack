@@ -53,6 +53,23 @@ def prepared(tmp_path):
     return bundle
 
 
+def test_old_bundle_record_moves_without_replacing_authored_stage(prepared, tmp_path):
+    out = tmp_path / 'replica'
+    ledger = StageLedger(out / 'stage_state.json')
+    _, _, required = _consume_preparation_bundle({}, prepared, out, ledger)
+    old = ledger.snapshot()['stages']['preparation']
+    cfg = {'schema': 'bms.md.job.v3'}
+    _consume_preparation_bundle(cfg, prepared, out, ledger)
+    assert ledger.snapshot()['stages'] == {'internal:preparation': old}
+    assert ledger.is_complete('internal:preparation', required)
+    tpr = out / 'stage.tpr'
+    tpr.write_bytes(b'inert')
+    ledger.mark_running('preparation', ['gmx', 'mdrun'])
+    ledger.mark_completed('preparation', [tpr])
+    _consume_preparation_bundle(cfg, prepared, out, ledger)
+    assert ledger.is_complete('preparation', [tpr])
+
+
 def test_prepared_replicas_share_retained_inputs_not_outputs(prepared, tmp_path, record_property):
     before = identity(prepared)
     replicas = []
