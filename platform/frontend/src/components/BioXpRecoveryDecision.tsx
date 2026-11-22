@@ -2,11 +2,12 @@ import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { bioXpErrorText, type BioXpRecoveryAction } from '../lib/bioxpClient';
 import { methodsGet, methodsPost, type MethodValue } from '../lib/bioxpMethods';
+import { BioXpAttemptPressure } from './BioXpAttemptPressure';
 import { object } from './BioXpMethodFields';
 
 
 const labels = { retry: 'Retry failed action', repeat: 'Repeat completed action', skip: 'Skip failed action', manual_complete: 'Mark completed by operator' };
-type Preview = BioXpRecoveryAction & { job_id: string; submitted: boolean; projected_target?: unknown; affected_actions?: {action_id: string; kind: string}[]; previous_settings: MethodValue; proposed_settings: MethodValue; editable_settings: string[]; attempt_results: unknown[]; sibling_results: unknown[] };
+type Preview = BioXpRecoveryAction & { pressure_traces?: { stream_session_id: string }[]; pressure_trace_warning?: string; job_id: string; submitted: boolean; projected_target?: unknown; affected_actions?: {action_id: string; kind: string}[]; previous_settings: MethodValue; proposed_settings: MethodValue; editable_settings: string[]; attempt_results: unknown[]; sibling_results: unknown[] };
 
 /** Report and preview are read-only. Submission stays with the original job monitor. */
 type RecoveryProps = {
@@ -98,6 +99,8 @@ function RecoveryEditor({ jobId, generation, gateId, report, disabled, send, fai
             <ol>{preview.affected_actions?.map(a => <li key={a.action_id}>{a.kind.replaceAll('_', ' ')} · {a.action_id}</li>)}</ol>
             {preview.projected_target != null && <p>Only this sequence target: {JSON.stringify(preview.projected_target)}</p>}
             {preview.scope === 'occurrence' && <p>Previously completed children in this occurrence may run again. A repeat returns to the hold; it does not continue the job.</p>}<p>Attempt {preview.expected_attempt} · {preview.native_action_id}</p>
+            {failed && preview.native_action_id === failed.action_id && preview.expected_attempt === failed.attempt && preview.source_occurrence_id === failed.source_occurrence_id && <BioXpAttemptPressure refs={preview.pressure_traces} warning={preview.pressure_trace_warning}
+                address={{ generation, jobId, gateId, actionId: preview.native_action_id, occurrence: preview.source_occurrence_id, attempt: preview.expected_attempt }} />}
             <details><summary>Attempt history and partial effects</summary><pre>{JSON.stringify({ selected: preview.attempt_results, siblings: preview.sibling_results })}</pre></details>
             <p>Edits apply to this attempt only. Blank inherits the prior setting. Positive Z offsets go deeper; zero is an explicit setting.</p>
             {(decision === 'retry' || decision === 'repeat') && preview.editable_settings.map(key => <label key={key}>{key.replaceAll('_', ' ')} · {String(preview.previous_settings?.[key] ?? 'not reported')} → {String(preview.proposed_settings?.[key] ?? 'inherit')}<input aria-label={key} inputMode={key.endsWith('offset_steps') ? 'text' : 'numeric'} placeholder="Inherit" value={draft[key] ?? String(preview.previous_settings?.[key] ?? '')} onChange={e => { revision.current++; setDraft({ ...draft, [key]: e.target.value }); }} /></label>)}

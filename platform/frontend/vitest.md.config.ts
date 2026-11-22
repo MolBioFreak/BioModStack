@@ -213,6 +213,7 @@ export default defineConfig({
             './tests/vitest/bioxpMethodNumericMounted.test.tsx',
             './tests/vitest/bioxpMethodPipettingMounted.test.tsx',
             './tests/vitest/bioxpThermalAuthoringMounted.test.tsx',
+            './tests/vitest/bioxpAttemptPressureMounted.test.tsx',
             './tests/vitest/bioxpWorkflowObservationMounted.test.tsx',
             './tests/vitest/bioxpTransferControlsMounted.test.tsx',
             './tests/vitest/bioxpWellPipettingMounted.test.tsx',
