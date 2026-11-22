@@ -30,22 +30,11 @@ export const launcherWorkflowTemplates = [
         },
 
         {
-            id: 'oligo_design',
-            name: 'Oligo Designer',
-            description: 'Design nucleoprotein assemblies with validation.',
-            icon: 'dna',
-            color: '#6366F1',
-            stages: [{ tool: 'RFDpoly' }, { tool: 'Boltz-2' }, { tool: 'Filtering' }],
-        },
-];
-export const launcherExperimentalTemplates = [
-        {
             id: 'protein_modification_experimental',
             name: 'De Novo Design',
             description: 'Start with RFD4-Proteina, choose another generation engine, or open a redesign, resequencing or shape editor.',
             icon: 'cube',
             color: '#22C55E',
-            experimental: true,
             stages: [
                 { tool: 'Generate · RFD4-Proteina' },
                 { tool: 'Redesign structure' },
@@ -53,7 +42,17 @@ export const launcherExperimentalTemplates = [
                 { tool: 'Resequence' },
             ],
         },
-
+];
+export const launcherExperimentalTemplates = [
+        {
+            id: 'oligo_design',
+            name: 'Oligo Designer',
+            description: 'Design nucleoprotein assemblies with validation.',
+            icon: 'dna',
+            color: '#6366F1',
+            experimental: true,
+            stages: [{ tool: 'RFDpoly' }, { tool: 'Boltz-2' }, { tool: 'Filtering' }],
+        },
 ];
 
 export function visibleLauncherTemplates<T extends { id: string }>(templates: T[], debug = false): T[] {
