@@ -101,6 +101,25 @@ beforeEach(() => {
 afterAll(() => { if (process.env.BIOXP_METHOD_UI_EXPORT) writeFileSync(process.env.BIOXP_METHOD_UI_EXPORT, JSON.stringify({ transport_fixture_only: true, requests: exportedRequests }, null, 2)); });
 afterEach(async () => { exportedRequests.push(...requests); await act(async () => root?.unmount()); client.clear(); host.remove(); api.defaults.adapter = oldAdapter; vi.unstubAllGlobals(); Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView'); });
 
+it('round-trips the workflow pressure checkbox without changing legacy methods on open', async () => {
+    const checkbox = () => {
+        const labels = [...host.querySelectorAll('label')].filter(label => label.textContent === 'Record pipette pressure traces');
+        expect(labels).toHaveLength(1);
+        return labels[0].querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    };
+    await mount(); expect(checkbox().checked).toBe(true);
+    await openOriginal(); expect(checkbox().checked).toBe(true);
+    await click('Save'); expect(db.m1.method).toEqual(sourceMethod);
+    for (const enabled of [false, true]) {
+        await act(async () => checkbox().click());
+        await click('Save');
+        expect(db.m1.method).toEqual({ ...sourceMethod, workflow_pressure_streaming: enabled });
+        await act(async () => checkbox().click()); // Discard this contrary unsaved edit via Open.
+        await openOriginal(); expect(checkbox().checked).toBe(enabled);
+    }
+    expect(requests.filter(r => r.method !== 'get' && !r.url.endsWith('/check') && !(r.method === 'put' && r.url.endsWith('/library/m1')))).toEqual([]);
+});
+
 it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('mounts committed discovery and all scientific skeletons through real Axios', async () => {
     const contracts = JSON.parse(readFileSync(process.env.BIOXP_METHOD_MODEL_CONTRACT!, 'utf8'));
     const transport = api.defaults.adapter as AxiosAdapter;

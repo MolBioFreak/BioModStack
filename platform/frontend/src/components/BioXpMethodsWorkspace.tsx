@@ -310,6 +310,9 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
                 {tab === 'Methods' && <label>On step error <select aria-label="Method error policy" value={String(activeDraft.on_error ?? '')} onChange={e => {
                     const next = { ...activeDraft }; if (e.target.value) next.on_error = e.target.value; else delete next.on_error; setActive(next);
                 }}><option value="">Default (hold on recoverable pipetting errors)</option><option value="stop">Stop</option><option value="pause_for_operator">Hold for operator</option></select></label>}
+                {tab === 'Methods' && <label title="Automatically requests pressure streaming during workflow pipette strokes. This is separate from liquid detection. Editing does not control the robot or change runs already started.">
+                    <input type="checkbox" checked={activeDraft.workflow_pressure_streaming !== false} onChange={e => setActive({ ...activeDraft, workflow_pressure_streaming: e.target.checked })} />Record pipette pressure traces
+                </label>}
                 <input className="bxw-name" aria-label="Method name" placeholder="Name your method" value={String(activeDraft.name ?? '')} onChange={e => setActive({ ...activeDraft, name: e.target.value })} />
                 <span className="bxw-chip">{saved ? `revision ${saved.revision}${tab !== 'Liquid classes' && !unchangedSinceSave ? ' · edited' : ''}` : 'unsaved draft'}</span>
                 {run && runStatus && <button type="button" className={`bxw-chip is-run${runStatus === 'completed' ? ' is-done' : ''}`} title="Show this run" onClick={() => setTab('Runs')}>Last run: {reported}</button>}
