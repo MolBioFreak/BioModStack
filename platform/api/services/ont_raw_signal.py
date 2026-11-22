@@ -4748,6 +4748,19 @@ async def list_waveform_lookups(session: AsyncSession, *, run_id: str, observed_
              "state": item.state, "sample_count": item.sample_count} for item in records]
 
 
+def _blow5_files_match_record(manifest: Mapping[str, Any]) -> bool:
+    """Whether the BLOW5 files are still where and what BMS recorded. Compares file identity only; reads no signal."""
+    artifacts = [item for item in manifest.get("artifacts") or [] if isinstance(item, dict) and item.get("path")]
+    checked = [item for item in artifacts if item.get("kind") in {"read_routing", "blow5_index"}]
+    try:
+        for artifact in checked:
+            _path, descriptor = _open_descriptor_confined_artifact(artifact, authority="BLOW5 artifact")
+            os.close(descriptor)
+    except ValueError:
+        return False
+    return bool(checked)
+
+
 def _source_display_name(run: OntInstrumentRun, source: OntRawSignalRepresentation | None) -> str:
     if run.external_source_relative_path:
         return Path(run.external_source_relative_path).name
@@ -4818,7 +4831,9 @@ async def list_signal_sources(session: AsyncSession, *, experiment_group: str) -
                              if isinstance(item, dict) and item.get("kind") in {"pod5", "slow5", "blow5"}),
                 "removed": bool((source.validation_receipts or {}).get("source_removed")),
             } if source is not None else None,
-            "blow5": {"representation_id": blow5.id, "read_count": blow5.read_count} if blow5 is not None else None,
+            "blow5": {"representation_id": blow5.id, "read_count": blow5.read_count,
+                      "readable": await asyncio.to_thread(_blow5_files_match_record, dict(blow5.artifact_manifest or {}))}
+            if blow5 is not None else None,
             "conversion": {"job_id": conversion.id, "state": conversion.state,
                            "reason_code": conversion.failure_code or conversion.reason_code} if conversion is not None else None,
             "results": results.get(run.id, []),

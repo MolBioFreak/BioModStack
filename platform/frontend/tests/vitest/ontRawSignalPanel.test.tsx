@@ -36,7 +36,7 @@ import { OntRawSignalPanel } from '../../src/components/ngs/OntRawSignalPanel';
 const imported = {
     run_id: 'run-imported', observed_generation: 1, origin: 'imported', name: 'lib_A.pod5', status: 'completed', created_at: '2026-08-21T16:16:06',
     source: { representation_id: 'src-a', format: 'pod5', bytes: 3_627_362_144, removed: false },
-    blow5: { representation_id: 'b5-a', read_count: 60784 }, conversion: { job_id: 'job-a', state: 'ready', reason_code: 'indexed_blow5_ready' },
+    blow5: { representation_id: 'b5-a', read_count: 60784, readable: true }, conversion: { job_id: 'job-a', state: 'ready', reason_code: 'indexed_blow5_ready' },
     results: [{ job_id: 'result-1', name: 'lib A basecall', created_at: '2026-08-29T00:00:00', signal_workbench: true }],
 };
 const sequenced = {
@@ -183,6 +183,22 @@ describe('Raw signal tab', () => {
         await act(async () => { select.value = 'cand-1'; select.dispatchEvent(new Event('change', { bubbles: true })); });
         await act(async () => button('Register selected POD5').click());
         await waitUntil(() => expect(ont.registerCandidate).toHaveBeenCalledWith('cand-1', 'project-1'));
+    });
+
+    it('shows saved traces but no read list for a file whose BLOW5 has moved', async () => {
+        ont.sources.mockResolvedValue({ sources: [{ ...imported, blow5: { ...imported.blow5, readable: false } }] });
+        ont.fetchWaveform.mockResolvedValue({ lookup_id: 'l1', run_id: 'run-imported', observed_generation: 1, representation_id: 'b5-a',
+            read_id: 'b0aa-read', state: 'ready', reason_code: 'ok', sample_count: 84356, samples: [70, 90, 110] });
+        await mount();
+        await waitUntil(() => expect(detail().querySelector('[aria-label="Reads opened before"]')).toBeTruthy());
+        expect(container.textContent).toContain('BLOW5 moved');
+        expect(detail().querySelector('[role="status"]')!.textContent).toContain('add its POD5 once more');
+        expect(ont.reads).not.toHaveBeenCalled();
+        expect(detail().querySelector('[aria-label="Reads in this file"]')).toBeNull();
+        await act(async () => button('b0aa-read').click());
+        await waitUntil(() => expect(detail().querySelector('svg[aria-label="Raw electrical signal waveform"] polyline')).toBeTruthy());
+        expect(ont.fetchWaveform).toHaveBeenCalledWith('l1');
+        expect(ont.requestWaveform).not.toHaveBeenCalled();
     });
 
     it('says what to do in a Project that has no raw signal', async () => {

@@ -6429,7 +6429,8 @@ export interface OntRawSignalSource {
     status: string;
     created_at: string;
     source: { representation_id: string; format: 'pod5' | 'slow5' | 'blow5'; bytes: number; removed: boolean } | null;
-    blow5: { representation_id: string; read_count: number | null } | null;
+    /** `readable` is false when the BLOW5 files no longer match what BMS recorded, so nothing new can be read from them. */
+    blow5: { representation_id: string; read_count: number | null; readable: boolean } | null;
     conversion: { job_id: string; state: string; reason_code: string } | null;
     results: Array<{ job_id: string; name: string; created_at: string | null; signal_workbench: boolean }>;
 }

@@ -46,7 +46,7 @@ function failure(error: unknown, fallback: string): string {
 }
 
 function sourceState(source: OntRawSignalSource): { label: string; tone: 'ok' | 'busy' | 'bad' | 'idle' } {
-    if (source.blow5) return { label: 'BLOW5 ready', tone: 'ok' };
+    if (source.blow5) return source.blow5.readable ? { label: 'BLOW5 ready', tone: 'ok' } : { label: 'BLOW5 moved', tone: 'bad' };
     const state = source.conversion?.state;
     if (state && CONVERTING.includes(state)) return { label: CONVERSION_WORDS[state], tone: 'busy' };
     if (state === 'failed') return { label: 'Conversion failed', tone: 'bad' };
@@ -111,7 +111,7 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
     useEffect(() => { if (requestedRunId) setSelectedRunId(requestedRunId); }, [requestedRunId]);
     const [readFilter, setReadFilter] = useState('');
     const [readOffset, setReadOffset] = useState(0);
-    const [openRead, setOpenRead] = useState<{ runId: string; readId: string } | null>(null);
+    const [openRead, setOpenRead] = useState<{ runId: string; readId: string; lookupId?: string } | null>(null);
     const [adding, setAdding] = useState(false);
     const [notice, setNotice] = useState('');
 
@@ -134,7 +134,7 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
         queryKey: ['ont-raw-signal-reads', blow5Id, readFilter, readOffset],
         queryFn: () => fetchOntRawSignalReads(selected!.run_id, selected!.observed_generation, blow5Id as string,
             { offset: readOffset, limit: READ_PAGE, query: readFilter }),
-        enabled: Boolean(selected && blow5Id),
+        enabled: Boolean(selected && blow5Id && selected.blow5?.readable),
         retry: false,
         placeholderData: (previous) => previous,
     });
@@ -150,7 +150,10 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
     const waveformQuery = useQuery({
         queryKey: ['ont-raw-signal-waveform', blow5Id, shownRead],
         queryFn: async () => {
-            let current = await requestOntRawSignalWaveform(selected!.run_id, selected!.observed_generation, blow5Id as string, shownRead as string);
+            // A read opened before is shown from its saved trace; a new one is read from the BLOW5.
+            let current = openRead?.lookupId
+                ? await fetchOntRawSignalWaveform(openRead.lookupId)
+                : await requestOntRawSignalWaveform(selected!.run_id, selected!.observed_generation, blow5Id as string, shownRead as string);
             for (let attempt = 0; attempt < WAVEFORM_POLL_ATTEMPTS && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
                 await new Promise((resolve) => window.setTimeout(resolve, 1000));
                 current = await fetchOntRawSignalWaveform(current.lookup_id);
@@ -242,7 +245,7 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
                                     {selected.source ? `${selected.source.format.toUpperCase()} ${fileSize(selected.source.bytes)}, ${selected.source.removed ? 'removed after conversion' : 'kept'}` : 'none on record'}
                                 </dd></div>
                                 <div><dt className={HEADING}>Indexed BLOW5</dt><dd className="font-semibold">
-                                    {selected.blow5 ? `ready${selected.blow5.read_count != null ? `, ${count(selected.blow5.read_count)} reads` : ''}` : state.label}
+                                    {selected.blow5 ? `${selected.blow5.readable ? 'ready' : 'moved since it was made'}${selected.blow5.read_count != null ? `, ${count(selected.blow5.read_count)} reads` : ''}` : state.label}
                                 </dd></div>
                             </dl>
                             <div className="flex flex-wrap items-center gap-2">
@@ -270,12 +273,17 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
                             {selected.conversion?.state === 'failed' ? <p role="alert" className="text-sm text-[var(--warning)]">Conversion failed: {selected.conversion.reason_code.replace(/_/g, ' ')}. Convert again to retry.</p> : null}
                             {restored?.state === 'failed' ? <p role="alert" className="text-sm text-[var(--warning)]">POD5 restore failed: {restored.error}</p> : null}
                             {notice ? <p role="alert" className="text-sm text-[var(--warning)]">{notice}</p> : null}
+                            {selected.blow5 && !selected.blow5.readable ? (
+                                <p role="status" className="text-sm text-[var(--warning)]">
+                                    The BLOW5 files are no longer where BMS recorded them, so new reads cannot be opened from this entry. Reads opened before still show. To browse the file again, add its POD5 once more with Add raw signal.
+                                </p>
+                            ) : null}
 
                             {selected.blow5 ? (
                                 <div className="grid items-start gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
                                     <div className="space-y-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
                                         <h3 className={HEADING}>Reads</h3>
-                                        <input aria-label="Find a read" value={readFilter} placeholder="Find by read ID"
+                                        <input aria-label="Find a read" value={readFilter} placeholder="Find by read ID" disabled={!selected.blow5.readable}
                                             onChange={(event) => { setReadFilter(event.target.value.replace(/[^A-Za-z0-9_.-]/g, '')); setReadOffset(0); }}
                                             className="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-xs text-[var(--text-primary)]" />
                                         {opened.length && !readFilter ? (
@@ -284,7 +292,7 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
                                                 <ul aria-label="Reads opened before">
                                                     {opened.slice(0, 6).map((item) => (
                                                         <li key={item.lookup_id}>
-                                                            <button type="button" aria-pressed={shownRead === item.read_id} onClick={() => setOpenRead({ runId: selected.run_id, readId: item.read_id })}
+                                                            <button type="button" aria-pressed={shownRead === item.read_id} onClick={() => setOpenRead({ runId: selected.run_id, readId: item.read_id, lookupId: item.lookup_id })}
                                                                 className={`flex w-full justify-between gap-2 rounded px-2 py-1 text-left text-xs ${shownRead === item.read_id ? 'bg-[color-mix(in_srgb,var(--accent-primary)_16%,transparent)] text-[var(--accent-primary)]' : 'text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'}`}>
                                                                 <span className="truncate font-mono" title={item.read_id}>{item.read_id}</span>
                                                                 <span className="whitespace-nowrap text-[var(--text-secondary)]">{item.sample_count != null ? count(item.sample_count) : ''}</span>
@@ -294,7 +302,7 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
                                                 </ul>
                                             </div>
                                         ) : null}
-                                        <div className="space-y-1">
+                                        {selected.blow5.readable ? <div className="space-y-1">
                                             <h4 className={HEADING}>{readFilter ? 'Matching reads' : 'All reads'}</h4>
                                             {readsQuery.isError ? <p role="alert" className="text-xs text-[var(--warning)]">Reads could not be listed: {failure(readsQuery.error, 'unknown error')}</p> : null}
                                             <ul aria-label="Reads in this file">
@@ -317,7 +325,7 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
                                                     </span>
                                                 </div>
                                             ) : null}
-                                        </div>
+                                        </div> : null}
                                     </div>
                                     <div className="min-w-0 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
                                         {!shownRead ? <p className="text-sm text-[var(--text-secondary)]">Pick a read to see its signal.</p> : null}

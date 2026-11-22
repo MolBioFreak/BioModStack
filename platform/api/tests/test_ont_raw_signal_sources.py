@@ -78,7 +78,8 @@ async def test_a_project_lists_its_sequenced_runs_and_imported_files_with_their_
     sequenced, imported = sources
     assert sequenced["source"] is None and sequenced["blow5"] is None and sequenced["results"] == []
     assert imported["source"] == {"representation_id": "src-a", "format": "pod5", "bytes": 3_000_000_000, "removed": False}
-    assert imported["blow5"] == {"representation_id": "b5-a", "read_count": 1200}
+    # Its BLOW5 files are not where the record says, so it is reported as not readable rather than failing later.
+    assert imported["blow5"] == {"representation_id": "b5-a", "read_count": 1200, "readable": False}
     assert imported["conversion"] == {"job_id": "job-a", "state": "ready", "reason_code": "indexed_blow5_ready"}
     assert imported["results"] == [{"job_id": "result-1", "name": "lib A basecall", "created_at": "2026-11-05T00:00:00", "signal_workbench": True}]
     assert "/x/" not in json.dumps(sources)
@@ -89,13 +90,13 @@ async def test_a_project_lists_its_sequenced_runs_and_imported_files_with_their_
 async def test_reads_of_a_ready_blow5_are_listed_sorted_paged_and_searchable(factory, tmp_path, partitioned) -> None:
     read_ids = [f"{n:04d}-read" for n in (7, 3, 12, 1, 9)]
     blow5 = tmp_path / "reads.blow5"; blow5.write_bytes(b"signal")
-    index = tmp_path / "reads.blow5.idx"; index.write_bytes(_index_bytes(read_ids))
+    # With a routing table the read list comes from it, so the index here names a different read.
+    index = tmp_path / "reads.blow5.idx"; index.write_bytes(_index_bytes(["zzzz-not-listed"] if partitioned else read_ids))
     artifacts = [raw._file_artifact(blow5, "a-blow5", kind="blow5"), raw._file_artifact(index, "a-index", kind="blow5_index")]
     if partitioned:
         routing = tmp_path / "routing.json"
         routing.write_text(json.dumps({"read_to_group": {read_id: "g" for read_id in read_ids}, "groups": {}}))
         artifacts += [raw._file_artifact(routing, "a-routing", kind="read_routing"), {"kind": "blow5", "path": "/second", "bytes": 1}]
-        index.write_bytes(b"not read when a routing table exists")
     async with factory() as session:
         session.add(_run("run-1", "project-a", name="reads.pod5"))
         await session.flush()
@@ -103,6 +104,7 @@ async def test_reads_of_a_ready_blow5_are_listed_sorted_paged_and_searchable(fac
         session.add(_representation("b5-pending", "run-1", "derived", "blow5", [{"kind": "blow5", "path": "/y", "bytes": 2}], state="preparable"))
         await session.commit()
         raw._READ_ID_CACHE.clear()
+        assert (await raw.list_signal_sources(session, experiment_group="project-a"))[0]["blow5"]["readable"] is True
         first = await raw.list_representation_reads(session, run_id="run-1", observed_generation=1, representation_id="b5", limit=2)
         second = await raw.list_representation_reads(session, run_id="run-1", observed_generation=1, representation_id="b5", offset=4, limit=2)
         found = await raw.list_representation_reads(session, run_id="run-1", observed_generation=1, representation_id="b5", query="0012")
