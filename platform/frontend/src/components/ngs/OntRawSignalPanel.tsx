@@ -210,7 +210,7 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
                             ? 'border-[var(--accent-primary)] bg-[var(--bg-secondary)]' : 'border-[var(--border-primary)] hover:bg-[var(--bg-secondary)]'}`}>
                         <span className="order-1 col-span-2 break-all text-sm font-semibold text-[var(--text-primary)]">{item.name}</span>
                         <span className={`order-3 self-center whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] ${TONE[itemState.tone]}`}>{itemState.label}</span>
-                        <span className="order-2 self-center text-xs text-[var(--text-secondary)]">
+                        <span className="order-2 self-center whitespace-nowrap text-xs text-[var(--text-secondary)]">
                             {item.origin === 'sequenced' ? 'Sequenced' : 'Imported'} {day(item.created_at)}
                             {item.source ? ` · ${item.source.format.toUpperCase()} ${fileSize(item.source.bytes)}` : ''}
                         </span>
@@ -229,7 +229,7 @@ export function OntRawSignalPanel({ onAnalyzeExistingData }: OntRawSignalPanelPr
             {!projectId ? <p role="status" className="text-sm text-[var(--text-secondary)]">Choose a Project (Projects button above) to see its raw signal.</p> : null}
             {sourcesQuery.isError ? <p role="alert" className="text-sm text-[var(--warning)]">Raw signal could not be loaded: {failure(sourcesQuery.error, 'unknown error')}</p> : null}
             {projectId && !sourcesQuery.isError ? (
-                <div className="grid items-start gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+                <div className="grid items-start gap-4 lg:grid-cols-[400px_minmax(0,1fr)]">
                     <div className="space-y-4 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
                         {sourcesQuery.isLoading ? <p className="text-sm text-[var(--text-secondary)]">Loading…</p> : <>
                             {list('Sequenced on this system', group('sequenced'), 'No runs sequenced here in this Project yet.')}
