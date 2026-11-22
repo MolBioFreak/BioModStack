@@ -27,6 +27,8 @@ from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, StrictInt, StrictFloat, model_validator, model_serializer
 from sqlalchemy import select
 
+from scripts.bms_md.chemistry.prepare import profile_preparation_owner
+
 from database import Design, Job, MdRun
 from schemas import CandidateRef
 from paths import get_allowed_roots, get_inputs_dir, to_allowed_relative
@@ -282,10 +284,19 @@ class MdGuidedNativeInput(_ClosedModel):
     chemistry_profile_id: str
     chemistry_profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     catalog_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
-    box_type: Literal["cubic", "triclinic", "dodecahedron", "octahedron"] = "dodecahedron"
+    box_type: Literal["cubic", "triclinic", "dodecahedron", "octahedron"] = Field(
+        default_factory=lambda data: "octahedron" if profile_preparation_owner(data["chemistry_profile_id"]) == "amber" else "dodecahedron",
+    )
     padding_nm: float = Field(default=1.0, gt=0)
     salt_molar: float = Field(default=0.15, ge=0)
     neutralize: bool = True
+
+    @model_serializer(mode="wrap")
+    def input_wire(self, handler):
+        data = handler(self)
+        if "box_type" not in self.model_fields_set:
+            data.pop("box_type", None)
+        return data
 
 
 class MdPreparedNativeInput(_ClosedModel):

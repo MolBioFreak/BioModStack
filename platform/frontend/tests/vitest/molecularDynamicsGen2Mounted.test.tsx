@@ -372,6 +372,38 @@ const mountPredictionCandidateRace = async () => {
 };
 
 describe('mounted Molecular Dynamics Gen 2 launcher', () => {
+    it('sends the profile default only as an omission and preserves explicit guided-native box choices', async () => {
+        await mountAdmittedFixture();
+        const select = async (label: string, value: string) => {
+            const el = container.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+            await act(async () => { el.value = value; el.dispatchEvent(new Event('change', { bubbles: true })); });
+        };
+        await select('Protocol', 'guided');
+        await click('Add ordered stage');
+        apiMocks.post.mockImplementation(async (url, { intent }) => {
+            if (url !== '/api/molecular-dynamics/launch-preview') throw new Error(`unexpected POST ${url}`);
+            return response({ schema_version: 'bms.md.launch-preview.v2', source: null, input_identity: {},
+                effective_request: { stages: intent.stages }, warnings: [], blockers: [], preview_digest: hash('d'),
+                execution_target_id: intent.execution_target_id, execution_policy: intent.execution_policy });
+        });
+        const previewInput = async () => {
+            const before = apiMocks.post.mock.calls.length;
+            await click('Preview');
+            expect(apiMocks.post).toHaveBeenCalledTimes(before + 1);
+            const last = apiMocks.post.mock.calls.at(-1)!;
+            expect(last[0]).toBe('/api/molecular-dynamics/launch-preview');
+            expect(last[1].intent.input.chemistry_profile_id).toBe(profile.id);
+            return last[1].intent.input;
+        };
+        expect(await previewInput()).not.toHaveProperty('box_type');
+        const label = 'Preparation box_type';
+        for (const box of ['cubic', 'triclinic', 'dodecahedron', 'octahedron']) {
+            await select(label, box);
+            expect(await previewInput()).toHaveProperty('box_type', box);
+        }
+        await select(label, '');
+        expect(await previewInput()).not.toHaveProperty('box_type');
+    });
     it.each([
         ['structure', 'gromacs', 'GROMACS'],
     ])('summary reflects the active %s lane, not the retained %s selector', async (inputMode, engine, label) => {

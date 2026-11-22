@@ -147,6 +147,7 @@ def test_guided_preparation_uses_native_protocol_without_smoke_caps():
     normalized = contract.normalize_md_job_spec(params={"md_job_spec": spec}, job_id="guided-native", resolve_runtime_path=lambda value: value, chemistry_catalog=catalog)
     assert normalized["stages"] == spec["stages"]
     assert normalized["replicas"] == 12
+    assert normalized["preparation"]["box_type"] == "dodecahedron"
     assert normalized["preparation"]["neutralize"] is False
     assert normalized["chemistry"]["resolved_preparation"] == profile["v1_preparation"]
     assert normalize_job_config(normalized) == normalized
@@ -289,6 +290,7 @@ async def test_native_launch_reaches_real_job_create_and_scratch_persistence(nat
 
 
 @pytest.mark.parametrize("field,value,message", [
+    ("box_type", None, None), ("box_type", "octahedron", None),
     ("box_type", "cubic", "octahedron"), ("box_type", "triclinic", "octahedron"),
     ("box_type", "dodecahedron", "octahedron"), ("salt_molar", 2.01, "salt_molar"),
     ("neutralize", False, "neutralization"), ("salt_molar", 2, None), ("salt_molar", 0, None),
@@ -310,7 +312,13 @@ def test_amber_native_preview_settings(native_client, monkeypatch, field, value,
     profile = view.get_profile("amber_ff19sb_opc_protein_v1")
     intent["input"].update(chemistry_profile_id=profile["id"], chemistry_profile_sha256=profile["profile_sha256"],
                            catalog_digest=view.catalog_digest, box_type="octahedron", neutralize=True)
-    intent["input"][field] = value
+    if value is None:
+        del intent["input"][field]
+    else:
+        intent["input"][field] = value
+    wire = MdNativeLaunchIntent.model_validate(intent).model_dump(mode="json")["input"]
+    assert ("box_type" in wire) == ("box_type" in intent["input"])
+    assert wire.get("box_type") == intent["input"].get("box_type")
     response = native_client.post("/api/molecular-dynamics/launch-preview", json={
         "schema_version": "bms.md.launch-preview-request.v1", "intent": intent})
     if message:
@@ -319,7 +327,7 @@ def test_amber_native_preview_settings(native_client, monkeypatch, field, value,
         assert message in response.json()["detail"]["message"]
     else:
         assert response.status_code == 200, response.text
-        assert response.json()["effective_request"]["preparation"][field] == value
+        assert response.json()["effective_request"]["preparation"][field] == ("octahedron" if value is None else value)
 
 
 @pytest.mark.parametrize("field,value", [("ntmpi", True), ("ntmpi", 1.0), ("ntmpi", 2),

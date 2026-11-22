@@ -56,16 +56,17 @@ _PROFILES = {
 }
 
 
+def profile_preparation_owner(profile_id: str | None) -> str:
+    return "gromacs" if profile_id == "gmx_amber99sb_ildn_tip3p_smoke_v1" else "amber"
+
+
 def preparation_owner(config: dict[str, Any]) -> str | None:
     """Recipe owner, independent of ordered-stage contract version."""
     if not config.get("input", {}).get("structure"):
         return None
     if config.get("schema") == "bms.md.job.v1":
         return "gromacs"
-    profile_id = config.get("chemistry", {}).get("profile_id")
-    if profile_id == "gmx_amber99sb_ildn_tip3p_smoke_v1":
-        return "gromacs"
-    return "amber"
+    return profile_preparation_owner(config.get("chemistry", {}).get("profile_id"))
 
 
 def preparation_profile(profile_id: str) -> PreparationProfile:

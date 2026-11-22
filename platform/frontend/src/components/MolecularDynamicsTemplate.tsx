@@ -824,7 +824,7 @@ export function MolecularDynamicsTemplate({
                                 stages: mode === 'compiled' ? [] : structuredClone(native?.stages ?? []),
                                 replicas: native?.replicas ?? 1, random_seed: native?.random_seed ?? 20260717,
                                 execution: native?.execution ?? { ntmpi: 1, ntomp: form.ntomp, gpu_offload: 'auto', pin: 'on' },
-                                input: mode === 'guided' ? { kind: 'guided', box_type: 'dodecahedron', padding_nm: form.paddingNm, salt_molar: form.saltMolar, neutralize: form.neutralize ?? true } : { kind: mode },
+                                input: mode === 'guided' ? { kind: 'guided', padding_nm: form.paddingNm, salt_molar: form.saltMolar, neutralize: form.neutralize ?? true } : { kind: mode },
                             });
                         }}><option value="original">Original guided protocol (historical defaults)</option><option value="guided">Guided preparation → native protocol</option><option value="prepared">Prepared native system</option><option value="compiled">Compiled TPR / CPT</option></select></label>
                         {(!nativeEnabled || native?.input.kind === 'guided') && <>
