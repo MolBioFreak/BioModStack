@@ -339,7 +339,7 @@ describe('NGS authoritative stage presentation', () => {
 
 describe('preview-independent mounted locus loading', () => {
 
-    it.each(['rejected', 'pending'] as const)('loads a detailed locus when the oversized BAM preview is %s', async (previewState) => {
+    it.each(['rejected', 'pending', 'pending across a stale IGV timeout'] as const)('loads a detailed locus when the oversized BAM preview is %s', async (previewState) => {
         Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
         const hash = 'a'.repeat(64);
         const artifact = (role: string, size = 1024) => ({
@@ -387,6 +387,14 @@ describe('preview-independent mounted locus loading', () => {
         };
         igvMocks.createBrowser.mockReset();
         igvMocks.createBrowser.mockResolvedValue(browser);
+        const staleTimeout = previewState === 'pending across a stale IGV timeout';
+        const staleBrowser = { on: vi.fn() };
+        let finishStaleCreation!: (value: typeof staleBrowser) => void;
+        if (staleTimeout) {
+            vi.useFakeTimers();
+            igvMocks.removeBrowser.mockClear();
+            igvMocks.createBrowser.mockImplementationOnce(() => new Promise(resolve => { finishStaleCreation = resolve; }));
+        }
         vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
             if (String(input) === session.artifacts.reference.url) return new Response(`>plasmid\n${'A'.repeat(1000)}\n`);
             throw new Error(`Unexpected mounted-test network request: ${String(input)}`);
@@ -402,6 +410,13 @@ describe('preview-independent mounted locus loading', () => {
         await waitUntil(() => expect(button('Open local IGV')?.disabled).toBe(false));
         await act(async () => button('Open local IGV')!.click());
         await waitUntil(() => expect(igvMocks.createBrowser).toHaveBeenCalledTimes(1));
+        const closeViewer = () => document.querySelector<HTMLButtonElement>('[aria-label="Close IGV"]')!.click();
+        if (staleTimeout) {
+            await act(async () => closeViewer());
+            alignmentMocks.fetchAlignmentPresentation.mockClear();
+            await act(async () => button('Open local IGV')!.click());
+            await waitUntil(() => expect(igvMocks.createBrowser).toHaveBeenCalledTimes(2));
+        }
         await waitUntil(() => expect(alignmentMocks.fetchAlignmentPresentation).toHaveBeenCalled());
         for (let index = 0; index < 5; index += 1) await flush();
         expect(alignmentMocks.fetchAlignmentPresentation).toHaveBeenCalledTimes(1);
@@ -440,6 +455,13 @@ describe('preview-independent mounted locus loading', () => {
             for (let index = 0; index < 5; index += 1) await flush();
             expect(browser.loadTrack).not.toHaveBeenCalled();
         }
+        if (staleTimeout) {
+            // A times out while B owns the viewer and is waiting on its locus slice.
+            await act(async () => { await vi.advanceTimersByTimeAsync(20_001); });
+            await act(async () => finishStaleCreation(staleBrowser));
+            expect(igvMocks.removeBrowser.mock.calls).toEqual([[staleBrowser]]);
+            expect(container.textContent).not.toContain('Failed to initialize IGV viewer');
+        }
         await act(async () => resolveSlice(slice));
         await waitUntil(() => expect(tracks.some((track) => track.url === slice.bam.url)).toBe(true));
         await waitUntil(() => expect(document.querySelector('.ngs-alignment-presentation-status')?.textContent).toBe('Locus reads · 5,000 of 7,000 reads'));
@@ -448,6 +470,10 @@ describe('preview-independent mounted locus loading', () => {
         expect(tracks.filter((track) => track.type === 'alignment').map((track) => track.url)).toEqual([slice.bam.url]);
         expect(browser.loadTrack.mock.calls.every(([config]) => config.url === slice.bam.url)).toBe(true);
         expect(document.querySelector('.ngs-alignment-presentation-status')?.textContent).toBe('Locus reads · 5,000 of 7,000 reads');
+        if (staleTimeout) {
+            await act(async () => closeViewer());
+            expect(igvMocks.removeBrowser.mock.calls).toEqual([[staleBrowser], [browser]]);
+        }
     });
 });
 

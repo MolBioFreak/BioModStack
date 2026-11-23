@@ -2267,7 +2267,6 @@ export function NGSToolkit() {
     const runInspectorRef = useRef<HTMLDivElement | null>(null);
     const igvLoadTokenRef = useRef(0);
     const igvBrowserRef = useRef<UntypedApiValue | null>(null);
-    const igvLibraryRef = useRef<UntypedApiValue | null>(null);
     const pendingIgvLocusRef = useRef<PendingSessionNavigation | null>(null);
     const igvNavigationRequestIdRef = useRef(0);
     const igvNavigationOwnerRef = useRef<OwnedIgvNavigation | null>(null);
@@ -3911,8 +3910,23 @@ export function NGSToolkit() {
 
         let cancelled = false;
         let igvBrowser: UntypedApiValue = null;
+        let igvLibrary: UntypedApiValue = null;
         let removeLocusListener: (() => void) | null = null;
         let removeTrackClickListener: (() => void) | null = null;
+        const disposeOwnedBrowser = () => {
+            if (!igvBrowser) return;
+            if (igvBrowserRef.current === igvBrowser) igvBrowserRef.current = null;
+            try {
+                removeLocusListener?.();
+                removeTrackClickListener?.();
+            } finally {
+                try {
+                    removeIgvBrowser(igvLibrary, igvBrowser);
+                } finally {
+                    igvBrowser = null;
+                }
+            }
+        };
         let creationTimedOut = false;
         let timeoutInvalidationToken: number | null = null;
         const loadToken = ++igvLoadTokenRef.current;
@@ -3941,6 +3955,7 @@ export function NGSToolkit() {
                 );
                 if (cancelled || !igvMount.isConnected) return;
                 const igvAny = igv as UntypedApiValue;
+                igvLibrary = igvAny;
                 if (typeof igvAny.setDefaults === 'function') {
                     igvAny.setDefaults({
                         showControls: true,
@@ -3993,10 +4008,13 @@ export function NGSToolkit() {
                     timeoutMessage: `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s`,
                 });
                 if (!igvBrowser) return;
+                if (cancelled || !isCurrentLoad()) {
+                    disposeOwnedBrowser();
+                    return;
+                }
                 styleIgvShadow(igvMount);
                 // Takes effect on the next ruler draw; repainting here interrupts IGV setup.
                 hideClippedIgvRulerLabels(igvBrowser);
-                igvLibraryRef.current = igvAny;
                 ensureIgvThemeStyles(igvMount);
                 patchIgvRulerContrast(igvBrowser);
                 igvBrowserRef.current = igvBrowser;
@@ -4102,12 +4120,10 @@ export function NGSToolkit() {
                     setIgvError(`Failed to initialize IGV viewer: ${msg}.${suffix}`);
                 }
                 try {
-                    if (igvBrowser) removeIgvBrowser(igvLibraryRef.current, igvBrowser);
+                    disposeOwnedBrowser();
                 } catch {
                     // no-op
                 }
-                igvBrowserRef.current = null;
-                igvLibraryRef.current = null;
             } finally {
                 if (ownsTerminalState()) {
                     setIgvLoading(false);
@@ -4122,16 +4138,12 @@ export function NGSToolkit() {
             igvPresentationGenerationRef.current += 1;
             igvReadClickGuardRef.current.reset();
             if (isCurrentLoad()) igvLoadTokenRef.current += 1;
-            removeLocusListener?.();
             setClickedBarcodeRead('');
-            removeTrackClickListener?.();
             try {
-                if (igvBrowser) removeIgvBrowser(igvLibraryRef.current, igvBrowser);
+                disposeOwnedBrowser();
             } catch {
                 // no-op
             }
-            igvBrowserRef.current = null;
-            igvLibraryRef.current = null;
             setIgvReadsTrackLoaded(false);
             setIgvReadsTrackLoading(false);
             setIgvAutoLoadAttempted(false);
