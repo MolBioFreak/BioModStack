@@ -976,7 +976,8 @@ export async function fetchAlignmentSessions(jobId: string): Promise<AlignmentSe
 }
 
 const previewRetryDelaysMs = [1000, 2000, 4000, 8000];
-const previewRetryBudgetMs = 30_000;
+// Cover the producer’s 120-second limit and one final poll.
+const previewRetryBudgetMs = 135_000;
 
 export class ReadPreviewBusyError extends Error {
     constructor() {
@@ -1011,13 +1012,12 @@ export async function prepareReadPreview<T>(jobId: string, owner: AbortSignal,
             } catch (reason) {
                 signal.throwIfAborted();
                 if (!isExactNgsError(reason, 503, 'NGS_PRESENTATION_BUSY', jobId, 'artifact')) throw reason;
-                if (attempt >= previewRetryDelaysMs.length) throw new ReadPreviewBusyError();
                 if (attempt === 0) {
                     expiresAt = Date.now() + previewRetryBudgetMs;
                     onBusy();
                     timer = setTimeout(() => deadline.abort(new ReadPreviewBusyError()), previewRetryBudgetMs);
                 }
-                await waitForPreviewRetry(previewRetryDelaysMs[attempt], signal);
+                await waitForPreviewRetry(previewRetryDelaysMs[Math.min(attempt, previewRetryDelaysMs.length - 1)], signal);
             }
         }
     } finally {

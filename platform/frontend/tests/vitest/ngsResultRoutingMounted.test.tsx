@@ -918,19 +918,29 @@ describe('bounded read preview preparation', () => {
         expect(waiting).not.toHaveBeenCalled();
     });
 
-    it('stops at the retry cap when the producer stays busy', async () => {
+    it('waits for a cold producer still busy after 45 seconds', async () => {
+        const start = Date.now();
+        const load = vi.fn(async () => { if (Date.now() - start < 45_000) throw busy; return 'ready'; });
+        const result = expect(prepareReadPreview('job-a', controller().signal, load, vi.fn())).resolves.toBe('ready');
+        await vi.advanceTimersByTimeAsync(55_000);
+        await result;
+    });
+
+    it('stops at the deadline when the producer stays busy', async () => {
         const load = vi.fn().mockRejectedValue(busy);
         const result = expect(prepareReadPreview('job-a', controller().signal, load, vi.fn())).rejects.toThrow('still busy');
-        await vi.advanceTimersByTimeAsync(60_000);
+        await vi.advanceTimersByTimeAsync(135_000);
         await result;
-        expect(load).toHaveBeenCalledTimes(5);
+        const attempts = load.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(load).toHaveBeenCalledTimes(attempts);
     });
 
     it('aborts a retry in flight at the deadline', async () => {
         const load = vi.fn().mockRejectedValueOnce(busy).mockImplementation((signal: AbortSignal) =>
             new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))));
         const result = expect(prepareReadPreview('job-a', controller().signal, load, vi.fn())).rejects.toThrow('still busy');
-        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.advanceTimersByTimeAsync(135_000);
         await result;
         expect(load).toHaveBeenCalledTimes(2);
     });
