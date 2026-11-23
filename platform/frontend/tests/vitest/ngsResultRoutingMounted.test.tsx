@@ -1,3 +1,4 @@
+import { prepareReadPreview } from '../../src/lib/ngsAlignmentSession';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseOntFastqQcResult } from '../../src/lib/ontFastqQcResult';
@@ -879,5 +880,69 @@ describe('bounded NGS jobs receiving owner', () => {
         } else {
             expect(ngsApiMocks.fetchFullJob).not.toHaveBeenCalled();
         }
+    });
+});
+
+describe('bounded read preview preparation', () => {
+    const busy = { response: { status: 503, data: { schema: 'bms.ngs.error.v1', code: 'NGS_PRESENTATION_BUSY',
+        job_id: 'job-a', resource: 'artifact', retryable: true, message: 'Producer busy.' } } };
+    const controller = () => new AbortController();
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('waits after a typed busy response and returns the next receipt', async () => {
+        const load = vi.fn().mockRejectedValueOnce(busy).mockResolvedValue('receipt');
+        const waiting = vi.fn();
+        const result = prepareReadPreview('job-a', controller().signal, load, waiting);
+        await vi.advanceTimersByTimeAsync(999);
+        expect(waiting).toHaveBeenCalledTimes(1);
+        expect(load).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await result).toBe('receipt');
+        expect(load).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+        { ...busy.response, status: 409 },
+        { ...busy.response, data: { ...busy.response.data, code: 'NGS_AUTHORITY_CONFLICT' } },
+        { ...busy.response, data: { ...busy.response.data, job_id: 'other' } },
+        { ...busy.response, data: { ...busy.response.data, resource: 'rotation' } },
+        { ...busy.response, data: { ...busy.response.data, retryable: false } },
+        { status: 503, data: { code: 'NGS_PRESENTATION_BUSY' } },
+    ])('passes through nonmatching errors immediately', async (response) => {
+        const error = { response };
+        const load = vi.fn().mockRejectedValue(error);
+        const waiting = vi.fn();
+        await expect(prepareReadPreview('job-a', controller().signal, load, waiting)).rejects.toBe(error);
+        expect(load).toHaveBeenCalledTimes(1);
+        expect(waiting).not.toHaveBeenCalled();
+    });
+
+    it('stops at the retry cap when the producer stays busy', async () => {
+        const load = vi.fn().mockRejectedValue(busy);
+        const result = expect(prepareReadPreview('job-a', controller().signal, load, vi.fn())).rejects.toThrow('still busy');
+        await vi.advanceTimersByTimeAsync(60_000);
+        await result;
+        expect(load).toHaveBeenCalledTimes(5);
+    });
+
+    it('aborts a retry in flight at the deadline', async () => {
+        const load = vi.fn().mockRejectedValueOnce(busy).mockImplementation((signal: AbortSignal) =>
+            new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))));
+        const result = expect(prepareReadPreview('job-a', controller().signal, load, vi.fn())).rejects.toThrow('still busy');
+        await vi.advanceTimersByTimeAsync(30_000);
+        await result;
+        expect(load).toHaveBeenCalledTimes(2);
+    });
+
+    it('cancels a pending wait without fetching again', async () => {
+        const owner = controller();
+        const load = vi.fn().mockRejectedValue(busy);
+        const result = expect(prepareReadPreview('job-a', owner.signal, load, vi.fn())).rejects.toMatchObject({ name: 'AbortError' });
+        await vi.advanceTimersByTimeAsync(500);
+        owner.abort();
+        await vi.advanceTimersByTimeAsync(60_000);
+        await result;
+        expect(load).toHaveBeenCalledTimes(1);
     });
 });

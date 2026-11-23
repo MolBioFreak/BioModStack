@@ -47,6 +47,8 @@ import {
     fetchAlignmentRead,
     fetchAlignmentSessions,
     fetchAlignmentPresentation,
+    prepareReadPreview,
+    ReadPreviewBusyError,
     isAlignmentAccessDenied,
     rotateAlignmentAccess,
     type AlignmentRead,
@@ -2279,6 +2281,13 @@ export function NGSToolkit() {
     const [igvReadsTrackLoading, setIgvReadsTrackLoading] = useState(false);
     const [igvPresentation, setIgvPresentation] = useState<AlignmentPresentation | null>(null);
     const [igvLocusSlice, setIgvLocusSlice] = useState<AlignmentLocusSlice | null>(null);
+    const [previewBusy, setPreviewBusy] = useState(false);
+    const previewOwnerRef = useRef<AbortController | null>(null);
+    const cancelPreview = useCallback(() => {
+        previewOwnerRef.current?.abort();
+        previewOwnerRef.current = null;
+        setPreviewBusy(false);
+    }, []);
     const igvPresentationRequestedRef = useRef(false);
     const [igvLocusSliceLoading, setIgvLocusSliceLoading] = useState(false);
     const igvPresentationGenerationRef = useRef(0);
@@ -4161,6 +4170,8 @@ export function NGSToolkit() {
         barcodeSignalJobId,
     ]);
 
+    useEffect(() => cancelPreview, [cancelPreview, igvModalOpen, selectedJob?.id, selectedAlignmentSession?.session_id]);
+
     useEffect(() => {
         if (!igvModalOpen || igvLoading || !igvReady || igvAlignmentLoadDisposition.autoLoad
             || igvPresentation || igvLocusSlice || igvPresentationRequestedRef.current
@@ -4172,21 +4183,32 @@ export function NGSToolkit() {
         if (!alignment || !alignmentIndex) return;
         // A failed optional preview is not an automatic retry loop or a locus gate.
         igvPresentationRequestedRef.current = true;
-        void fetchAlignmentPresentation(selectedJob.id, sessionId, {
+        const owner = new AbortController();
+        previewOwnerRef.current?.abort();
+        previewOwnerRef.current = owner;
+        const isCurrent = () => !owner.signal.aborted && igvPresentationGenerationRef.current === generation
+            && selectedAlignmentSessionIdRef.current === sessionId;
+        const authority = {
             mode: selectedAlignmentSession.mode,
             packageManifestSha256: alignment.source_manifest_sha256,
             alignmentSha256: alignment.sha256,
             alignmentSizeBytes: alignment.size_bytes,
             alignmentIndexSha256: alignmentIndex.sha256,
             alignmentIndexSizeBytes: alignmentIndex.size_bytes,
-        }).then((receipt) => {
-            if (igvPresentationGenerationRef.current !== generation
-                || selectedAlignmentSessionIdRef.current !== sessionId) return;
-            setIgvPresentation(receipt);
+        };
+        void prepareReadPreview(selectedJob.id, owner.signal, (signal) => {
+            if (!isCurrent()) throw new DOMException('Preview superseded', 'AbortError');
+            return fetchAlignmentPresentation(selectedJob.id, sessionId, authority, signal);
+        }, () => { if (isCurrent()) setPreviewBusy(true); }).then((receipt) => {
+            if (isCurrent()) setIgvPresentation(receipt);
         }).catch((reason: unknown) => {
-            if (igvPresentationGenerationRef.current !== generation
-                || selectedAlignmentSessionIdRef.current !== sessionId) return;
-            setIgvError(describeNgsError(reason, 'Bounded alignment presentation is unavailable.').slice(0, 512));
+            if (isCurrent()) setIgvError(reason instanceof ReadPreviewBusyError ? reason.message
+                : describeNgsError(reason, 'Bounded alignment presentation is unavailable.').slice(0, 512));
+        }).finally(() => {
+            if (previewOwnerRef.current === owner) {
+                previewOwnerRef.current = null;
+                setPreviewBusy(false);
+            }
         });
     }, [igvAlignmentLoadDisposition.autoLoad, igvLoading, igvModalOpen, igvPresentation, igvLocusSlice, igvReady, selectedAlignmentSession, selectedJob]);
 
@@ -4297,6 +4319,7 @@ export function NGSToolkit() {
         const operationGeneration = ++igvTrackOperationGenerationRef.current;
         igvTrackOperationActiveRef.current = true;
         // A direct request supersedes any optional preview still being prepared.
+        cancelPreview();
         igvPresentationGenerationRef.current += 1;
         igvPresentationRequestedRef.current = true;
         const isCurrent = () => igvLocusSliceGenerationRef.current === generation
@@ -5785,6 +5808,7 @@ export function NGSToolkit() {
                                 ×
                             </button>
                         </div>
+                        {previewBusy && <div role="status" className="px-3 py-1 text-xs">Preparing read preview…</div>}
                         {browserAlignmentTrack && (
                             <AlignmentPresentationStatus status={{
                                 kind: browserAlignmentTrack.kind,
