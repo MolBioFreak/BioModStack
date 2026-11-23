@@ -137,6 +137,10 @@ class AlignmentSessionError(ValueError):
     """Raised when a requested session or artifact is unsafe or unavailable."""
 
 
+class AlignmentPresentationBusy(AlignmentSessionError):
+    """Another request holds a presentation generation lock."""
+
+
 class _AlignmentDerivativeByteLimit(AlignmentSessionError):
     """Raised when the kernel-enforced derivative file limit is reached."""
 
@@ -3072,7 +3076,7 @@ def _alignment_presentation_generation_slot() -> Iterator[None]:
         try:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise AlignmentSessionError("alignment presentation concurrency limit exceeded") from exc
+            raise AlignmentPresentationBusy("alignment presentation concurrency limit exceeded") from exc
         try:
             yield
         finally:
@@ -3090,7 +3094,7 @@ def _load_trusted_presentation(
         try:
             fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise AlignmentSessionError("alignment presentation generation is already in progress") from exc
+            raise AlignmentPresentationBusy("alignment presentation generation is already in progress") from exc
         with open_presentation_authority_root(destination, create=False) as pinned_destination:
             cached = _load_derived_package(
                 pinned_destination, expected_authority_sha256=cache_key,
@@ -3170,7 +3174,7 @@ def build_alignment_presentation(
         try:
             fcntl.flock(producer_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise AlignmentSessionError("alignment presentation generation is already in progress") from exc
+            raise AlignmentPresentationBusy("alignment presentation generation is already in progress") from exc
         namespace_fd = int(namespace_parts[4])
         protected_names = _presentation_names_for_manifest(namespace, expected_manifest_sha256)
         _cleanup_presentation_namespace(

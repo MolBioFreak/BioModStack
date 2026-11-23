@@ -35,7 +35,8 @@
           "code": {
             "enum": [
               "NGS_CAPABILITY_DENIED",
-              "NGS_CAPABILITY_ROTATION_CONFLICT"
+              "NGS_CAPABILITY_ROTATION_CONFLICT",
+              "NGS_PRESENTATION_BUSY"
             ]
           }
         },
@@ -70,7 +71,8 @@
         "NGS_ARTIFACT_INTEGRITY_CONFLICT",
         "NGS_READ_SCAN_TRUNCATED",
         "NGS_RANGE_INVALID",
-        "NGS_RANGE_UNSATISFIABLE"
+        "NGS_RANGE_UNSATISFIABLE",
+        "NGS_PRESENTATION_BUSY"
       ]
     },
     "job_id": {
@@ -117,6 +119,7 @@
     "NGS_CAPABILITY_ROTATION_CONFLICT": 409,
     "NGS_HIERARCHY_DENIED": 403,
     "NGS_PACKAGE_INTEGRITY_CONFLICT": 409,
+    "NGS_PRESENTATION_BUSY": 503,
     "NGS_PRINCIPAL_DENIED": 403,
     "NGS_RANGE_INVALID": 400,
     "NGS_RANGE_UNSATISFIABLE": 416,

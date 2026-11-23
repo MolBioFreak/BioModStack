@@ -57,12 +57,15 @@ from services.sequence_qc_manifest import (
 router = APIRouter()
 
 
+_RETRYABLE_NGS_CODES = ("NGS_CAPABILITY_DENIED", "NGS_CAPABILITY_ROTATION_CONFLICT", "NGS_PRESENTATION_BUSY")
+
+
 class OntNgsErrorV1(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
         json_schema_extra={
             "allOf": [{
-                "if": {"properties": {"code": {"enum": ["NGS_CAPABILITY_DENIED", "NGS_CAPABILITY_ROTATION_CONFLICT"]}}, "required": ["code"]},
+                "if": {"properties": {"code": {"enum": list(_RETRYABLE_NGS_CODES)}}, "required": ["code"]},
                 "then": {"properties": {"retryable": {"const": True}}, "required": ["retryable"]},
                 "else": {"properties": {"retryable": {"const": False}}, "required": ["retryable"]},
             }],
@@ -75,6 +78,7 @@ class OntNgsErrorV1(BaseModel):
         "NGS_PACKAGE_INTEGRITY_CONFLICT", "NGS_CAPABILITY_ROTATION_CONFLICT",
         "NGS_ROTATION_INELIGIBLE", "NGS_ARTIFACT_INTEGRITY_CONFLICT",
         "NGS_READ_SCAN_TRUNCATED", "NGS_RANGE_INVALID", "NGS_RANGE_UNSATISFIABLE",
+        "NGS_PRESENTATION_BUSY",
     ]
     message: str = Field(min_length=1, max_length=512)
     job_id: str = Field(json_schema_extra={"format": "uuid"})
@@ -83,7 +87,7 @@ class OntNgsErrorV1(BaseModel):
 
     @model_validator(mode="after")
     def _retryable_matches_code(self):
-        expected = self.code in {"NGS_CAPABILITY_DENIED", "NGS_CAPABILITY_ROTATION_CONFLICT"}
+        expected = self.code in _RETRYABLE_NGS_CODES
         if self.retryable is not expected:
             raise ValueError("retryable disagrees with governed NGS error code")
         return self
@@ -431,6 +435,8 @@ _BINARY_RESPONSES: dict[int | str, dict[str, Any]] = {
     },
 }
 
+_PRESENTATION_BINARY_RESPONSES = {**_BINARY_RESPONSES, **_typed_errors(503)}
+
 _GOVERNED_OPENAPI_SUFFIXES = (
     "/alignment-access/rotate",
     "/alignment-access",
@@ -514,7 +520,7 @@ def _ngs_error_response(
             "message": message,
             "job_id": job_id,
             "resource": resource,
-            "retryable": code in {"NGS_CAPABILITY_DENIED", "NGS_CAPABILITY_ROTATION_CONFLICT"},
+            "retryable": code in _RETRYABLE_NGS_CODES,
         },
         headers=headers,
     )
@@ -659,6 +665,12 @@ def _http_error(
     job_id: str,
     resource: str,
 ) -> OntNgsRouteError:
+    if isinstance(exc, service.AlignmentPresentationBusy):
+        return OntNgsRouteError(
+            status_code=503, code="NGS_PRESENTATION_BUSY",
+            message="Read preview preparation is busy. Try again shortly.",
+            job_id=job_id, resource=resource,
+        )
     message = str(exc).lower()
     if "not found" in message:
         return OntNgsRouteError(
@@ -1773,7 +1785,7 @@ def _require_current_locus_authority(receipt: dict[str, Any], presentation: dict
 
 
 @router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation",
-            response_model=OntAlignmentPresentationV1, responses=_STANDARD_GOVERNED_ERRORS)
+            response_model=OntAlignmentPresentationV1, responses=_typed_errors(403, 404, 409, 503))
 async def get_alignment_presentation(job_id: str, session_id: str, authorized_job: Job = Depends(require_alignment_job)):
     try:
         async with _prepared_presentation(job_id, session_id, authorized_job) as (package, _pinned_result_root):
@@ -1782,10 +1794,10 @@ async def get_alignment_presentation(job_id: str, session_id: str, authorized_jo
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 
 
-@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{kind}", responses=_BINARY_RESPONSES)
-@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{kind}", responses=_BINARY_RESPONSES)
-@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{presentation_id}/{kind}", responses=_BINARY_RESPONSES)
-@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{presentation_id}/{kind}", responses=_BINARY_RESPONSES)
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{kind}", responses=_PRESENTATION_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{kind}", responses=_PRESENTATION_BINARY_RESPONSES)
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{presentation_id}/{kind}", responses=_PRESENTATION_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{presentation_id}/{kind}", responses=_PRESENTATION_BINARY_RESPONSES)
 async def get_alignment_presentation_artifact(job_id: str, session_id: str, kind: str, request: Request,
                                                authorized_job: Job = Depends(require_alignment_job),
                                                presentation_id: str | None = None):
@@ -1806,7 +1818,7 @@ async def get_alignment_presentation_artifact(job_id: str, session_id: str, kind
 
 
 @router.post("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices",
-             response_model=OntAlignmentLocusSliceV1, responses=_typed_errors(400, 403, 404, 409))
+             response_model=OntAlignmentLocusSliceV1, responses=_typed_errors(400, 403, 404, 409, 503))
 async def create_alignment_locus_slice(job_id: str, session_id: str, body: OntAlignmentLocusSliceRequestV1,
                                        authorized_job: Job = Depends(require_alignment_job)):
     if (not service.SAFE_CONTIG_RE.fullmatch(body.contig) or body.start_1based < 1
@@ -1850,8 +1862,8 @@ async def create_alignment_locus_slice(job_id: str, session_id: str, body: OntAl
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 
 
-@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{artifact_sha256}/{kind}", responses=_BINARY_RESPONSES)
-@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{artifact_sha256}/{kind}", responses=_BINARY_RESPONSES)
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{artifact_sha256}/{kind}", responses=_PRESENTATION_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{artifact_sha256}/{kind}", responses=_PRESENTATION_BINARY_RESPONSES)
 async def get_alignment_locus_slice_artifact(job_id: str, session_id: str, slice_id: str,
                                               artifact_sha256: str, kind: str,
                                               request: Request, authorized_job: Job = Depends(require_alignment_job)):
@@ -1874,8 +1886,8 @@ async def get_alignment_locus_slice_artifact(job_id: str, session_id: str, slice
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 
 
-@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/preview/{kind}", responses=_BINARY_RESPONSES)
-@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/preview/{kind}", responses=_BINARY_RESPONSES)
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/preview/{kind}", responses=_PRESENTATION_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/preview/{kind}", responses=_PRESENTATION_BINARY_RESPONSES)
 async def get_alignment_preview(
     job_id: str,
     session_id: str,
@@ -1903,7 +1915,7 @@ async def get_alignment_preview(
 @router.get(
     "/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/reads",
     response_model=OntSortableReadPageV1,
-    responses=_READ_ERRORS,
+    responses=_typed_errors(400, 403, 404, 409, 503),
 )
 async def list_sortable_alignment_reads(
     job_id: str,

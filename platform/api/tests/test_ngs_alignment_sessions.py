@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
+import fcntl
 import hashlib
 import io
 import json
@@ -254,8 +255,8 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         ("/api/jobs/{job_id}/alignment-access", "delete"): {"200", "403", "404", "409"},
         ("/api/jobs/{job_id}/reads", "get"): {"200", "400", "403", "404", "409"},
         ("/api/jobs/{job_id}/reads/{read_id}", "get"): {"200", "400", "403", "404", "409"},
-        ("/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation", "get"): {"200", "403", "404", "409"},
-        ("/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices", "post"): {"200", "400", "403", "404", "409"},
+        ("/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation", "get"): {"200", "403", "404", "409", "503"},
+        ("/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices", "post"): {"200", "400", "403", "404", "409", "503"},
     }
     binary_statuses = {"200", "206", "304", "400", "403", "404", "409", "416"}
     for path in (
@@ -266,8 +267,9 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         "/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{kind}",
         "/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{artifact_sha256}/{kind}",
     ):
-        exact_statuses[(path, "get")] = binary_statuses
-        exact_statuses[(path, "head")] = binary_statuses
+        statuses = binary_statuses | {"503"} if "/alignment-sessions/" in path else binary_statuses
+        exact_statuses[(path, "get")] = statuses
+        exact_statuses[(path, "head")] = statuses
 
     for (path, method), statuses in exact_statuses.items():
         responses = document["paths"][path][method]["responses"]
@@ -275,7 +277,7 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         for status in statuses - {"200", "206", "304"}:
             schema = responses[status]["content"]["application/json"]["schema"]
             assert schema["$ref"] == "#/components/schemas/OntNgsErrorV1"
-        if statuses == binary_statuses:
+        if "206" in statuses:
             assert responses["206"]["headers"]["Content-Range"]["schema"] == {"type": "string"}
             assert responses["416"]["headers"]["Content-Range"]["schema"] == {"type": "string"}
 
@@ -4049,12 +4051,13 @@ def test_warm_presentation_reads_do_not_compete_for_generation_slot(tmp_path, mo
             running.result(timeout=5)
 
 
-def test_presentation_receipt_admits_concurrent_http_ranges_without_regeneration(tmp_path, monkeypatch):
+@pytest.fixture
+def presentation_http_app(tmp_path, monkeypatch):
     from services import ngs_alignment_sessions as service
     source = tmp_path / "source.bam"
     index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
     monkeypatch.setattr(service, "get_analysis_cache_dir", lambda: tmp_path / "analysis-cache")
-    job_id, session_id = "job-http-race", "6" * 24
+    job_id, session_id = "00000000-0000-4000-8000-000000000001", "6" * 24
     job = SimpleNamespace(id=job_id)
     @asynccontextmanager
     async def pinned_root(_job):
@@ -4074,6 +4077,40 @@ def test_presentation_receipt_admits_concurrent_http_ranges_without_regeneration
     app = _ngs_app()
     app.include_router(ngs_routes.router, prefix="/api")
     app.dependency_overrides[ngs_routes.require_alignment_job] = lambda: job
+    return app, job_id, session_id
+
+
+@pytest.mark.parametrize("lock", ["global", "cold-session", "warm-session"])
+def test_presentation_lock_contention_is_retryable(presentation_http_app, tmp_path, lock):
+    from services import ngs_alignment_sessions as service
+
+    app, job_id, session_id = presentation_http_app
+    url = f"/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation"
+    with TestClient(app) as client:
+        if lock == "warm-session":
+            assert client.get(url).status_code == 200
+        if lock == "global":
+            held = service._alignment_presentation_generation_slot()
+        else:
+            namespace = tmp_path / ".alignment-presentations" / job_id / session_id
+            namespace.mkdir(parents=True, exist_ok=True)
+            held = (namespace / ".generation.lock").open("a+b")
+        with held as handle:
+            if lock != "global":
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            response = client.get(url)
+        assert response.status_code == 503, response.text
+        error = ngs_routes.OntNgsErrorV1.model_validate(response.json())
+        assert (error.code, error.retryable, error.job_id, error.resource) == (
+            "NGS_PRESENTATION_BUSY", True, job_id, "artifact",
+        )
+        assert client.get(url).status_code == 200
+
+
+def test_presentation_receipt_admits_concurrent_http_ranges_without_regeneration(tmp_path, presentation_http_app):
+    from services import ngs_alignment_sessions as service
+
+    app, job_id, session_id = presentation_http_app
     with TestClient(app) as client:
         first = client.get(f"/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation")
         assert first.status_code == 200, first.text
@@ -4108,3 +4145,4 @@ def test_presentation_receipt_admits_concurrent_http_ranges_without_regeneration
         denied = client.get(descriptors[0]["url"], headers={"Range": "bytes=0-15"})
         assert denied.status_code == 409
         assert denied.json()["code"] == "NGS_AUTHORITY_CONFLICT"
+        assert denied.json()["retryable"] is False
