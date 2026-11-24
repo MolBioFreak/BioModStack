@@ -74,7 +74,7 @@ class StandaloneUvBootstrapTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_uv_version_and_checksums_pinned(self):
-        self.assertEqual(p.UV_VERSION, "0.13.9")
+        self.assertEqual(p.UV_VERSION, "0.13.10")
         expected_targets = {
             "x86_64-unknown-linux-gnu",
             "aarch64-unknown-linux-gnu",
@@ -95,7 +95,7 @@ class StandaloneUvBootstrapTests(unittest.TestCase):
                 self.assertEqual(asset["sha256"], p.UV_RELEASE_SHA256[target])
                 self.assertEqual(
                     asset["url"],
-                    f"https://github.com/astral-sh/uv/releases/download/0.13.9/uv-{target}.tar.gz",
+                    f"https://github.com/astral-sh/uv/releases/download/0.13.10/uv-{target}.tar.gz",
                 )
         with self.assertRaises(p.PrerequisiteError) as ctx:
             p.uv_release_asset(system="Darwin", machine="arm64")
@@ -105,12 +105,12 @@ class StandaloneUvBootstrapTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "uv_platform_unsupported")
 
     def test_uv_version_matches_accepts_standalone_and_short_formats(self):
-        self.assertTrue(p.uv_version_matches("uv 0.13.9\n", "0.13.9"))
-        self.assertTrue(p.uv_version_matches("uv 0.13.9 (x86_64-unknown-linux-gnu)\n", "0.13.9"))
-        self.assertTrue(p.uv_version_matches("uv 0.13.9 (873e1ab1f 2026-11-20)\n", "0.13.9"))
-        self.assertFalse(p.uv_version_matches("uv 0.13.90 (x86_64-unknown-linux-gnu)\n", "0.13.9"))
-        self.assertFalse(p.uv_version_matches("uv 0.8.22\n", "0.13.9"))
-        self.assertFalse(p.uv_version_matches("", "0.13.9"))
+        self.assertTrue(p.uv_version_matches("uv 0.13.10\n", "0.13.10"))
+        self.assertTrue(p.uv_version_matches("uv 0.13.10 (x86_64-unknown-linux-gnu)\n", "0.13.10"))
+        self.assertTrue(p.uv_version_matches("uv 0.13.10 (873e1ab1f 2026-11-20)\n", "0.13.10"))
+        self.assertFalse(p.uv_version_matches("uv 0.13.100 (x86_64-unknown-linux-gnu)\n", "0.13.10"))
+        self.assertFalse(p.uv_version_matches("uv 0.8.22\n", "0.13.10"))
+        self.assertFalse(p.uv_version_matches("", "0.13.10"))
 
     def test_install_pinned_uv_verifies_sha256_extracts_and_reuses(self):
         target = p.uv_release_asset()["target"]
@@ -168,7 +168,7 @@ class StandaloneUvBootstrapTests(unittest.TestCase):
         plan = p.prerequisite_report("python-plan", project_root=self.source)
         self.assertEqual(plan["status"], "planned")
         self.assertEqual(plan["steps"][0]["step"], "pinned-uv")
-        self.assertEqual(plan["steps"][0]["version"], "0.13.9")
+        self.assertEqual(plan["steps"][0]["version"], "0.13.10")
         self.assertEqual(plan["steps"][0]["method"], "standalone-tarball-sha256")
         self.assertEqual(plan["steps"][0]["sha256"], p.UV_RELEASE_SHA256[plan["steps"][0]["target"]])
 
@@ -265,7 +265,7 @@ class StandaloneUvBootstrapTests(unittest.TestCase):
 class RunKvmUvMigrationTests(unittest.TestCase):
     def test_seed_container_uses_pinned_uv_and_no_pip(self):
         kvm = _load_run_kvm()
-        self.assertEqual(kvm.UV_VERSION, "0.13.9")
+        self.assertEqual(kvm.UV_VERSION, "0.13.10")
         self.assertEqual(kvm.SEED_PYCDLIB, "pycdlib==1.22.0")
         with tempfile.TemporaryDirectory() as td:
             run = Path(td)
@@ -290,13 +290,13 @@ class RunKvmUvMigrationTests(unittest.TestCase):
             with patch.object(
                 kvm,
                 "install_pinned_uv",
-                return_value={"uv": str(run / "seed-uv/bin/uv"), "version": "0.13.9"},
+                return_value={"uv": str(run / "seed-uv/bin/uv"), "version": "0.13.10"},
             ) as mock_inst:
                 info = kvm.bootstrap_seed_uv(run)
             mock_inst.assert_called_once_with(
                 run / "seed-uv", log_path=run / "seed-uv.log", timeout=180, libc="musl"
             )
-            self.assertEqual(info["version"], "0.13.9")
+            self.assertEqual(info["version"], "0.13.10")
 
 
 if __name__ == "__main__":

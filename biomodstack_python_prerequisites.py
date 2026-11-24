@@ -21,13 +21,13 @@ import tempfile
 import urllib.error
 import urllib.request
 
-UV_VERSION = "0.13.9"
+UV_VERSION = "0.13.10"
 UV_RELEASE_BASE = f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}"
 UV_RELEASE_SHA256 = {
-    "x86_64-unknown-linux-gnu": "a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5",
-    "aarch64-unknown-linux-gnu": "0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d",
-    "x86_64-unknown-linux-musl": "58ccf5f1792b8a5a88d01bc910ea131a8b3db4a319a17ad5fad75e0845a3e271",
-    "aarch64-unknown-linux-musl": "37fbb7c5bc66cf99c12aa881949d216181e201dec449772c4329e56487d61179",
+    "x86_64-unknown-linux-gnu": "bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c",
+    "aarch64-unknown-linux-gnu": "14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2",
+    "x86_64-unknown-linux-musl": "5597970380083a340b7983af05a84824b4db1c62b7059c796935b7fd6dc95fd2",
+    "aarch64-unknown-linux-musl": "68174084fe40b6300361c5b2038066120dc62c92920c22a0f31f6fc74b066b57",
 }
 UV_ARCHIVE_MAX_BYTES = 80 * 1024 * 1024
 SCHEMA = "bms.python-prerequisites.v1"

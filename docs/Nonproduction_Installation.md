@@ -77,7 +77,7 @@ are not scientific readiness or service activation.
 
 ## Python dependency authority
 
-`python-bootstrap` explicitly downloads pinned standalone uv **0.13.9** (verified
+`python-bootstrap` explicitly downloads pinned standalone uv **0.13.10** (verified
 by archive SHA-256) into an owned external root, then consumes the repository's
 `platform/api/uv.lock` using `--frozen
 --no-dev --no-install-project`. Source builds are forbidden except for the exact
