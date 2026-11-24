@@ -70,12 +70,14 @@ export function resolveConfiguredTailnetOrigin(apiBaseUrl?: string): string | nu
   }
 }
 
-export function resolveStatsToolkitEntryUrl(entryUrl: string, hostname: string, apiBaseUrl?: string): string {
+export function resolveStatsToolkitEntryUrl(entryUrl: string, hostname: string, apiBaseUrl?: string, runId?: string | null): string {
   // Downloaded Cordova UI lives at localhost; its API owner is still remote.
   const configuredOrigin = resolveConfiguredTailnetOrigin(apiBaseUrl);
-  if (configuredOrigin) return new URL(TAILNET_STATS_ENTRY, configuredOrigin).href;
-  if (isTailnetHostname(hostname)) {
-    return TAILNET_STATS_ENTRY;
-  }
-  return entryUrl.startsWith('/') ? LOCAL_STATS_ENTRY : entryUrl;
+  const entry = configuredOrigin ? new URL(TAILNET_STATS_ENTRY, configuredOrigin).href
+    : isTailnetHostname(hostname) ? TAILNET_STATS_ENTRY
+    : entryUrl.startsWith('/') ? LOCAL_STATS_ENTRY : entryUrl;
+  if (!runId) return entry;
+  const url = new URL(entry, 'http://localhost');
+  url.searchParams.set('run_id', runId);
+  return entry.startsWith('/') ? `${url.pathname}${url.search}${url.hash}` : url.href;
 }

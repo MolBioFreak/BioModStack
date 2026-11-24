@@ -70,3 +70,9 @@ test('notes folder links are independent of record-selection buttons', () => {
     assert.equal(doc.querySelector('a')?.closest('button'), null);
     assert.ok(doc.querySelector('button')?.textContent?.includes('Note'));
 });
+
+test('a named Stats run opens its original ID; arbitrary Stats URLs stay text', () => {
+    const doc = narrative('[Compare batches](/stats?run_id=run_123) [other](/stats?target=remote)');
+    const links = Array.from(doc.querySelectorAll('a'), a => [a.textContent, a.getAttribute('href')]);
+    assert.deepEqual(links, [['Compare batches', '/stats?run_id=run_123']]);
+});

@@ -54,3 +54,13 @@ test('Tailnet status treats absent local control surfaces as unavailable', async
   const fetcher = async () => new Response('', { status: 404 });
   assert.equal(await readTailnetEnvironmentStatus(fetcher as typeof fetch), null);
 });
+
+test('a saved run follows the resolved Stats origin on desktop, Tailnet and mobile', () => {
+  for (const [host, api, expected] of [
+    ['localhost', undefined, 'http://127.0.0.1:18180/stats/'],
+    ['host.example.ts.net', undefined, '/stats/embed/'],
+    ['localhost', 'https://host.example.ts.net', 'https://host.example.ts.net/stats/embed/'],
+  ]) {
+    assert.equal(resolveStatsToolkitEntryUrl('/stats/embed/', host!, api, 'run_123'), `${expected}?run_id=run_123`);
+  }
+});

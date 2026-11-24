@@ -4,16 +4,17 @@ import { projectNavigationHref } from '../../lib/projectManager';
 
 // Project notes remain plain text, with optional named links to existing BMS
 // records. Do not interpret HTML, remote URLs, or executable URL schemes.
+const namedLink = /\[([^\]\n]+)\]\((\/(?:(?:projects|designs|jobs)\/[^\s()]+|stats\?run_id=[A-Za-z0-9][A-Za-z0-9._-]{0,159}))\)/g;
+
 export function hasProjectNarrativeLinks(text: string): boolean {
-    return /\[[^\]\n]+\]\(\/(?:projects|designs|jobs)\/[^\s()]+\)/.test(text);
+    return text.search(namedLink) !== -1;
 }
 
 export function ProjectNarrative({ text }: { text: string }) {
     const location = useLocation();
     const parts: ReactNode[] = [];
-    const links = /\[([^\]\n]+)\]\((\/(?:projects|designs|jobs)\/[^\s()]+)\)/g;
     let offset = 0;
-    for (const match of text.matchAll(links)) {
+    for (const match of text.matchAll(namedLink)) {
         const href = match[2];
         if (/[\\\u0000-\u001f\u007f]/.test(href) || /%(?:0[0-9a-f]|1[0-9a-f]|7f|5c)/i.test(href)) continue;
         parts.push(text.slice(offset, match.index));

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { resolveStatsToolkitEntryUrl } from '../runtime/tailnetEnvironment';
 import { useTheme } from './themeContext';
@@ -24,6 +25,8 @@ async function fetchStatsToolkitStatus(): Promise<StatsToolkitStatus> {
 
 export function StatsToolkitLauncher() {
   const { theme } = useTheme();
+  const [search] = useSearchParams();
+  const runId = search.get('run_id');
   const frameRef = useRef<HTMLIFrameElement>(null);
   const query = useQuery({
     queryKey: ['stats-toolkit-status'],
@@ -36,8 +39,8 @@ export function StatsToolkitLauncher() {
   const status = query.data;
   const apiBaseUrl = window.__BMS_API_BASE_URL__;
   const entryUrl = useMemo(
-    () => status?.entry_url ? resolveStatsToolkitEntryUrl(status.entry_url, window.location.hostname, apiBaseUrl) : null,
-    [status?.entry_url, apiBaseUrl],
+    () => status?.entry_url ? resolveStatsToolkitEntryUrl(status.entry_url, window.location.hostname, apiBaseUrl, runId) : null,
+    [status?.entry_url, apiBaseUrl, runId],
   );
   const sendTheme = useCallback(() => {
     const frameWindow = frameRef.current?.contentWindow;
