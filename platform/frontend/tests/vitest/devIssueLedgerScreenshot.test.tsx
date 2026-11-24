@@ -30,8 +30,8 @@ beforeEach(() => {
     vi.stubGlobal('cancelAnimationFrame', clearTimeout);
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); document.documentElement.classList.remove('bms-cordova-compact'); vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); localStorage.removeItem('show_dev_features'); });
-async function mountStats() {
-    await act(async () => root.render(<QueryClientProvider client={client}><ThemeContext.Provider value={{ theme: 'midnight', setTheme: () => {}, themeConfig: THEMES[0] }}><StatsToolkitLauncher /></ThemeContext.Provider></QueryClientProvider>));
+async function mountStats(initialEntries: string[] = ['/stats']) {
+    await act(async () => root.render(<MemoryRouter initialEntries={initialEntries}><QueryClientProvider client={client}><ThemeContext.Provider value={{ theme: 'midnight', setTheme: () => {}, themeConfig: THEMES[0] }}><StatsToolkitLauncher /></ThemeContext.Provider></QueryClientProvider></MemoryRouter>));
     await flush();
 }
 it.each([null, false])('opens workspace without a readiness gate (%s), with no recurring browsing reads', async (ready) => {
@@ -52,6 +52,10 @@ it('packaged Stats uses the configured server origin and keeps exact theme-origi
     await act(async () => frame.dispatchEvent(new Event('load'))); await flush();
     expect(post).toHaveBeenCalledWith(expect.any(Object), 'https://node.example.ts.net');
     expect(requests.mock.calls.map(([url]) => url)).toEqual(['/api/system/stats-toolkit']);
+});
+it('forwards a linked run_id query parameter to the Stats iframe', async () => {
+    await mountStats(['/stats?run_id=run_123']);
+    expect(container.querySelector('iframe')?.getAttribute('src')).toBe('http://127.0.0.1:18180/stats/?run_id=run_123');
 });
 
 it.each([
