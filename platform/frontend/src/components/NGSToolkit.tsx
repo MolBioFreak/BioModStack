@@ -47,8 +47,6 @@ import {
     fetchAlignmentRead,
     fetchAlignmentSessions,
     fetchAlignmentPresentation,
-    prepareReadPreview,
-    ReadPreviewBusyError,
     isAlignmentAccessDenied,
     rotateAlignmentAccess,
     type AlignmentRead,
@@ -4196,14 +4194,11 @@ export function NGSToolkit() {
             alignmentIndexSha256: alignmentIndex.sha256,
             alignmentIndexSizeBytes: alignmentIndex.size_bytes,
         };
-        void prepareReadPreview(selectedJob.id, owner.signal, (signal) => {
-            if (!isCurrent()) throw new DOMException('Preview superseded', 'AbortError');
-            return fetchAlignmentPresentation(selectedJob.id, sessionId, authority, signal);
-        }, () => { if (isCurrent()) setPreviewBusy(true); }).then((receipt) => {
+        setPreviewBusy(true);
+        void fetchAlignmentPresentation(selectedJob.id, sessionId, authority, owner.signal).then((receipt) => {
             if (isCurrent()) setIgvPresentation(receipt);
         }).catch((reason: unknown) => {
-            if (isCurrent()) setIgvError(reason instanceof ReadPreviewBusyError ? reason.message
-                : describeNgsError(reason, 'Bounded alignment presentation is unavailable.').slice(0, 512));
+            if (isCurrent()) setIgvError(describeNgsError(reason, 'Bounded alignment presentation is unavailable.').slice(0, 512));
         }).finally(() => {
             if (previewOwnerRef.current === owner) {
                 previewOwnerRef.current = null;

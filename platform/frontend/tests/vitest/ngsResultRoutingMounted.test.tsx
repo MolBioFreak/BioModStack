@@ -1,4 +1,3 @@
-import { prepareReadPreview } from '../../src/lib/ngsAlignmentSession';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseOntFastqQcResult } from '../../src/lib/ontFastqQcResult';
@@ -340,7 +339,7 @@ describe('NGS authoritative stage presentation', () => {
 
 describe('preview-independent mounted locus loading', () => {
 
-    it.each(['rejected', 'pending', 'pending across a stale IGV timeout'] as const)('loads a detailed locus when the oversized BAM preview is %s', async (previewState) => {
+    it.each(['rejected', 'server busy', 'pending', 'pending across a stale IGV timeout'] as const)('loads a detailed locus when the oversized BAM preview is %s', async (previewState) => {
         Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
         const hash = 'a'.repeat(64);
         const artifact = (role: string, size = 1024) => ({
@@ -374,7 +373,9 @@ describe('preview-independent mounted locus loading', () => {
         let resolvePreview!: (value: unknown) => void;
         const preview = new Promise((resolve) => { resolvePreview = resolve; });
         alignmentMocks.fetchAlignmentPresentation.mockImplementation(() => previewState === 'rejected'
-            ? Promise.reject(new Error('preview unavailable')) : preview);
+            ? Promise.reject(new Error('preview unavailable')) : previewState === 'server busy'
+                ? Promise.reject({ response: { status: 503, data: { schema: 'bms.ngs.error.v1', code: 'NGS_PRESENTATION_BUSY',
+                    job_id: 'job-123', resource: 'artifact', retryable: true, message: 'Producer busy.' } } }) : preview);
         let resolveSlice!: (value: unknown) => void;
         alignmentMocks.createAlignmentLocusSlice.mockImplementation(() => new Promise((resolve) => { resolveSlice = resolve; }));
         type Track = { type?: string; name?: string; url?: string; id?: string };
@@ -391,8 +392,8 @@ describe('preview-independent mounted locus loading', () => {
         const staleTimeout = previewState === 'pending across a stale IGV timeout';
         const staleBrowser = { on: vi.fn() };
         let finishStaleCreation!: (value: typeof staleBrowser) => void;
+        if (staleTimeout || previewState === 'server busy') vi.useFakeTimers();
         if (staleTimeout) {
-            vi.useFakeTimers();
             igvMocks.removeBrowser.mockClear();
             igvMocks.createBrowser.mockImplementationOnce(() => new Promise(resolve => { finishStaleCreation = resolve; }));
         }
@@ -421,6 +422,11 @@ describe('preview-independent mounted locus loading', () => {
         await waitUntil(() => expect(alignmentMocks.fetchAlignmentPresentation).toHaveBeenCalled());
         for (let index = 0; index < 5; index += 1) await flush();
         expect(alignmentMocks.fetchAlignmentPresentation).toHaveBeenCalledTimes(1);
+        if (previewState === 'pending') expect(container.textContent).toContain('Preparing read preview');
+        if (previewState === 'server busy') {
+            await act(async () => { await vi.advanceTimersByTimeAsync(140_000); });
+            expect(alignmentMocks.fetchAlignmentPresentation).toHaveBeenCalledTimes(1);
+        }
         expect(browser.loadTrack).not.toHaveBeenCalled();
         await waitUntil(() => expect(button('Load locus reads')?.disabled).toBe(false));
         await act(async () => button('Load locus reads')!.click());
@@ -880,79 +886,5 @@ describe('bounded NGS jobs receiving owner', () => {
         } else {
             expect(ngsApiMocks.fetchFullJob).not.toHaveBeenCalled();
         }
-    });
-});
-
-describe('bounded read preview preparation', () => {
-    const busy = { response: { status: 503, data: { schema: 'bms.ngs.error.v1', code: 'NGS_PRESENTATION_BUSY',
-        job_id: 'job-a', resource: 'artifact', retryable: true, message: 'Producer busy.' } } };
-    const controller = () => new AbortController();
-    beforeEach(() => { vi.useFakeTimers(); });
-    afterEach(() => { vi.useRealTimers(); });
-
-    it('waits after a typed busy response and returns the next receipt', async () => {
-        const load = vi.fn().mockRejectedValueOnce(busy).mockResolvedValue('receipt');
-        const waiting = vi.fn();
-        const result = prepareReadPreview('job-a', controller().signal, load, waiting);
-        await vi.advanceTimersByTimeAsync(999);
-        expect(waiting).toHaveBeenCalledTimes(1);
-        expect(load).toHaveBeenCalledTimes(1);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(await result).toBe('receipt');
-        expect(load).toHaveBeenCalledTimes(2);
-    });
-
-    it.each([
-        { ...busy.response, status: 409 },
-        { ...busy.response, data: { ...busy.response.data, code: 'NGS_AUTHORITY_CONFLICT' } },
-        { ...busy.response, data: { ...busy.response.data, job_id: 'other' } },
-        { ...busy.response, data: { ...busy.response.data, resource: 'rotation' } },
-        { ...busy.response, data: { ...busy.response.data, retryable: false } },
-        { status: 503, data: { code: 'NGS_PRESENTATION_BUSY' } },
-    ])('passes through nonmatching errors immediately', async (response) => {
-        const error = { response };
-        const load = vi.fn().mockRejectedValue(error);
-        const waiting = vi.fn();
-        await expect(prepareReadPreview('job-a', controller().signal, load, waiting)).rejects.toBe(error);
-        expect(load).toHaveBeenCalledTimes(1);
-        expect(waiting).not.toHaveBeenCalled();
-    });
-
-    it('waits for a cold producer still busy after 45 seconds', async () => {
-        const start = Date.now();
-        const load = vi.fn(async () => { if (Date.now() - start < 45_000) throw busy; return 'ready'; });
-        const result = expect(prepareReadPreview('job-a', controller().signal, load, vi.fn())).resolves.toBe('ready');
-        await vi.advanceTimersByTimeAsync(55_000);
-        await result;
-    });
-
-    it('stops at the deadline when the producer stays busy', async () => {
-        const load = vi.fn().mockRejectedValue(busy);
-        const result = expect(prepareReadPreview('job-a', controller().signal, load, vi.fn())).rejects.toThrow('still busy');
-        await vi.advanceTimersByTimeAsync(135_000);
-        await result;
-        const attempts = load.mock.calls.length;
-        await vi.advanceTimersByTimeAsync(60_000);
-        expect(load).toHaveBeenCalledTimes(attempts);
-    });
-
-    it('aborts a retry in flight at the deadline', async () => {
-        const load = vi.fn().mockRejectedValueOnce(busy).mockImplementation((signal: AbortSignal) =>
-            new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))));
-        const result = expect(prepareReadPreview('job-a', controller().signal, load, vi.fn())).rejects.toThrow('still busy');
-        await vi.advanceTimersByTimeAsync(135_000);
-        await result;
-        expect(load).toHaveBeenCalledTimes(2);
-    });
-
-    it('cancels a pending wait without fetching again', async () => {
-        const owner = controller();
-        const load = vi.fn().mockRejectedValue(busy);
-        const result = expect(prepareReadPreview('job-a', owner.signal, load, vi.fn())).rejects.toMatchObject({ name: 'AbortError' });
-        await vi.advanceTimersByTimeAsync(500);
-        owner.abort();
-        await vi.advanceTimersByTimeAsync(60_000);
-        await result;
-        expect(load).toHaveBeenCalledTimes(1);
     });
 });

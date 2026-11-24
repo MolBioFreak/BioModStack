@@ -975,56 +975,6 @@ export async function fetchAlignmentSessions(jobId: string): Promise<AlignmentSe
     });
 }
 
-const previewRetryDelaysMs = [1000, 2000, 4000, 8000];
-// Cover the producer’s 120-second limit and one final poll.
-const previewRetryBudgetMs = 135_000;
-
-export class ReadPreviewBusyError extends Error {
-    constructor() {
-        super('Read preview is still busy. Load locus reads now, or reopen the viewer to try the preview again.');
-    }
-}
-
-function waitForPreviewRetry(ms: number, signal: AbortSignal): Promise<void> {
-    signal.throwIfAborted();
-    return new Promise((resolve, reject) => {
-        const cancel = () => { clearTimeout(timer); reject(signal.reason); };
-        const timer = setTimeout(() => { signal.removeEventListener('abort', cancel); resolve(); }, ms);
-        signal.addEventListener('abort', cancel, { once: true });
-    });
-}
-
-export async function prepareReadPreview<T>(jobId: string, owner: AbortSignal,
-    load: (signal: AbortSignal) => Promise<T>, onBusy: () => void): Promise<T> {
-    const deadline = new AbortController();
-    const signal = AbortSignal.any([owner, deadline.signal]);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let expiresAt = Infinity;
-    try {
-        for (let attempt = 0; ; attempt++) {
-            signal.throwIfAborted();
-            if (Date.now() >= expiresAt) throw new ReadPreviewBusyError();
-            try {
-                const result = await load(signal);
-                signal.throwIfAborted();
-                if (Date.now() >= expiresAt) throw new ReadPreviewBusyError();
-                return result;
-            } catch (reason) {
-                signal.throwIfAborted();
-                if (!isExactNgsError(reason, 503, 'NGS_PRESENTATION_BUSY', jobId, 'artifact')) throw reason;
-                if (attempt === 0) {
-                    expiresAt = Date.now() + previewRetryBudgetMs;
-                    onBusy();
-                    timer = setTimeout(() => deadline.abort(new ReadPreviewBusyError()), previewRetryBudgetMs);
-                }
-                await waitForPreviewRetry(previewRetryDelaysMs[Math.min(attempt, previewRetryDelaysMs.length - 1)], signal);
-            }
-        }
-    } finally {
-        clearTimeout(timer);
-    }
-}
-
 export async function fetchAlignmentPresentation(
     jobId: string,
     sessionId: string,
