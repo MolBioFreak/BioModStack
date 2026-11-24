@@ -145,11 +145,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
     test -x /usr/local/bin/create_report
     test "$(sha256sum /opt/bms/igv-reports/igv.min.js | awk '{print $1}')" = "0efd638a0997aa90791ce6c83a8b33912d4bc06aed5e28741fc74f32a20998d6"
     grep -F 'src="file:///opt/bms/igv-reports/igv.min.js"' /opt/bms/igv-reports/igv_variant_standalone.html
-    igv_metadata="$(uv pip show --python /opt/igv-reports/bin/python igv-reports)"
-    case "${igv_metadata}" in
-        *"Version: 1.17.0"*) ;;
-        *) echo "igv-reports 1.17.0 is missing" >&2; exit 1 ;;
-    esac
+    /opt/igv-reports/bin/python -B -c 'from importlib.metadata import version; assert version("igv-reports") == "1.17.0"'
     echo "Container build tests passed"
 
 %help

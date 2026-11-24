@@ -24,7 +24,7 @@
       },
       {
         "cache_file": "medaka-2.2.2.img",
-        "sha256": "3234e2c8447db8685b0b7927b84fee7b1c7b097bc3cd5ca9718c3cf9183a4a77",
+        "sha256": "736b6101c1e37fb1c1260b028bcb21896189d34c3992ea76c50d445775e7788e",
         "uri": "docker://ontresearch/medaka@sha256:6794e1b293ffa125b4a57a042cbc7f85db2584f34a44ffd415e7eb501684c430",
         "label": "medaka",
         "definition": "../../apptainer/medaka.def"

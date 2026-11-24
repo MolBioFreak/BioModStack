@@ -180,7 +180,7 @@ async def test_native_completed_output_reopens_without_optional_publication(stor
         child = tmp_path / 'analysis-child'
         code = ('from pathlib import Path; from scripts.bms_md.analysis import write_analysis_report; '
                 'import sys; path, ok = write_analysis_report(Path(sys.argv[1]), Path(sys.argv[2]), '
-                'runtime_sha256="3a74031e20dbd5012b7e532134f81816d596521dde47c4439fd1d6ae54fa5c68"); '
+                'runtime_sha256="f9ecfc7067744c2e11ab3d4546377bb62a3fcf6b76c8083bb2a550352d49e3b5"); '
                 'assert ok, path.read_text()')
         subprocess.run([python, '-c', code, str(root / 'replicas/replica_0/manifest.json'),
             str(child / 'md_analysis_replica_0.json')], check=True)

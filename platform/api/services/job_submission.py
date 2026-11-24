@@ -99,7 +99,7 @@ _MD_OUTPUT_SLUG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MD_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
-_MD_ANALYSIS_SIF_SHA256 = "3a74031e20dbd5012b7e532134f81816d596521dde47c4439fd1d6ae54fa5c68"
+_MD_ANALYSIS_SIF_SHA256 = "f9ecfc7067744c2e11ab3d4546377bb62a3fcf6b76c8083bb2a550352d49e3b5"
 
 
 _MD_TERMINAL_STATES = {"completed", "failed", "cancelled"}

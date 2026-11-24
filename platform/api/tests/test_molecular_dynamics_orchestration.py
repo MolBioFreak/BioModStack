@@ -151,7 +151,7 @@ async def test_analysis_child_is_validated_persisted_cpu_only_and_launched_witho
                 mode="analyze",
                 params={
                     "md_analysis_work_item": str(work_item),
-                    "md_analysis_sif_sha256": "3a74031e20dbd5012b7e532134f81816d596521dde47c4439fd1d6ae54fa5c68",
+                    "md_analysis_sif_sha256": "f9ecfc7067744c2e11ab3d4546377bb62a3fcf6b76c8083bb2a550352d49e3b5",
                 },
                 parent_job_id=parent_id,
                 batch_id=parent_id,
@@ -366,7 +366,7 @@ def test_analysis_spawn_retry_schedules_only_analysis_and_preserves_dynamics_has
         "aggregate_manifest": parent_root / "manifest.json",
         "api_url": "http://api.invalid",
         "work_item_dir": parent_root / "orchestration" / "analysis_work_items",
-        "runtime_sha256": "3a74031e20dbd5012b7e532134f81816d596521dde47c4439fd1d6ae54fa5c68",
+        "runtime_sha256": "f9ecfc7067744c2e11ab3d4546377bb62a3fcf6b76c8083bb2a550352d49e3b5",
     }
     first = spawn_module.spawn_analysis(**kwargs)
     second = spawn_module.spawn_analysis(**kwargs)
