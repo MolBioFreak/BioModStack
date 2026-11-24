@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import math
 import os
@@ -1705,8 +1706,25 @@ def _derived_descriptor(metadata: dict[str, Any], url: str) -> dict[str, Any]:
 
 
 
+async def _build_presentation(bam: Path, *, wait: bool, **authority):
+    while True:
+        try:
+            return await run_in_threadpool(service.build_alignment_presentation, bam, **authority)
+        except service.AlignmentPresentationPending as pending:
+            if not wait:
+                raise
+            # A cancelled GET must not cancel the producer or another viewer.
+            try:
+                await asyncio.shield(asyncio.wrap_future(pending.done))
+            except Exception:
+                if pending.same_authority:
+                    raise
+            # Reopen using our pinned authority and the producer-observed digest,
+            # never paths borrowed from the request which owned the producer.
+
+
 @asynccontextmanager
-async def _prepared_presentation(job_id: str, session_id: str, job: Job):
+async def _prepared_presentation(job_id: str, session_id: str, job: Job, *, wait: bool = False):
     async with _validated_pinned_result_root(job) as root:
         session = await run_in_threadpool(
             service.resolve_alignment_session, job_id, session_id,
@@ -1718,8 +1736,8 @@ async def _prepared_presentation(job_id: str, session_id: str, job: Job):
             service.resolve_session_alignment_bundle, job_id, session_id,
             **_job_authority(job), job_output_dir=root, pinned_root_descriptor=True,
         )
-        package = await run_in_threadpool(
-            service.build_alignment_presentation, bam,
+        package = await _build_presentation(
+            bam, wait=wait,
             bam_sha256=bam_metadata["sha256"], bam_size_bytes=bam_metadata["size_bytes"],
             index=index, index_sha256=index_metadata["sha256"], index_size_bytes=index_metadata["size_bytes"],
             source_manifest_sha256=bam_metadata["source_manifest_sha256"],
@@ -1786,9 +1804,16 @@ def _require_current_locus_authority(receipt: dict[str, Any], presentation: dict
 
 @router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation",
             response_model=OntAlignmentPresentationV1, responses=_typed_errors(403, 404, 409, 503))
-async def get_alignment_presentation(job_id: str, session_id: str, authorized_job: Job = Depends(require_alignment_job)):
+async def get_alignment_presentation(
+    job_id: str, session_id: str, authorized_job: Job = Depends(require_alignment_job),
+    db: AsyncSession = Depends(get_session), experiment_db: AsyncSession = Depends(get_experiment_session),
+):
+    # Admission is complete. Detach the loaded Job and return read connections
+    # before the potentially long generation/wait (no later ORM lookups here).
+    await db.close()
+    await experiment_db.close()
     try:
-        async with _prepared_presentation(job_id, session_id, authorized_job) as (package, _pinned_result_root):
+        async with _prepared_presentation(job_id, session_id, authorized_job, wait=True) as (package, _pinned_result_root):
             return _presentation_response(job_id, session_id, package)
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc

@@ -24,6 +24,7 @@ import threading
 import time
 from dataclasses import dataclass
 from collections import OrderedDict
+from concurrent.futures import Future
 from contextlib import contextmanager
 from functools import cmp_to_key, lru_cache, wraps
 from pathlib import Path
@@ -139,6 +140,22 @@ class AlignmentSessionError(ValueError):
 
 class AlignmentPresentationBusy(AlignmentSessionError):
     """Another request holds a presentation generation lock."""
+
+
+_ReceiptKey = tuple[int, int, str]
+
+
+@dataclass
+class _PresentationProducer:
+    key: _ReceiptKey
+    done: Future[None]
+
+
+class AlignmentPresentationPending(AlignmentPresentationBusy):
+    def __init__(self, producer: _PresentationProducer, requested: _ReceiptKey):
+        super().__init__("alignment presentation generation is already in progress")
+        self.done = producer.done
+        self.same_authority = producer.key == requested
 
 
 class _AlignmentDerivativeByteLimit(AlignmentSessionError):
@@ -3068,6 +3085,38 @@ _presentation_receipts_lock = threading.RLock()
 _PRESENTATION_RECEIPT_MAX_ENTRIES = 128
 
 
+# Process-local notification only. The filesystem locks still govern publication;
+# a completion signal never authorizes reading a package from disk.
+_active_presentation: _PresentationProducer | None = None
+
+
+@contextmanager
+def _presentation_admission(key: _ReceiptKey, destination: Path, expected_digest: str | None):
+    global _active_presentation
+    producer = None
+    with _presentation_receipts_lock:
+        digest = expected_digest or _presentation_receipts.get(key)
+        if digest is None or not destination.exists():
+            digest = None
+            if _active_presentation is not None:
+                raise AlignmentPresentationPending(_active_presentation, key)
+            producer = _PresentationProducer(key, Future())
+            _active_presentation = producer
+    try:
+        yield digest
+    except BaseException as exc:
+        if producer is not None:
+            with _presentation_receipts_lock:
+                _active_presentation = None
+                producer.done.set_exception(exc)
+        raise
+    else:
+        if producer is not None:
+            with _presentation_receipts_lock:
+                _active_presentation = None
+                producer.done.set_result(None)
+
+
 @contextmanager
 def _alignment_presentation_generation_slot() -> Iterator[None]:
     lock_root = get_analysis_cache_dir() / "ngs_alignment_presentation_generation"
@@ -3084,25 +3133,48 @@ def _alignment_presentation_generation_slot() -> Iterator[None]:
 
 
 def _load_trusted_presentation(
-    namespace: Path, destination: Path, cache_key: str, manifest_sha256: str,
+    namespace: Path, destination: Path, key: _ReceiptKey, manifest_sha256: str,
 ) -> dict[str, Any]:
     lock_fd = os.open(
         ".generation.lock", os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
         0o640, dir_fd=int(namespace.parts[4]),
     )
     with os.fdopen(lock_fd, "a+b") as reader_lock:
-        try:
-            fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise AlignmentPresentationBusy("alignment presentation generation is already in progress") from exc
+        with _presentation_receipts_lock:
+            try:
+                fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                if _active_presentation is not None and _active_presentation.key[:2] == key[:2]:
+                    raise AlignmentPresentationPending(_active_presentation, key) from exc
+                raise AlignmentPresentationBusy("alignment presentation generation is already in progress") from exc
         with open_presentation_authority_root(destination, create=False) as pinned_destination:
             cached = _load_derived_package(
-                pinned_destination, expected_authority_sha256=cache_key,
+                pinned_destination, expected_authority_sha256=key[2],
                 expected_manifest_sha256=manifest_sha256,
             )
         if cached is None:
             raise AlignmentSessionError("alignment presentation manifest authority is invalid")
         return cached
+
+
+@contextmanager
+def _presentation_slot(namespace: Path, destination: Path, key: _ReceiptKey, expected_digest: str | None):
+    with _presentation_admission(key, destination, expected_digest) as digest:
+        if digest is not None:
+            yield _load_trusted_presentation(namespace, destination, key, digest)
+            return
+        lock_fd = os.open(
+            ".generation.lock",
+            os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o640,
+            dir_fd=int(namespace.parts[4]),
+        )
+        with os.fdopen(lock_fd, "a+b") as producer_lock, _alignment_presentation_generation_slot():
+            try:
+                fcntl.flock(producer_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise AlignmentPresentationBusy("alignment presentation generation is already in progress") from exc
+            yield None
 
 
 @_pin_presentation_root(create=True)
@@ -3159,22 +3231,9 @@ def build_alignment_presentation(
         raise AlignmentSessionError("presentation namespace is not pinned")
     namespace_identity = namespace.stat()
     receipt_key = (namespace_identity.st_dev, namespace_identity.st_ino, cache_key)
-    with _presentation_receipts_lock:
-        observed_manifest = _presentation_receipts.get(receipt_key)
-    trusted_manifest = expected_manifest_sha256 or observed_manifest
-    if trusted_manifest is not None and destination.exists():
-        return _load_trusted_presentation(namespace, destination, cache_key, trusted_manifest)
-    lock_fd = os.open(
-        ".generation.lock",
-        os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
-        0o640,
-        dir_fd=int(namespace_parts[4]),
-    )
-    with os.fdopen(lock_fd, "a+b") as producer_lock, _alignment_presentation_generation_slot():
-        try:
-            fcntl.flock(producer_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise AlignmentPresentationBusy("alignment presentation generation is already in progress") from exc
+    with _presentation_slot(namespace, destination, receipt_key, expected_manifest_sha256) as cached:
+        if cached is not None:
+            return cached
         namespace_fd = int(namespace_parts[4])
         protected_names = _presentation_names_for_manifest(namespace, expected_manifest_sha256)
         _cleanup_presentation_namespace(

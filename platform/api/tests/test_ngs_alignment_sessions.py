@@ -2978,6 +2978,9 @@ def test_ngs_package_routes_deny_requests_without_job_capability() -> None:
     app.dependency_overrides[routes.get_session] = lambda: Session()
     client = TestClient(app, client=("127.0.0.1", 40000))
 
+    descriptor = client.get(f"/api/jobs/job-denied/alignment-sessions/{'6' * 24}/presentation")
+    assert descriptor.status_code == 403
+    assert descriptor.json()["code"] == "NGS_CAPABILITY_DENIED"
     assert client.get("/api/jobs/job-denied/ngs-artifacts").status_code == 403
     assert client.get(f"/api/jobs/job-denied/ngs-artifacts/{'a' * 64}").status_code == 403
 
@@ -4078,6 +4081,57 @@ def presentation_http_app(tmp_path, monkeypatch):
     app.include_router(ngs_routes.router, prefix="/api")
     app.dependency_overrides[ngs_routes.require_alignment_job] = lambda: job
     return app, job_id, session_id
+
+
+@pytest.mark.parametrize("scenario", ["same", "other", "failed"])
+def test_descriptor_waits_for_active_producer(presentation_http_app, monkeypatch, scenario):
+    from services import ngs_alignment_sessions as service
+
+    app, job_id, session_id = presentation_http_app
+    url = f"/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation"
+    waiter_url = url.replace(session_id, "7" * 24) if scenario == "other" else url
+    entered, release, contended = threading.Event(), threading.Event(), threading.Event()
+    build, verify = service.build_alignment_presentation, service._verify_descriptor
+    source_passes = []
+
+    def gated_verify(handle, size, digest):
+        if not source_passes or digest == source_passes[0]:
+            source_passes.append(digest)
+            entered.set()
+            assert release.wait(10)
+            if scenario == "failed":
+                raise service.AlignmentSessionError("source integrity check failed")
+        return verify(handle, size, digest)
+
+    def observe_build(*args, **kwargs):
+        try:
+            return build(*args, **kwargs)
+        except service.AlignmentPresentationBusy:
+            contended.set()
+            raise
+
+    monkeypatch.setattr(service, "_verify_descriptor", gated_verify)
+    monkeypatch.setattr(service, "build_alignment_presentation", observe_build)
+    with TestClient(app) as client, ThreadPoolExecutor(max_workers=2) as pool:
+        producer = pool.submit(client.get, url)
+        try:
+            assert entered.wait(5)
+            waiter = pool.submit(client.get, waiter_url)
+            assert contended.wait(5)
+        finally:
+            release.set()
+        first, second = producer.result(10), waiter.result(10)
+    if scenario == "failed":
+        assert first.status_code == second.status_code == 409
+        assert second.json()["code"] == "NGS_ARTIFACT_INTEGRITY_CONFLICT"
+    else:
+        assert first.status_code == second.status_code == 200
+        assert second.json()["state"] == "ready"
+        if scenario == "same":
+            assert first.json() == second.json()
+        else:
+            assert second.json()["session_id"] == "7" * 24
+    assert len(source_passes) == (2 if scenario == "other" else 1)
 
 
 @pytest.mark.parametrize("lock", ["global", "cold-session", "warm-session"])
