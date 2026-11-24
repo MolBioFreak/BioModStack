@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+From: nvidia/cuda:13.5.0-cudnn-devel-ubuntu24.04
 
 %labels
     Author ProteinDJ Extended Pipeline
@@ -10,6 +10,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     apptainer/patches/boltzgen/ligand-only-mmcif.patch /opt/bms-patches/ligand-only-mmcif.patch
 
 %post
+    set -eu
     export DEBIAN_FRONTEND=noninteractive
     export TZ=America/Chicago
     ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
@@ -23,60 +24,77 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
         patch \
         && rm -rf /var/lib/apt/lists/*
     
-    # Python 3.11 (required by BoltzGen >= 0.1.8)
-    apt-get update && apt-get install -y \
-        software-properties-common \
-        && add-apt-repository ppa:deadsnakes/ppa -y \
-        && apt-get update && apt-get install -y \
-        python3.11 \
-        python3.11-dev \
-        python3.11-venv \
-        && rm -rf /var/lib/apt/lists/*
-        
-    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
-    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
-    
-    # UV Package Manager (YES, UV!)
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="/root/.local/bin:$PATH"
+    apt-get update && apt-get install -y python3.12 python3.12-dev python3.12-venv
+
+    # Install pinned uv 0.13.10 with SHA256 verification
+    UV_VERSION="0.13.10"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    curl -fsSL --retry 3 --retry-delay 2 \
+        "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
+        -o "${UV_TMP}/uv.tar.gz"
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
+    uv --version
     
     # Virtual Environment
-    uv venv /opt/venv
+    uv venv --python /usr/bin/python3.12 /opt/venv
     . /opt/venv/bin/activate
     
-    # PyTorch release built for CUDA 12.8 (includes RTX 50-series sm_120 kernels).
-    uv pip install --compile torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+    # Hold the chosen CUDA wheels during later tool dependency resolution.
+    export UV_CONSTRAINT=/tmp/bms-gpu-constraints.txt
+    printf '%s\n' 'torch==2.15.0+cu134' 'torchvision==0.29.2+cu134' 'torchaudio==2.11.1+cu134' > "$UV_CONSTRAINT"
+    # PyTorch release built for CUDA 13.4 (includes RTX 50-series sm_120 kernels).
+    uv pip install --python /opt/venv/bin/python --compile torch==2.15.0+cu134 torchvision==0.29.2+cu134 torchaudio==2.11.1+cu134 --index https://download.pytorch.org/whl/cu134 --default-index https://pypi.org/simple
     
-    # Install BoltzGen dependencies
-    # BoltzGen is built on top of Boltz
-    
-    # 1. Install Boltz-2 (Core dependency)
+    # Separate environments: the upstream NumPy requirements are incompatible.
+    uv venv --python /usr/bin/python3.12 /opt/boltz-venv
+    uv pip install --python /opt/boltz-venv/bin/python --compile torch==2.15.0+cu134 torchvision==0.29.2+cu134 torchaudio==2.11.1+cu134 --index https://download.pytorch.org/whl/cu134 --default-index https://pypi.org/simple
     git clone https://github.com/jwohlwend/boltz.git /app/boltz
     cd /app/boltz
-    uv pip install --compile .
+    git checkout --detach cb04aeccdd480fd4db707f0bbafde538397fa2ac
+    uv pip install --python /opt/boltz-venv/bin/python --no-cache --compile .
+    ln -s /opt/boltz-venv/bin/boltz /opt/venv/bin/boltz
     
     # 2. Install BoltzGen
     # Pinned to the commit BMS is integrated against. The patch lets a ligand-only structure
     # (no polymer rows) parse; see docs/BoltzGen_Ligand_Parser_Repair.md.
     git clone https://github.com/HannesStark/boltzgen.git /app/boltzgen
     cd /app/boltzgen
-    git checkout --detach 617e549edf70787d899f47bc39e3746d8f10ffff
+    git checkout --detach 31d9d9b9c72245b4ed6fe8742d6fbf4e1a3552a0
     patch --batch --forward src/boltzgen/data/parse/mmcif.py /opt/bms-patches/ligand-only-mmcif.patch
-    uv pip install --compile .
+    uv pip install --python /opt/venv/bin/python --no-cache --compile .
     
-    # Cleanup
-    # Cleanup
-    # rm -rf /root/.cache/uv
-    apt-get clean
+    uv pip check --python /opt/venv/bin/python
+    uv pip check --python /opt/boltz-venv/bin/python
+    uv pip freeze --python /opt/boltz-venv/bin/python > /opt/boltz-venv/requirements.lock
+    uv cache clean
     apt-get clean
 
     # Generate lockfile for reproducibility
-    uv pip freeze > /opt/venv/requirements.lock 2>/dev/null || true
+    /opt/venv/bin/python -c "import torch, torchvision; assert torch.__version__ == '2.15.0+cu134' and torch.version.cuda == '13.4'"
+    uv pip freeze --python /opt/venv/bin/python > /opt/venv/requirements.lock 2>/dev/null || true
 
 %environment
     export PATH=/opt/venv/bin:$PATH
     export CUDA_DEVICE_ORDER=PCI_BUS_ID
-    export PYTHONPATH=/app/boltzgen:$PYTHONPATH
+    export XDG_CACHE_HOME=${XDG_CACHE_HOME:-/tmp/boltzgen-cache}
     export BOLTZ_CACHE=/tmp/boltz_cache
 
 %runscript
@@ -86,7 +104,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     . /opt/venv/bin/activate
     python3 -c "import torch; print(f'PyTorch: {torch.__version__}')"
     # Verify imports
-    python3 -c "import boltz; print(f'Boltz: {boltz.__version__}')"
+    /opt/boltz-venv/bin/python -c "import boltz; from importlib.metadata import version; print(version('boltz'))"
     python3 -c 'from boltzgen.data.parse.mmcif import mmcif_from_block; import inspect; assert "eps_loop is not None and eps_loop.length()" in inspect.getsource(mmcif_from_block)'
     # python3 -c "import boltzgen; print('BoltzGen OK')" # Module name might differ
 

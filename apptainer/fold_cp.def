@@ -9,6 +9,11 @@ From: {{ container_dir }}/boltzgen.sif
 
 %post
     set -eu
+    # Install the native CUDA extras in the Fold-CP environment, not BoltzGen's.
+    printf "%s\n" "torch==2.15.0+cu134" > /tmp/bms-fold-constraints
+    uv pip install --no-cache --python /opt/boltz-venv/bin/python -c /tmp/bms-fold-constraints cuequivariance==0.8.0 cuequivariance-torch==0.8.0 cuequivariance-ops-cu13==0.8.0 cuequivariance-ops-torch-cu13==0.8.0
+    uv pip check --python /opt/boltz-venv/bin/python
+    uv pip freeze --python /opt/boltz-venv/bin/python > /opt/boltz-venv/requirements.lock
     rm -rf /opt/fold-cp
     git clone https://github.com/NVIDIA-BioNeMo/boltz-cp.git /opt/fold-cp
     cd /opt/fold-cp
@@ -32,7 +37,7 @@ From: {{ container_dir }}/boltzgen.sif
     find /opt/fold-cp -type d -name __pycache__ -prune -exec rm -rf {} +
 
 %environment
-    export PATH=/opt/venv/bin:$PATH
+    export PATH=/opt/boltz-venv/bin:/opt/venv/bin:$PATH
     export PYTHONPATH=/opt/fold-cp/src${PYTHONPATH:+:$PYTHONPATH}
     export CUDA_DEVICE_ORDER=PCI_BUS_ID
     export BOLTZ_CACHE=/boltzcache
@@ -46,7 +51,6 @@ From: {{ container_dir }}/boltzgen.sif
     org.opencontainers.image.source "https://github.com/NVIDIA-BioNeMo/boltz-cp"
     org.opencontainers.image.revision "dedfdba3f33fd650aeb8f2da1005b44ebd03f95e"
     org.biomodstack.runtime.id "fold-cp-dedfdba-cli-topology-dp-local-writer"
-    org.biomodstack.runtime.base.sha256 "a62b63635a53f18f3bbb66585817bdd0425f58799696b2a1c19124bd6023a672"
 
     org.biomodstack.runtime.cli-patch.sha256 "68ca9baec4554f0f6e0bd3f935550b5106ca12a7c3368fd5ac56904ebaadb911"
     org.biomodstack.runtime.association-patch.sha256 "6048b36a0b5f79aa45fbf58a629a8bca884c02e9016904c8d58fba0c0210d506"

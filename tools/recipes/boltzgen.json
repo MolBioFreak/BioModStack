@@ -2,7 +2,7 @@
   "schema": "bms.tool-recipe.v1",
   "id": "boltzgen",
   "name": "BoltzGen and Fold-CP",
-  "label": "starting-point",
+  "label": "builds-from-clean",
   "modules": [
     "design",
     "structure_prediction"
@@ -18,7 +18,7 @@
     "id": "MIT",
     "url": "https://github.com/HannesStark/boltzgen/blob/main/LICENSE"
   },
-  "notes": "boltzgen.def builds BoltzGen at the commit BMS is integrated against, on PyTorch 2.11.0, and applies the ligand-only mmCIF parser fix. fold-cp.sif is built on top of boltzgen.sif. Not yet built from clean by us: expect to fix things.",
+  "notes": "BoltzGen 0.3.2 and Fold-CP build on CUDA Toolkit 13.5 and stable PyTorch cu134. BoltzGen and the companion Boltz CLI use separate Python environments because their NumPy requirements conflict. Fold-CP uses the companion environment.",
   "images": [
     {
       "filename": "boltzgen.sif",
