@@ -1,7 +1,7 @@
 {
   "network": "none",
-  "oci_digest": "sha256:d8dc5487691e408da2b4fbfd02083a14968dbe54088e023841ba7ab795df01d9",
-  "runtime_id": "sha256:d8dc5487691e408da2b4fbfd02083a14968dbe54088e023841ba7ab795df01d9",
+  "oci_digest": "sha256:8ca23665fb79f0bc73cced44895e3a247cbe803dbbd27fa718f0c99a93c34731",
+  "runtime_id": "sha256:8ca23665fb79f0bc73cced44895e3a247cbe803dbbd27fa718f0c99a93c34731",
   "schema": "bms.ont-squigualiser-comparison-runtime-policy.v1",
   "upstream": {
     "commit": "5a2404f1f43bc3227a85475c59b2b77970078b2e",
