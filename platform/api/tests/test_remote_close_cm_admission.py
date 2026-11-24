@@ -58,7 +58,7 @@ def test_canonical_root_preview_and_bundle(placement, monkeypatch, backend):
         installed.parent.mkdir(parents=True, exist_ok=True)
         installed.write_bytes(checkpoint.read_bytes())
     from schemas import JobCreate
-    from routers.jobs import _execution_plan_preview
+    from services.job_requests import _execution_plan_preview
     # Preview describes requirements; dispatcher GPU bindings belong only to execution.
     physical = JobCreate(name="CM admission", model_id="conformational_mapping", mode="map", params=dict(job.params))
     with pytest.raises(ValueError, match="native preview cannot carry physical GPU bindings"):
@@ -86,6 +86,7 @@ async def test_actual_cm_operator_route_stored_job_bundle(placement, monkeypatch
     from sqlalchemy.orm import sessionmaker
     from database import Base, Job, ConformationalMappingSource
     from routers import conformational_mapping as cm
+    from services.conformational_mapping import submission
     from services.remote_execution import bundle
     from services.conformational_mapping.contracts import canonical_json_bytes
     from biomodstack_msa_handoff import digest
@@ -98,7 +99,7 @@ async def test_actual_cm_operator_route_stored_job_bundle(placement, monkeypatch
     # Runtime image registry is an explicit offline boundary double, not science.
     identity = _request_params('confornets')['confornets']['backend_identity']
     identity['backend_commit'] = '4df561a1fbd0fd2b9c7a230fa62957a837d9f72d'
-    monkeypatch.setattr(cm, '_server_confornets_identity', lambda: dict(identity))
+    monkeypatch.setattr(submission, '_server_confornets_identity', lambda: dict(identity))
     monkeypatch.setattr(cm, '_runtime_registry', lambda _: {'schema_name':'cm_runtime_registry', 'schema_version':1, 'offline_fixture':True})
     real_resolve = bundle.resolve_image
     monkeypatch.setattr(bundle, 'resolve_image', lambda name, root, params: root / name if name == 'frustrampnn.sif' else real_resolve(name, root, params))
@@ -140,7 +141,7 @@ async def test_actual_cm_operator_route_stored_job_bundle(placement, monkeypatch
         job.params = dict(job.params, gpu_id=0)
         invocation = compile_installed((roots,job,target), 'conformational_mapping','map')
         checkpoint.write_bytes(b'explicit offline checkpoint transport fixture')
-        from routers.jobs import _execution_plan_preview, normalize_job_request
+        from services.job_requests import _execution_plan_preview, normalize_job_request
         from schemas import JobCreate
         typed = JobCreate(name=job.name,model_id=job.model_id,mode=job.mode,params={k:v for k,v in job.params.items() if k not in {'remote_result_policy', 'gpu_id'}}, execution_policy={'remote_result_policy':job.params['remote_result_policy']})
         normalized = normalize_job_request(typed)

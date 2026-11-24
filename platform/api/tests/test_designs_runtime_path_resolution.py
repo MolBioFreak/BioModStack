@@ -30,6 +30,10 @@ class _FakeSession:
     def __init__(self, design):
         self._design = design
 
+    async def get(self, model, key):
+        assert model is designs.Job and key == self._design.job_id
+        return None  # Retained design without a native publication owner.
+
     async def execute(self, _stmt):
         return _FakeResult(self._design)
 
@@ -46,7 +50,7 @@ def test_get_design_pdb_rewrites_legacy_host_paths_to_active_runtime(monkeypatch
     monkeypatch.setattr(paths, "_candidate_data_roots", lambda: [legacy_root])
     monkeypatch.setattr(paths, "_runtime_paths", lambda: {"container_state_path": str(active_root)})
 
-    design = SimpleNamespace(id="design-1", name="model_0", pdb_path=str(legacy_path))
+    design = SimpleNamespace(id="design-1", job_id="legacy-job", name="model_0", pdb_path=str(legacy_path))
 
     response = asyncio.run(designs.get_design_pdb("design-1", session=_FakeSession(design)))
 

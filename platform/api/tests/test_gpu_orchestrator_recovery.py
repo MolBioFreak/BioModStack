@@ -38,7 +38,7 @@ async def test_remote_vram_budget_allows_exactly_one_concurrent_claim(tmp_path: 
     from services.remote_execution import targets
     async def telemetry(target):
         return dict(available=True, gpus=[dict(index=0, uuid="GPU-remote", memory_total_mb=7000,
-                                              memory_used_mb=0, utilization=99)])
+                                              memory_used_mb=0, utilization=0)])
     monkeypatch.setattr(targets, "remote_target_telemetry", telemetry)
     monkeypatch.setattr(gpu_module, "read_scheduler_config", lambda: {"global": {
         "target_vram_fill": 0.75, "vram_safety_margin_mb": 0}})
@@ -177,6 +177,116 @@ async def test_unknown_vram_is_estimated_and_pinned_while_explicit_zero_stays_cp
         assert gpu_job.params["gpu_id"] == 2
         assert gpu_job.vram_estimate_mb is not None and gpu_job.vram_estimate_mb > 0
         assert cpu_job is not None and cpu_job.assigned_gpu is None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mb,devices,model,expected", [
+    (20000, [2], 'example', 1),
+    (4096, [2], 'example', 2),
+    (20000, [2, 3], 'example', 2),
+    (4096, [2, 3], 'msa_batch', 1),
+    (0, [], 'msa_batch', 1),
+])
+async def test_overlapping_local_cycles(tmp_path, monkeypatch, mb, devices, model, expected):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'overlap.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(gpu_module, 'read_scheduler_config', lambda: {'global': {
+        'max_launches_per_cycle': 1, 'target_vram_fill': .9, 'msa_concurrency_limit': 1}})
+    gpus = [SimpleNamespace(index=i, name='gpu', memory_used_mb=0, memory_total_mb=32607,
+                            utilization=0, temperature=30) for i in devices]
+    async def seed(key, priority):
+        async with factory() as s:
+            s.add(Job(id=key, name=key, model_id=model, mode='run', params={},
+                      output_dir=str(tmp_path / key), status='queued', queue_status='queued',
+                      priority=priority, vram_estimate_mb=mb))
+            await s.commit()
+
+    launches = []
+    async def launch(job_id, **kwargs):
+        async with factory() as reader:
+            owner = await reader.get(Job, job_id)
+            launches.append((job_id, owner.status, owner.queue_status, owner.assigned_gpu))
+
+    # Pause A after reading its queue. B then sees a different priority winner.
+    # Neither the packer nor the actual claim or reservation query is stubbed.
+    selected, resume = asyncio.Event(), asyncio.Event()
+    lock_held, contender = asyncio.Event(), asyncio.Event()
+    class DelayedSession(AsyncSession):
+        async def execute(self, statement, *args, **kwargs):
+            result = await super().execute(statement, *args, **kwargs)
+            if not selected.is_set() and 'ORDER BY jobs.priority DESC' in str(statement):
+                selected.set()
+                await asyncio.wait_for(resume.wait(), 5)
+            if str(statement) == 'BEGIN IMMEDIATE' and not lock_held.is_set():
+                lock_held.set()
+                await asyncio.wait_for(contender.wait(), 5)
+            return result
+
+    class ContendingSession(AsyncSession):
+        async def execute(self, statement, *args, **kwargs):
+            if str(statement) == 'BEGIN IMMEDIATE':
+                contender.set()
+            return await super().execute(statement, *args, **kwargs)
+
+    delayed = sessionmaker(engine, class_=DelayedSession, expire_on_commit=False)
+    await seed('first', 1)
+    task = asyncio.create_task(GPUOrchestrator(delayed, lambda: gpus, launch)._process_cycle())
+    try:
+        await asyncio.wait_for(selected.wait(), 5)
+        await seed('second', 2)
+        peer = factory
+        if mb:
+            resume.set()
+            await asyncio.wait_for(lock_held.wait(), 5)
+            peer = sessionmaker(engine, class_=ContendingSession, expire_on_commit=False)
+        await GPUOrchestrator(peer, lambda: gpus, launch)._process_cycle()
+    finally:
+        resume.set()
+        await task
+    assert len(launches) == expected
+    assert {row[0] for row in launches} == (
+        {'first', 'second'} if expected == 2 else {'first' if mb else 'second'})
+    assert all(row[1:3] == ('running', 'running') for row in launches)
+    if len(devices) == expected == 2:
+        assert {row[3] for row in launches} == set(devices)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('outcome', ['success', 'failure', 'cancel_then_fail', 'successor_then_fail'])
+async def test_ordinary_cpu_handoff_has_one_owner(tmp_path, monkeypatch, outcome):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cpu.db'}")
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with factory() as seed:
+        seed.add(Job(id='cpu', name='cpu', model_id='example', mode='run', params={},
+                     output_dir=str(tmp_path), vram_estimate_mb=0, status='queued', queue_status='queued'))
+        await seed.commit()
+    calls = []
+    async def launch(job_id, **kwargs):
+        async with factory() as peer:
+            job = await peer.get(Job, job_id)
+            calls.append((job.status, job.queue_status, job.started_at is not None))
+            if outcome == 'cancel_then_fail':
+                job.queue_status = job.status = 'cancelled'
+            elif outcome == 'successor_then_fail':
+                job.started_at = datetime(2030, 1, 1)
+            await peer.commit()
+        if outcome != 'success':
+            raise RuntimeError('inert failure')
+
+    monkeypatch.setattr(gpu_module, 'read_scheduler_config', lambda: {})
+    await asyncio.gather(*(GPUOrchestrator(factory, lambda: [], launch)._process_cycle() for _ in range(2)))
+    assert calls == [('running', 'running', True)]
+    async with factory() as reader:
+        job = await reader.get(Job, 'cpu')
+        status = {'cancel_then_fail': 'cancelled', 'failure': 'failed'}.get(outcome, 'running')
+        assert job.status == job.queue_status == status
+        assert job.error_message == ('inert failure' if outcome == 'failure' else None)
     await engine.dispose()
 
 
@@ -388,18 +498,25 @@ def test_terminal_nextflow_history_overrides_gpu_activity_liveness_hint() -> Non
     assert _has_terminal_nextflow_history(None) is False
 
 
-def test_terminal_history_requires_output_root_for_native_rfd3() -> None:
-    job = SimpleNamespace(
-        model_id="protein_local_redesign",
-        mode="partial_diffusion",
-        params={"redesign_mode": "partial_diffusion"},
-    )
+@pytest.mark.parametrize(("model_id", "mode", "requires_designs"), [
+    ("protein_local_redesign", "partial_diffusion", False),
+    ("boltz2", "predict", True),
+])
+def test_terminal_history_respects_native_publication_owner(model_id, mode, requires_designs) -> None:
+    job = Job(model_id=model_id, mode=mode, params={}, provenance={})
 
-    assert _job_requires_result_output_for_terminal_history(job) is True
+    assert _job_requires_result_output_for_terminal_history(job) is requires_designs
 
 
 @pytest.mark.asyncio
-async def test_worker_recovery_publish_does_not_overwrite_concurrent_cancellation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("new_values", [
+    {"status": "cancelled", "queue_status": "cancelled", "awaiting_input": False},
+    {"params": {"gpu_id": 2, "new_input": True}},
+    {"assigned_gpu": 2},
+    {"retry_count": 1, "started_at": datetime(2026, 1, 2)},
+    {"status": "running"},
+])
+async def test_worker_recovery_publish_does_not_overwrite_concurrent_update(tmp_path: Path, new_values) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'recovery.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -408,7 +525,8 @@ async def test_worker_recovery_publish_does_not_overwrite_concurrent_cancellatio
     async with factory() as seed:
         seed.add(Job(
             id="recovery-race", name="recovery-race", model_id="boltz2", mode="predict",
-            params={}, status="running", queue_status="running", awaiting_input=False,
+            params={"gpu_id": 0}, assigned_gpu=0,
+            status="running", queue_status="running", awaiting_input=False,
             awaiting_payload={}, retry_count=0, max_retries=2,
         ))
         await seed.commit()
@@ -422,16 +540,23 @@ async def test_worker_recovery_publish_does_not_overwrite_concurrent_cancellatio
         async with factory() as cancellation:
             await cancellation.execute(
                 update(Job).where(Job.id == "recovery-race").values(
-                    status="cancelled", queue_status="cancelled", awaiting_input=False,
+                    **new_values,
                 )
             )
             await cancellation.commit()
 
-        assert await _commit_reconciled_job_mutations(worker) == 0
+        unchanged = new_values == {"status": "running"}
+        assert await _commit_reconciled_job_mutations(worker) == int(unchanged)
 
     async with factory() as verify:
         final = (await verify.execute(select(Job).where(Job.id == "recovery-race"))).scalar_one()
-        assert (final.status, final.queue_status) == ("cancelled", "cancelled")
+        if unchanged:
+            assert (final.status, final.queue_status) == ("failed", "failed")
+        else:
+            for key, value in new_values.items():
+                assert getattr(final, key) == value
+            if "status" not in new_values:
+                assert (final.status, final.queue_status) == ("running", "running")
     await engine.dispose()
 
 

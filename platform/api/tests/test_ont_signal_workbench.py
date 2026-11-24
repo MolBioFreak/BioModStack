@@ -1940,7 +1940,7 @@ def _calibration_report(
         "sample_selection": {
             "method": "sha256_read_id_rank_v1",
             "requested_count": job.sample_count,
-            "selected_count": job.sample_count,
+            "selected_count": len(selected_ids),
             "intersection_count": 2,
             "read_ids": selected_ids,
             "selection_sha256": hashlib.sha256(
@@ -1966,7 +1966,7 @@ def _calibration_report(
                 "candidate_signal_move_offset": value,
                 "candidate_kmer_bound": 9,
                 "score": float(value + 1),
-                "read_count": job.sample_count,
+                "read_count": len(selected_ids),
             }
             for value in range(9)
         ],
@@ -2090,6 +2090,66 @@ async def test_calibration_runtime_report_rejects_mismatched_parent_read_or_prof
         assert await session.scalar(
             select(func.count()).select_from(OntSignalCalibrationArtifact)
         ) == 0
+
+
+@pytest.mark.asyncio
+async def test_calibration_on_fewer_reads_than_requested_is_published_with_both_counts(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        service.EXTERNAL_MOVE_BAM_ROOT_ENV,
+        str(workbench_store.root / "missing-optional-external-root"),
+    )
+    worker = OntSignalWorker(workbench_store.factory, workbench_store.factory)
+    async with workbench_store.factory() as session:
+        created = await service.create_calibration_job(
+            session, run_id="run-1", observed_generation=1, raw_representation_id="raw-blow5-1",
+            move_source_id="ont-moves-ready", sample_count=100,
+        )
+        await session.commit()
+        job = await session.get(OntSignalCalibrationJob, created["calibration_job_id"])
+        source = await session.get(OntMoveTableSource, "ont-moves-ready")
+        assert job is not None and source is not None
+        # The run has two eligible reads; the form asked for 100.
+        report = _calibration_report(job=job, source=source)
+        assert report["sample_selection"]["read_ids"] == READ_IDS
+    claimed = await worker._claim(OntSignalCalibrationJob, "state")
+    assert claimed is not None
+    job_id, claim_token = claimed
+    _patch_fake_calibration_runtime(monkeypatch, worker, workbench_store.root / "fake-runtime", report)
+    await worker._process_calibration(job_id, claim_token)
+    async with workbench_store.factory() as session:
+        published = await session.get(OntSignalCalibrationJob, job_id)
+        assert published is not None and published.state == "ready"
+        artifact = await session.get(OntSignalCalibrationArtifact, published.calibration_artifact_id)
+        assert artifact is not None
+        assert (artifact.sample_selection["requested_count"], artifact.sample_selection["selected_count"]) == (100, 2)
+        assert (artifact.recommended_kmer_length, artifact.recommended_signal_move_offset) == (5, 4)
+
+
+@pytest.mark.asyncio
+async def test_calibration_report_claiming_more_or_fewer_reads_than_it_used_is_rejected(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = OntSignalWorker(workbench_store.factory, workbench_store.factory)
+    async with workbench_store.factory() as session:
+        created = await service.create_calibration_job(
+            session, run_id="run-1", observed_generation=1, raw_representation_id="raw-blow5-1",
+            move_source_id="ont-moves-ready", sample_count=100,
+        )
+        await session.commit()
+        job = await session.get(OntSignalCalibrationJob, created["calibration_job_id"])
+        source = await session.get(OntMoveTableSource, "ont-moves-ready")
+        report = _calibration_report(job=job, source=source)
+        # Says 100 reads were used when two were.
+        report["sample_selection"]["selected_count"] = 100
+    claimed = await worker._claim(OntSignalCalibrationJob, "state")
+    job_id, claim_token = claimed
+    _patch_fake_calibration_runtime(monkeypatch, worker, workbench_store.root / "fake-runtime", report)
+    with pytest.raises(RuntimeError, match="calibration report failed governed validation"):
+        await worker._process_calibration(job_id, claim_token)
 
 
 @pytest.mark.asyncio
@@ -5604,3 +5664,57 @@ def test_migration_49_allows_fresh_attempt_for_failed_job_move_source(tmp_path: 
         ).fetchone()[0]
         assert "predecessor.source_job_id IS NULL) != (predecessor.external_registration_receipt_id IS NULL)" in sql
         assert "AND NEW.source_job_id IS predecessor.source_job_id" in sql
+
+
+@pytest.mark.asyncio
+async def test_a_finished_result_names_the_image_it_ran_on_even_if_the_tag_moved_meanwhile(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        service.EXTERNAL_MOVE_BAM_ROOT_ENV,
+        str(workbench_store.root / "missing-optional-external-root"),
+    )
+    worker = OntSignalWorker(workbench_store.factory, workbench_store.factory)
+    async with workbench_store.factory() as session:
+        created = await service.create_calibration_job(
+            session, run_id="run-1", observed_generation=1, raw_representation_id="raw-blow5-1",
+            move_source_id="ont-moves-ready", sample_count=2,
+        )
+        await session.commit()
+        job = await session.get(OntSignalCalibrationJob, created["calibration_job_id"])
+        source = await session.get(OntMoveTableSource, "ont-moves-ready")
+        report = _calibration_report(job=job, source=source)
+    claimed = await worker._claim(OntSignalCalibrationJob, "state")
+    assert claimed is not None
+    job_id, claim_token = claimed
+    output_root = workbench_store.root / "tag-move-runtime"
+    monkeypatch.setattr(worker, "_output_root", lambda: output_root)
+    monkeypatch.setattr(worker, "_container_user_identity", lambda: (1000, 1000))
+    tag = {"points_at": "a"}  # what the image tag resolves to right now
+    resolutions: list[str] = []
+
+    def resolve() -> dict[str, str]:
+        resolutions.append(tag["points_at"])
+        return {"image": f"sha256:{tag['points_at'] * 64}", "image_digest": tag["points_at"] * 64,
+                "upstream_version": "0.7.0", "upstream_commit": "5a2404f1f43bc3227a85475c59b2b77970078b2e", "network": "none"}
+
+    monkeypatch.setattr(worker, "_runtime_identity", resolve)
+    commands: list[list[str]] = []
+
+    async def fake_execute(command, kind, item_id, _claim_token, output_dir, _allowed=None, **_kwargs):
+        commands.append(list(command))
+        (Path(output_dir) / "calibration.json").write_text(json.dumps(report, sort_keys=True), encoding="utf-8")
+        tag["points_at"] = "b"  # the tag is rebuilt while the task runs
+        return {"argv_sha256": "1" * 64, "returncode": 0, "stdout_sha256": "2" * 64, "stderr_sha256": "3" * 64, "stderr_tail": ""}
+
+    monkeypatch.setattr(worker, "_execute", fake_execute)
+    await worker._process_calibration(job_id, claim_token)
+    assert f"sha256:{'a' * 64}" in commands[0] and f"sha256:{'b' * 64}" not in commands[0]
+    async with workbench_store.factory() as session:
+        published = await session.get(OntSignalCalibrationJob, job_id)
+        artifact = await session.get(OntSignalCalibrationArtifact, published.calibration_artifact_id)
+        assert artifact.runtime_identity["image_digest"] == "a" * 64
+        assert artifact.runtime_identity["image"] == f"sha256:{'a' * 64}"
+    # Resolved once, at dispatch; not again to describe the finished work.
+    assert resolutions == ["a"]

@@ -379,7 +379,7 @@ def test_cm_adapter_projects_neutral_contracts_to_existing_cm_presentations(
 
     header = "frustration_pred,position,wildtype,mutation,chain,pdb\n"
     rows = []
-    for position, wt in enumerate("GA"):
+    for position, wt in [(0, "G"), (2, "A")]:
         rows.extend(
             f"{-2.0 + AA_ORDER.index(mutation) / 5},{position},{wt},{mutation},X,normalized.pdb\n"
             for mutation in AA_ORDER

@@ -224,11 +224,14 @@ class SearchSettings:
                 raise ValueError(f"Invalid search setting: {name}")
         if self.ranking_mode not in ("empirical", "lexicographic"):
             raise ValueError("Unknown ranking mode")
+        if not self.unique_classes:
+            raise ValueError("Duplicate overhangs are not allowed")
 
 
 def _search(*, domain_size: int, enumeration: Callable, random_start: Callable,
             neighbor: Callable, describe: Callable, feasible: Callable,
-            dataset_id: str | None, end_length: int, condition_use: str, settings: SearchSettings) -> dict:
+            dataset_id: str | None, end_length: int, condition_use: str, settings: SearchSettings,
+            penalty: Callable | None = None) -> dict:
     if condition_use not in ("reference", "explicit_proxy"):
         raise ValueError("condition_use must be reference or explicit_proxy")
     matrix = None
@@ -251,7 +254,8 @@ def _search(*, domain_size: int, enumeration: Callable, random_start: Callable,
               "search_scope": {"algorithm": "exhaustive" if exact else "seeded_greedy_coordinate_restarts",
                   "domain_size": domain_size, "attempted": 0, "scored": 0,
                   "complete": False, "optimality_proven": False,
-                  "tie_break": "descending log F_set, then size penalty, then explicit choices",
+                  "tie_break": ("fewest avoided overhangs, then " if penalty else "")
+                               + "descending log F_set, then size penalty, then explicit choices",
                   "objective": settings.ranking_mode}}
     if unavailable:
         result["diagnostics"].append(unavailable)
@@ -268,7 +272,7 @@ def _search(*, domain_size: int, enumeration: Callable, random_start: Callable,
             return None
         candidate = describe(choice)
         junctions = candidate["junctions"]
-        if settings.unique_classes and len({_class(x) for x in junctions}) != len(junctions):
+        if len({_class(x) for x in junctions}) != len(junctions):
             return None
         if settings.exclude_palindromes and any(x == reverse_complement(x) for x in junctions):
             return None
@@ -279,7 +283,7 @@ def _search(*, domain_size: int, enumeration: Callable, random_start: Callable,
         # Log objective preserves ordering even if representable F_set underflows.
         objective = (-(log_value if log_value is not None else -math.inf)
                      if settings.ranking_mode == "empirical" else 0)
-        key = (objective, candidate.get("size_penalty", 0), tuple(choice))
+        key = (penalty(candidate) if penalty else 0, objective, candidate.get("size_penalty", 0), tuple(choice))
         candidate.update(f_set=value, log_f_set=log_value)
         best[tuple(choice)] = (key, candidate)
         if len(best) > settings.alternatives:
@@ -311,63 +315,82 @@ def _search(*, domain_size: int, enumeration: Callable, random_start: Callable,
 
 def optimize_overhangs(candidate_domain: Sequence[str], junction_count: int, dataset_id: str | None, *,
                        end_length: int, required: Sequence[str] = (), fixed: Sequence[str] = (),
-                       excluded: Sequence[str] = (), condition_use: str = "reference",
+                       excluded: Sequence[str] = (), avoided: Sequence[str] = (), condition_use: str = "reference",
                        settings: SearchSettings = SearchSettings()) -> dict:
     """Find a set, including every required/fixed class. Exclusions include RC classes.
 
     Fixed strings preserve their supplied orientation; other classes use the
     lexicographically first explicitly supplied representative. No hidden full domain.
+
+    `avoided` is a preference, never a refusal: classes (with reverse complements) the search leaves out of the free
+    choices when any set exists without them, and otherwise uses as few of as it can. Fixed and required
+    overhangs on the list are kept as given. `excluded` stays a hard constraint.
     """
     if type(junction_count) is not int or junction_count < 1:
         raise ValueError("junction_count must be positive")
-    if end_length not in (3, 4):
-        raise ValueError("end_length must be 3 or 4")
-    for x in itertools.chain(candidate_domain, required, fixed, excluded):
+    if type(end_length) is not int or end_length < 1:
+        raise ValueError("end_length must be positive")
+    for x in itertools.chain(candidate_domain, required, fixed, excluded, avoided):
         _dna(x, end_length)
     forbidden = {_class(x) for x in excluded}
+    preferred_out = {_class(x) for x in avoided} - forbidden
     locked = list(fixed)
     for x in required:
         if _class(x) not in {_class(y) for y in locked}:
             locked.append(x)
-    representatives = {}
-    for x in sorted(set(candidate_domain)):
-        if _class(x) not in forbidden and (not settings.unique_classes or _class(x) not in {_class(y) for y in locked}):
-            if not settings.exclude_palindromes or x != reverse_complement(x):
-                representatives.setdefault(_class(x), x)
-    pool = sorted(representatives.values())
-    need = junction_count - len(locked)
-    conflict = need < 0 or any(_class(x) in forbidden for x in locked)
-    if conflict or (need and not pool) or (settings.unique_classes and need > len(pool)):
-        size = 0
-    else:
-        size = math.comb(len(pool), need) if settings.unique_classes else math.comb(len(pool) + need - 1, need) if need else 1
+    locked_classes = {_class(y) for y in locked}
 
-    def enumeration():
-        if not size:
-            return iter(())
-        combinations = itertools.combinations if settings.unique_classes else itertools.combinations_with_replacement
-        return combinations(range(len(pool)), need)
+    def run(leave_out: set[str], penalty: Callable | None) -> tuple[dict, list[str]]:
+        representatives = {}
+        for x in sorted(set(candidate_domain)):
+            if _class(x) not in forbidden and _class(x) not in locked_classes and _class(x) not in leave_out:
+                if not settings.exclude_palindromes or x != reverse_complement(x):
+                    representatives.setdefault(_class(x), x)
+        pool = sorted(representatives.values())
+        need = junction_count - len(locked)
+        conflict = need < 0 or any(_class(x) in forbidden for x in locked)
+        size = 0 if conflict or (need and not pool) or need > len(pool) else math.comb(len(pool), need)
 
-    def start(rng):
-        if settings.unique_classes:
+        def enumeration():
+            if not size:
+                return iter(())
+            return itertools.combinations(range(len(pool)), need)
+
+        def start(rng):
             return tuple(sorted(rng.sample(range(len(pool)), need)))
-        return tuple(sorted(rng.randrange(len(pool)) for _ in range(need)))
 
-    def neighbor(choice, rng):
-        remaining = sorted(set(range(len(pool))) - set(choice)) if settings.unique_classes else list(range(len(pool)))
-        if not choice or not remaining:
-            return choice
-        out = list(choice)
-        out[rng.randrange(len(out))] = rng.choice(remaining)
-        return tuple(sorted(out))
+        def neighbor(choice, rng):
+            remaining = sorted(set(range(len(pool))) - set(choice))
+            if not choice or not remaining:
+                return choice
+            out = list(choice)
+            out[rng.randrange(len(out))] = rng.choice(remaining)
+            return tuple(sorted(out))
 
-    result = _search(domain_size=size, enumeration=enumeration, random_start=start, neighbor=neighbor,
-                     describe=lambda c: {"junctions": locked + [pool[i] for i in c], "choices": list(c)},
-                     feasible=lambda c: True, dataset_id=dataset_id, end_length=end_length,
-                     condition_use=condition_use, settings=settings)
+        found = _search(domain_size=size, enumeration=enumeration, random_start=start, neighbor=neighbor,
+                        describe=lambda c: {"junctions": locked + [pool[i] for i in c], "choices": list(c)},
+                        feasible=lambda c: True, dataset_id=dataset_id, end_length=end_length,
+                        condition_use=condition_use, settings=settings, penalty=penalty)
+        return found, pool
+
+    # The search runs exactly as before; only when it would use an avoided class in a free junction is it run again
+    # without those classes, so every other request keeps the set it always had.
+    result, pool = run(set(), None)
+    listed_free = lambda candidate: sum(_class(x) in preferred_out for x in candidate["junctions"][len(locked):])
+    if preferred_out and any(listed_free(c) for c in result["solutions"]):
+        restricted, restricted_pool = run(preferred_out, None)
+        if restricted["solutions"]:
+            result, pool = restricted, restricted_pool
+        else:
+            fallback, fallback_pool = run(set(), listed_free)
+            if fallback["solutions"]:
+                fallback["diagnostics"].append("No junction set exists without the avoided overhangs under these "
+                                               "constraints; the fewest possible are used.")
+                result, pool = fallback, fallback_pool
     result["constraints"] = {"candidate_domain": list(candidate_domain), "effective_candidate_domain": pool,
                              "junction_count": junction_count, "end_length": end_length,
-                             "required": list(required), "fixed": list(fixed), "excluded": list(excluded)}
+                             "required": list(required), "fixed": list(fixed), "excluded": list(excluded),
+                             "avoided": list(avoided)}
     return result
 
 
@@ -386,7 +409,7 @@ def sequence_window_domains(sequence: str, windows: Sequence[tuple[int, int]], *
     nonwrapping reference-coordinate intervals; no CDS translation claim is made.
     """
     _dna(sequence)
-    if end_length not in (3, 4) or topology not in ("linear", "circular"):
+    if type(end_length) is not int or end_length < 1 or topology not in ("linear", "circular"):
         raise ValueError("Unsupported length/topology")
     n = len(sequence)
     if n < end_length:
@@ -418,8 +441,10 @@ def sequence_window_domains(sequence: str, windows: Sequence[tuple[int, int]], *
 def optimize_sequence_windows(sequence: str, windows: Sequence[tuple[int, int]], dataset_id: str | None, *,
                               end_length: int, topology: str = "linear",
                               fixed_positions: Sequence[int | None] = (),
+                              allowed_positions: set[int] | None = None,
                               fixed_overhangs: Sequence[str] = (), required: Sequence[str] = (),
-                              excluded: Sequence[str] = (), protected_regions: Sequence[tuple[int, int]] = (),
+                              excluded: Sequence[str] = (), avoided: Sequence[str] = (),
+                              protected_regions: Sequence[tuple[int, int]] = (),
                               frame_constraints: Sequence[tuple[int, int, int, int]] = (),
                               min_fragment_length: int = 1, max_fragment_length: int | None = None,
                               target_fragment_length: int | None = None,
@@ -431,6 +456,10 @@ def optimize_sequence_windows(sequence: str, windows: Sequence[tuple[int, int]],
     lengths. Circular final segment crosses the origin. Fixed vector/closure ends
     participate in the objective without pretending to be target cut positions.
     The assembly owner must verify physical fragments/primers and coding biology.
+
+    `avoided` is a preference, never a refusal: fusions of those classes are left out of every window that is not pinned
+    to an exact position when a feasible set exists without them; otherwise the search keeps the whole window and uses as
+    few of them as it can. Exact positions and `fixed_overhangs` are never moved or removed. `excluded` stays hard.
     """
     domains = sequence_window_domains(sequence, windows, end_length=end_length, topology=topology,
                                      protected_regions=protected_regions, frame_constraints=frame_constraints)
@@ -439,59 +468,97 @@ def optimize_sequence_windows(sequence: str, windows: Sequence[tuple[int, int]],
     if (min_fragment_length < 1 or (max_fragment_length is not None and max_fragment_length < min_fragment_length)
             or (target_fragment_length is not None and target_fragment_length < 1)):
         raise ValueError("Invalid fragment length goal")
-    for x in itertools.chain(fixed_overhangs, required, excluded):
+    for x in itertools.chain(fixed_overhangs, required, excluded, avoided):
         _dna(x, end_length)
     forbidden = {_class(x) for x in excluded}
+    preferred_out = {_class(x) for x in avoided} - forbidden
     for i, domain in enumerate(domains):
-        domains[i] = [x for x in domain if _class(x["sequence"]) not in forbidden and
+        domains[i] = [x for x in domain if (allowed_positions is None or x["position"] in allowed_positions) and _class(x["sequence"]) not in forbidden and
                       (not fixed_positions or fixed_positions[i] is None or x["position"] == fixed_positions[i])]
-    size = math.prod(len(x) for x in domains)
-    if not domains:
-        size = 0
+    full = [list(d) for d in domains]
 
-    def describe(choice):
-        selected = [domains[i][j] for i, j in enumerate(choice)]
-        positions = [x["position"] for x in selected]
-        if topology == "linear":
-            boundaries = [0, *positions, len(sequence)]
-            lengths = [b - a for a, b in zip(boundaries, boundaries[1:])]
-        else:
-            lengths = ([(b - a) % len(sequence) for a, b in zip(positions, positions[1:] + positions[:1])]
-                       if len(positions) > 1 else [len(sequence)])
-        return {"junctions": list(fixed_overhangs) + [x["sequence"] for x in selected],
-                "choices": list(choice), "cuts": selected, "fragment_lengths": lengths,
-                "size_penalty": sum(abs(x - target_fragment_length) for x in lengths) if target_fragment_length else 0}
+    def run(domains: list[list[dict]], penalty: Callable | None) -> dict:
+        size = 0 if not domains else math.prod(len(x) for x in domains)
 
-    def feasible(choice):
-        candidate = describe(choice)
-        positions = [x["position"] for x in candidate["cuts"]]
-        geometry_valid = (all(a + end_length <= b for a, b in zip(positions, positions[1:]))
-                          if topology == "linear" else
-                          sum(candidate["fragment_lengths"]) == len(sequence)
-                          and all(x >= end_length for x in candidate["fragment_lengths"]))
-        return (geometry_valid
-                and all(x >= min_fragment_length and (max_fragment_length is None or x <= max_fragment_length)
-                        for x in candidate["fragment_lengths"])
-                and not any(_class(x) in forbidden for x in candidate["junctions"])
-                and {_class(x) for x in required} <= {_class(x) for x in candidate["junctions"]})
+        def describe(choice):
+            selected = [domains[i][j] for i, j in enumerate(choice)]
+            positions = [x["position"] for x in selected]
+            if topology == "linear":
+                boundaries = [0, *positions, len(sequence)]
+                lengths = [b - a for a, b in zip(boundaries, boundaries[1:])]
+            else:
+                lengths = ([(b - a) % len(sequence) for a, b in zip(positions, positions[1:] + positions[:1])]
+                           if len(positions) > 1 else [len(sequence)])
+            return {"junctions": list(fixed_overhangs) + [x["sequence"] for x in selected],
+                    "choices": list(choice), "cuts": selected, "fragment_lengths": lengths,
+                    "size_penalty": sum(abs(x - target_fragment_length) for x in lengths) if target_fragment_length else 0}
 
-    def neighbor(choice, rng):
-        out = list(choice)
-        slot = rng.randrange(len(domains))
-        out[slot] = rng.randrange(len(domains[slot]))
-        return tuple(out)
+        def feasible(choice):
+            candidate = describe(choice)
+            positions = [x["position"] for x in candidate["cuts"]]
+            geometry_valid = (all(a + end_length <= b for a, b in zip(positions, positions[1:]))
+                              if topology == "linear" else
+                              sum(candidate["fragment_lengths"]) == len(sequence)
+                              and all(x >= end_length for x in candidate["fragment_lengths"]))
+            return (geometry_valid
+                    and all(x >= min_fragment_length and (max_fragment_length is None or x <= max_fragment_length)
+                            for x in candidate["fragment_lengths"])
+                    and not any(_class(x) in forbidden for x in candidate["junctions"])
+                    and {_class(x) for x in required} <= {_class(x) for x in candidate["junctions"]})
 
-    result = _search(domain_size=size, enumeration=lambda: itertools.product(*(range(len(d)) for d in domains)) if size else iter(()),
-                     random_start=lambda rng: tuple(rng.randrange(len(d)) for d in domains),
-                     neighbor=neighbor, describe=describe, feasible=feasible, dataset_id=dataset_id,
-                     end_length=end_length, condition_use=condition_use, settings=settings)
+        def neighbor(choice, rng):
+            out = list(choice)
+            slot = rng.randrange(len(domains))
+            out[slot] = rng.randrange(len(domains[slot]))
+            return tuple(out)
+
+        def random_start(rng):
+            independent = tuple(rng.randrange(len(d)) for d in domains)
+            if rng.randrange(2) or not domains:
+                return independent
+            # Correlated balanced starts can satisfy tight size bounds that independent
+            # coordinate draws almost never reach. Same native search/objective follows.
+            count = len(domains) + (topology == "linear")
+            origin = domains[0][independent[0]]["position"] if topology == "circular" else 0
+            return tuple(min(range(len(domain)), key=lambda j: abs(domain[j]["position"] -
+                         (origin + (i if topology == "circular" else i + 1) * len(sequence) / count)))
+                         for i, domain in enumerate(domains))
+
+        found = _search(domain_size=size, enumeration=lambda: itertools.product(*(range(len(d)) for d in domains)) if size else iter(()),
+                        random_start=random_start,
+                        neighbor=neighbor, describe=describe, feasible=feasible, dataset_id=dataset_id,
+                        end_length=end_length, condition_use=condition_use, settings=settings, penalty=penalty)
+        found["candidate_domains"] = domains
+        return found
+
+    # The search runs exactly as before; only when it would use an avoided overhang in a window that is not pinned to an
+    # exact position is it run again without them, so every other request keeps the set it always had.
+    result = run(full, None)
+    if preferred_out:
+        pinned = [bool(fixed_positions) and fixed_positions[i] is not None for i in range(len(full))]
+
+        def listed_free(candidate):
+            picks = candidate["junctions"][len(fixed_overhangs):]
+            return sum(_class(x) in preferred_out for x, is_pinned in zip(picks, pinned) if not is_pinned)
+
+        if any(listed_free(c) for c in result["solutions"]):
+            preferred = [d if pinned[i] else [x for x in d if _class(x["sequence"]) not in preferred_out]
+                         for i, d in enumerate(full)]
+            restricted = run(preferred, None)
+            if restricted["solutions"]:
+                result = restricted
+            else:
+                fallback = run(full, listed_free)
+                if fallback["solutions"]:
+                    fallback["diagnostics"].append("No fusion set without the avoided overhangs fits these windows and "
+                                                   "limits; the fewest possible are used.")
+                    result = fallback
     result["constraints"] = {"end_length": end_length, "topology": topology, "windows": [list(x) for x in windows],
         "coordinate_convention": "zero_based_half_open_fusion_start_windows",
         "fragment_length_basis": "distance_between_fusion_starts", "fusion_nonoverlap": True,
         "fixed_positions": list(fixed_positions), "fixed_overhangs": list(fixed_overhangs), "required": list(required),
-        "excluded": list(excluded), "protected_regions": [list(x) for x in protected_regions],
+        "excluded": list(excluded), "avoided": list(avoided), "protected_regions": [list(x) for x in protected_regions],
         "frame_constraints": [list(x) for x in frame_constraints], "min_fragment_length": min_fragment_length,
         "max_fragment_length": max_fragment_length, "target_fragment_length": target_fragment_length}
-    result["candidate_domains"] = domains
     result["diagnostics"].append("Sequence-window assignment only; physical preparation, primer tradeoffs and translation verification belong to the design owner. Target DNA is unchanged.")
     return result

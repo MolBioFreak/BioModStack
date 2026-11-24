@@ -5,6 +5,10 @@ Reads all_designs.csv and success_metrics.json from completed jobs
 and populates the Design table in SQLite.
 """
 
+from services.result_contracts import (
+    _parse_job_params,
+)
+
 import csv
 import copy
 import hashlib
@@ -69,7 +73,6 @@ from .frustrampnn.persistence import (
 from .structure_utils import calculate_epitope_contacts, compute_contact_geometry_metrics, compute_gyration_radius
 
 
-
 def _normalize_boltzgen_design_name(design_name: str) -> str:
     """Normalize upstream ``rankN_name`` artifacts to the UI/API ``name_N`` contract."""
     import re
@@ -114,18 +117,6 @@ def parse_backbone_id(design_name: str) -> Optional[int]:
         if matches:
             return int(matches[-1])
     return None
-
-
-def _parse_job_params(raw_params: Any) -> Dict[str, Any]:
-    if isinstance(raw_params, dict):
-        return raw_params
-    if isinstance(raw_params, str) and raw_params:
-        try:
-            parsed = json.loads(raw_params)
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:
-            return {}
-    return {}
 
 
 def _job_has_explicit_binder_target_roles(job: Optional[Job]) -> bool:
@@ -1766,39 +1757,6 @@ def _resolve_existing_child_path(root: Path, raw_path: Any) -> Optional[Path]:
     return candidate if candidate.exists() else None
 
 
-def _resolve_esmfold2_final_root(output_path: Path) -> Optional[Path]:
-    esmfold2_root = output_path / "final" / "esmfold2"
-    # The workflow publishes single-sequence jobs under
-    # final/esmfold2/<sequence_name>/esmfold2_results. Keep the older aggregate
-    # directory candidates for backward compatibility, but discover only the
-    # bounded one-level sequence namespace rather than recursively scanning the
-    # job root.
-    sequence_roots = (
-        sorted(esmfold2_root.glob("*/esmfold2_results"))
-        if esmfold2_root.is_dir()
-        else []
-    )
-    candidates = [
-        esmfold2_root / "esmfold2_results",
-        *sequence_roots,
-        esmfold2_root,
-        output_path / "esmfold2_results",
-        output_path / "pdb_files" / "esmfold2_results",
-        output_path,
-    ]
-    for candidate in candidates:
-        if not candidate.exists():
-            continue
-        manifest = _load_json_any(candidate / "manifest.json")
-        if isinstance(manifest, dict) and str(manifest.get("workflow") or "").strip().lower() in {"esmfold2", "esmfold2_experimental"}:
-            return candidate
-        if any(candidate.glob("*.metrics.json")) and (
-            any(candidate.glob("*.cif")) or any(candidate.glob("*.mmcif")) or any(candidate.glob("*.pdb"))
-        ):
-            return candidate
-    return None
-
-
 def _esmfold2_sample_entries(final_root: Path, manifest_payload: Any) -> List[Dict[str, Any]]:
     if isinstance(manifest_payload, dict) and isinstance(manifest_payload.get("samples"), list):
         return [entry for entry in manifest_payload["samples"] if isinstance(entry, dict)]
@@ -1872,7 +1830,8 @@ async def ingest_esmfold2_results(
     with session.no_autoflush:
         persisted_job = await session.get(Job, job_id)
     strict = revision_for_job(persisted_job) == 1
-    final_root = _resolve_esmfold2_final_root(output_path)
+    from services.esmfold2_scientific_consumer import _resolve_esmfold2_final_root
+    final_root = _resolve_esmfold2_final_root(output_path, persisted_job if strict else None)
     if final_root is None:
         if strict:
             raise CandidateIntegrityError("missing_candidate_declaration", "ESMFold2 producer manifest is missing")
@@ -1915,6 +1874,7 @@ async def ingest_esmfold2_results(
         sample_id = str(entry.get("sample_id") or entry.get("id") or entry.get("name") or "").strip()
         if strict:
             sample_id = entry['sample_id']
+            manifest_path = prepared[sample_id]["manifest_path"]
             combined_payload = prepared[sample_id]["payload"]
             metrics_path = Path(prepared[sample_id]["artifacts"]["metrics"]["path"])
             structure_path = Path(prepared[sample_id]["artifacts"]["structure"]["path"])
@@ -3952,117 +3912,6 @@ async def _persist_cm_bundle_atomically(
         raise
 
 
-async def _ingest_rfd3_generation_manifest(
-    job: Job,
-    output_path: Path,
-    session: AsyncSession,
-    *,
-    commit: bool,
-) -> int:
-    manifest_path = output_path / "collected" / "rfd3_generation" / "rfd3_generation_result_manifest.json"
-    if manifest_path.is_symlink() or not manifest_path.is_file():
-        raise GenerationContractError("RFD3 generation result manifest is absent or unsafe")
-    params = _parse_job_params(job.params)
-    request = params.get("rfd3_generation_request")
-    if not isinstance(request, dict):
-        raise GenerationContractError("persisted RFD3 generation request is missing")
-    from services.rfd3_generation_results import load_incremental_manifest, check_incremental_candidates, retain_unpaired_artifacts
-    manifest_sha256 = file_sha256(manifest_path)
-    try:
-        manifest, candidates, candidate_names = load_incremental_manifest(manifest_path,
-            request=request, output_root=output_path, job_id=str(job.id))
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        raise GenerationContractError(f"RFD3 generation result manifest is malformed: {exc}") from exc
-    existing_names = set(await session.scalars(select(Design.name).where(Design.job_id == job.id)))
-    if not existing_names <= candidate_names:
-        raise GenerationContractError('persisted RFD3 generation candidates conflict with the producer manifest')
-    await retain_unpaired_artifacts(session, job, output_path, manifest)
-
-    from services.rfd3_generation_results import candidate_batches
-    async for candidate_index, candidate, existing_row in candidate_batches(session, job.id, candidates):
-        if existing_row is not None:
-            check_incremental_candidates([existing_row], {**manifest, 'candidates': [candidate]}, manifest_sha256)
-            continue
-        artifacts = {item["role"]: item for item in candidate["artifacts"]}
-        structure = artifacts["candidate_structure"]
-        metadata = artifacts["candidate_metadata"]
-        metrics = candidate["metrics"]
-        session.add(
-            Design(
-                id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"bms:rfd3-generation:{job.id}:{candidate['candidate_id']}")),
-                job_id=job.id,
-                name=candidate["candidate_id"],
-                producer_model_id="rfd3",
-                pdb_path=structure["resolved_path"],
-                json_path=metadata["resolved_path"],
-                lineage_root_job_id=job.lineage_root_job_id or job.id,
-                stage_family="de_novo_design",
-                stage_mode="rfd3_generation",
-                artifact_class="rfd3_general_generation",
-                artifact_schema_version=1,
-                review_profile_id="de_novo_generation_v1",
-                review_contract_version=1,
-                review_contract_source="rfd3_generation_producer",
-                review_role_map={"result_role": "generated_backbone", "generator": "rfd3"},
-                review_artifact_manifest={
-                    "schema": REVIEW_ARTIFACT_SCHEMA,
-                    "artifacts": {
-                        "structure": {
-                            "kind": "structure",
-                            "state": "ready",
-                            "path": structure["resolved_path"],
-                            "relative_path": structure["relative_path"],
-                            "sha256": structure["sha256"],
-                            "bytes": structure["bytes"],
-                        },
-                        "native_metadata": {
-                            "kind": "native_metadata",
-                            "state": "ready",
-                            "path": metadata["resolved_path"],
-                            "relative_path": metadata["relative_path"],
-                            "sha256": metadata["sha256"],
-                            "bytes": metadata["bytes"],
-                        },
-                    },
-                    "roles": {"result_role": "generated_backbone", "generator": "rfd3", "has_binder": False},
-                },
-                num_helices=metrics["helix_count"],
-                num_strands=metrics["strand_count"],
-                rfd_rog=metrics["radius_of_gyration"],
-                # Whole-candidate values remain in native provenance below;
-                # they are not per-chain confidence records.
-                chain_metrics=None,
-                provenance={
-                    "schema": "bms.rfd3.generation.candidate-provenance.v1",
-                    "request_id": manifest["request_id"],
-                    "request_sha256": manifest["request_sha256"],
-                    "result_manifest_sha256": manifest_sha256,
-                    "artifact_manifest_sha256": candidate["artifact_manifest_sha256"],
-                    "metrics": metrics,
-                    "accepted": candidate["accepted"],
-                    "artifacts": candidate["artifacts"],
-                },
-            )
-        )
-        if candidate_index % 256 == 0:
-            await session.flush()
-    if file_sha256(manifest_path) != manifest_sha256:
-        raise GenerationContractError('RFD3 generation manifest changed during import')
-    persisted_params = dict(params)
-    persisted_params["rfd3_generation_result_manifest_sha256"] = manifest_sha256
-    persisted_params["rfd3_generation_aggregate"] = manifest["aggregate"]
-    persisted_params["rfd3_generation_result_schema"] = manifest["schema"]
-    persisted_params["rfd3_generation_population"] = manifest.get("population")
-    persisted_params["rfd3_generation_execution_status"] = manifest.get("execution_status", job.status)
-    job.params = persisted_params
-    flag_modified(job, "params")
-    if commit:
-        await session.commit()
-    else:
-        await session.flush()
-    return len(candidate_names)
-
-
 async def _ingest_protenix_primary_publications(
     job: Job, output_root: Path, session: AsyncSession,
 ) -> None:
@@ -4504,6 +4353,36 @@ async def _ingest_public_sequence_results(job: Job, output_path: Path, session: 
     return created
 
 
+async def _publish_primary_results(
+    job_id: str,
+    job: Optional[Job],
+    output_dir: str,
+    session: AsyncSession,
+    epitope_residues: Optional[list],
+    closeout: Optional[dict],
+) -> int:
+    """Primary import, Protenix binding, flush, then the antibody closeout stamp.
+
+    The caller reads the closeout and owns commit, savepoint and rollback.
+    """
+    model_id = str(job.model_id or "").strip().lower() if job else ""
+    # Native primary owners publish full scientific projections first. Component
+    # results attach to those rows; they must never replace primary ingestion.
+    count = 0 if model_id == "frustrampnn" else await _ingest_job_results(
+        job_id, output_dir, session, epitope_residues,
+    )
+    if model_id == "protenix" and job is not None:
+        output_path = Path(output_dir)
+        output_path = (resolve_runtime_data_path(output_path) if output_path.is_absolute()
+                       else get_data_root() / output_dir)
+        await _ingest_protenix_primary_publications(job, output_path, session)
+    await session.flush()
+    if closeout is not None and job is not None:
+        job.provenance = {**(job.provenance or {}),
+                          "antibody_pipeline_result": closeout}
+    return count
+
+
 async def ingest_job_results(
     job_id: str,
     output_dir: str,
@@ -4534,20 +4413,12 @@ async def ingest_job_results(
             native_root = (resolve_runtime_data_path(native_root) if native_root.is_absolute()
                            else get_data_root() / output_dir)
             closeout = antibody_pipeline_closeout(current_job, native_root)
-        # Native primary owners publish full scientific projections first. Component
-        # results attach to those rows; they must never replace primary ingestion.
-        count = 0 if model_id == "frustrampnn" else await _ingest_job_results(
-            job_id, output_dir, session, epitope_residues,
+        count = await _publish_primary_results(
+            job_id, current_job, output_dir, session, epitope_residues, closeout,
         )
         output_path = Path(output_dir)
         output_path = (resolve_runtime_data_path(output_path) if output_path.is_absolute()
                        else get_data_root() / output_dir)
-        if model_id == "protenix" and current_job is not None:
-            await _ingest_protenix_primary_publications(current_job, output_path, session)
-        await session.flush()
-        if closeout is not None and current_job is not None:
-            current_job.provenance = {**(current_job.provenance or {}),
-                                      "antibody_pipeline_result": closeout}
         # The primary owner has finished verification and publication. Commit
         # before the optional component only when it was selected: its native
         # validation may fail without revoking an already verified generator.
@@ -4680,6 +4551,7 @@ async def _ingest_job_results(
         and str(current_job.mode or "").strip().lower() == "de_novo_design"
         and str(_parse_job_params(current_job.params).get("generator") or "rfd3").strip().lower() == "rfd3"
     ):
+        from services.rfd3_generation_results import _ingest_rfd3_generation_manifest
         return await _ingest_rfd3_generation_manifest(current_job, output_path, session, commit=False)
     if current_job and str(current_job.model_id or "") == "conformational_mapping":
         cm_request = (await session.execute(select(ConformationalMappingRequest).where(
@@ -6457,7 +6329,6 @@ async def ingest_collected_ppiflow_structures(
         print(f"[Ingester] Backfilled {created} collected PPIFlow structures for job {job_id}")
 
     return created
-
 
 
 def _relocate_caliby_native_output(payload: Dict[str, Any], metadata_path: Path) -> Dict[str, Any]:

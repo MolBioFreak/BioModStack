@@ -105,24 +105,8 @@ def test_canonical_region_mode_reuses_internal_local_redesign_entrypoint() -> No
     assert "--modification_mode region_redesign" in joined
 
 
-def test_launcher_exposes_parent_and_not_legacy_products() -> None:
-    job_submission = (FRONTEND_ROOT / "src/components/JobSubmission.tsx").read_text(encoding="utf-8")
-    template_state = (FRONTEND_ROOT / "src/components/jobSubmissionTemplateState.ts").read_text(encoding="utf-8")
-    parent_template = FRONTEND_ROOT / "src/components/ProteinModificationTemplate.tsx"
-
-    assert parent_template.exists()
-    assert "id: 'protein_modification_experimental'" in job_submission
-    assert "name: 'De Novo Design'" in job_submission
-    assert re.search(r"^\s*id: 'protein_local_redesign'", job_submission, flags=re.MULTILINE) is None
-    assert "selectedTemplateId === 'protein_local_redesign'" not in job_submission
-    assert "'protein_modification_experimental'" in template_state
 
 
-def test_legacy_api_template_is_compatibility_only_and_hidden() -> None:
-    assert (API_ROOT / "config/templates/protein_cad_experimental.yaml").exists()
-    job_submission = (FRONTEND_ROOT / "src/components/JobSubmission.tsx").read_text(encoding="utf-8")
-    assert "LEGACY_PROTEIN_MODIFICATION_TEMPLATE_IDS" in job_submission
-    assert "!LEGACY_PROTEIN_MODIFICATION_TEMPLATE_IDS.has(t.id)" in job_submission
 
 
 def test_canonical_region_jobs_retain_local_redesign_review_semantics() -> None:

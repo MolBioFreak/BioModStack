@@ -152,10 +152,18 @@ def selected_assets():
 
 
 def default_runtime_image(container_root):
-    """One pinned dual-device image travels with the selected native stage."""
+    """The reference build when it is installed, else a locally built protonpottsmpnn.sif.
+
+    The reference build is checked against its recorded hash. A local build is accepted
+    as it is; the repository cannot know its hash.
+    """
     lock = json.loads((Path(__file__).resolve().parents[3] /
         'apptainer/protonpottsmpnn-runtime.lock.json').read_text())
-    return Path(container_root) / lock['image_filename'], lock['image_sha256']
+    reference = Path(container_root) / lock['image_filename']
+    local = Path(container_root) / 'protonpottsmpnn.sif'
+    if not reference.exists() and local.exists():
+        return local, None
+    return reference, lock['image_sha256']
 
 
 def read_design_result(output_root):

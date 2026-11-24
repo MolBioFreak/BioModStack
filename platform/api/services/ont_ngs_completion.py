@@ -65,6 +65,8 @@ _REQUIRED_STAGE_OUTPUT_SUFFIXES = {
         "verification/evidence.html", "verification/topology_evidence.json",
     ),
 }
+# Optional exports: a stage is complete with or without them.
+_OPTIONAL_STAGE_OUTPUT_SUFFIXES = {"fastq_qc": frozenset({"fastq_qc/igv_report.html"})}
 _MAX_MANIFEST_ARTIFACTS = 256
 
 
@@ -77,7 +79,7 @@ def prepare_dorado_demux_products(job: Any, *, read_root: Path, persisted_root: 
     from services import ont_ngs_contract
     from services.ont_barcode_units import _resolve_barcode_catalogs, BarcodeProductContainmentError
 
-    if job.model_id != "nanopore" or job.mode != "basecall_dna" or str((job.params or {}).get("barcode_kit") or "") != "SQK-RBK114-96":
+    if job.model_id != "nanopore" or job.mode != "basecall_dna" or str((job.params or {}).get("barcode_kit") or "") not in ont_ngs_contract.accepted_barcode_kits():
         raise DoradoProductsUnavailable(status_code=422, detail="dorado_demux is valid only for locked barcoded DNA jobs")
     if not persisted_root.is_absolute():
         raise OntNgsCompletionError("Dorado persisted destination must be absolute")
@@ -208,8 +210,7 @@ def prepare_dorado_demux_products(job: Any, *, read_root: Path, persisted_root: 
         or preflight_selection.get("molecule") != "dna"
         or preflight_selection.get("model_aggregate_sha256") != approved_model.get("aggregate_sha256")
         or preflight_selection.get("quality") != params.get("dorado_quality_mode")
-        or preflight_selection.get("modified_bases") != "none"
-        or preflight_selection.get("modified_bases_model_ids")
+        or str(preflight_selection.get("modified_bases") or "none") != str(params.get("modified_bases") or "none")
         or preflight_selection.get("stereo_model_id") is not None
         or runtime.get("model_id") != expected_model_id
         or expected_mode != "simplex"
@@ -299,6 +300,14 @@ def is_ont_fastq_qc_job(job: Job) -> bool:
     )
 
 
+def ont_fastq_qc_stage_selected(params: Any) -> bool:
+    """Mirror workflows/ngs/ont_fastq_qc.nf: explicit run_fastq_qc wins, then legacy run_multimer_qc."""
+    params = params if isinstance(params, dict) else {}
+    if params.get("run_fastq_qc") is not None:
+        return params.get("run_fastq_qc") is not False
+    return params.get("run_multimer_qc") is not False
+
+
 def is_ont_signal_alignment_job(job: Job) -> bool:
     """Return whether one Job is the bounded external move-BAM alignment lane."""
 
@@ -365,7 +374,9 @@ def ont_native_completion_path(job: Any) -> str:
     if workflow == "ont_pooled_reference_assignment":
         return "pooled_review"
     if is_ont_fastq_qc_job(job):
-        return "fastq_qc"
+        # QC off runs alignment and multimer analysis only. It writes no QC or
+        # verification manifest, so it completes through the shared importer.
+        return "fastq_qc" if ont_fastq_qc_stage_selected(params) else "shared_native_import"
     if is_ont_signal_alignment_job(job):
         return "signal_alignment"
     return "shared_native_import"
@@ -757,7 +768,8 @@ def _validate_terminal_stages(
                 raise OntNgsCompletionError("required NGS stage output is duplicated across stages")
             observed_paths.add(suffix)
             observed_suffixes.append(suffix)
-        if set(observed_suffixes) != set(_REQUIRED_STAGE_OUTPUT_SUFFIXES[stage]):
+        optional = _OPTIONAL_STAGE_OUTPUT_SUFFIXES.get(stage, frozenset())
+        if set(observed_suffixes) - optional != set(_REQUIRED_STAGE_OUTPUT_SUFFIXES[stage]) - optional:
             raise OntNgsCompletionError(f"required NGS stage output contract mismatch: {stage}")
         stage_outputs[stage] = list(outputs)
     return list(_REQUIRED_TERMINAL_STAGES), stage_outputs

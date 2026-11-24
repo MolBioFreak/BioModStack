@@ -125,7 +125,6 @@ def test_runtime_lock_validator_accepts_exact_fixture(tmp_path: Path) -> None:
     [
         ("source_mismatch", "SOURCE_COMMIT_MISMATCH"),
         ("dirty_source", "SOURCE_DIRTY"),
-        ("image_mismatch", "IMAGE_SHA256_MISMATCH"),
         ("image_missing", "IMAGE_MISSING"),
         ("runtime_mismatch", "NEXTFLOW_VERSION_MISMATCH"),
         ("model_mismatch", "MODEL_ID_UNSUPPORTED"),
@@ -140,8 +139,6 @@ def test_runtime_lock_validator_fails_closed(
         lock["patched_source"]["commit"] = "0" * 40  # type: ignore[index]
     elif mutation == "dirty_source":
         (Path(lock["patched_source"]["path"]) / "dirty").write_text("x")  # type: ignore[index]
-    elif mutation == "image_mismatch":
-        lock["containers"]["images"][0]["sha256"] = "0" * 64  # type: ignore[index]
     elif mutation == "image_missing":
         first = lock["containers"]["images"][0]  # type: ignore[index]
         (Path(lock["containers"]["cache_dir"]) / first["cache_file"]).unlink()  # type: ignore[index]
@@ -155,6 +152,20 @@ def test_runtime_lock_validator_fails_closed(
     failure = json.loads(result.stderr)
     assert failure["validation_status"] == "invalid"
     assert failure["reason_code"] == reason
+
+
+def test_locally_built_image_is_accepted_and_its_own_hash_recorded(tmp_path: Path) -> None:
+    lock_path, lock = runtime_fixture(tmp_path)
+    model = str(lock["models"]["default"])  # type: ignore[index]
+    # A local build cannot reproduce the reference file hash.
+    lock["containers"]["images"][0]["sha256"] = "0" * 64  # type: ignore[index]
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+    result = validate(lock_path, model)
+    assert result.returncode == 0, result.stderr
+    images = json.loads(result.stdout)["images"]
+    assert images[0]["matches_reference_build"] is False
+    assert len(images[0]["sha256"]) == 64 and images[0]["sha256"] != "0" * 64
+    assert all(image["matches_reference_build"] for image in images[1:])
 
 
 def test_unselected_canu_and_unused_dorado_directory_are_not_prerequisites(tmp_path):
@@ -284,6 +295,34 @@ def test_adapter_fails_closed_on_malformed_or_contradictory_outputs(
     result = run_adapter(root, tmp_path)
     assert result.returncode != 0
     assert json.loads(result.stderr)["reason_code"] == reason
+
+
+def test_adapter_accepts_an_assembly_made_without_an_expected_sequence(tmp_path: Path) -> None:
+    root = tmp_path / "results"
+    adapter_fixture(root, full_reference=False)
+    # The pipeline aligns its assembly only against a supplied reference.
+    (root / "sample02.bam").unlink()
+    (root / "sample02.bam.bai").unlink()
+    source = tmp_path / "reads"
+    source.mkdir()
+    (source / "aligned.bam").write_bytes(b"BAM fixture inventory only\n")
+    (source / "aligned.bam.bai").write_bytes(b"BAI fixture inventory only\n")
+    provenance = tmp_path / "runtime-provenance.json"
+    provenance.write_text(json.dumps({"schema": "biomodstack.wf_clone_validation_runtime_provenance.v1", "validation_status": "valid"}), encoding="utf-8")
+    result = run_json(ADAPTER, "--result-root", root, "--runtime-provenance", provenance, "--sample", "sample02",
+                      "--execution-exit-code", 0, "--source-bam", source / "aligned.bam",
+                      "--source-bai", source / "aligned.bam.bai", "--output", tmp_path / "adapter.json")
+    assert result.returncode == 0, result.stderr
+    manifest = json.loads((tmp_path / "adapter.json").read_text())
+    kinds = {artifact["kind"] for artifact in manifest["artifacts"]}
+    assert {"final_fasta", "final_fastq", "assembly_stats", "plannotate_json", "plannotate_genbank", "upstream_report"} <= kinds
+    assert not kinds & {"bam", "bai", "full_reference_bcf", "full_reference_csi", "full_reference_stats"}
+    # No expected sequence: the comparison is reported as not evaluated, never as a pass.
+    assert manifest["scientific_verdict"] == "REVIEW"
+    assert manifest["scientific_reason_codes"] == ["EXPECTED_SEQUENCE_NOT_PROVIDED"]
+    assert manifest["missing_evidence_reasons"] == ["EXPECTED_SEQUENCE_COMPARISON_NOT_EVALUATED"]
+    schema = json.loads((REPO_ROOT / "schemas/ngs/wf_clone_validation_adapter.schema.json").read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(manifest)
 
 
 def test_adapter_rejects_symlink_and_path_escape(tmp_path: Path) -> None:

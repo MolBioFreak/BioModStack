@@ -205,6 +205,44 @@ async def test_transaction_interleavings_preserve_only_receipted_artifact_bytes(
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nested_commits", [False, True])
+@pytest.mark.parametrize("outer_commits", [False, True])
+async def test_savepoint_publications_follow_their_own_transaction(
+    tmp_path, monkeypatch, nested_commits, outer_commits
+):
+    root = tmp_path / "artifacts"
+    monkeypatch.setenv("BMS_SCIENTIFIC_ARTIFACT_ROOT", str(root))
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'savepoint.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    publication = dict(owner_kind="savepoint-test", role="rows", schema_id="bms.test.v1",
+                       source_sha256="a" * 64, rows=[{"value": 1}],
+                       schema=pa.schema([("value", pa.int64())]))
+    async with sessions() as session:
+        outer = await publish_table_rows(session, owner_id="outer", **publication)
+        nested = await session.begin_nested()
+        inner = await publish_table_rows(session, owner_id="inner", **publication)
+        # Reusing outer bytes in the SAVEPOINT must not surrender outer custody.
+        await publish_table_rows(session, owner_id="outer", **publication)
+        await session.flush()
+        await (nested.commit() if nested_commits else nested.rollback())
+        assert outer.storage_path.exists()
+        assert inner.storage_path.exists() == nested_commits
+        await (session.commit() if outer_commits else session.rollback())
+    async with sessions() as session:
+        ids = set((await session.execute(text(
+            "SELECT artifact_id FROM scientific_artifact_receipts"
+        ))).scalars())
+    expected = ({outer.artifact_id} | ({inner.artifact_id} if nested_commits else set())) if outer_commits else set()
+    assert ids == expected
+    assert outer.storage_path.exists() == outer_commits
+    assert inner.storage_path.exists() == (nested_commits and outer_commits)
+    assert not list(root.rglob(".publication-ownership.json"))
+    await engine.dispose()
+
+
 def test_transactional_reuse_rejects_digest_mismatch_without_disarming_cleanup(tmp_path):
     import services.scientific_artifacts.writer as writer
 

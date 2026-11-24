@@ -13,6 +13,8 @@ from sqlalchemy import select
 
 from database import Design, Job
 from routers import jobs
+from services import job_submission
+from services import job_requests
 from schemas import JobCreate
 from services.nextflow import compile_job_nextflow_invocation
 from services.result_ingester import ingest_job_results
@@ -61,7 +63,7 @@ def test_existing_native_role_checks_are_called_by_jobs(settings, message, tmp_p
     typed = role_request(tmp_path)
     typed.params.update(settings)
     with pytest.raises(HTTPException) as error:
-        jobs.normalize_job_request(typed)
+        job_requests.normalize_job_request(typed)
     assert error.value.status_code == 422 and message in str(error.value.detail)
 
 
@@ -72,9 +74,11 @@ async def test_role_request_real_compiled_native_transport_and_ingestion(admissi
     if model == 'proteinmpnn':
         monkeypatch.setenv('BMS_TEST_MPNN_ROLE_FIXTURE', str(fixture.native_role_fixture(tmp_path)))
     else:
+        if not os.environ.get('BMS_G09_FAMPNN_SOURCE'):
+            pytest.skip('BMS_G09_FAMPNN_SOURCE (installed FA-MPNN source export) is not set')
         monkeypatch.setenv('BMS_TEST_FA_REAL_WRITER', '1')
     typed = role_request(tmp_path, model, order)
-    response = await jobs._create_job(typed, BackgroundTasks(), admission)
+    response = await job_submission._create_job(typed, BackgroundTasks(), admission)
     job = await admission.get(Job, response.id)
     output = tmp_path / 'native-output'
     invocation = compile_job_nextflow_invocation(job, deepcopy(job.params), str(output))
@@ -138,7 +142,7 @@ async def test_caliby_actual_compiler_shell_native_identity_and_ingestion(admiss
         'pdb_paths': str(source), 'binder_chains': 'Z', 'target_chains': 'B',
         'caliby_num_seqs_per_pdb': 2, 'caliby_temperature': 0.4,
     })
-    response = await jobs._create_job(typed, BackgroundTasks(), admission)
+    response = await job_submission._create_job(typed, BackgroundTasks(), admission)
     job = await admission.get(Job, response.id)
     output = tmp_path / 'native-output'
     invocation = compile_job_nextflow_invocation(job, deepcopy(job.params), str(output))

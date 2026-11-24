@@ -1,0 +1,369 @@
+{
+  "job": {
+    "completed_stages": [
+      "fastq_align",
+      "dimer_qc",
+      "fastq_qc",
+      "construct_verification"
+    ],
+    "id": "31f02bd5-830f-4558-aa78-3873c515de68",
+    "provenance": {
+      "alignment_hierarchy_authority_v1": {
+        "digest": "7f7d7165497b0e04326af92764374dc41b8c6daa5123abe163abf099d5c8fe16",
+        "document": {
+          "domain_experiment": {
+            "id": "916a611b-6879-486f-bf9e-e1b5a796e01c",
+            "state_revision_id": "molbio_ngs_state_revision_5922d66c-d4fe-44e8-bdc1-1b81c26449c1"
+          },
+          "global_experiment": {
+            "id": "9a10c5a8-b233-4bf3-af14-9c2880525278"
+          },
+          "job": {
+            "id": "31f02bd5-830f-4558-aa78-3873c515de68",
+            "input_mode": "fastq",
+            "workflow_id": "ont_fastq_qc"
+          },
+          "member": {
+            "receipt_id": "195b526d-35b3-40e4-b400-e8e4232a98fc"
+          },
+          "project": {
+            "id": "4af72c1d-27d8-4e14-8f39-4259a80494a0"
+          },
+          "reference": {
+            "normalized_sequence_sha256": "0185e3475f9e04c996d2bd2667f83d8655fb12b1e426bc5b674261ac4b2f3be4",
+            "revision_id": "molbio_ngs_reference_revision_1f508b7f-15f1-482a-9148-c3b2054ca56d"
+          },
+          "sample": {
+            "revision_id": "molbio_ngs_sample_revision_b81cd561-e18d-4fab-9c48-f8aa40f45e19"
+          },
+          "schema": "biomodstack.ont-fastq-qc-hierarchy-authority.v1",
+          "source_fastq": {
+            "artifact_set_sha256": "e122e032836df10c0d7e1756fb5ea00d5e65384c6cf942c1f684c155b3a57650",
+            "sequence_qc_manifest_sha256": "e37f0225c2c7db017b5a3be95bc3a1fb83797918268c3a838a390d1d5378b06b",
+            "sha256": "957a1c7fb5a4f10089f52b8b26cee37527176575b99ecc5e81a139c1374d8fff",
+            "verification_manifest_sha256": "3d2aa73270c11fe692ed8116aeb86d0f9fd96496da45933fcffb8c8de8a42a38"
+          }
+        },
+        "schema": "biomodstack.alignment-hierarchy-authority.v1"
+      },
+      "existing_history": {
+        "immutable": true
+      },
+      "ont_fastq_qc_hierarchy_v1": {
+        "digest": "7f7d7165497b0e04326af92764374dc41b8c6daa5123abe163abf099d5c8fe16",
+        "document": {
+          "domain_experiment": {
+            "id": "916a611b-6879-486f-bf9e-e1b5a796e01c",
+            "state_revision_id": "molbio_ngs_state_revision_5922d66c-d4fe-44e8-bdc1-1b81c26449c1"
+          },
+          "global_experiment": {
+            "id": "9a10c5a8-b233-4bf3-af14-9c2880525278"
+          },
+          "job": {
+            "id": "31f02bd5-830f-4558-aa78-3873c515de68",
+            "input_mode": "fastq",
+            "workflow_id": "ont_fastq_qc"
+          },
+          "member": {
+            "receipt_id": "195b526d-35b3-40e4-b400-e8e4232a98fc"
+          },
+          "project": {
+            "id": "4af72c1d-27d8-4e14-8f39-4259a80494a0"
+          },
+          "reference": {
+            "normalized_sequence_sha256": "0185e3475f9e04c996d2bd2667f83d8655fb12b1e426bc5b674261ac4b2f3be4",
+            "revision_id": "molbio_ngs_reference_revision_1f508b7f-15f1-482a-9148-c3b2054ca56d"
+          },
+          "sample": {
+            "revision_id": "molbio_ngs_sample_revision_b81cd561-e18d-4fab-9c48-f8aa40f45e19"
+          },
+          "schema": "biomodstack.ont-fastq-qc-hierarchy-authority.v1",
+          "source_fastq": {
+            "artifact_set_sha256": "e122e032836df10c0d7e1756fb5ea00d5e65384c6cf942c1f684c155b3a57650",
+            "sequence_qc_manifest_sha256": "e37f0225c2c7db017b5a3be95bc3a1fb83797918268c3a838a390d1d5378b06b",
+            "sha256": "957a1c7fb5a4f10089f52b8b26cee37527176575b99ecc5e81a139c1374d8fff",
+            "verification_manifest_sha256": "3d2aa73270c11fe692ed8116aeb86d0f9fd96496da45933fcffb8c8de8a42a38"
+          }
+        },
+        "schema": "biomodstack.alignment-hierarchy-authority.v1"
+      },
+      "ont_fastq_qc_reconciliation_v1": {
+        "applied_at": "2026-08-20T15:00:00Z",
+        "artifact_set_sha256": "e122e032836df10c0d7e1756fb5ea00d5e65384c6cf942c1f684c155b3a57650",
+        "authorization_class": "development_service_owner",
+        "backup": {
+          "backup_id": "retry3-pre-reconciliation.sqlite",
+          "foreign_key_violations": 0,
+          "integrity_check": "ok",
+          "sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+          "size_bytes": 8192
+        },
+        "backup_source_preimage_sha256": "e63c5d4cf0cb66db56f1f929d5cfd11ee0ff9094a401d03eea04e89beb21a2d4",
+        "completed_stages": [
+          "fastq_align",
+          "dimer_qc",
+          "fastq_qc",
+          "construct_verification"
+        ],
+        "completed_stages_postimage_sha256": "ec02401fdbdacb8c77a6e0cd4fa302fa1f90bcf2986d6bf10f52d90dee3c4b07",
+        "completed_stages_preimage_sha256": "ef18ecd116f4ec494487f14056e9bed3fc55863f552df20e28ae929ea0febc9e",
+        "compute_invoked": false,
+        "database_identity_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+        "declared_artifact_count": 36,
+        "domain_experiment_id": "916a611b-6879-486f-bf9e-e1b5a796e01c",
+        "global_experiment_id": "9a10c5a8-b233-4bf3-af14-9c2880525278",
+        "hierarchy_authority_sha256": "7f7d7165497b0e04326af92764374dc41b8c6daa5123abe163abf099d5c8fe16",
+        "input_mode": "fastq",
+        "job_id": "31f02bd5-830f-4558-aa78-3873c515de68",
+        "lane": "development",
+        "member_receipt_id": "195b526d-35b3-40e4-b400-e8e4232a98fc",
+        "normalized_request_sha256": "b65a5c1f53df36bf49f12a53fd3225068dcb225bfc94fa14eafbe37bd83df75d",
+        "present_artifact_count": 34,
+        "principal": "uid:1000:tester",
+        "project_id": "4af72c1d-27d8-4e14-8f39-4259a80494a0",
+        "protected_row_preimage_sha256": "145c62449939ba9bc6e04fed2ade3450fcf74543bd06f21f6a6776ecfa10d552",
+        "provenance_preimage_sha256": "4c645fa3a5ddf67c7cc44e1cb70a2e8e03fb3197b93183fd3a7c0550fddd7b96",
+        "receipt_free_provenance_postimage_sha256": "cf6f109d08102ee359bf4cf5affd265a1173a573dec76548b0a0864883bcbcb5",
+        "receipt_sha256": "3fa14157291efb9eed1003c1cf3836c45079332f80b18f58d4d9b62e41194173",
+        "reference_revision_id": "molbio_ngs_reference_revision_1f508b7f-15f1-482a-9148-c3b2054ca56d",
+        "reference_sequence_sha256": "0185e3475f9e04c996d2bd2667f83d8655fb12b1e426bc5b674261ac4b2f3be4",
+        "resource_evidence_status": "historical_unavailable",
+        "result_root_identity_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "sample_revision_id": "molbio_ngs_sample_revision_b81cd561-e18d-4fab-9c48-f8aa40f45e19",
+        "schema": "bms.ont-fastq-qc-reconciliation.v1",
+        "scientific_artifacts_modified": false,
+        "sequence_qc_manifest_sha256": "e37f0225c2c7db017b5a3be95bc3a1fb83797918268c3a838a390d1d5378b06b",
+        "source_commit": "ffffffffffffffffffffffffffffffffffffffff",
+        "source_fastq_sha256": "957a1c7fb5a4f10089f52b8b26cee37527176575b99ecc5e81a139c1374d8fff",
+        "source_snapshot": {
+          "data_version": 3,
+          "database_identity_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+          "foreign_key_violations": 0,
+          "integrity_check": "ok",
+          "page_count": 2,
+          "page_size": 4096,
+          "schema": "bms.sqlite-backup-source-preimage.v1",
+          "schema_version": 7,
+          "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "source_size_bytes": 8192
+        },
+        "source_tree": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "stage_outputs": {
+          "construct_verification": [
+            "bms_results/retry3/verification/qc_manifest.json",
+            "bms_results/retry3/verification/verification_summary.tsv",
+            "bms_results/retry3/verification/variants.vcf",
+            "bms_results/retry3/verification/per_base_metrics.tsv",
+            "bms_results/retry3/verification/evidence.html",
+            "bms_results/retry3/verification/topology_evidence.json"
+          ],
+          "dimer_qc": [
+            "bms_results/retry3/multimer_qc/dimer_breakpoint_call.tsv",
+            "bms_results/retry3/multimer_qc/dimer_evidence_by_position.tsv",
+            "bms_results/retry3/multimer_qc/dimer_read_events.tsv",
+            "bms_results/retry3/multimer_qc/dimer_breakpoint_sequences.tsv",
+            "bms_results/retry3/multimer_qc/dimer_secondary_anomalies.tsv",
+            "bms_results/retry3/multimer_qc/dimer_secondary_summary.tsv"
+          ],
+          "fastq_align": [
+            "bms_results/retry3/align/aligned.bam",
+            "bms_results/retry3/align/aligned.bam.bai",
+            "bms_results/retry3/align/reference.fasta",
+            "bms_results/retry3/align/reference.fasta.fai",
+            "bms_results/retry3/align/fastq_align.log"
+          ],
+          "fastq_qc": [
+            "bms_results/retry3/fastq_qc/read_lengths.tsv",
+            "bms_results/retry3/fastq_qc/fastq_qc_summary.tsv",
+            "bms_results/retry3/fastq_qc/fastq_alignment_stats.tsv",
+            "bms_results/retry3/fastq_qc/fastq_coverage.tsv",
+            "bms_results/retry3/fastq_qc/per_base_support.tsv",
+            "bms_results/retry3/fastq_qc/qc_manifest.json",
+            "bms_results/retry3/fastq_qc/igv_report.html",
+            "bms_results/retry3/fastq_qc/fastq_consensus.fasta"
+          ]
+        },
+        "stage_outputs_postimage_sha256": "fd4e4a27b8b3f24e79781ab158bd346711547deb2f136ee572bfe43ae07db9f4",
+        "stage_outputs_preimage_sha256": "771ea07155a66f40c28c26cbe70f25a6187df7b6e3684eb249da06f37d314c12",
+        "state_revision_id": "molbio_ngs_state_revision_5922d66c-d4fe-44e8-bdc1-1b81c26449c1",
+        "unavailable_artifact_count": 2,
+        "verification_manifest_sha256": "3d2aa73270c11fe692ed8116aeb86d0f9fd96496da45933fcffb8c8de8a42a38",
+        "workflow_id": "ont_fastq_qc"
+      },
+      "stage_terminal_states": {
+        "construct_verification": {
+          "outputs": [
+            "bms_results/retry3/verification/qc_manifest.json",
+            "bms_results/retry3/verification/verification_summary.tsv",
+            "bms_results/retry3/verification/variants.vcf",
+            "bms_results/retry3/verification/per_base_metrics.tsv",
+            "bms_results/retry3/verification/evidence.html",
+            "bms_results/retry3/verification/topology_evidence.json"
+          ],
+          "status": "complete"
+        },
+        "dimer_qc": {
+          "outputs": [
+            "bms_results/retry3/multimer_qc/dimer_breakpoint_call.tsv",
+            "bms_results/retry3/multimer_qc/dimer_evidence_by_position.tsv",
+            "bms_results/retry3/multimer_qc/dimer_read_events.tsv",
+            "bms_results/retry3/multimer_qc/dimer_breakpoint_sequences.tsv",
+            "bms_results/retry3/multimer_qc/dimer_secondary_anomalies.tsv",
+            "bms_results/retry3/multimer_qc/dimer_secondary_summary.tsv"
+          ],
+          "status": "complete"
+        },
+        "fastq_align": {
+          "outputs": [
+            "bms_results/retry3/align/aligned.bam",
+            "bms_results/retry3/align/aligned.bam.bai",
+            "bms_results/retry3/align/reference.fasta",
+            "bms_results/retry3/align/reference.fasta.fai",
+            "bms_results/retry3/align/fastq_align.log"
+          ],
+          "status": "complete"
+        },
+        "fastq_qc": {
+          "outputs": [
+            "bms_results/retry3/fastq_qc/read_lengths.tsv",
+            "bms_results/retry3/fastq_qc/fastq_qc_summary.tsv",
+            "bms_results/retry3/fastq_qc/fastq_alignment_stats.tsv",
+            "bms_results/retry3/fastq_qc/fastq_coverage.tsv",
+            "bms_results/retry3/fastq_qc/per_base_support.tsv",
+            "bms_results/retry3/fastq_qc/qc_manifest.json",
+            "bms_results/retry3/fastq_qc/igv_report.html",
+            "bms_results/retry3/fastq_qc/fastq_consensus.fasta"
+          ],
+          "status": "complete"
+        }
+      }
+    },
+    "queue_status": "completed",
+    "stage_outputs": {
+      "construct_verification": [
+        "bms_results/retry3/verification/qc_manifest.json",
+        "bms_results/retry3/verification/verification_summary.tsv",
+        "bms_results/retry3/verification/variants.vcf",
+        "bms_results/retry3/verification/per_base_metrics.tsv",
+        "bms_results/retry3/verification/evidence.html",
+        "bms_results/retry3/verification/topology_evidence.json"
+      ],
+      "dimer_qc": [
+        "bms_results/retry3/multimer_qc/dimer_breakpoint_call.tsv",
+        "bms_results/retry3/multimer_qc/dimer_evidence_by_position.tsv",
+        "bms_results/retry3/multimer_qc/dimer_read_events.tsv",
+        "bms_results/retry3/multimer_qc/dimer_breakpoint_sequences.tsv",
+        "bms_results/retry3/multimer_qc/dimer_secondary_anomalies.tsv",
+        "bms_results/retry3/multimer_qc/dimer_secondary_summary.tsv"
+      ],
+      "fastq_align": [
+        "bms_results/retry3/align/aligned.bam",
+        "bms_results/retry3/align/aligned.bam.bai",
+        "bms_results/retry3/align/reference.fasta",
+        "bms_results/retry3/align/reference.fasta.fai",
+        "bms_results/retry3/align/fastq_align.log"
+      ],
+      "fastq_qc": [
+        "bms_results/retry3/fastq_qc/read_lengths.tsv",
+        "bms_results/retry3/fastq_qc/fastq_qc_summary.tsv",
+        "bms_results/retry3/fastq_qc/fastq_alignment_stats.tsv",
+        "bms_results/retry3/fastq_qc/fastq_coverage.tsv",
+        "bms_results/retry3/fastq_qc/per_base_support.tsv",
+        "bms_results/retry3/fastq_qc/qc_manifest.json",
+        "bms_results/retry3/fastq_qc/igv_report.html",
+        "bms_results/retry3/fastq_qc/fastq_consensus.fasta"
+      ]
+    },
+    "status": "completed"
+  },
+  "provenance_preimage": {
+    "existing_history": {
+      "immutable": true
+    },
+    "ont_fastq_qc_hierarchy_v1": {
+      "digest": "7f7d7165497b0e04326af92764374dc41b8c6daa5123abe163abf099d5c8fe16",
+      "document": {
+        "domain_experiment": {
+          "id": "916a611b-6879-486f-bf9e-e1b5a796e01c",
+          "state_revision_id": "molbio_ngs_state_revision_5922d66c-d4fe-44e8-bdc1-1b81c26449c1"
+        },
+        "global_experiment": {
+          "id": "9a10c5a8-b233-4bf3-af14-9c2880525278"
+        },
+        "job": {
+          "id": "31f02bd5-830f-4558-aa78-3873c515de68",
+          "input_mode": "fastq",
+          "workflow_id": "ont_fastq_qc"
+        },
+        "member": {
+          "receipt_id": "195b526d-35b3-40e4-b400-e8e4232a98fc"
+        },
+        "project": {
+          "id": "4af72c1d-27d8-4e14-8f39-4259a80494a0"
+        },
+        "reference": {
+          "normalized_sequence_sha256": "0185e3475f9e04c996d2bd2667f83d8655fb12b1e426bc5b674261ac4b2f3be4",
+          "revision_id": "molbio_ngs_reference_revision_1f508b7f-15f1-482a-9148-c3b2054ca56d"
+        },
+        "sample": {
+          "revision_id": "molbio_ngs_sample_revision_b81cd561-e18d-4fab-9c48-f8aa40f45e19"
+        },
+        "schema": "biomodstack.ont-fastq-qc-hierarchy-authority.v1",
+        "source_fastq": {
+          "artifact_set_sha256": "e122e032836df10c0d7e1756fb5ea00d5e65384c6cf942c1f684c155b3a57650",
+          "sequence_qc_manifest_sha256": "e37f0225c2c7db017b5a3be95bc3a1fb83797918268c3a838a390d1d5378b06b",
+          "sha256": "957a1c7fb5a4f10089f52b8b26cee37527176575b99ecc5e81a139c1374d8fff",
+          "verification_manifest_sha256": "3d2aa73270c11fe692ed8116aeb86d0f9fd96496da45933fcffb8c8de8a42a38"
+        }
+      },
+      "schema": "biomodstack.alignment-hierarchy-authority.v1"
+    },
+    "stage_terminal_states": {
+      "construct_verification": {
+        "outputs": [
+          "bms_results/retry3/verification/qc_manifest.json",
+          "bms_results/retry3/verification/verification_summary.tsv",
+          "bms_results/retry3/verification/variants.vcf",
+          "bms_results/retry3/verification/per_base_metrics.tsv",
+          "bms_results/retry3/verification/evidence.html",
+          "bms_results/retry3/verification/topology_evidence.json"
+        ],
+        "status": "complete"
+      },
+      "dimer_qc": {
+        "outputs": [
+          "bms_results/retry3/multimer_qc/dimer_breakpoint_call.tsv",
+          "bms_results/retry3/multimer_qc/dimer_evidence_by_position.tsv",
+          "bms_results/retry3/multimer_qc/dimer_read_events.tsv",
+          "bms_results/retry3/multimer_qc/dimer_breakpoint_sequences.tsv",
+          "bms_results/retry3/multimer_qc/dimer_secondary_anomalies.tsv",
+          "bms_results/retry3/multimer_qc/dimer_secondary_summary.tsv"
+        ],
+        "status": "complete"
+      },
+      "fastq_align": {
+        "outputs": [
+          "bms_results/retry3/align/aligned.bam",
+          "bms_results/retry3/align/aligned.bam.bai",
+          "bms_results/retry3/align/reference.fasta",
+          "bms_results/retry3/align/reference.fasta.fai",
+          "bms_results/retry3/align/fastq_align.log"
+        ],
+        "status": "complete"
+      },
+      "fastq_qc": {
+        "outputs": [
+          "bms_results/retry3/fastq_qc/read_lengths.tsv",
+          "bms_results/retry3/fastq_qc/fastq_qc_summary.tsv",
+          "bms_results/retry3/fastq_qc/fastq_alignment_stats.tsv",
+          "bms_results/retry3/fastq_qc/fastq_coverage.tsv",
+          "bms_results/retry3/fastq_qc/per_base_support.tsv",
+          "bms_results/retry3/fastq_qc/qc_manifest.json",
+          "bms_results/retry3/fastq_qc/igv_report.html",
+          "bms_results/retry3/fastq_qc/fastq_consensus.fasta"
+        ],
+        "status": "complete"
+      }
+    }
+  }
+}

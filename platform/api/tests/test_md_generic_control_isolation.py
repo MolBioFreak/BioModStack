@@ -17,15 +17,8 @@ if str(API_ROOT) not in sys.path:
 
 from database import Base, Job
 from routers.gpu import ForceRunRequest, force_run_job
-from routers.jobs import (
-    delete_job_permanently,
-    mark_children_aggregated,
-    open_stage_gate,
-    report_stage_complete,
-    report_stage_start,
-    resubmit_job,
-    resume_job,
-)
+from routers.jobs import delete_job_permanently, resubmit_job, resume_job
+from routers.job_stages import mark_children_aggregated, open_stage_gate, report_stage_complete, report_stage_start
 from routers.queue import (
     ForceLaunchRequest,
     PinGPURequest,

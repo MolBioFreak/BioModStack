@@ -1,4 +1,5 @@
 import { Children, createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { AtomWorksStudioHost } from './AtomWorksStudioHost';
 import { importStudio, type StudioCapture } from '../lib/atomworksStudio';
 import { adoptAnnotatedCif, type CapturedAnnotatedDocument, type DocumentCaptureRegistry } from '../lib/deNovoDocumentCapture';
@@ -11,6 +12,7 @@ type Actions = {
     /** True while a Studio editor is opening or open, so the form can make room for the canvas. */
     active: boolean;
 };
+export const StudioTaskRail = createContext<HTMLElement | null>(null);
 const EditorsContext = createContext<Actions | null>(null);
 export const useDeNovoDocumentEditors = () => useContext(EditorsContext);
 export function DeNovoDocumentEditorPanels() { return <>{useDeNovoDocumentEditors()?.panels}</>; }
@@ -37,8 +39,8 @@ const studioImportOptions = { parse_preset: 'minimal', assembly: 'asym', model: 
 /** One mount-local editor per opened source, shared by task and advanced source rows.
  * Sessions remain ephemeral; all successful captures use immutable source custody.
  */
-export function DeNovoDocumentEditors({ registry, sources, molecularDocuments, onAdopt, children }: {
-    registry: DocumentCaptureRegistry; sources: NativeGenerationSourceBindings | undefined;
+export function DeNovoDocumentEditors({ registry, sources, molecularDocuments, onAdopt, children, hideEmpty }: {
+    hideEmpty?: boolean; registry: DocumentCaptureRegistry; sources: NativeGenerationSourceBindings | undefined;
     molecularDocuments?: Record<string, CapturedAnnotatedDocument>;
     onAdopt: (slot: string, document: CapturedAnnotatedDocument, assertCurrent: () => void) => void | Promise<unknown>;
     children: ReactNode;
@@ -110,7 +112,7 @@ export function DeNovoDocumentEditors({ registry, sources, molecularDocuments, o
     return <EditorsContext.Provider value={{ open, active: Boolean(opening) || editors.length > 0, panels: <div ref={panel} tabIndex={-1} aria-label="Molecular document editor" className="min-w-0 space-y-5">
         {opening && <p role="status">Opening {opening} in AtomWorks Studio…</p>}
         {error && <p role="status">Studio unavailable: {error}</p>}
-        {!opening && !error && editors.length === 0 && <div data-studio-canvas-empty
+        {!hideEmpty && !opening && !error && editors.length === 0 && <div data-studio-canvas-empty
             className="rounded-xl border border-dashed p-6 text-sm text-[var(--text-secondary)]"
             style={{ borderColor: 'var(--border-primary)' }}>
             <p className="font-medium text-[var(--text-primary)]">AtomWorks Studio</p>
@@ -125,6 +127,7 @@ function DocumentEditor({ editor, source, selected, registry, onAdopt, onClose }
     editor: Editor; source: NativeGenerationSourceBindings[string] | undefined; selected: boolean; registry: DocumentCaptureRegistry;
     onAdopt: (document: CapturedAnnotatedDocument, assertCurrent: () => void) => void | Promise<unknown>; onClose: () => void;
 }) {
+    const rail = useContext(StudioTaskRail);
     const host = useRef<StudioCapture>(null);
     const accepted = useRef(editor.acceptedBindings);
     const attached = selected && accepted.current.has(key(source));
@@ -204,6 +207,7 @@ function DocumentEditor({ editor, source, selected, registry, onAdopt, onClose }
             setTimeout(() => URL.revokeObjectURL(url), 0);
         } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     };
+    const adopt = <button type="button" disabled={busy} onClick={() => void useEdited()}>{busy ? 'Capturing document…' : `Use edited document for ${editor.slot}`}</button>;
     return <section tabIndex={-1} data-document-editor={editor.id} className="space-y-3 rounded border border-slate-600 p-3" aria-label={`Molecular editor for ${editor.slot}`}>
         <h3>Editable document · {editor.slot}</h3>
         <p className="text-xs">Source MODEL {editor.receipt.model_number ?? editor.receipt.model_numbers[0]} · exact source coordinates (no assembly expansion).
@@ -214,7 +218,11 @@ function DocumentEditor({ editor, source, selected, registry, onAdopt, onClose }
         {error && <p role="alert">{error}. Existing saved source is unchanged.</p>}
         <AtomWorksStudioHost ref={host} sessionId={editor.sessionId} onDirty={() => { setDirty(true); if (attachedRef.current) registry.changed(); }} />
         <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={busy} onClick={() => void useEdited()}>{busy ? 'Capturing document…' : `Use edited document for ${editor.slot}`}</button>
+            {rail ? createPortal(<div className="space-y-2" aria-label={`Studio source ${editor.slot}`}>
+                <p>Editing: {editor.parent.path?.split('/').at(-1) ?? editor.slot} · {editor.slot}</p>
+                <p>{!attached ? 'Replaced source · not attached' : dirty ? 'Studio edits not yet applied' : captured ? 'Edited structure applied' : 'No pending Studio edits'}</p>
+                {adopt}
+            </div>, rail) : adopt}
             <button type="button" onClick={() => void download()}>Download frozen CIF for recovery</button>
             <button type="button" onClick={onClose}>{dirty ? 'Close editor and discard uncaptured edits' : 'Close editor'}</button>
         </div>

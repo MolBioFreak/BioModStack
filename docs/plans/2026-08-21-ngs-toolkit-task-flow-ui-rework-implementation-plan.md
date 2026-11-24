@@ -799,14 +799,14 @@ No force push.
 
 **Step 1: Wait for or run the supported managed Development synchronization path**
 
-Do not edit `/home/dalab/biomodstack/dev-test-canonical` directly.
+Do not edit `<dev-test-canonical checkout>` directly.
 
 **Step 2: Prove lane identity**
 
 ```bash
-git -C /home/dalab/biomodstack/dev-test-canonical rev-parse HEAD origin/test
+git -C <dev-test-canonical checkout> rev-parse HEAD origin/test
 curl -fsS http://127.0.0.1:18002/api/health
-python /home/dalab/biomodstack/dev-test-canonical/scripts/manage_desktop_services.py --runtime dev status --json
+python <dev-test-canonical checkout>/scripts/manage_desktop_services.py --runtime dev status --json
 ```
 
 Require source, API, frontend, and `origin/test` identity to agree.

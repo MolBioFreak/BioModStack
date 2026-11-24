@@ -66,3 +66,9 @@
     .bwd-station-control { padding-inline: 12px; }
     .bwd-toolbar .bwd-clear { margin-left: 0; }
 }
+.bwd-holder-body { fill: var(--bwd-surface); stroke: var(--bwd-line); stroke-width: 1.2; }
+.bwd-holder-tube, .bwd-holder-well { fill: var(--bwd-inset); stroke: var(--bwd-muted); stroke-width: 1.2; }
+.bwd-holder-label { fill: var(--bwd-text); font-size: 11px; font-weight: 700; pointer-events: none; }
+.bwd-holder-target[role="button"] { cursor: pointer; }
+.bwd-holder-target:hover .bwd-hit, .bwd-holder-target:focus .bwd-hit { stroke: var(--bwd-text); }
+.bwd-holder-target.is-active .bwd-holder-tube, .bwd-holder-target.is-active .bwd-holder-well { fill: var(--bwd-accent); stroke: var(--bwd-accent); }

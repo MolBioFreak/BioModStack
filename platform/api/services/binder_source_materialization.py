@@ -4,6 +4,15 @@ No launch policy or display conversion lives here. Native bytes remain retained.
 """
 from __future__ import annotations
 
+import json
+import shutil
+import stat
+import tempfile
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import HTTPException
+from paths import get_allowed_roots
+from sqlalchemy import select
+
 import asyncio
 from contextlib import asynccontextmanager
 import fcntl
@@ -206,6 +215,41 @@ def _select_pdb_model(raw: bytes, number: int) -> bytes:
     return b''.join(kept)
 
 
+def _chem_comp_type(component_id: str, gemmi) -> str:
+    """CCD-style ``_chem_comp.type`` for a component name.
+
+    Gemmi writes ``.`` for every component unless a monomer library is loaded.
+    Mol* and other mmCIF readers decide which residues are polymer from this
+    column, so a blank column leaves a protein with zero polymer residues and
+    no ribbon. Gemmi's own residue table is the same classification the CCD uses
+    for the standard polymer types; anything it cannot place stays a
+    non-polymer, which is also the CCD default for ligands, ions and water.
+    """
+    if component_id == 'GLY':
+        return 'peptide linking'  # the CCD types achiral glycine without an L/D prefix
+    info = gemmi.find_tabulated_residue(component_id)
+    if info is None:
+        return 'non-polymer'
+    if info.is_amino_acid():
+        return 'D-peptide linking' if str(info.kind).rsplit('.', 1)[-1] == 'AAD' else 'L-peptide linking'
+    if info.is_nucleic_acid():
+        return 'DNA linking' if str(info.kind).rsplit('.', 1)[-1] == 'DNA' else 'RNA linking'
+    return 'non-polymer'
+
+
+def _fill_blank_chem_comp_types(columns: dict, gemmi) -> dict:
+    """Fill only blank (``.``/``?``) component types; keep every supplied value."""
+    ids = columns.get('_chem_comp.id')
+    if not ids:
+        return columns
+    existing = columns.get('_chem_comp.type') or []
+    columns['_chem_comp.type'] = [
+        (existing[i] if i < len(existing) and existing[i] not in ('.', '?') else _chem_comp_type(component, gemmi))
+        for i, component in enumerate(ids)
+    ]
+    return columns
+
+
 def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, output_format: str,
                              model_number: int | None = None,
                              verified_original_sha256: str | None = None) -> dict:
@@ -345,7 +389,6 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
             'declared_chemistry': ledger['declared_chemistry']}
     selected_path, selected_bytes = consumed, consumed_bytes
     if output_format == 'pdb' and native_format != 'pdb':
-        from routers.jobs import _cif_selection_pdb
         try:
             consumed = _cif_selection_pdb(decoded if consumed_format == 'bcif' else consumed, destination / 'derived.pdb')
         except (PDBConstructionException, PDBIOException) as exc:
@@ -365,7 +408,8 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
                 model.num = number
             converted.setup_entities()
             converted.assign_label_seq_id()
-            converted_columns = MMCIF2Dict(io.StringIO(converted.make_mmcif_document().as_string()))
+            converted_columns = _fill_blank_chem_comp_types(
+                MMCIF2Dict(io.StringIO(converted.make_mmcif_document().as_string())), gemmi)
             if model_number is not None:
                 converted_columns = _select_cif_model(converted_columns, model_number)
             writer = RetainedCifIO(); writer.set_dict(converted_columns)
@@ -401,7 +445,6 @@ async def prepare_resequence_sources(sources, session, selection_dir: Path,
     Only root-level PDBs enter the existing loop input glob.
     """
     import shutil
-    from routers.files import materialize_structure_source
 
     sources = list(sources)
     async with resequence_submission_guard(
@@ -720,3 +763,230 @@ async def resolve_structure_source(request: StructureSourceRequest, session):
         # the historical output tree. Consumed derivatives remain model inputs.
         path = resolve_allowed_path(request.path)
     return path, identity
+
+
+def _cif_selection_pdb(source: Path, destination: Path) -> Path:
+    """Materialize only representable CIF coordinates for a PDB-only consumer."""
+    from Bio.PDB import PDBIO
+    from Bio.PDB.PDBParser import PDBParser
+    from services.md.starting_structures import _parse_mmcif_structure
+    structure = _parse_mmcif_structure(source.read_bytes())
+    def identity(model):
+        return [(chain.id, residue.id, residue.resname,
+                 tuple((atom.id, atom.coord.tolist()) for atom in residue))
+                for chain in model for residue in chain]
+    models = list(structure)
+    if len(models) != 1:
+        raise ValueError('Selected CIF has no single PDB-representable model')
+    original = identity(models[0])
+    if not original or any(len(chain) != 1 or not (-999 <= residue_id[1] <= 9999)
+                           or len(residue_id[2]) > 1
+                           for chain, residue_id, _, _ in original):
+        raise ValueError('Selected CIF chain/residue identifiers cannot be represented in PDB')
+    io = PDBIO()
+    io.set_structure(structure)
+    io.save(str(destination))
+    converted = PDBParser(QUIET=True).get_structure('selected', str(destination))
+    after = identity(next(iter(converted)))
+    if len(after) != len(original) or any(
+            (a[0], a[1], a[2], [atom[0] for atom in a[3]]) !=
+            (b[0], b[1], b[2], [atom[0] for atom in b[3]]) or
+            any(any(abs(x - y) > 0.0011 for x, y in zip(atom_a[1], atom_b[1]))
+                for atom_a, atom_b in zip(a[3], b[3]))
+            for a, b in zip(original, after)):
+        destination.unlink(missing_ok=True)
+        raise ValueError('Selected CIF to PDB conversion lost chain, residue or atom mapping')
+    return destination
+
+
+IMMUTABLE_STRUCTURE_UPLOAD_MAX_BYTES = 64 * 1024 * 1024
+
+
+GOVERNED_NGS_MANIFEST_SCHEMAS = frozenset(
+    {"sequence_qc.manifest.v1", "biomodstack.construct_verification.v2"}
+)
+
+
+GOVERNED_NGS_MODEL_IDS = frozenset(
+    {"nanopore", "ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation"}
+)
+
+
+def _lexical_absolute(path: Path) -> Path:
+    return Path(os.path.abspath(path.expanduser()))
+
+
+def _contained_lexically(path: Path, root: Path) -> bool:
+    try:
+        _lexical_absolute(path).relative_to(_lexical_absolute(root))
+        return True
+    except ValueError:
+        return False
+
+
+async def governed_ngs_result_roots(session: AsyncSession) -> tuple[Path, ...]:
+    """Return stable lexical authority from persisted canonical NGS job rows."""
+    configured_root = _lexical_absolute(get_allowed_roots()["bms_results"])
+    result = await session.execute(
+        select(Job.output_dir, Job.child_output_dir).where(Job.model_id.in_(GOVERNED_NGS_MODEL_IDS))
+    )
+    roots: set[Path] = set()
+    for output_dir, child_output_dir in result.all():
+        for raw in (output_dir, child_output_dir):
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            declared = Path(raw.strip()).expanduser()
+            candidate = _lexical_absolute(declared if declared.is_absolute() else configured_root / declared)
+            if _contained_lexically(candidate, configured_root):
+                roots.add(candidate)
+    return tuple(sorted(roots, key=os.fspath))
+
+
+def _under_persisted_ngs_root(path: Path, governed_roots: tuple[Path, ...]) -> bool:
+    return any(_contained_lexically(path, root) for root in governed_roots)
+
+
+def _read_json_nofollow(path: Path, *, max_bytes: int = 10 * 1024 * 1024) -> dict:
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        absolute = Path(os.path.abspath(path))
+        for index, component in enumerate(absolute.parts[1:]):
+            final = index == len(absolute.parts[1:]) - 1
+            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+            if not final:
+                flags |= os.O_DIRECTORY
+            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > max_bytes:
+            raise ValueError("manifest is unsafe")
+        raw = b""
+        while len(raw) <= max_bytes:
+            chunk = os.read(descriptor, min(1024 * 1024, max_bytes + 1 - len(raw)))
+            if not chunk:
+                break
+            raw += chunk
+        if len(raw) > max_bytes:
+            raise ValueError("manifest is too large")
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("manifest root is invalid")
+        return payload
+    finally:
+        os.close(descriptor)
+
+
+def _sha256_regular_file_nofollow(path: Path) -> tuple[str, int]:
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("immutable structure path is not a regular file")
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        return digest.hexdigest(), metadata.st_size
+    finally:
+        os.close(descriptor)
+
+
+def is_path_allowed(path: Path) -> bool:
+    """Check if path is within allowed roots."""
+    try:
+        resolved = path.resolve()
+        for root in get_allowed_roots().values():
+            try:
+                resolved.relative_to(root.resolve())
+                return True
+            except ValueError:
+                continue
+        return False
+    except (ValueError, RuntimeError):
+        return False
+
+
+def _is_governed_ngs_artifact(path: Path) -> bool:
+    resolved = path.resolve()
+    for parent in resolved.parents:
+        manifest = parent / "qc_manifest.json"
+        if not manifest.is_file() or manifest.is_symlink():
+            continue
+        try:
+            payload = _read_json_nofollow(manifest)
+            if payload.get("schema") in GOVERNED_NGS_MANIFEST_SCHEMAS:
+                return True
+        except (OSError, ValueError, json.JSONDecodeError):
+            return True
+    return False
+
+
+def _reject_governed_ngs_artifact(path: Path) -> None:
+    if _is_governed_ngs_artifact(path):
+        raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
+
+
+async def materialize_structure_source(
+    payload: StructureSourceRequest, session: AsyncSession,
+    governed_roots: tuple[Path, ...], *, destination: Path | None = None,
+):
+    """Shared exact acquisition for files and Resequence; destination is caller-owned.
+
+    A supplied destination must not exist. Failure removes only the directory
+    created by this acquisition, never a source or a prior preparation.
+    """
+    directory = None
+    try:
+        source, identity = await resolve_structure_source(payload, session)
+        if not is_path_allowed(source) or _under_persisted_ngs_root(source, governed_roots):
+            raise HTTPException(403, "Access denied to this structure")
+        _reject_governed_ngs_artifact(source)
+        descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise ValueError("Source is not a regular structure file")
+            raw = handle.read(IMMUTABLE_STRUCTURE_UPLOAD_MAX_BYTES + 1)
+        if len(raw) > IMMUTABLE_STRUCTURE_UPLOAD_MAX_BYTES:
+            raise HTTPException(413, "Structure exceeds 64 MiB")
+        digest = hashlib.sha256(raw).hexdigest()
+        expected = identity.get("artifact_sha256") or payload.expected_sha256
+        if expected is not None and digest != expected:
+            raise ValueError("Selected source bytes differ from the exact document digest")
+        if payload.expected_sha256 is not None and digest != payload.expected_sha256:
+            raise ValueError("Selected source bytes changed")
+        parent = resolve_allowed_path("inputs")
+        parent.mkdir(parents=True, exist_ok=True)
+        if destination is None:
+            directory = Path(tempfile.mkdtemp(prefix="structure-", dir=parent))
+        else:
+            destination.resolve().relative_to(parent.resolve())
+            destination.mkdir(parents=True, exist_ok=False)
+            directory = destination
+        result = materialize_source_bytes(raw, structure_suffix(source), directory,
+            output_format=payload.output_format, model_number=payload.model_number,
+            verified_original_sha256=digest)
+        retained = payload.model_copy(update={"path": result["original_path"],
+                                              "expected_sha256": result["original_sha256"]})
+        result = {**result, "source_identity": identity, "source_path": to_allowed_relative(source),
+                  "source_structure": retained.model_dump(mode="json", exclude_none=True)}
+        # Keep the already governed acquisition's ancestry beside its retained
+        # bytes. Replay access is still governed by the inputs path and digest,
+        # not by the continued existence of a historical producer row.
+        import json
+        (directory / '.source-custody.json').write_text(json.dumps({
+            'source_structure': result['source_structure'], 'source_identity': identity}, sort_keys=True))
+        return result
+    except HTTPException:
+        if directory is not None:
+            shutil.rmtree(directory)
+        raise
+    except (ValueError, OSError, EOFError, KeyError) as exc:
+        if directory is not None:
+            shutil.rmtree(directory)
+        raise HTTPException(422, str(exc)) from exc

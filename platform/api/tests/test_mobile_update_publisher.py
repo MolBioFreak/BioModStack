@@ -26,7 +26,7 @@ def test_publisher_exposes_only_health_and_mobile_update_routes(monkeypatch, tmp
     monkeypatch.setenv("BMS_BUILD_ID", "test-0123456789ab")
     monkeypatch.setenv("BMS_BUILD_TIME", "2026-08-26T12:00:00Z")
     monkeypatch.setenv("BMS_MOBILE_APK_TRUSTED_PROXY_HOSTS", "testclient")
-    monkeypatch.setenv("BMS_MOBILE_APK_ALLOWED_TAILSCALE_USERS", "christian@example.test")
+    monkeypatch.setenv("BMS_MOBILE_APK_ALLOWED_TAILSCALE_USERS", "user@example.test")
     module = load_publisher_module()
 
     ui_root = tmp_path / "mobile-ui-updates"
@@ -72,7 +72,7 @@ def test_publisher_exposes_only_health_and_mobile_update_routes(monkeypatch, tmp
     )
     monkeypatch.setattr(module.mobile_apk_updates, "get_mobile_apk_updates_dir", lambda: apk_root)
 
-    headers = {"Tailscale-User-Login": "christian@example.test"}
+    headers = {"Tailscale-User-Login": "user@example.test"}
     with TestClient(module.app, base_url="https://updates.example.test", headers=headers) as client:
         health = client.get("/health")
         ui = client.get("/api/mobile-ui/channels/phone/manifest")

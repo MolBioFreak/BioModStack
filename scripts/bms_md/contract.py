@@ -21,7 +21,7 @@ MD_RUN_SCHEMA = "bms.md.run.v1"
 RETRYABLE_INFRASTRUCTURE_FAILURES = frozenset({
     "spawn_rejected", "worker_lost", "scheduler_transient", "runtime_transient",
 })
-SUPPORTED_ENGINES = {"gromacs", "openmm"}
+SUPPORTED_ENGINES = {"gromacs"}
 MAX_INPUT_SNAPSHOT_BYTES = 100 * 1024 * 1024
 
 

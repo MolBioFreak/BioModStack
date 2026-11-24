@@ -28,6 +28,7 @@ SCHEMA_BY_KIND = {
     "per_base_support": "sequence_qc.per_base_support.v1",
     "consensus": "sequence_qc.consensus_fasta.v1",
     "consensus_index": "sequence_qc.fasta_index.v1",
+    "pileup_chromatogram": "sequence_qc.pileup_chromatogram_ab1.v1",
     "log": "sequence_qc.log.v1",
     "alignment_bam": "sequence_qc.alignment_bam.v1",
     "alignment_bai": "sequence_qc.alignment_index.v1",

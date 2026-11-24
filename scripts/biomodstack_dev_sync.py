@@ -32,7 +32,7 @@ SYNC_INTERVAL_SECONDS = 60
 SYNC_QUEUE_FILENAME = "dev-sync-queue.json"
 SYNC_CONTROL_FILENAME = "dev-sync-control.json"
 SYNC_REFRESH_FILENAME = "dev-sync-refresh.json"
-DEFAULT_CANONICAL_ROOT = Path("/home/dalab/biomodstack/dev-test-canonical")
+DEFAULT_CANONICAL_ROOT = Path.home() / "biomodstack" / "dev-test-canonical"
 DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "biomodstack"
 DEFAULT_INSTALLED_SYNC = Path.home() / ".local" / "libexec" / "biomodstack" / "biomodstack_dev_sync.py"
 DEPLOYMENT_ADMISSION_LOCK_ENV = "BMS_DEPLOYMENT_ADMISSION_LOCK"
@@ -884,6 +884,10 @@ def _sync_once_transaction(
                 _write_receipt(state_dir, receipt)
                 raise
             receipt.update(deployment)
+            # The receipt describes the finished deployment: `local_revision` is the
+            # checkout as it is now, and the pre-deploy value stays beside it.
+            receipt["local_revision_before"] = receipt.get("local_revision")
+            receipt["local_revision"] = _git(root, "rev-parse", "HEAD")
             receipt["status"] = "deployed"
             receipt["queue_state"] = "empty"
             receipt["queued_revision"] = None

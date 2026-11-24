@@ -1476,3 +1476,337 @@ def test_run_list_filters_exact_project_before_limit_and_pages_with_offset() -> 
     assert [run["run_id"] for run in second_page.json()] == ["ont-run-page-0"]
     assert prefix_only.json() == []
     assert negative_offset.status_code == 422
+
+
+_KIT_MODELS = [
+    {"name": "dna_r10.4.1_e8.2_400bps_fast@v5.2.0", "variant": "fast", "min_qscore": 8.0, "modified_models": []},
+    {"name": "dna_r10.4.1_e8.2_400bps_hac@v5.0.0", "variant": "hac", "min_qscore": 9, "modified_models": [
+        {"name": "dna_r10.4.1_e8.2_400bps_hac@v5.0.0_6mA@v1", "variant": "6mA", "canonical_base": "A", "context": "A"}]},
+    {"name": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0", "variant": "sup", "min_qscore": 10.0, "modified_models": [
+        {"name": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_6mA@v1", "variant": "6mA", "canonical_base": "A", "context": "A"},
+        {"name": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_5mCG_5hmCG@v2", "variant": "5mCG_5hmCG", "canonical_base": "C", "context": "CG"},
+        {"name": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_5mC_5hmC@v2", "variant": "5mC_5hmC", "canonical_base": "C", "context": "C"}]},
+]
+
+
+async def _kit_catalog(monkeypatch):
+    preflight = _ready_host_preflight(
+        kit="SQK-RBK114-24",
+        basecalling_options={"simplex_models": ["dna_r10.4.1_e8.2_400bps_hac@v5.0.0"], "min_qscore": 9, "models": _KIT_MODELS})
+    monkeypatch.setattr(ont_run_control, "get_position_protocol_options", lambda _position, _kit=None: preflight)
+    return await ont_run_control.issue_position_protocol_catalog("X1", kit="SQK-RBK114-24")
+
+
+@pytest.mark.asyncio
+async def test_catalog_offers_accuracy_and_modifications_without_model_names(monkeypatch) -> None:
+    catalog = await _kit_catalog(monkeypatch)
+
+    choices = catalog["options"][0]["basecalling_choices"]
+    assert [(choice["quality"], choice["default"], choice["default_min_qscore"]) for choice in choices] == [
+        ("fast", False, 8.0), ("hac", True, 9), ("sup", False, 10.0)]
+    assert choices[0]["modified_bases"] == []
+    assert [item["id"] for item in choices[2]["modified_bases"]] == ["6mA", "5mCG_5hmCG", "5mC_5hmC"]
+    assert choices[2]["modified_bases"][1] == {"id": "5mCG_5hmCG", "canonical_base": "C", "context": "CG"}
+    assert "400bps" not in repr(catalog) and "@v" not in repr(catalog)
+
+
+@pytest.mark.asyncio
+async def test_chosen_accuracy_modifications_and_qscore_reach_the_minknow_start(monkeypatch) -> None:
+    catalog = await _kit_catalog(monkeypatch)
+    option = catalog["options"][0]
+    intent = await ont_run_control.create_run_intent("X1", {
+        "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"],
+        "experiment_group": "domain-1",
+        "barcode_samples": [{"barcode": "barcode01", "alias": "plasmid_A"}],
+        "basecalling": {"quality": "sup", "modified_bases": ["6mA", "5mCG_5hmCG"], "min_qscore": 12},
+    })
+    calls = []
+
+    def host(method, path, payload=None, *, query=None, timeout=None):
+        calls.append((method, path, payload))
+        if path == "/ont/positions/X1/protocol-runs":
+            return {"minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000002", "position": "X1"}
+        if path.startswith("/ont/runs/"):
+            return {"status": "running", "minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000002",
+                    "output_files": {"fastq": [], "pod5": [], "bam": []}}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", host)
+    await ont_run_control.validate_armed_intent_start(
+        intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]})
+
+    sent = next(call for call in calls if call[1] == "/ont/positions/X1/protocol-runs")[2]
+    assert sent["simplex_model"] == "dna_r10.4.1_e8.2_400bps_sup@v5.2.0"
+    assert sent["modified_models"] == ["dna_r10.4.1_e8.2_400bps_sup@v5.2.0_6mA@v1",
+                                       "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_5mCG_5hmCG@v2"]
+    assert sent["min_qscore"] == 12
+    assert sent["barcoding_kits"] == ["SQK-RBK114-24"]
+    assert sent["barcode_samples"] == [{"barcode": "barcode01", "alias": "plasmid_A"}]
+
+
+@pytest.mark.asyncio
+async def test_accuracy_alone_uses_that_models_own_qscore_and_no_modifications(monkeypatch) -> None:
+    catalog = await _kit_catalog(monkeypatch)
+    option = catalog["options"][0]
+    intent = await ont_run_control.create_run_intent("X1", {
+        "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"],
+        "basecalling": {"quality": "sup"}})
+    sent = {}
+
+    def host(method, path, payload=None, *, query=None, timeout=None):
+        if path == "/ont/positions/X1/protocol-runs":
+            sent.update(payload)
+            return {"minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000003", "position": "X1"}
+        return {"status": "running", "minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000003",
+                "output_files": {"fastq": [], "pod5": [], "bam": []}}
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", host)
+    await ont_run_control.validate_armed_intent_start(
+        intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]})
+
+    assert sent["simplex_model"] == "dna_r10.4.1_e8.2_400bps_sup@v5.2.0" and sent["min_qscore"] == 10.0
+    assert "modified_models" not in sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("choice, message", [
+    ({"quality": "fast", "modified_bases": ["6mA"]}, "no 6mA modification model for FAST"),
+    ({"quality": "sup", "modified_bases": ["5mCG_5hmCG", "5mC_5hmC"]}, "one modification model per base"),
+    ({"quality": "ultra"}, "no basecalling model of that accuracy"),
+    ({"quality": "sup", "min_qscore": 31}, "min_qscore"),
+    ({"quality": "sup", "simplex_model": "anything"}, "basecalling accepts"),
+])
+async def test_a_basecalling_choice_minknow_does_not_offer_is_refused_before_arming(monkeypatch, choice, message) -> None:
+    catalog = await _kit_catalog(monkeypatch)
+    option = catalog["options"][0]
+    with pytest.raises(ValueError, match=message):
+        await ont_run_control.create_run_intent("X1", {
+            "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"], "basecalling": choice})
+    # A refused choice leaves the option unused, so the same receipt still arms a run.
+    intent = await ont_run_control.create_run_intent("X1", {
+        "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"]})
+    assert intent["state"] == "armed"
+
+
+def test_run_intent_route_accepts_a_basecalling_choice_and_refuses_model_names(monkeypatch) -> None:
+    app = FastAPI()
+    app.include_router(ont_runs.router, prefix="/api/ont")
+    client = TestClient(app)
+    seen = []
+
+    async def create(position, payload):
+        seen.append(payload)
+        return {"id": "ont-run-x"}
+
+    monkeypatch.setattr(ont_run_control, "create_run_intent", create)
+    body = {"option_id": "ont-option-a", "option_receipt_id": "ont-preflight-a"}
+    ok = client.post("/api/ont/positions/X1/run-intents",
+                     json={**body, "basecalling": {"quality": "sup", "modified_bases": ["6mA"], "min_qscore": 12}})
+    assert ok.status_code == 200, ok.text
+    assert seen[0]["basecalling"] == {"quality": "sup", "modified_bases": ["6mA"], "min_qscore": 12}
+    for bad in ({"simplex_model": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0"}, {"quality": "sup", "min_qscore": 40},
+                {"quality": "../x"}, {"modified_bases": ["6mA; rm"]}):
+        assert client.post("/api/ont/positions/X1/run-intents", json={**body, "basecalling": bad}).status_code == 422
+    assert len(seen) == 1
+
+
+async def _running_barcoded_run(monkeypatch, live):
+    catalog = await _kit_catalog(monkeypatch)
+    option = catalog["options"][0]
+    intent = await ont_run_control.create_run_intent("X1", {
+        "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"],
+        "barcode_samples": [{"barcode": "barcode01", "alias": "plasmid_A"}]})
+    calls = []
+
+    def host(method, path, payload=None, *, query=None, timeout=None):
+        calls.append((method, path))
+        if path == "/ont/positions/X1/protocol-runs":
+            return {"minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000009", "position": "X1"}
+        if path.endswith("/live"):
+            if isinstance(live, Exception):
+                raise live
+            return live
+        return {"status": "running", "minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000009",
+                "output_files": {"fastq": [], "pod5": [], "bam": []}}
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", host)
+    await ont_run_control.validate_armed_intent_start(
+        intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]})
+    return intent["id"], calls
+
+
+_LIVE_COUNTS = {"read_count": 1000, "basecalled_pass_read_count": 700, "basecalled_fail_read_count": 100,
+                "basecalled_pass_bases": 3_500_000, "basecalled_fail_bases": 400_000, "estimated_selected_bases": 5_000_000}
+
+
+@pytest.mark.asyncio
+async def test_live_run_numbers_come_from_minknow_with_the_run_sample_names(monkeypatch) -> None:
+    barcode = {**_LIVE_COUNTS, "read_count": 600, "basecalled_pass_read_count": 500}
+    run_id, calls = await _running_barcoded_run(monkeypatch, {
+        "available": True, "totals": _LIVE_COUNTS,
+        "latest_acquisition": {"basecalling_enabled": True, "fraction_basecalled": 0.8, "channel_count": 512,
+                               "acquisition_id": "acq-seq", "started_at": 200, "ended_at": None},
+        "barcodes": [{"barcode": "barcode01", "alias": "barcode01", **barcode},
+                     {"barcode": "barcode02", "alias": "barcode02", **barcode},
+                     {"barcode": "unclassified", "alias": None, **barcode}],
+        "channels": {"sequencing_fraction": 0.6, "open_pore_fraction": 0.2, "other_fraction": 0.2},
+    })
+    before = await ont_run_control.get_instrument_run(run_id)
+
+    live = await ont_run_control.get_instrument_run_live(run_id)
+
+    assert calls[-1] == ("GET", "/ont/runs/7f3c1a2b-0000-4000-8000-000000000009/live")
+    assert live["available"] is True and live["run_id"] == run_id and live["totals"] == _LIVE_COUNTS
+    assert live["basecalling_enabled"] is True and live["fraction_basecalled"] == 0.8
+    assert [(item["barcode"], item["alias"], item["basecalled_pass_read_count"]) for item in live["barcodes"]] == [
+        ("barcode01", "plasmid_A", 500), ("barcode02", None, 500), ("unclassified", None, 500)]
+    assert live["channels"]["sequencing_fraction"] == 0.6
+    assert "acq-seq" not in repr(live) and "7f3c1a2b" not in repr(live)
+    # Monitoring only reads: the run record gains no event and keeps its state.
+    after = await ont_run_control.get_instrument_run(run_id)
+    assert after["observed_generation"] == before["observed_generation"] and len(after["events"]) == len(before["events"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("live", [RuntimeError("bridge down"), {"available": False}, "not json"])
+async def test_live_run_numbers_are_unavailable_when_minknow_has_none(monkeypatch, live) -> None:
+    run_id, _calls = await _running_barcoded_run(monkeypatch, live)
+    result = await ont_run_control.get_instrument_run_live(run_id)
+    assert result["available"] is False and result["run_id"] == run_id and "totals" not in result
+
+
+@pytest.mark.asyncio
+async def test_live_numbers_for_a_run_that_never_started_do_not_contact_minknow(monkeypatch) -> None:
+    catalog = await _kit_catalog(monkeypatch)
+    option = catalog["options"][0]
+    intent = await ont_run_control.create_run_intent("X1", {
+        "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"]})
+
+    def host(*args, **kwargs):
+        raise AssertionError("an armed run has nothing live to read")
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", host)
+    assert (await ont_run_control.get_instrument_run_live(intent["id"]))["available"] is False
+
+
+def test_live_route_returns_the_numbers_and_404s_an_unknown_run(monkeypatch) -> None:
+    app = FastAPI()
+    app.include_router(ont_runs.router, prefix="/api/ont")
+    client = TestClient(app)
+
+    async def live(run_id):
+        if run_id != "ont-run-x":
+            raise KeyError(run_id)
+        return {"run_id": run_id, "available": True}
+
+    monkeypatch.setattr(ont_run_control, "get_instrument_run_live", live)
+    assert client.get("/api/ont/runs/ont-run-x/live").json() == {"run_id": "ont-run-x", "available": True}
+    assert client.get("/api/ont/runs/nope/live").status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_adaptive_sampling_choice_reaches_the_minknow_start_with_resolved_files(monkeypatch, tmp_path) -> None:
+    import paths
+    (tmp_path / "ont-adaptive-sampling").mkdir()
+    (tmp_path / "ont-adaptive-sampling" / "ref.fa").write_text(">p\nACGT\n")
+    (tmp_path / "ont-adaptive-sampling" / "targets.bed").write_text("p\t0\t4\n")
+    monkeypatch.setattr(paths, "get_allowed_roots", lambda: {"inputs": tmp_path})
+    catalog = await _kit_catalog(monkeypatch)
+    option = catalog["options"][0]
+    intent = await ont_run_control.create_run_intent("X1", {
+        "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"],
+        "adaptive_sampling": {"mode": "enrich", "reference_path": "inputs/ont-adaptive-sampling/ref.fa",
+                              "bed_path": "inputs/ont-adaptive-sampling/targets.bed"}})
+    sent = {}
+
+    def host(method, path, payload=None, *, query=None, timeout=None):
+        if path == "/ont/positions/X1/protocol-runs":
+            sent.update(payload)
+            return {"minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000011", "position": "X1"}
+        return {"status": "running", "minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000011",
+                "output_files": {"fastq": [], "pod5": [], "bam": []}}
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", host)
+    await ont_run_control.validate_armed_intent_start(
+        intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]})
+    assert sent["adaptive_sampling"] == {
+        "mode": "enrich", "reference_path": str((tmp_path / "ont-adaptive-sampling" / "ref.fa").resolve()),
+        "bed_path": str((tmp_path / "ont-adaptive-sampling" / "targets.bed").resolve())}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("choice, message", [
+    ({"mode": "enrich"}, "need a reference FASTA"),
+    ({"mode": "enrich", "reference_path": "/etc/passwd"}, "uploaded to BMS first"),
+    ({"mode": "enrich", "reference_path": "inputs/../../etc/passwd"}, "escapes|not found"),
+    ({"mode": "enrich", "reference_path": "inputs/missing.fa"}, "not found"),
+    ({"mode": "sideways"}, "mode must be"),
+    ({"mode": "enrich", "reference_path": "inputs/x.fa", "args": "--x"}, "adaptive_sampling accepts"),
+])
+async def test_adaptive_sampling_outside_uploaded_files_is_refused_before_arming(monkeypatch, tmp_path, choice, message) -> None:
+    import paths
+    monkeypatch.setattr(paths, "get_allowed_roots", lambda: {"inputs": tmp_path})
+    catalog = await _kit_catalog(monkeypatch)
+    option = catalog["options"][0]
+    with pytest.raises(ValueError, match=message):
+        await ont_run_control.create_run_intent("X1", {
+            "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"], "adaptive_sampling": choice})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adaptive, expected", [({"mode": "barcode_balance"}, {"mode": "barcode_balance"}), (None, None)])
+async def test_barcode_balancing_and_plain_runs(monkeypatch, adaptive, expected) -> None:
+    catalog = await _kit_catalog(monkeypatch)
+    option = catalog["options"][0]
+    intent = await ont_run_control.create_run_intent("X1", {
+        "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"],
+        **({"adaptive_sampling": adaptive} if adaptive else {})})
+    sent = {}
+
+    def host(method, path, payload=None, *, query=None, timeout=None):
+        if path == "/ont/positions/X1/protocol-runs":
+            sent.update(payload)
+            return {"minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000012", "position": "X1"}
+        return {"status": "running", "minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000012",
+                "output_files": {"fastq": [], "pod5": [], "bam": []}}
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", host)
+    await ont_run_control.validate_armed_intent_start(
+        intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]})
+    assert sent.get("adaptive_sampling") == expected
+
+
+@pytest.mark.asyncio
+async def test_live_numbers_carry_the_graph_series(monkeypatch) -> None:
+    charts = {"pore_activity": [{"start_seconds": 0, "sequencing": 0.6, "pore": 0.2, "recovering": 0.1, "inactive": 0.05, "unclassified": 0.05}],
+              "cumulative": [{"seconds": 60, **_LIVE_COUNTS}],
+              "read_lengths": {"n50": 5500.0, "buckets": [{"start": 0, "end": 100, "value": 10}]}}
+    run_id, _calls = await _running_barcoded_run(monkeypatch, {
+        "available": True, "totals": _LIVE_COUNTS, "latest_acquisition": {"basecalling_enabled": True}, "barcodes": [],
+        "charts": charts})
+    assert (await ont_run_control.get_instrument_run_live(run_id))["charts"] == charts
+
+
+@pytest.mark.asyncio
+async def test_live_numbers_without_graph_series_give_empty_graphs(monkeypatch) -> None:
+    run_id, _calls = await _running_barcoded_run(monkeypatch, {
+        "available": True, "totals": _LIVE_COUNTS, "latest_acquisition": {}, "barcodes": []})
+    assert (await ont_run_control.get_instrument_run_live(run_id))["charts"] == {
+        "pore_activity": [], "cumulative": [], "read_lengths": None}
+
+
+@pytest.mark.asyncio
+async def test_live_numbers_say_when_barcode_output_could_not_be_read(monkeypatch) -> None:
+    run_id, _calls = await _running_barcoded_run(monkeypatch, {
+        "available": True, "totals": _LIVE_COUNTS, "acquisition_count": 2, "barcodes": [], "barcodes_available": False,
+        "latest_acquisition": {"basecalling_enabled": True, "fraction_basecalled": 0.7, "fraction_skipped": 0.2}})
+    live = await ont_run_control.get_instrument_run_live(run_id)
+    assert live["barcodes_available"] is False and live["barcoding_enabled"] is True
+    assert live["fraction_basecalled"] == 0.7 and live["fraction_skipped"] == 0.2 and live["acquisition_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_live_numbers_from_an_older_bridge_count_barcode_output_as_read(monkeypatch) -> None:
+    run_id, _calls = await _running_barcoded_run(monkeypatch, {
+        "available": True, "totals": _LIVE_COUNTS, "latest_acquisition": {}, "barcodes": []})
+    assert (await ont_run_control.get_instrument_run_live(run_id))["barcodes_available"] is True

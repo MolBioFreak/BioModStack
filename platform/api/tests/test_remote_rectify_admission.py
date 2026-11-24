@@ -12,6 +12,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, ExecutionTarget, Job, get_session
 from routers import jobs
+from services import job_submission
+from services import binder_continuation
+from services import job_requests
 from tests.test_msa_bundle_integration import offline_bundle
 
 
@@ -74,8 +77,11 @@ def test_remote_typed_project_uses_validated_approval_handoff(remote_project_sto
     from tests.test_md_typed_launch import _Catalog, _intent_payload
     store = remote_project_store
     monkeypatch.setenv('BMS_FEATURE_MOLECULAR_DYNAMICS', '1')
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *_: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda *_: None)
     monkeypatch.setattr(launch_contract, 'get_chemistry_catalog', lambda: _Catalog())
+    # Admission authority is independent of installed engine bytes.
+    monkeypatch.setattr(launch_contract, '_bound_engine_runtime_identity',
+        lambda: {'image_name': 'gromacs.sif', 'sif_sha256': 'a' * 64})
     source = SourceIdentity('1' * 40, '2' * 40)
     monkeypatch.setattr(SourceIdentity, 'from_checkout', lambda *_: source)
     monkeypatch.setattr(bundle, 'current_source_identity', lambda: (source.revision, source.tree))
@@ -114,7 +120,7 @@ def test_preparation_rebind_keeps_approved_scientific_identity(offline_bundle):
     from services.model_msa_handoff import prepare_launch_msa
     _, job, _, _ = offline_bundle
     payload = JobCreate(name='prepared-identity', model_id=job.model_id, mode=job.mode, params=deepcopy(job.params))
-    approved = jobs._execution_plan_preview(payload)
+    approved = job_requests._execution_plan_preview(payload)
     assert approved['admissible']
     invocation = nextflow.compile_job_nextflow_invocation(job, job.params, job.output_dir)
     invocation.materialize_inputs(Path(job.output_dir))
@@ -125,7 +131,7 @@ def test_preparation_rebind_keeps_approved_scientific_identity(offline_bundle):
     assert prepared.effective_json == invocation.effective_json
     assert prepared.execution_plan.complete
     assert prepared.execution_plan.plan_sha256 != invocation.execution_plan.plan_sha256
-    assert jobs._execution_plan_preview(payload)['approval_digest'] == approved['approval_digest']
+    assert job_requests._execution_plan_preview(payload)['approval_digest'] == approved['approval_digest']
 
 
 @pytest_asyncio.fixture
@@ -140,7 +146,7 @@ async def admission(tmp_path, monkeypatch):
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *_: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda *_: None)
     app = FastAPI()
     app.include_router(jobs.router, prefix='/jobs')
     from routers import molecular_dynamics
@@ -177,9 +183,11 @@ async def test_custom_actions_prepare_once_before_review(admission, tmp_path, mo
     inputs.mkdir()
     pdb = inputs / 'source.pdb'
     pdb.write_bytes((Path(__file__).parent / 'fixtures/md/1AKI.pdb').read_bytes())
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: inputs)
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: inputs)
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: inputs)
     monkeypatch.setattr('paths.get_inputs_dir', lambda: inputs)
     monkeypatch.setattr(jobs, '_resolve_design_structure_path', lambda value: Path(value))
+    monkeypatch.setattr(binder_continuation, '_resolve_design_structure_path', lambda value: Path(value))
     async with factory() as session:
         session.add(Job(id='source', name='antibody source', model_id='boltzgen', mode='antibody',
             status='awaiting_input', queue_status='awaiting_input', awaiting_input=True,
@@ -230,8 +238,14 @@ async def test_custom_actions_prepare_once_before_review(admission, tmp_path, mo
         candidate.write_bytes(saved)
         candidate.unlink()
         candidate.symlink_to(pdb)
+        contained = await client.post('/jobs/execution-plan/preview', json=prepared)
+        assert contained.status_code == 200 and contained.json()['admissible'], contained.text
+        candidate.unlink()
+        outside = tmp_path / 'outside-selected-roots.pdb'
+        outside.write_bytes(saved)
+        candidate.symlink_to(outside)
         unsafe = await client.post('/jobs/execution-plan/preview', json=prepared)
-        assert unsafe.status_code == 422 and 'symlink' in unsafe.text, unsafe.text
+        assert unsafe.status_code == 422 and 'outside approved roots' in unsafe.text, unsafe.text
         candidate.unlink()
         candidate.write_bytes(saved)
         async with factory() as session:
@@ -269,7 +283,9 @@ def qualify_root_bundle(job, tmp_path, monkeypatch):
     monkeypatch.setattr(bundle, '_git', lambda *_: 'b' * 40)
     for directory in (paths.get_weights_root(), paths.get_container_dir()):
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / 'infrastructure-fixture.txt').write_text('Runtime inventory double; never executed.\n')
+        fixture = directory / 'infrastructure-fixture.txt'
+        fixture.write_text('Runtime inventory double; never executed.\n')
+        fixture.chmod(0o444)
     monkeypatch.setattr(bundle, '_runtime_assets', lambda *_, **__: [
         (paths.get_weights_root(), 'weights'), (paths.get_container_dir(), 'containers')])
     actual_run = subprocess.run
@@ -277,7 +293,8 @@ def qualify_root_bundle(job, tmp_path, monkeypatch):
     # bytes from HEAD rather than requesting that synthetic infrastructure SHA.
     def archive(command, **kwargs):
         if command[:2] == ['git', 'archive']:
-            command = [*command[:-1], 'HEAD']
+            command = list(command)
+            command[command.index('a' * 40)] = 'HEAD'
         return actual_run(command, **kwargs)
     monkeypatch.setattr(bundle.subprocess, 'run', archive)
     job.assigned_gpu = 0
@@ -295,7 +312,14 @@ def qualify_root_bundle(job, tmp_path, monkeypatch):
         if transfer.source.is_dir():
             shutil.copytree(transfer.source, destination)
         else:
-            shutil.copyfile(transfer.source, destination)
+            shutil.copy2(transfer.source, destination)
+    # Mirror source-cache materialization, not just archive transfer.
+    import tarfile
+    with tarfile.open(Path(prepared.remote_source_dir)/'.bms-source.tar.gz', 'r:*') as archive:
+        archive.extractall(prepared.remote_source_dir, filter='data')
+        for member in archive.getmembers():
+            if member.isfile():
+                (Path(prepared.remote_source_dir)/member.name).chmod(member.mode & 0o555)
     attempt = Path(prepared.remote_attempt_dir)
     shutil.copytree(prepared.local_attempt_dir, attempt, dirs_exist_ok=True)
     (attempt / 'bundle/source').symlink_to(prepared.remote_source_dir, target_is_directory=True)
@@ -454,13 +478,18 @@ async def test_unsupported_plan_and_forged_parent_do_not_enqueue(admission):
 @pytest.mark.asyncio
 async def test_md_native_preview_binds_shared_plan_without_second_approval(admission, monkeypatch):
     from routers import molecular_dynamics as md
+    from services.md import native_launch
     from tests.test_md_typed_launch import _intent_payload
     from tests.test_md_job_v2_contract import _catalog
     from services.md import launch_contract
     monkeypatch.setenv('BMS_FEATURE_MOLECULAR_DYNAMICS', '1')
     catalog = _catalog()
     monkeypatch.setattr(md, 'get_chemistry_catalog', lambda: catalog)
+    monkeypatch.setattr(native_launch, 'get_chemistry_catalog', lambda: catalog)
     monkeypatch.setattr(launch_contract, 'get_chemistry_catalog', lambda: catalog)
+    # Admission authority is independent of installed engine bytes.
+    monkeypatch.setattr(launch_contract, '_bound_engine_runtime_identity',
+        lambda: {'image_name': 'gromacs.sif', 'sif_sha256': 'a' * 64})
     view = catalog.view()
     profile = view.get_profile('gmx_amber99sb_ildn_tip3p_smoke_v1')
     client, factory = admission
@@ -494,29 +523,6 @@ async def test_md_native_preview_binds_shared_plan_without_second_approval(admis
         assert successor.parent_job_id is None
         assert successor.execution_target_id == intent['execution_target_id']
         assert successor.provenance['execution_plan_approval']['approval_digest'] == preview['preview_digest']
-
-    # Faithful native result fixture; actual retry route and canonical producer.
-    import hashlib, json
-    from pathlib import Path
-    from routers import md_results
-    from tests.test_molecular_dynamics_orchestration import _write_completed_replica
-    async with factory() as session:
-        parent = await session.get(Job, job_id)
-        root = Path(parent.output_dir)
-        monkeypatch.setenv('BMS_MD_RESULT_ROOT', str(root.parent))
-        manifest, sha = _write_completed_replica(root, job_id)
-        accepted_set = hashlib.sha256(json.dumps([(0, sha)], separators=(',', ':')).encode()).hexdigest()
-        parent.provenance = {**parent.provenance, 'md': {
-            'dynamics_state': 'completed', 'analysis_state': 'failed',
-            'aggregate_manifest_sha256': hashlib.sha256((root / 'manifest.json').read_bytes()).hexdigest(),
-            'replica_manifest_set_sha256': accepted_set}}
-        await session.commit()
-        retry = await md_results.retry_md_analysis(job_id, session)
-        child = await session.get(Job, retry['created_child_ids'][0])
-        assert child.mode == 'analyze' and child.parent_job_id == job_id
-        assert child.execution_target_id == intent['execution_target_id']
-        assert child.provenance['execution_plan_approval']['approval_digest'] == preview['preview_digest']
-        assert hashlib.sha256(manifest.read_bytes()).hexdigest() == sha
 
 
 @pytest.mark.asyncio

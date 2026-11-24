@@ -49,14 +49,15 @@ _ATTACHMENT_METADATA_FIELDS = {
 }
 _DOMAIN_KINDS = {"protein_in_silico", "ngs_molbio"}
 _HIERARCHY_SCHEMA_VERSIONS = {
-    "bms.project.v1": "1",
-    "bms.project.v2": "2",
-    "bms.global-experiment.v1": "1",
-    "bms.global-experiment.v2": "2",
-    "bms.domain-experiment.v1": "1",
-    "bms.domain-experiment.v2": "1",
-    "bms.domain-experiment.v3": "2",
-    "bms.domain-experiment.v4": "3",
+    "bms.project.v1": ("1",),
+    "bms.project.v2": ("2",),
+    "bms.global-experiment.v1": ("1",),
+    "bms.global-experiment.v2": ("2",),
+    "bms.domain-experiment.v1": ("1",),
+    # Save records domain_contract_version; v2 rows saved before it did carry "1".
+    "bms.domain-experiment.v2": ("1", "2"),
+    "bms.domain-experiment.v3": ("2",),
+    "bms.domain-experiment.v4": ("3",),
 }
 
 
@@ -481,7 +482,7 @@ async def _current_hierarchy_revision_authority(
             and revision.revision_number != head.head_generation
         )
         or revision.schema_name not in expected_schema_names
-        or revision.schema_version != _HIERARCHY_SCHEMA_VERSIONS.get(revision.schema_name)
+        or revision.schema_version not in _HIERARCHY_SCHEMA_VERSIONS.get(revision.schema_name, ())
         or revision_resource.id != revision.resource_id
         or revision_resource.kind != "revision"
         or revision_resource.workspace_id != project_id
@@ -554,6 +555,7 @@ async def _current_hierarchy_revision_authority(
                 "expected_sha256": expected_sha256,
             }
         )
+    parent_reference: dict[str, Any] | None = None
     if head.aggregate_kind == "domain_experiment":
         parent_head = await session.get(ExperimentAggregateHead, str(head.parent_id or ""))
         parent_revision = (
@@ -584,17 +586,25 @@ async def _current_hierarchy_revision_authority(
                 "current Domain parent Global revision authority diverges"
             )
         expected_identities.add(parent_identity)
+        parent_reference = {
+            "role": parent_identity[0],
+            "ordinal": parent_identity[1],
+            "target_resource_id": parent_identity[2],
+            "expected_sha256": parent_row.expected_sha256,
+        }
     if set(rows_by_identity) != expected_identities:
         raise PreparationInputAuthorityError("current hierarchy revision dependencies are missing or extraneous")
 
-    expected_graph = _canonical(
-        {
-            "nodes": payload.get("nodes", []),
-            "edges": payload.get("edges", []),
-            "references": references,
-        }
-    )
-    if hashlib.sha256(expected_graph.encode("utf-8")).hexdigest() != dependency_sha256:
+    from experiment_services import hierarchy_dependency_graph_json, sha256_text
+
+    # Save binds the parent Global revision into a Domain revision's graph;
+    # Domain revisions saved before that keep the graph without it.
+    accepted_graphs = [references]
+    if parent_reference is not None:
+        accepted_graphs.append([*references, parent_reference])
+    if dependency_sha256 not in {
+        sha256_text(hierarchy_dependency_graph_json(payload, graph)) for graph in accepted_graphs
+    }:
         raise PreparationInputAuthorityError("current hierarchy revision dependency digest diverges")
     return payload
 

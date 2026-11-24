@@ -162,6 +162,20 @@ class StageLedger:
         temp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(temp, self.path)
 
+    def preparation_key(self, config: Mapping[str, Any]) -> str:
+        if config.get('schema') != 'bms.md.job.v3':
+            return 'preparation'
+        # A colon cannot occur in an authored stage name. Identify old prep
+        # by its writer, not by its status or the user-visible stage name.
+        key = 'internal:preparation'
+        data = self._read()
+        stages = data['stages']
+        command = stages.get('preparation', {}).get('command', [])
+        if key not in stages and (command[:1] == ['consume-immutable-bundle'] or command[1:2] == ['pdb2gmx']):
+            stages[key] = stages.pop('preparation')
+            self._write(data)
+        return key
+
     def mark_running(self, stage_name: str, command: Sequence[str]) -> None:
         data = self._read()
         data["stages"][stage_name] = {

@@ -13,21 +13,13 @@ chemical component definitions, bonds, or inference behavior. A malformed
 polymer still reaches its existing missing-sequence lookup. The observational
 source-correspondence exporter does not apply this scientific repair.
 
-## Reproducible candidate
+## Build
 
-From the repository root:
-
-```sh
-apptainer build --fakeroot --mksquashfs-args '-processors 4 -mem 2G' \
-  --build-arg base_image=/absolute/path/to/base.sif \
-  /absolute/path/to/boltzgen-ligand-parser.sif apptainer/boltzgen-ligand-parser.def
-```
-
-Use a task-owned `TMPDIR`, `APPTAINER_TMPDIR` and `APPTAINER_CACHEDIR`.
-The qualified base image SHA-256 is
-`a62b63635a53f18f3bbb66585817bdd0425f58799696b2a1c19124bd6023a672`.
-The recipe changes the repository and installed copies of `mmcif.py`, with
-exact build-time source checks. It does not resolve or reinstall dependencies.
+`apptainer/boltzgen.def` pins BoltzGen to commit
+`617e549edf70787d899f47bc39e3746d8f10ffff` and applies
+`apptainer/patches/boltzgen/ligand-only-mmcif.patch` before installing it, so the
+tool installer's `boltzgen` recipe produces the repaired image directly.
+The build asserts the repaired parser is the one installed.
 These build checks are not application admission rules.
 
 The repaired source SHA-256 is
@@ -40,7 +32,7 @@ unsupported images continue to execute as before, without invented provenance.
 
 ```sh
 BMS_TEST_BOLTZGEN_BASE_IMAGE=/absolute/path/to/base.sif \
-BMS_TEST_BOLTZGEN_IMAGE=/absolute/path/to/boltzgen-ligand-parser.sif \
+BMS_TEST_BOLTZGEN_IMAGE=/absolute/path/to/boltzgen.sif \
   python -m pytest tests/test_boltzgen_ligand_parser.py \
   tests/test_boltzgen_source_correspondence.py -q -o addopts=
 ```

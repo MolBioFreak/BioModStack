@@ -125,6 +125,107 @@ def _option_snapshot(position: str, host_payload: dict[str, Any]) -> dict[str, A
     }
 
 
+def _basecalling_models(snapshot: Any) -> list[dict[str, Any]]:
+    options = snapshot.get("basecalling_options") if isinstance(snapshot, dict) else None
+    models = options.get("models") if isinstance(options, dict) else None
+    return [model for model in models or [] if isinstance(model, dict) and model.get("name") and model.get("variant")]
+
+
+def _default_simplex_model(snapshot: Any) -> str | None:
+    options = snapshot.get("basecalling_options") if isinstance(snapshot, dict) else None
+    names = options.get("simplex_models") if isinstance(options, dict) else None
+    return str(names[0]) if names else None
+
+
+def _public_basecalling_choices(snapshot: Any) -> list[dict[str, Any]]:
+    """Accuracy tiers and modification names MinKNOW offers for this kit; model names stay server-side."""
+    default = _default_simplex_model(snapshot)
+    return [
+        {
+            "quality": str(model["variant"]),
+            "default": model["name"] == default,
+            "default_min_qscore": model.get("min_qscore"),
+            "modified_bases": [
+                {"id": str(item["variant"]), "canonical_base": item.get("canonical_base"), "context": item.get("context")}
+                for item in model.get("modified_models") or [] if isinstance(item, dict) and item.get("variant")
+            ],
+        }
+        for model in _basecalling_models(snapshot)
+    ]
+
+
+def _basecalling_choice(value: Any, snapshot: Any) -> dict[str, Any] | None:
+    """Resolve the chosen accuracy, modifications and read-quality cutoff to MinKNOW's own model names."""
+    if not value:
+        return None
+    if not isinstance(value, dict) or set(value) - {"quality", "modified_bases", "min_qscore"}:
+        raise ValueError("basecalling accepts quality, modified_bases and min_qscore")
+    if not isinstance(snapshot, dict) or snapshot.get("basecalling_enabled") is not True:
+        raise ValueError("basecalling is off for this run")
+    models = _basecalling_models(snapshot)
+    quality = value.get("quality")
+    if quality is None:
+        default = _default_simplex_model(snapshot)
+        model = next((item for item in models if item["name"] == default), None)
+    else:
+        model = next((item for item in models if item["variant"] == str(quality).strip().lower()), None)
+    if model is None:
+        raise ValueError("MinKNOW offers no basecalling model of that accuracy for this kit and flow cell")
+    chosen: list[dict[str, Any]] = []
+    for name in value.get("modified_bases") or []:
+        match = next((item for item in model.get("modified_models") or []
+                      if isinstance(item, dict) and item.get("variant") == name), None)
+        if match is None:
+            raise ValueError(
+                f"MinKNOW offers no {name} modification model for {str(model['variant']).upper()} basecalling with this kit")
+        if any((item.get("canonical_base") or item["name"]) == (match.get("canonical_base") or match["name"]) for item in chosen):
+            raise ValueError("choose one modification model per base")
+        chosen.append(match)
+    min_qscore = value.get("min_qscore")
+    if min_qscore is None:
+        min_qscore = model.get("min_qscore")
+    elif isinstance(min_qscore, bool) or not isinstance(min_qscore, (int, float)) or not 0 <= min_qscore <= 30:
+        raise ValueError("min_qscore must be a number from 0 to 30")
+    return {
+        "quality": str(model["variant"]),
+        "simplex_model": str(model["name"]),
+        "modified_bases": [str(item["variant"]) for item in chosen],
+        "modified_models": [str(item["name"]) for item in chosen],
+        "min_qscore": min_qscore,
+    }
+
+
+def _adaptive_sampling_choice(value: Any) -> dict[str, Any] | None:
+    """The adaptive sampling mode and its uploaded files, as absolute paths for the MinKNOW bridge."""
+    if not value:
+        return None
+    if not isinstance(value, dict) or set(value) - {"mode", "reference_path", "bed_path"}:
+        raise ValueError("adaptive_sampling accepts mode, reference_path and bed_path")
+    mode = str(value.get("mode") or "")
+    if mode not in {"enrich", "deplete", "barcode_balance"}:
+        raise ValueError("adaptive sampling mode must be enrich, deplete or barcode_balance")
+    if mode == "barcode_balance":
+        return {"mode": mode}
+    from paths import resolve_allowed_path  # noqa: PLC0415
+
+    def uploaded(key: str) -> str | None:
+        relative = str(value.get(key) or "").strip()
+        if not relative:
+            return None
+        if not relative.startswith("inputs/"):
+            raise ValueError("adaptive sampling files must be uploaded to BMS first")
+        path = resolve_allowed_path(relative)
+        if not path.is_file():
+            raise ValueError(f"adaptive sampling file was not found: {Path(relative).name}")
+        return str(path)
+
+    reference = uploaded("reference_path")
+    if not reference:
+        raise ValueError("enrich and deplete need a reference FASTA")
+    bed = uploaded("bed_path")
+    return {"mode": mode, "reference_path": reference, **({"bed_path": bed} if bed else {})}
+
+
 def _catalog_blockers(host_payload: dict[str, Any]) -> list[str]:
     public_reasons = {
         "flowcell_absent",
@@ -818,6 +919,7 @@ async def issue_position_protocol_catalog(
                 f"{snapshot['kit']} sequencing · {float(run_hours):g} h", "MinKNOW sequencing protocol",
             ),
             "basecalling_enabled": snapshot["basecalling_enabled"],
+            "basecalling_choices": _public_basecalling_choices(snapshot) if snapshot["basecalling_enabled"] else [],
             "output_policy_id": f"ont-output-policy-{source_digest[:16]}",
             "output_policy_label": "MinKNOW-managed output policy",
         }
@@ -837,9 +939,98 @@ def _bounded_metadata(payload: dict[str, Any], key: str) -> str | None:
     return normalized or None
 
 
+def _barcoding_kits() -> frozenset[str]:
+    from services.ont_ngs_contract import accepted_barcode_kits  # noqa: PLC0415
+    return accepted_barcode_kits()
+
+
+def _barcode_samples(value: Any, kit: Any) -> list[dict[str, str]]:
+    """Barcode and sample-name pairs for a run on a barcoding kit."""
+    if not value:
+        return []
+    if kit not in _barcoding_kits():
+        raise ValueError("barcode sample names need a barcoding kit")
+    limit = 24 if str(kit).endswith("-24") else 96
+    samples: list[dict[str, str]] = []
+    for item in value:
+        barcode = str((item or {}).get("barcode") or "").strip()
+        alias = str((item or {}).get("alias") or "").strip()
+        if (not re.fullmatch(r"barcode(?:0[1-9]|[1-8][0-9]|9[0-6])", barcode) or int(barcode[7:]) > limit
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", alias) or re.fullmatch(r"barcode[0-9]+", alias)
+                or alias == "unclassified"
+                or any(barcode == seen["barcode"] or alias == seen["alias"] for seen in samples)):
+            raise ValueError(
+                f"barcode sample names must pair barcode01 to barcode{limit} with unique names of letters, numbers, _ or -")
+        samples.append({"barcode": barcode, "alias": alias})
+    return sorted(samples, key=lambda item: item["barcode"])
+
+
+def _run_barcode_samples(events: list[OntInstrumentRunEvent]) -> list[dict[str, str]]:
+    for event in events:
+        payload = event.minknow_payload if isinstance(event.minknow_payload, dict) else {}
+        if event.event_type == "preflight_armed" and payload.get("barcode_samples"):
+            return list(payload["barcode_samples"])
+    return []
+
+
+def _run_basecalling_choice(events: list[OntInstrumentRunEvent]) -> dict[str, Any] | None:
+    for event in events:
+        payload = event.minknow_payload if isinstance(event.minknow_payload, dict) else {}
+        if event.event_type == "preflight_armed" and isinstance(payload.get("basecalling"), dict):
+            return dict(payload["basecalling"])
+    return None
+
+
+def _run_adaptive_sampling(events: list[OntInstrumentRunEvent]) -> dict[str, Any] | None:
+    for event in events:
+        payload = event.minknow_payload if isinstance(event.minknow_payload, dict) else {}
+        if event.event_type == "preflight_armed" and isinstance(payload.get("adaptive_sampling"), dict):
+            return dict(payload["adaptive_sampling"])
+    return None
+
+
+def _allowed_relative(path: Path) -> str:
+    """The path as the ONT form submits it: below a named data root when it lies in one."""
+    from paths import get_allowed_roots  # noqa: PLC0415
+    roots = get_allowed_roots()
+    for key in ("sequencer_runs", "inputs"):
+        if key in roots:
+            try:
+                return f"{key}/{path.relative_to(roots[key].resolve()).as_posix()}"
+            except ValueError:
+                continue
+    return str(path)
+
+
+async def build_barcode_basecall_handoff(run_id: str) -> dict[str, Any]:
+    """What the ONT form needs to basecall and demultiplex a finished run: its POD5 folder, kit and sample names."""
+    async with async_session() as session:
+        record = await _load_run(session, run_id)
+        if record.state not in {"completed", "stopped"}:
+            raise ValueError("the run must finish (completed or stopped) before it is basecalled here")
+        pod5 = [str(path) for path in (record.output_files or {}).get("pod5") or []]
+        if not pod5:
+            raise ValueError("this run has no POD5 files on record")
+        folder = Path(os.path.commonpath([str(Path(path).parent) for path in pod5]))
+        kit = record.kit if record.kit in _barcoding_kits() else None
+        samples = _run_barcode_samples(await _events_for_run(session, run_id)) if kit else []
+    sheet = None
+    if samples:
+        # Run identifiers are left blank; the basecall reads them from the POD5 files.
+        directory = get_inputs_dir() / "ont-sample-sheets" / uuid4().hex
+        directory.mkdir(parents=True)
+        sheet = directory / "samples.csv"
+        sheet.write_text("experiment_id,kit,flow_cell_id,position_id,barcode,alias\n" + "".join(
+            f",{kit},,,{item['barcode']},{item['alias']}\n" for item in samples), encoding="utf-8")
+    return {"run_id": run_id, "pod5_dir": _allowed_relative(folder), "barcode_kit": kit,
+            "barcode_samples": samples, "sample_sheet": _allowed_relative(sheet.resolve()) if sheet else None,
+            "fake_or_demo_devices": False}
+
+
 async def create_run_intent(position: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Consume one opaque option receipt into an ARMED durable ledger row."""
-    allowed = {"option_id", "option_receipt_id", "sample_id", "experiment_group"}
+    allowed = {"option_id", "option_receipt_id", "sample_id", "experiment_group", "barcode_samples", "basecalling",
+               "adaptive_sampling"}
     if not isinstance(payload, dict) or set(payload) - allowed:
         raise ValueError("run intent accepts only opaque option receipt IDs and bounded sample metadata")
     option_id = str(payload.get("option_id") or "").strip()
@@ -864,6 +1055,11 @@ async def create_run_intent(position: str, payload: dict[str, Any]) -> dict[str,
         ).scalar_one_or_none()
         if receipt is None or receipt.consumed_at is not None or receipt.expires_at <= now:
             raise ValueError("opaque option receipt is unknown, expired, or already consumed")
+        barcode_samples = _barcode_samples(
+            payload.get("barcode_samples"),
+            receipt.source_snapshot.get("kit") if isinstance(receipt.source_snapshot, dict) else None)
+        basecalling_choice = _basecalling_choice(payload.get("basecalling"), receipt.source_snapshot)
+        adaptive_choice = _adaptive_sampling_choice(payload.get("adaptive_sampling"))
         run_id = _new_run_id()
         record = OntInstrumentRun(
             id=run_id,
@@ -903,7 +1099,10 @@ async def create_run_intent(position: str, payload: dict[str, Any]) -> dict[str,
             state="armed",
             observed_at=now,
             observed_generation=1,
-            minknow_payload={"preflight_id": preflight.id, "source_digest": receipt.source_digest},
+            minknow_payload={"preflight_id": preflight.id, "source_digest": receipt.source_digest,
+                             **({"barcode_samples": barcode_samples} if barcode_samples else {}),
+                             **({"basecalling": basecalling_choice} if basecalling_choice else {}),
+                             **({"adaptive_sampling": adaptive_choice} if adaptive_choice else {})},
             output_files={"fastq": [], "pod5": [], "bam": []},
         )
         receipt.consumed_at = now
@@ -990,14 +1189,20 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
         snapshot = preflight.source_snapshot if isinstance(preflight.source_snapshot, dict) else {}
         basecalling = snapshot.get("basecalling_options") if isinstance(snapshot.get("basecalling_options"), dict) else {}
         simplex_models = basecalling.get("simplex_models") or []
+        armed_events = await _events_for_run(session, run_id)
+        choice = _run_basecalling_choice(armed_events)
         start_request = {
             "confirm_start": True,
             "start_request_id": record.id,
             "protocol_id": snapshot.get("protocol_id"),
             "basecalling_enabled": snapshot.get("basecalling_enabled") is True,
-            "simplex_model": simplex_models[0] if simplex_models else None,
-            "min_qscore": basecalling.get("min_qscore"),
+            "simplex_model": choice["simplex_model"] if choice else (simplex_models[0] if simplex_models else None),
+            "min_qscore": choice["min_qscore"] if choice else basecalling.get("min_qscore"),
+            **({"modified_models": choice["modified_models"]} if choice and choice.get("modified_models") else {}),
             "run_hours": float(snapshot.get("run_hours") or DEFAULT_RUN_HOURS),
+            **({"barcoding_kits": [snapshot["kit"]]} if snapshot.get("kit") in _barcoding_kits() else {}),
+            **({"barcode_samples": samples} if (samples := _run_barcode_samples(armed_events)) else {}),
+            **({"adaptive_sampling": adaptive} if (adaptive := _run_adaptive_sampling(armed_events)) else {}),
             "sample_id": record.sample_id,
             "experiment_group": record.experiment_group,
         }
@@ -1059,6 +1264,68 @@ async def stop_instrument_run(run_id: str, *, confirm_stop: bool) -> dict[str, A
                                       minknow_payload={"source": "bms_stop"})
             await session.commit()
     return await reconcile_instrument_run(run_id)
+
+
+def _live_charts(value: Any) -> dict[str, Any]:
+    """The graph series MinKNOW gave for a run, bounded for the browser."""
+    if not isinstance(value, dict):
+        return {"pore_activity": [], "cumulative": [], "read_lengths": None}
+
+    def rows(key: str) -> list[dict[str, Any]]:
+        return [dict(item) for item in value.get(key) or [] if isinstance(item, dict)][:240]
+
+    lengths = value.get("read_lengths")
+    return {"pore_activity": rows("pore_activity"), "cumulative": rows("cumulative"),
+            "read_lengths": lengths if isinstance(lengths, dict) and lengths.get("buckets") else None}
+
+
+async def get_instrument_run_live(run_id: str) -> dict[str, Any]:
+    """Live reads, basecalled yield, per-barcode output and channel use for one run, read from MinKNOW."""
+    async with async_session() as session:
+        record = await _load_run(session, run_id)
+        samples = {item["barcode"]: item["alias"] for item in _run_barcode_samples(await _events_for_run(session, run_id))}
+        minknow_run_id, state = record.minknow_run_id, record.state
+        barcoding = record.kit in _barcoding_kits()
+    empty = {"run_id": run_id, "status": state, "available": False, "fake_or_demo_devices": False}
+    if not minknow_run_id:
+        return empty
+    try:
+        live = await asyncio.to_thread(request_host_agent, "GET", f"/ont/runs/{minknow_run_id}/live", timeout=30.0)
+    except Exception:  # noqa: BLE001 - monitoring is read-only; an unreachable MinKNOW shows as unavailable
+        return empty
+    if not isinstance(live, dict) or live.get("available") is not True:
+        return empty
+    totals = {key: int(value or 0) for key, value in (live.get("totals") or {}).items()}
+    barcodes = []
+    for item in live.get("barcodes") or []:
+        if not isinstance(item, dict) or not item.get("barcode"):
+            continue
+        name = str(item["barcode"])
+        barcodes.append({
+            "barcode": name,
+            "alias": samples.get(name) or (item.get("alias") if item.get("alias") != name else None),
+            **{key: int(item.get(key) or 0) for key in totals},
+        })
+    latest = live.get("latest_acquisition") if isinstance(live.get("latest_acquisition"), dict) else {}
+    return {
+        "run_id": run_id,
+        "status": state,
+        "available": True,
+        "basecalling_enabled": latest.get("basecalling_enabled") is True,
+        "fraction_basecalled": latest.get("fraction_basecalled"),
+        "fraction_skipped": latest.get("fraction_skipped"),
+        "acquisition_count": live.get("acquisition_count"),
+        "barcoding_enabled": barcoding,
+        "barcodes_available": live.get("barcodes_available") is not False,
+        "started_at": latest.get("started_at"),
+        "ended_at": latest.get("ended_at"),
+        "channel_count": latest.get("channel_count"),
+        "totals": totals,
+        "barcodes": barcodes,
+        "channels": live.get("channels") if isinstance(live.get("channels"), dict) else None,
+        "charts": _live_charts(live.get("charts")),
+        "fake_or_demo_devices": False,
+    }
 
 
 async def get_instrument_run(run_id: str) -> dict[str, Any] | None:

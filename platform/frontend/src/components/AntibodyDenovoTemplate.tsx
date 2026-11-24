@@ -28,8 +28,6 @@ import {
     deriveBoltzgenScaffoldSelectionUpdate,
     resolveBoltzgenReferencePreviewEnabled,
 } from './antibodyDenovoBoltzgenScaffold';
-import { PhysicsRefinementPanel, type PhysicsRefinementSettings } from './PhysicsRefinementPanel';
-import { DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './physicsRefinementSettings';
 import { CDRRangeSelector, type CDRDefinition } from './CDRRangeSelector';
 import {
     clearAntibodyRefinementLaunchState,
@@ -468,7 +466,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     try { hydrateFampnnOverrides(fampnnOverrides, false); } catch (error) { fampnnError = String(error); }
     const [fampnnConstraintMode, setFampnnConstraintMode] = useState<'generic' | 'antibody'>('antibody');
     const [useAntiberty, setUseAntiberty] = useState(false);  // Disabled by default, planned for removal
-    const [, setUseThermoMPNN] = useState(true);  // Legacy setter retained for template/state hydration
     const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn');
     const initialFrustrampnnSelection = createModelIntegrationSelection(initialValues?.run_frustrampnn, false);
     const frustrampnnSelectionRef = useRef(initialFrustrampnnSelection);
@@ -584,31 +581,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [manualCDRDefinitions, setManualCDRDefinitions] = useState<CDRDefinition[]>([]);
     const [showCDREditor, setShowCDREditor] = useState(false);
 
-    // Visibility only: preserve explicit historical flags, including false.
-    const hasLegacyThermoMPNN = (params?: Record<string, UntypedApiValue>) =>
-        [params, params?.quality_settings, params?.qualitySettings].some(values =>
-            values && ['run_thermompnn', 'run_stability_scoring'].some(key => Object.hasOwn(values, key)));
-    const [legacyThermoMPNNVisible, setLegacyThermoMPNNVisible] = useState(() => hasLegacyThermoMPNN(initialValues));
 
     // Quality settings
     const [qualitySettings, setQualitySettings] = useState<QualitySettings>(() => mergeQualitySettingsFromParams(initialValues));
-    const hydratePhysicsSettings = (params: UntypedApiValue): PhysicsRefinementSettings => ({
-        ...PHYSICS_DEFAULTS,
-        enabled: params?.openmm_enabled ?? PHYSICS_DEFAULTS.enabled,
-        computeTier: params?.openmm_compute_tier ?? PHYSICS_DEFAULTS.computeTier,
-        cdrOnly: params?.openmm_cdr_only ?? PHYSICS_DEFAULTS.cdrOnly,
-        restraintMode: params?.openmm_restraint_mode ?? PHYSICS_DEFAULTS.restraintMode,
-        mmgbsaMode: params?.openmm_mmgbsa_mode ?? PHYSICS_DEFAULTS.mmgbsaMode,
-        forceField: params?.openmm_force_field ?? PHYSICS_DEFAULTS.forceField,
-        topNPercentage: params?.openmm_top_n_percentage ?? PHYSICS_DEFAULTS.topNPercentage,
-        maxIterations: params?.openmm_max_iterations ?? PHYSICS_DEFAULTS.maxIterations,
-        tolerance: params?.openmm_tolerance ?? PHYSICS_DEFAULTS.tolerance,
-        restraintStrength: params?.openmm_restraint_strength ?? PHYSICS_DEFAULTS.restraintStrength,
-        implicitSolvent: params?.openmm_implicit_solvent ?? PHYSICS_DEFAULTS.implicitSolvent,
-        platform: params?.openmm_platform ?? PHYSICS_DEFAULTS.platform,
-    });
-    const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(() => hydratePhysicsSettings(initialValues));
-    const [legacyPhysicsVisible, setLegacyPhysicsVisible] = useState(() => Object.keys(initialValues ?? {}).some(key => key.startsWith('openmm_')));
     const resolvedFampnnCheckpoint = qualitySettings.fampnn_checkpoint.trim() || PRESETS.balanced.fampnn_checkpoint;
     const resolvedPpiFlowCheckpoint = qualitySettings.ppiflow_checkpoint.trim() || PRESETS.balanced.ppiflow_checkpoint;
     const selectedLoopList = Array.from(selectedCDRLoops).sort();
@@ -629,18 +604,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const effectiveUseAntiberty = (!isRefinementMode && (!deNovoStageSelection.qc || deNovoDownstreamLocked))
         ? false
         : useAntiberty;
-    const effectiveUseThermoMPNN = (!isRefinementMode && (!deNovoStageSelection.qc || deNovoDownstreamLocked))
-        ? false
-        : Boolean(qualitySettings.run_thermompnn);
     const effectiveRunFrustrampnn = (!isRefinementMode && (!deNovoStageSelection.qc || deNovoDownstreamLocked))
         ? false
         : runFrustrampnn;
     const effectiveRunAnarciiPost = (!isRefinementMode && (!deNovoStageSelection.qc || deNovoDownstreamLocked))
         ? false
         : runAnarciiPost;
-    const effectivePhysicsEnabled = (!isRefinementMode && (!deNovoStageSelection.qc || deNovoDownstreamLocked))
-        ? false
-        : physicsSettings.enabled;
     const showExecutionModePanel = true;
     const showStructureValidatorPanel = isRefinementMode;
     const showQualitySettingsPanel = isRefinementMode || (!deNovoDownstreamLocked && hasEnabledDeNovoDownstreamStages);
@@ -1190,9 +1159,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         const boltzgenParams: Record<string, UntypedApiValue> = {
             diffusion_method: 'boltzgen',
             run_boltzgen_only: true,
-            run_docking: false,
-            run_diffdock: false,
-            run_unidock: false,
             boltzgen_mode: 'nanobody_binder',
             boltzgen_protocol: 'nanobody-anything',
             boltzgen_num_designs: numDesigns,
@@ -1423,9 +1389,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         if (initialValues) {
             console.log('[ANTIBODY_DENOVO] Initializing from values:', initialValues);
             setQualitySettings(mergeQualitySettingsFromParams(initialValues));
-            setPhysicsSettings(hydratePhysicsSettings(initialValues));
-            setLegacyPhysicsVisible(Object.keys(initialValues).some(key => key.startsWith('openmm_')));
-            setLegacyThermoMPNNVisible(hasLegacyThermoMPNN(initialValues));
 
             // Basic params
             if (initialValues.job_name) setJobName(initialValues.job_name);
@@ -1440,8 +1403,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
             // Booleans
             if (initialValues.run_immunogenicity_scoring !== undefined) setUseAntiberty(initialValues.run_immunogenicity_scoring);
-            if (initialValues.run_thermompnn !== undefined) setUseThermoMPNN(initialValues.run_thermompnn);
-            else if (initialValues.run_stability_scoring !== undefined) setUseThermoMPNN(initialValues.run_stability_scoring);
             if (typeof initialValues.run_frustrampnn === 'boolean') updateRunFrustrampnn(initialValues.run_frustrampnn);
             if (initialValues.frustrampnn_settings !== undefined) {
                 setFrustrampnnSettings(hydrateFrustraMpnnSettings(initialValues.frustrampnn_settings));
@@ -1468,7 +1429,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             }
             // Handling renamed/mapped boolean params if unknown
             if (initialValues.use_antiberty !== undefined) setUseAntiberty(initialValues.use_antiberty);
-            if (initialValues.use_thermompnn !== undefined) setUseThermoMPNN(initialValues.use_thermompnn);
             if (Array.isArray(initialValues.pinned_gpus)) setPinnedGpus(initialValues.pinned_gpus);
             if (typeof initialValues.lock_gpus === 'boolean') setLockGpus(initialValues.lock_gpus);
             if (initialValues.parallel_mode) setParallelMode(initialValues.parallel_mode);
@@ -1824,7 +1784,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (runPpiFlowBackboneRefine) pipelineSteps.push('ppiflow_backbone_refine');
             if (runPpiFlowMaturation) pipelineSteps.push('ppiflow_maturation');
             if (effectiveUseAntiberty) pipelineSteps.push('antiberty');
-            if (effectiveUseThermoMPNN) pipelineSteps.push('thermompnn');
             if (effectiveRunStructureValidation) pipelineSteps.push(structureValidator);
             if (effectiveRunFrustrampnn) pipelineSteps.push('frustrampnn');
 
@@ -1895,7 +1854,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     seq_design_proteinmpnn: effectiveSeqDesigner === 'proteinmpnn',
                     seq_designer: effectiveSeqDesigner,
                     run_immunogenicity_scoring: effectiveUseAntiberty,
-                    run_stability_scoring: effectiveUseThermoMPNN,
                     run_structure_validation: effectiveRunStructureValidation,
                     structure_validator: structureValidator,
                     ...buildFrustraMpnnLaunchParams(effectiveRunFrustrampnn, frustrampnnSettings),
@@ -2033,21 +1991,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     // Pre-Boltz filtering (saves compute)
                     fampnn_max_psce: qualitySettings.fampnn_max_psce,
                     fampnn_max_residue_psce: qualitySettings.fampnn_max_residue_psce,
-                    // ThermoMPNN stability scoring (before Boltz when enabled)
-                    run_thermompnn: effectiveUseThermoMPNN,
-                    thermompnn_max_ddg: qualitySettings.thermompnn_max_ddg,
-                    // AF2 Backprop CDR refinement (after ThermoMPNN, before Boltz)
-                    run_af2_backprop: qualitySettings.run_af2_backprop,
-                    af2_backprop_soft_iters: qualitySettings.af2_backprop_soft_iters,
-                    af2_backprop_temp_iters: qualitySettings.af2_backprop_temp_iters,
-                    af2_backprop_hard_iters: qualitySettings.af2_backprop_hard_iters,
-                    af2_backprop_num_recycles: qualitySettings.af2_backprop_num_recycles,
-                    af2_backprop_learning_rate: qualitySettings.af2_backprop_learning_rate,
-                    af2_backprop_use_multimer: qualitySettings.af2_backprop_use_multimer,
-                    af2_backprop_num_models: qualitySettings.af2_backprop_num_models,
-                    af2_backprop_loss_plddt: qualitySettings.af2_backprop_loss_plddt,
-                    af2_backprop_loss_pae: qualitySettings.af2_backprop_loss_pae,
-                    af2_backprop_loss_contact: qualitySettings.af2_backprop_loss_contact,
                     // Post-validation filtering
                     boltz_max_binder_rmsd: qualitySettings.boltz_max_binder_rmsd,
                     boltz_min_ptm_interface: qualitySettings.boltz_min_ptm_interface,
@@ -2064,19 +2007,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     fampnn_collected_pdbs: fampnnCollectedPdbs.trim() || undefined,
                     // Debug: Custom output directory
                     out_dir: customOutputDir.trim() || undefined,
-                    // Physics refinement (OpenMM)
-                    openmm_enabled: effectivePhysicsEnabled,
-                    openmm_compute_tier: physicsSettings.computeTier,
-                    openmm_cdr_only: physicsSettings.cdrOnly,
-                    openmm_restraint_mode: physicsSettings.restraintMode,
-                    openmm_mmgbsa_mode: physicsSettings.mmgbsaMode,
-                    openmm_force_field: physicsSettings.forceField,
-                    openmm_top_n_percentage: physicsSettings.topNPercentage,
-                    openmm_max_iterations: physicsSettings.maxIterations,
-                    openmm_tolerance: physicsSettings.tolerance,
-                    openmm_restraint_strength: physicsSettings.restraintStrength,
-                    openmm_implicit_solvent: physicsSettings.implicitSolvent,
-                    openmm_platform: physicsSettings.platform,
                 }
             };
         return jobData;
@@ -2402,18 +2332,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     bindcraft2_settings: requestedBc2Settings,
                     model_id: deNovoGenerator === null ? retainedDraft.model_id : deNovoGenerator === 'bindcraft2' ? 'bindcraft2' : deNovoGenerator === 'boltzgen' ? 'boltzgen' : 'antibody_denovo',
                     mode: deNovoGenerator === null ? retainedDraft.mode : deNovoGenerator === 'bindcraft2' ? 'campaign' : deNovoGenerator === 'boltzgen' ? 'nanobody_binder' : deNovoGenerator === 'ppiflow' ? 'generator_backbone_refine' : ANTIBODY_DENOVO_PIPELINE_MODE,
-                    openmm_enabled: physicsSettings.enabled,
-                    openmm_compute_tier: physicsSettings.computeTier,
-                    openmm_cdr_only: physicsSettings.cdrOnly,
-                    openmm_restraint_mode: physicsSettings.restraintMode,
-                    openmm_mmgbsa_mode: physicsSettings.mmgbsaMode,
-                    openmm_force_field: physicsSettings.forceField,
-                    openmm_top_n_percentage: physicsSettings.topNPercentage,
-                    openmm_max_iterations: physicsSettings.maxIterations,
-                    openmm_tolerance: physicsSettings.tolerance,
-                    openmm_restraint_strength: physicsSettings.restraintStrength,
-                    openmm_implicit_solvent: physicsSettings.implicitSolvent,
-                    openmm_platform: physicsSettings.platform,
 
                     fampnn_analysis_overrides: fampnnOverrides,
                     // Core settings
@@ -2434,8 +2352,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     rfantibody_num_designs: numDesigns,
                     seqs_per_design: seqsPerDesign,
                     run_immunogenicity_scoring: useAntiberty,
-                    run_thermompnn: qualitySettings.run_thermompnn,
-                    run_stability_scoring: qualitySettings.run_thermompnn,
                     run_structure_validation: runStructureValidation,
                     msa_preset: qualitySettings.msa_preset,
                     structure_validator: structureValidator,
@@ -2916,8 +2832,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (p.seq_designer === 'caliby' && p.caliby_num_seqs_per_pdb !== undefined) { setSeqsPerDesign(p.caliby_num_seqs_per_pdb); loaded.push('caliby_num_seqs_per_pdb'); }
                         else if (p.seqs_per_design !== undefined) { setSeqsPerDesign(p.seqs_per_design); loaded.push('seqs_per_design'); } else { skipped.push('seqs_per_design'); }
                         if (typeof p.run_immunogenicity_scoring === 'boolean') { setUseAntiberty(p.run_immunogenicity_scoring); loaded.push('run_immunogenicity_scoring'); }
-                        if (typeof p.run_thermompnn === 'boolean') { setUseThermoMPNN(p.run_thermompnn); loaded.push('run_thermompnn'); }
-                        else if (typeof p.run_stability_scoring === 'boolean') { setUseThermoMPNN(p.run_stability_scoring); loaded.push('run_stability_scoring'); }
                         if (typeof p.run_frustrampnn === 'boolean') { updateRunFrustrampnn(p.run_frustrampnn); loaded.push('run_frustrampnn'); }
                         if (p.frustrampnn_settings !== undefined) {
                             setFrustrampnnSettings(hydrateFrustraMpnnSettings(p.frustrampnn_settings));
@@ -3081,9 +2995,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             p.qualitySettings ||
                             (Object.keys(PRESETS.balanced) as Array<keyof QualitySettings>).some((key) => p[key] !== undefined)
                         );
-                        setPhysicsSettings(hydratePhysicsSettings(p));
-                        setLegacyPhysicsVisible(Object.keys(p).some(key => key.startsWith('openmm_')));
-                        setLegacyThermoMPNNVisible(hasLegacyThermoMPNN(p));
                         if (hasQualityOverrides) {
                             setQualitySettings(mergeQualitySettingsFromParams(p));
                             loaded.push('quality_settings');
@@ -3431,12 +3342,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             AntiBERTy scoring
                         </span>
                     )}
-                    {effectiveUseThermoMPNN && (
-                        <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--accent-primary)')}>
-                            ThermoMPNN stability
-                        </span>
-                    )}
-                    {!effectiveRunFrustrampnn && !effectiveUseAntiberty && !effectiveUseThermoMPNN && (
+                    {!effectiveRunFrustrampnn && !effectiveUseAntiberty && (
                         <span className="rounded-full border border-slate-700 bg-slate-800/60 px-2.5 py-1 text-slate-400">
                             No optional QC stages enabled
                         </span>
@@ -5673,18 +5579,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         showStructureValidationSettings={showStructureValidationQualitySettings}
                         showFampnnSettings={showFampnnQualitySettings}
                         showCalibySettings={showCalibyQualitySettings}
-                        showThermoMPNN={legacyThermoMPNNVisible}
                         showPreValidationFiltering={effectiveSeqDesigner === 'fampnn' && effectiveRunStructureValidation}
                         showPostValidationFiltering={effectiveRunStructureValidation && structureValidator !== 'esmfold2'}
-                    />
-                    )}
-
-                    {/* Physics Refinement Panel (OpenMM) */}
-                    {showQcPanels && legacyPhysicsVisible && (
-                    <PhysicsRefinementPanel
-                        settings={physicsSettings}
-                        onSettingsChange={setPhysicsSettings}
-                        isAntibody={true}
                     />
                     )}
 

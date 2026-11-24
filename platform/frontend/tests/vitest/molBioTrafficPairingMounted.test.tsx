@@ -174,6 +174,8 @@ it('mounted full/compact inventory has identical filters, every bulk-map group a
         for (const [group, label] of [['unique', 'Map all 1x'], ['double', 'Map all 2x'], ['three_plus', 'Map all 3x+'], ['nicking', 'Map nicking'], ['type_iis', 'Map Golden Gate']] as const) {
             await click(label); expect(map).toHaveBeenLastCalledWith(quickMapIds[group]);
         }
+        // Mapping Golden Gate now also selects its matching browse filter.
+        await click('All Types');
         for (const [label, count] of [['1x',1],['2x',2],['3x+',3],['0x',0]] as const) {
             await click(label);
             const ids = expected.filter(r => r.summary.double_strand_break_count === count).map(r => r.record.enzyme_id);
@@ -221,7 +223,10 @@ it('mounted digest compact save is identity-only, preserves held fragments and p
     expect(body).not.toHaveProperty('simulation'); expect(body.source).not.toHaveProperty('dna');
     expect(body.enzyme_ids).toEqual(simulation.selected_enzyme_ids);
     expect(host.querySelectorAll('[data-fragment-index]')).toHaveLength(simulation.fragments.length);
-    expect(host.querySelector('a')?.getAttribute('href')).toContain(JSON.parse(fixture.digest.compact).operation_id);
+    // Open saved digest is now a button that lists the saved children, not a link to raw API JSON.
+    expect(host.querySelector('a')).toBeNull();
+    const openSaved = [...host.querySelectorAll('button')].find(b => b.textContent === 'Open saved digest'); expect(openSaved).toBeDefined();
+    await act(async () => openSaved!.click()); expect(host.querySelectorAll('[data-saved-digest-fragment]').length).toBe(simulation.fragments.length);
     expect(() => parseRestrictionDigestSaveAcknowledgement(JSON.parse(fixture.digest.full))).toThrow();
     console.info('PAIRING_DIGEST_METRICS', JSON.stringify({ ...call, fullResponseBytes: bytes(fixture.digest.full), count: simulation.fragments.length, eagerGets: 0 }));
 });
@@ -233,6 +238,7 @@ it.each(['ligation', 'gibson', 'golden-gate'] as const)('mounted %s save/load us
         captured.push(config); expect(config.url).toBe(`/api/molbio/assembly/${mode}/save`); expect(config.params).toEqual({ response_view: 'compact' }); return { config, status: 200, statusText: 'OK', headers: {}, data: JSON.parse(savedFixture.compact) };
     };
     await render(<AssemblyPanel sequenceData={{ ...seq, operationParams: { mode: mode === 'gibson' ? 'ligation' : mode.replace('-', '_'), assembly_request: savedFixture.request } }} selection={null} selectedSequenceId={null} onLoadProduct={load} onLoadSavedWorkup={noop} />);
+    if (mode === 'golden-gate') await click('Manual / prepared fragments');
     if (mode === 'gibson') { await click('Gibson'); await click('Validate purchased fragments'); }
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
     await click('Validate + Save'); await click('Load product');

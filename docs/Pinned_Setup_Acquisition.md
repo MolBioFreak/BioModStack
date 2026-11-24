@@ -111,10 +111,10 @@ bypassing that availability gate.
 Other closure-unavailable entries (also no approved acquisition metadata):
 `af2`, `antibody_child`, `antibody_denovo`, `boltz2`, `boltz_cp_experimental`,
 `boltzgen`, `boltzgen_child`, `caliby_experimental`, `conformational_mapping`,
-`confornets_experimental`, `diffdock`, `docking`, `fampnn_child`, `ligandmpnn`,
+`confornets_experimental`, `fampnn_child`, `ligandmpnn`,
 `molecular_dynamics`, `nanopore`, `oligo_design`, `protein_cad_experimental`,
 `protein_hunter_experimental`, `protein_local_redesign`,
-`protein_modification_experimental`, `proteinmpnn`, `rf3`, `rfdiffusion`, `unidock`.
+`protein_modification_experimental`, `proteinmpnn`, `rf3`, `rfdiffusion`.
 Their artifact closure must be reviewed before individual download promises.
 
 ## Validation

@@ -184,7 +184,7 @@ async def test_successor_is_selected_native_job_not_old_runtime(store, tmp_path,
         assert manifest['designs'][0]['design_id'] == row.id
         assert manifest['designs'][0]['checkpoint_artifact_sha256'] == checkpoint['artifacts'][0]['sha256']
         # Real native compiler, new root. No old Nextflow cache or runtime required.
-        from routers.jobs import _execution_plan_preview
+        from services.job_requests import _execution_plan_preview
         preview = _execution_plan_preview(request)
         assert preview['request']['execution_target_id'] == target
         assert preview['admissible'], preview['blockers']

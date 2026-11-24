@@ -1,6 +1,7 @@
-import { ngsArtifactUrl, useNgsArtifacts, type NgsPackageArtifact } from '../lib/ngsArtifacts';
+import { hasPublishedReadsBam, ngsArtifactUrl, useNgsArtifacts, type NgsPackageArtifact } from '../lib/ngsArtifacts';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { JobStageProgress } from './JobStageProgress';
+import { themeFont } from '../lib/themeFont';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
@@ -15,6 +16,8 @@ import {
     buildLocalIgvConfig,
     createGenerationBoundResourceWithTimeout,
     createIgvGenerationMount,
+    styleIgvShadow,
+    hideClippedIgvRulerLabels,
     ownsIgvLoadTerminalState,
     parseLocalIgvRange,
     loadMissingTracksById,
@@ -44,6 +47,8 @@ import {
     fetchAlignmentRead,
     fetchAlignmentSessions,
     fetchAlignmentPresentation,
+    prepareReadPreview,
+    ReadPreviewBusyError,
     isAlignmentAccessDenied,
     rotateAlignmentAccess,
     type AlignmentRead,
@@ -62,6 +67,7 @@ import { normalizeNanoporeCloneState } from '../lib/nanoporeCloneState';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { NanoporeTemplate } from './NanoporeTemplate';
 import { OntInstrumentPanel } from './ngs/OntInstrumentPanel';
+import { OntRawSignalPanel } from './ngs/OntRawSignalPanel';
 import { RawReadInspector } from './ngs/RawReadInspector';
 import { ReadAndSignalWorkbench } from './ngs/ReadAndSignalWorkbench';
 import { NgsArtifactDownloads } from './ngs/NgsArtifactDownloads';
@@ -71,6 +77,9 @@ import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
 import { OntReadReportPanel } from './ngs/OntReadReportPanel';
 import { OntFastqQcResultPanel } from './ngs/OntFastqQcResultPanel';
+import { OntReadSquigglePanel } from './ngs/OntReadSquigglePanel';
+import { PlasmidSummaryPanel } from './ngs/PlasmidSummaryPanel';
+import { NativeResultProjectAttach } from './ngs/NativeResultProjectAttach';
 import { AlignmentPresentationStatus } from './ngs/AlignmentPresentationStatus';
 import { useOntFastqQcResult } from './ngs/useOntFastqQcResult';
 import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
@@ -1459,26 +1468,6 @@ function lookupCodePercent(
     return { percent, coverage };
 }
 
-function pickDominantCytosineCall(
-    mCall: { percent: number | null; coverage: number | null },
-    hCall: { percent: number | null; coverage: number | null }
-): { percent: number | null; coverage: number | null } {
-    const mPercent = mCall.percent;
-    const hPercent = hCall.percent;
-    const hasM = mPercent != null;
-    const hasH = hPercent != null;
-
-    if (!hasM && !hasH) {
-        return { percent: null, coverage: null };
-    }
-
-    const coverage = Math.max(mCall.coverage || 0, hCall.coverage || 0) || null;
-    if (!hasH || (hasM && (mPercent as number) >= (hPercent as number))) {
-        return { percent: mPercent, coverage };
-    }
-    return { percent: hPercent, coverage };
-}
-
 function buildDamDcmCalls(
     records: ParsedBedRecord[],
     fastaText: string
@@ -1543,13 +1532,9 @@ function buildDamDcmCalls(
         const minusPos = hit.start + 4;
         const pairKey = `${chrom}:Dcm:${hit.start + 1}`;
 
-        const plusM = lookupCodePercent(lookup, chrom, plusPos, 'm');
-        const plusH = lookupCodePercent(lookup, chrom, plusPos, 'h');
-        const plus = pickDominantCytosineCall(plusM, plusH);
-
-        const minusM = lookupCodePercent(lookup, chrom, minusPos, 'm');
-        const minusH = lookupCodePercent(lookup, chrom, minusPos, 'h');
-        const minus = pickDominantCytosineCall(minusM, minusH);
+        // Dcm writes 5mC. 5hmC is a different modification and is never folded into the Dcm figure.
+        const plus = lookupCodePercent(lookup, chrom, plusPos, 'm');
+        const minus = lookupCodePercent(lookup, chrom, minusPos, 'm');
 
         dcmSites.push({
             chrom,
@@ -2073,7 +2058,7 @@ function patchIgvRulerContrast(browser: UntypedApiValue): void {
 
             const textColor = resolveThemeColor('--text-primary', '#e5e7eb');
             const lineColor = resolveThemeColor('--border-secondary', textColor);
-            const fontFamily = getComputedStyle(document.body).fontFamily || 'sans-serif';
+            const bodyFont = themeFont('sans');
             const originalFillText = typeof context.fillText === 'function'
                 ? context.fillText.bind(context)
                 : null;
@@ -2085,13 +2070,13 @@ function patchIgvRulerContrast(browser: UntypedApiValue): void {
             context.fillStyle = textColor;
             context.strokeStyle = lineColor;
             context.lineWidth = 1.1;
-            context.font = `600 13px ${fontFamily}`;
+            context.font = `600 13px ${bodyFont}`;
             context.shadowColor = 'rgba(0, 0, 0, 0.5)';
             context.shadowBlur = 1;
             if (originalFillText) {
                 context.fillText = (...drawArgs: UntypedApiValue[]) => {
                     context.fillStyle = textColor;
-                    context.font = `600 13px ${fontFamily}`;
+                    context.font = `600 13px ${bodyFont}`;
                     return originalFillText(...drawArgs);
                 };
             }
@@ -2279,11 +2264,11 @@ export function NGSToolkit() {
     const [motifMinCoverage, setMotifMinCoverage] = useState<number>(DEFAULT_MOTIF_MIN_COVERAGE);
     const [requireStrandConcordance, setRequireStrandConcordance] = useState(true);
     const igvContainerRef = useRef<HTMLDivElement | null>(null);
+    const [igvContainerNode, setIgvContainerNode] = useState<HTMLDivElement | null>(null);
     const igvFullscreenShellRef = useRef<HTMLDivElement | null>(null);
     const runInspectorRef = useRef<HTMLDivElement | null>(null);
     const igvLoadTokenRef = useRef(0);
     const igvBrowserRef = useRef<UntypedApiValue | null>(null);
-    const igvLibraryRef = useRef<UntypedApiValue | null>(null);
     const pendingIgvLocusRef = useRef<PendingSessionNavigation | null>(null);
     const igvNavigationRequestIdRef = useRef(0);
     const igvNavigationOwnerRef = useRef<OwnedIgvNavigation | null>(null);
@@ -2296,6 +2281,13 @@ export function NGSToolkit() {
     const [igvReadsTrackLoading, setIgvReadsTrackLoading] = useState(false);
     const [igvPresentation, setIgvPresentation] = useState<AlignmentPresentation | null>(null);
     const [igvLocusSlice, setIgvLocusSlice] = useState<AlignmentLocusSlice | null>(null);
+    const [previewBusy, setPreviewBusy] = useState(false);
+    const previewOwnerRef = useRef<AbortController | null>(null);
+    const cancelPreview = useCallback(() => {
+        previewOwnerRef.current?.abort();
+        previewOwnerRef.current = null;
+        setPreviewBusy(false);
+    }, []);
     const igvPresentationRequestedRef = useRef(false);
     const [igvLocusSliceLoading, setIgvLocusSliceLoading] = useState(false);
     const igvPresentationGenerationRef = useRef(0);
@@ -2316,6 +2308,21 @@ export function NGSToolkit() {
     useEffect(() => {
         setSignalViewerSession(requestedViewerSessionQuery.data || null);
     }, [requestedViewerSessionId, requestedViewerSessionQuery.data]);
+
+    // IGV only relays itself out on a window resize; opening the signal panel narrows its box.
+    useEffect(() => {
+        if (!igvContainerNode || typeof ResizeObserver === 'undefined') return undefined;
+        let width = igvContainerNode.clientWidth;
+        let frame = 0;
+        const observer = new ResizeObserver(() => {
+            if (igvContainerNode.clientWidth === width) return;
+            width = igvContainerNode.clientWidth;
+            window.cancelAnimationFrame(frame);
+            frame = window.requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+        });
+        observer.observe(igvContainerNode);
+        return () => { observer.disconnect(); window.cancelAnimationFrame(frame); };
+    }, [igvContainerNode]);
 
     const openIgvModal = useCallback(() => {
         setIgvInspectorOpen(false);
@@ -2543,13 +2550,29 @@ export function NGSToolkit() {
             : typeof selectedJobParams.workflow_id === 'string'
                 ? selectedJobParams.workflow_id
                 : null;
-    const isCanonicalFastqQcRun = isFastqOnlyRun && selectedOntWorkflowId === 'ont_fastq_qc';
-    const showOntReadReport = !isCanonicalFastqQcRun && selectedJob?.status === 'completed' && !!selectedOntWorkflowId && /^ont_/.test(selectedOntWorkflowId) && (hasPod5Input || hasBamInput);
+    const barcodeSignalJobId = selectedJob?.status === 'completed' && selectedOntWorkflowId === 'wf_clone_validation'
+        && selectedJobParams.source_ont_job_id && selectedJobParams.source_barcode_unit
+        && !(signalDatasetId && rawSignalRunId && rawSignalObservedGeneration) ? selectedJob.id : null;
+    const [barcodeSignal, setBarcodeSignal] = useState<{ jobId: string; readId: string; opening: number } | null>(null);
+    const [clickedBarcodeRead, setClickedBarcodeRead] = useState('');
+    const barcodeSignalRef = useRef<HTMLDivElement>(null);
+    useEffect(() => { setBarcodeSignal(null); }, [barcodeSignalJobId]);
+    useEffect(() => { if (barcodeSignal) barcodeSignalRef.current?.focus(); }, [barcodeSignal]);
+    const openBarcodeSignal = (readId = '') => {
+        if (!barcodeSignalJobId) return;
+        if (igvModalOpen) void closeIgvModal();
+        setBarcodeSignal(previous => ({ jobId: barcodeSignalJobId, readId, opening: (previous?.opening ?? 0) + 1 }));
+    };
+    // QC off runs alignment and multimer analysis only and publishes no QC result package.
+    const fastqQcStageSelected = selectedJobParams.run_fastq_qc != null
+        ? selectedJobParams.run_fastq_qc !== false
+        : selectedJobParams.run_multimer_qc !== false;
+    const isCanonicalFastqQcRun = isFastqOnlyRun && selectedOntWorkflowId === 'ont_fastq_qc' && fastqQcStageSelected;
     const sequenceQcManifestState = useSequenceQcManifest(selectedJob?.id, selectedJob?.status);
     const ontFastqQcResultState = useOntFastqQcResult(
         selectedJob?.id,
         selectedJob?.status,
-        selectedOntWorkflowId,
+        isCanonicalFastqQcRun ? selectedOntWorkflowId : null,
     );
     const alignmentAuthorityBinding = useMemo(() => {
         const result = ontFastqQcResultState.result;
@@ -2579,9 +2602,12 @@ export function NGSToolkit() {
     const alignmentSessions = alignmentAuthorityBinding.sessions;
     const alignmentSessionsError = alignmentSessionsQueryError ?? alignmentAuthorityBinding.error;
     const shouldShowMethylationInspector = !isFastqOnlyRun;
-    const shouldShowMultimerInspector = hasFastqInput;
     const artifactQuery = useNgsArtifacts(selectedJob?.id || null);
     const packageArtifacts = artifactQuery.data?.artifacts;
+    // What the run published decides what opens. Only when the catalog cannot be read do the run's inputs stand in for it.
+    const showOntReadReport = !isCanonicalFastqQcRun && selectedJob?.status === 'completed'
+        && (packageArtifacts ? hasPublishedReadsBam(packageArtifacts)
+            : artifactQuery.isError && !!selectedOntWorkflowId && /^ont_/.test(selectedOntWorkflowId) && (hasPod5Input || hasBamInput));
     const toStreamHref = useCallback((path: string, jobId?: string) => ngsArtifactUrl(path, jobId, packageArtifacts), [packageArtifacts]);
     const toDownloadHref = toStreamHref;
     const igvArtifacts = useMemo(
@@ -2595,6 +2621,10 @@ export function NGSToolkit() {
     const methylationArtifacts = useMemo(
         () => resolveMethylationArtifacts(selectedJob, stageOutputs, packageArtifacts || []),
         [selectedJob, stageOutputs, packageArtifacts]
+    );
+    // BAM and POD5 runs publish the same read QC tables as FASTQ runs.
+    const shouldShowMultimerInspector = hasFastqInput || Boolean(
+        multimerArtifacts.summaryUrl || multimerArtifacts.lengthsUrl || multimerArtifacts.candidatesUrl || multimerArtifacts.dimerSummaryUrl
     );
     const igvSourcePaths = useMemo(() => {
         const allPaths = dedupePaths(collectStageOutputPaths(stageOutputs));
@@ -3889,8 +3919,23 @@ export function NGSToolkit() {
 
         let cancelled = false;
         let igvBrowser: UntypedApiValue = null;
+        let igvLibrary: UntypedApiValue = null;
         let removeLocusListener: (() => void) | null = null;
         let removeTrackClickListener: (() => void) | null = null;
+        const disposeOwnedBrowser = () => {
+            if (!igvBrowser) return;
+            if (igvBrowserRef.current === igvBrowser) igvBrowserRef.current = null;
+            try {
+                removeLocusListener?.();
+                removeTrackClickListener?.();
+            } finally {
+                try {
+                    removeIgvBrowser(igvLibrary, igvBrowser);
+                } finally {
+                    igvBrowser = null;
+                }
+            }
+        };
         let creationTimedOut = false;
         let timeoutInvalidationToken: number | null = null;
         const loadToken = ++igvLoadTokenRef.current;
@@ -3919,6 +3964,7 @@ export function NGSToolkit() {
                 );
                 if (cancelled || !igvMount.isConnected) return;
                 const igvAny = igv as UntypedApiValue;
+                igvLibrary = igvAny;
                 if (typeof igvAny.setDefaults === 'function') {
                     igvAny.setDefaults({
                         showControls: true,
@@ -3971,7 +4017,13 @@ export function NGSToolkit() {
                     timeoutMessage: `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s`,
                 });
                 if (!igvBrowser) return;
-                igvLibraryRef.current = igvAny;
+                if (cancelled || !isCurrentLoad()) {
+                    disposeOwnedBrowser();
+                    return;
+                }
+                styleIgvShadow(igvMount);
+                // Takes effect on the next ruler draw; repainting here interrupts IGV setup.
+                hideClippedIgvRulerLabels(igvBrowser);
                 ensureIgvThemeStyles(igvMount);
                 patchIgvRulerContrast(igvBrowser);
                 igvBrowserRef.current = igvBrowser;
@@ -4004,6 +4056,10 @@ export function NGSToolkit() {
                     const trackClickHandler = (_track: unknown, popoverData: unknown) => {
                         if (!isCurrentLoad() || cancelled || igvBrowserRef.current !== igvBrowser) return;
                         const readId = resolveIgvClickedReadId(popoverData);
+                        if (barcodeSignalJobId) {
+                            setClickedBarcodeRead(readId || '');
+                            return;
+                        }
                         if (!readId || !selectedJob || !selectedAlignmentSession?.ready) return;
                         const requestToken = igvReadClickGuardRef.current.begin();
                         const locus = igvCurrentLocusRef.current;
@@ -4073,12 +4129,10 @@ export function NGSToolkit() {
                     setIgvError(`Failed to initialize IGV viewer: ${msg}.${suffix}`);
                 }
                 try {
-                    if (igvBrowser) removeIgvBrowser(igvLibraryRef.current, igvBrowser);
+                    disposeOwnedBrowser();
                 } catch {
                     // no-op
                 }
-                igvBrowserRef.current = null;
-                igvLibraryRef.current = null;
             } finally {
                 if (ownsTerminalState()) {
                     setIgvLoading(false);
@@ -4093,15 +4147,12 @@ export function NGSToolkit() {
             igvPresentationGenerationRef.current += 1;
             igvReadClickGuardRef.current.reset();
             if (isCurrentLoad()) igvLoadTokenRef.current += 1;
-            removeLocusListener?.();
-            removeTrackClickListener?.();
+            setClickedBarcodeRead('');
             try {
-                if (igvBrowser) removeIgvBrowser(igvLibraryRef.current, igvBrowser);
+                disposeOwnedBrowser();
             } catch {
                 // no-op
             }
-            igvBrowserRef.current = null;
-            igvLibraryRef.current = null;
             setIgvReadsTrackLoaded(false);
             setIgvReadsTrackLoading(false);
             setIgvAutoLoadAttempted(false);
@@ -4116,7 +4167,10 @@ export function NGSToolkit() {
         searchOwnedIgvNavigation,
         selectedAlignmentSession?.session_id,
         nativeIgv,
+        barcodeSignalJobId,
     ]);
+
+    useEffect(() => cancelPreview, [cancelPreview, igvModalOpen, selectedJob?.id, selectedAlignmentSession?.session_id]);
 
     useEffect(() => {
         if (!igvModalOpen || igvLoading || !igvReady || igvAlignmentLoadDisposition.autoLoad
@@ -4129,21 +4183,32 @@ export function NGSToolkit() {
         if (!alignment || !alignmentIndex) return;
         // A failed optional preview is not an automatic retry loop or a locus gate.
         igvPresentationRequestedRef.current = true;
-        void fetchAlignmentPresentation(selectedJob.id, sessionId, {
+        const owner = new AbortController();
+        previewOwnerRef.current?.abort();
+        previewOwnerRef.current = owner;
+        const isCurrent = () => !owner.signal.aborted && igvPresentationGenerationRef.current === generation
+            && selectedAlignmentSessionIdRef.current === sessionId;
+        const authority = {
             mode: selectedAlignmentSession.mode,
             packageManifestSha256: alignment.source_manifest_sha256,
             alignmentSha256: alignment.sha256,
             alignmentSizeBytes: alignment.size_bytes,
             alignmentIndexSha256: alignmentIndex.sha256,
             alignmentIndexSizeBytes: alignmentIndex.size_bytes,
-        }).then((receipt) => {
-            if (igvPresentationGenerationRef.current !== generation
-                || selectedAlignmentSessionIdRef.current !== sessionId) return;
-            setIgvPresentation(receipt);
+        };
+        void prepareReadPreview(selectedJob.id, owner.signal, (signal) => {
+            if (!isCurrent()) throw new DOMException('Preview superseded', 'AbortError');
+            return fetchAlignmentPresentation(selectedJob.id, sessionId, authority, signal);
+        }, () => { if (isCurrent()) setPreviewBusy(true); }).then((receipt) => {
+            if (isCurrent()) setIgvPresentation(receipt);
         }).catch((reason: unknown) => {
-            if (igvPresentationGenerationRef.current !== generation
-                || selectedAlignmentSessionIdRef.current !== sessionId) return;
-            setIgvError(describeNgsError(reason, 'Bounded alignment presentation is unavailable.').slice(0, 512));
+            if (isCurrent()) setIgvError(reason instanceof ReadPreviewBusyError ? reason.message
+                : describeNgsError(reason, 'Bounded alignment presentation is unavailable.').slice(0, 512));
+        }).finally(() => {
+            if (previewOwnerRef.current === owner) {
+                previewOwnerRef.current = null;
+                setPreviewBusy(false);
+            }
         });
     }, [igvAlignmentLoadDisposition.autoLoad, igvLoading, igvModalOpen, igvPresentation, igvLocusSlice, igvReady, selectedAlignmentSession, selectedJob]);
 
@@ -4254,6 +4319,7 @@ export function NGSToolkit() {
         const operationGeneration = ++igvTrackOperationGenerationRef.current;
         igvTrackOperationActiveRef.current = true;
         // A direct request supersedes any optional preview still being prepared.
+        cancelPreview();
         igvPresentationGenerationRef.current += 1;
         igvPresentationRequestedRef.current = true;
         const isCurrent = () => igvLocusSliceGenerationRef.current === generation
@@ -4463,7 +4529,7 @@ export function NGSToolkit() {
                                 ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
                                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'}`}
                         >
-                            Raw signal tools
+                            Raw signal
                         </button>
                         <button
                             onClick={() => selectView('runs')}
@@ -4499,8 +4565,10 @@ export function NGSToolkit() {
                     onBack={() => selectView('runs')}
                     initialValues={initialValues}
                 />
-            ) : view === 'instrument' || view === 'raw-signal' ? (
-                <OntInstrumentPanel rawSignalOnly={view === 'raw-signal'} onAnalyzeExistingData={() => selectView('launch')} />
+            ) : view === 'raw-signal' ? (
+                <OntRawSignalPanel onAnalyzeExistingData={(values) => { if (values) setInitialValues(values); selectView('launch'); }} />
+            ) : view === 'instrument' ? (
+                <OntInstrumentPanel onAnalyzeExistingData={(values) => { if (values) setInitialValues(values); selectView('launch'); }} />
             ) : (
                 <section className="space-y-4">
                     <div className="flex items-center gap-3" aria-label="Jobs pagination">
@@ -4738,6 +4806,21 @@ export function NGSToolkit() {
                                         />
                                     </div>
                                 )}
+                                {/* Shown for any completed run that published a plasmid summary; hidden otherwise. */}
+                                {!isCanonicalFastqQcRun && selectedJob.status === 'completed' && (
+                                    <PlasmidSummaryPanel
+                                        jobId={selectedJob.id}
+                                        onOpenIgv={igvMissingReason ? undefined : () => void openIgvModal()}
+                                        onOpenSignal={barcodeSignalJobId ? () => openBarcodeSignal() : signalDatasetId && rawSignalRunId && rawSignalObservedGeneration ? () => openSignalWorkbench() : undefined}
+                                    />
+                                )}
+                                {barcodeSignal && barcodeSignal.jobId === barcodeSignalJobId && (
+                                    <div ref={barcodeSignalRef} tabIndex={-1}>
+                                        <button type="button" onClick={() => setBarcodeSignal(null)}>Close squiggles</button>
+                                        <OntReadSquigglePanel key={`${barcodeSignal.jobId}:${barcodeSignal.opening}`}
+                                            jobId={barcodeSignal.jobId} requestedReadId={barcodeSignal.readId} />
+                                    </div>
+                                )}
                                 {showOntReadReport && (
                                     <div className="space-y-2">
                                         <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Run result</h4>
@@ -4826,6 +4909,7 @@ export function NGSToolkit() {
 
                                 <PooledAssignmentReviewPanel
                                     key={`pooled-assignment-review-${selectedJob.id}`}
+                                    barcodeSource={selectedJob.params?.pooled_source_bam}
                                     jobId={selectedJob.id}
                                     jobStatus={selectedJob.status}
                                     mode={selectedJob.mode}
@@ -4838,6 +4922,7 @@ export function NGSToolkit() {
                                 <BarcodeUnitsPanel
                                     key={`barcode-units-${selectedJob.id}`}
                                     jobId={selectedJob.id}
+                                    modifiedBases={typeof selectedJob.params?.modified_bases === 'string' ? selectedJob.params.modified_bases : null}
                                     enabled={selectedJob.status === 'completed' && selectedJob.model_id === 'nanopore' && selectedJob.mode === 'basecall_dna' && Boolean(selectedJob.params?.barcode_kit)}
                                 />
 
@@ -5128,7 +5213,11 @@ export function NGSToolkit() {
                                             )}
 
                                             <div className="text-xs text-[var(--text-secondary)]">
-                                                Dam/Dcm motif view; Dcm uses <span className="font-mono">max(m, h)</span>.
+                                                modkit pileup, per reference position and strand. Percent modified is modified calls over valid calls (modified, other modification and canonical) at that position.
+                                                {' '}Low-confidence calls are dropped first: {selectedJob?.params?.modkit_filter_threshold != null && String(selectedJob.params.modkit_filter_threshold) !== ''
+                                                    ? `pass threshold ${String(selectedJob.params.modkit_filter_threshold)} was set for this run`
+                                                    : 'the pass threshold was estimated by modkit from sampled reads (see pileup.log)'}.
+                                                {' '}Dam is 6mA at GATC and Dcm is 5mC at the second C of CCWGG; 5hmC is not combined into Dcm.
                                             </div>
                                             <div className="flex flex-wrap items-center gap-2 text-xs">
                                                 <span className="text-[var(--text-secondary)]">Strand view:</span>
@@ -5401,7 +5490,7 @@ export function NGSToolkit() {
 
                                             {methylationReport.summary ? (
                                                 <div className="bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded p-3">
-                                                    <div className="text-xs text-[var(--text-secondary)] mb-2">modkit summary (first 20 rows)</div>
+                                                    <div className="text-xs text-[var(--text-secondary)] mb-2">modkit summary (first 20 rows). Read-level call counts by modification code over the reads modkit sampled, with pass thresholds it estimates itself. The pileup pass threshold does not apply here, and these are not per-site estimates.</div>
                                                     <div className="overflow-x-auto">
                                                         <table className="w-full text-xs">
                                                             <thead>
@@ -5506,6 +5595,11 @@ export function NGSToolkit() {
                                 <div className="space-y-2">
                                     <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Stage Artifacts</h4>
                                     {selectedJob.status === 'completed' && <NgsArtifactDownloads jobId={selectedJob.id} />}
+                                    {/* A run with a construct-QC manifest is added from that panel; the others are added here. */}
+                                    {selectedJob.status === 'completed' && sequenceQcManifestState.status !== 'available' && sequenceQcManifestState.status !== 'loading'
+                                        && packageArtifacts?.some(artifact => artifact.state === 'present') && (
+                                        <NativeResultProjectAttach jobId={selectedJob.id} label={selectedJob.name || selectedJob.id} />
+                                    )}
                                     {Object.keys(stageOutputs).length === 0 ? (
                                         <p className="text-sm text-[var(--text-secondary)]">No stage outputs recorded yet.</p>
                                     ) : (
@@ -5585,7 +5679,7 @@ export function NGSToolkit() {
                                             setIgvRangeError(null);
                                         }}
                                         placeholder={selectedAlignmentSession?.reference?.contig
-                                            ? `${selectedAlignmentSession.reference.contig}:3400-3600`
+                                            ? `${selectedAlignmentSession.reference.contig}:start-end`
                                             : 'contig:start-end'}
                                         className="w-[210px] rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--text-primary)]"
                                     />
@@ -5682,13 +5776,14 @@ export function NGSToolkit() {
                             <button
                                 type="button"
                                 onClick={() => {
-                                    if (signalWorkbenchRequested) updateQueryParams({ view: null }, { replace: true });
+                                    if (barcodeSignalJobId) openBarcodeSignal(clickedBarcodeRead);
+                                    else if (signalWorkbenchRequested) updateQueryParams({ view: null }, { replace: true });
                                     else openSignalWorkbench();
                                 }}
-                                disabled={!signalDatasetId || !rawSignalRunId || !rawSignalObservedGeneration}
+                                disabled={!barcodeSignalJobId && (!signalDatasetId || !rawSignalRunId || !rawSignalObservedGeneration)}
                                 className="px-2 py-0.5 text-[11px] rounded border border-[var(--accent-secondary)]/50 text-[var(--text-action)] hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
                             >
-                                {signalWorkbenchRequested ? 'Hide signal' : 'Signal'}
+                                {barcodeSignalJobId ? `Open squiggles${clickedBarcodeRead ? ` for ${clickedBarcodeRead}` : ''}` : signalWorkbenchRequested ? 'Hide signal' : 'Signal'}
                             </button>
                             <button
                                 type="button"
@@ -5713,6 +5808,7 @@ export function NGSToolkit() {
                                 ×
                             </button>
                         </div>
+                        {previewBusy && <div role="status" className="px-3 py-1 text-xs">Preparing read preview…</div>}
                         {browserAlignmentTrack && (
                             <AlignmentPresentationStatus status={{
                                 kind: browserAlignmentTrack.kind,
@@ -5733,7 +5829,7 @@ export function NGSToolkit() {
                         <div className="flex-1 overflow-hidden min-h-0">
                             <div className="relative w-full h-full">
                                 <div
-                                    ref={igvContainerRef}
+                                    ref={(node) => { igvContainerRef.current = node; setIgvContainerNode(node); }}
                                     className={`ngs-readable-igv absolute inset-y-0 left-0 bg-[var(--bg-primary)] ${signalWorkbenchRequested ? 'right-0 lg:right-[560px]' : igvInspectorOpen ? 'right-0 lg:right-[600px]' : 'right-0'}`}
                                 />
                                 {igvLoading && (
@@ -5807,7 +5903,8 @@ export function NGSToolkit() {
                                                 );
                                             }
                                         }}
-                                        onOpenRawSignal={(read) => void openSignalWorkbenchForRead(read)}
+                                        onOpenRawSignal={barcodeSignalJobId ? read => openBarcodeSignal(read.read_id)
+                                            : signalDatasetId && rawSignalRunId && rawSignalObservedGeneration ? read => void openSignalWorkbenchForRead(read) : undefined}
                                     />
                                 )}
                             </div>

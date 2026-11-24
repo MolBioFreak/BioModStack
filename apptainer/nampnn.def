@@ -28,9 +28,8 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     # Clone NA-MPNN repository
     git clone https://github.com/baker-laboratory/NA-MPNN.git /app/NA-MPNN
 
-    # Install PyTorch nightly with CUDA 12.8 for RTX 5090 (sm_120) support
-    # CUDA 12.8 nightly builds include sm_120 support for Blackwell architecture
-    uv pip install --compile --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    # PyTorch release built for CUDA 12.8 (includes RTX 50-series sm_120 kernels).
+    uv pip install --compile --no-cache-dir torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
 
     # Install NA-MPNN dependencies (from their environment.yml)
     uv pip install --compile --no-cache-dir \
@@ -85,7 +84,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
 %help
     Container for running NA-MPNN (Nucleic Acid MPNN) sequence design.
-    Built with PyTorch CUDA 12.8 nightly for RTX 5090 (sm_120) support.
+    Built with the PyTorch 2.11.0 CUDA 12.8 release for RTX 5090 (sm_120) support.
     
     Usage:
       apptainer run --nv nampnn.sif python inference/run.py \

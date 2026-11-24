@@ -1,12 +1,13 @@
+import { useState } from 'react';
 import type { MethodCompile, MethodFinding, MethodValue } from '../lib/bioxpMethods';
 import { findMethodNode, object } from './BioXpMethodFields';
 
-const COVERS: Record<string, string> = { OUTPUT_COVER: 'Output cover', REAGENT_COVER: 'Reagent cover', BIO_SECURITY_COVER: 'Biosecurity cover' };
+export const COVERS: Record<string, string> = { OUTPUT_COVER: 'Output cover', REAGENT_COVER: 'Reagent cover', BIO_SECURITY_COVER: 'Biosecurity cover' };
 const PLACES: Record<string, string> = {
     LOC_OC_COVER: 'on the output chiller', LOC_OC_COVER_STORAGE: 'output cover storage', LOC_RC_COVER: 'on the reagent chiller',
     LOC_RC_COVER_STORAGE: 'reagent cover storage', LOC_BSC: 'on the thermal cycler', LOC_BSCS: 'biosecurity cover storage', UNKNOWN: 'unknown',
 };
-const place = (location: unknown) => PLACES[String(location)] ?? String(location ?? 'not recorded').replaceAll('_', ' ').toLowerCase();
+export const coverPlace = (location: unknown) => PLACES[String(location)] ?? String(location ?? 'not recorded').replaceAll('_', ' ').toLowerCase();
 const rows = (value: unknown): MethodValue[] => Array.isArray(value) ? value.map(object) : [];
 const decimal = (value: unknown): number | null => { const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN; return Number.isFinite(n) ? n : null; };
 const amount = (n: number) => `${Math.round(n * 100) / 100} µL`;
@@ -36,8 +37,8 @@ export function methodStepFindings(result: MethodCompile | undefined, method: Me
     return [...compiled, ...simulation];
 }
 
-/** Plain summaries of the planned run. Planned values, not robot observations. */
-export function BioXpMethodPlanSummary({ result, method, stale }: { result: MethodCompile; method: MethodValue; stale?: boolean }) {
+/** The planned run in numbers: one model for the summary card and the notes card. */
+function planModel(result: MethodCompile, method: MethodValue) {
     const simulation = object(result.simulation), state = object(simulation.state), initial = object(simulation.initial_state);
     const steps = occurrenceSteps(result, method);
     const deck = object(method.deck_plan);
@@ -80,19 +81,49 @@ export function BioXpMethodPlanSummary({ result, method, stale }: { result: Meth
     const setting = (path: unknown) => String(path ?? '').replace(/^\//, '').replace(/_(ul_s|ul|ms)$/, '').replaceAll('_', ' ');
     const grouped = new Map<string, string[]>();
     for (const f of unaddressed) grouped.set(String(f.message), [...(grouped.get(String(f.message)) ?? []), setting(f.path)]);
-    const notes = [...grouped].map(([message, fields]) => fields.length > 1 && fields.every(Boolean) ? `${message.replace(/\.$/, '')}: ${fields.join(', ')}.` : fields.length === 1 && fields[0] ? `${fields[0]}: ${message}` : message);
+    return { racks, authoredRacks, startCovers, coverMoves, volumeRows, ms, plungerMs, unknownSteps, water, grouped };
+}
+
+export const methodGeneralNoteCount = (result: MethodCompile, method: MethodValue) => planModel(result, method).grouped.size;
+
+/** Plain summaries of the planned run. Planned values, not robot observations. */
+export function BioXpMethodPlanSummary({ result, method, stale }: { result: MethodCompile; method: MethodValue; stale?: boolean }) {
+    const { racks, authoredRacks, startCovers, coverMoves, volumeRows, ms, plungerMs, unknownSteps, water } = planModel(result, method);
+    const [showStill, setShowStill] = useState(false);
+    const moved = volumeRows.filter(v => v.moved !== undefined), still = volumeRows.filter(v => v.moved === undefined);
+    const volumeLine = (v: typeof volumeRows[number]) => <li key={v.id}>{v.name}: {v.moved !== undefined ? `${amount(v.moved)} moved` : 'not moved'}{v.planned !== undefined ? ` · ${amount(v.planned)} on the starting deck` : ''}</li>;
     return <section aria-label="Plan summary" className="bioxp-plan-summary">
-        <h3>Plan summary</h3>
+        <h3>Run plan <small>planned values, not robot measurements</small></h3>
         {stale && <p role="status">Updating for your latest edits…</p>}
-        <p>{result.document ? 'Ready to run as written.' : 'Not runnable yet — see the notes below.'} Planned values, not robot measurements.</p>
-        <dl>
-            <div><dt>Estimated time</dt><dd>{ms > 0 ? (ms < 60000 ? `${Math.round(ms / 100) / 10} s` : `${Math.round(ms / 60000 * 10) / 10} min`) : 'No timed steps'}{plungerMs > 0 ? ' pipetting (plunger only; head moves not included)' : ''}{unknownSteps && !plungerMs ? (ms > 0 ? ' of timed holds and waits; robot moves and pipetting are not timed, so the full run takes longer' : '; robot moves and pipetting are not timed') : ''}</dd></div>
-            <div><dt>Tips</dt><dd>{racks.length ? <ul>{racks.map(r => <li key={r.tray}>Tip rack {r.tray}: {r.used ?? '?'} used, {r.left ?? '?'} left</li>)}</ul> : authoredRacks.length ? <ul>{authoredRacks.map(r => <li key={r.tray}>Tip rack {r.tray}: {r.tips}{r.type ? ` · ${r.type}` : ''} at start</li>)}</ul> : 'No tip racks set on the starting deck.'}</dd></div>
-            <div><dt>Covers</dt><dd>{startCovers.length || coverMoves.length ? <ol>{startCovers.map(([name, location]) => <li key={`start-${name}`}>Start: {COVERS[name]} {place(location)}</li>)}{coverMoves.map((m, i) => <li key={i}>{m.step}: {COVERS[m.name]} → {place(m.location)}</li>)}</ol> : 'No cover positions set or moved.'}</dd></div>
-            <div><dt>Volumes</dt><dd>{volumeRows.length ? <ul>{volumeRows.map(v => <li key={v.id}>{v.name}: {v.moved !== undefined ? `${amount(v.moved)} moved` : 'not moved'}{v.planned !== undefined ? ` · ${amount(v.planned)} on the starting deck` : ''}</li>)}</ul> : 'No liquid moves.'}</dd></div>
-            {water > 0 && <div><dt>Liquid settings</dt><dd>{water} unspecified setting{water === 1 ? '' : 's'} use the matching Water class.</dd></div>}
-        </dl>
-        {notes.length > 0 && <section aria-label="General notes"><h4>Notes</h4><ul>{notes.map((n, i) => <li key={i}>{n}</li>)}</ul></section>}
+        <p>{result.document ? 'Ready to run as written.' : 'Not runnable yet — see the notes.'}</p>
+        <h4>Time</h4>
+        <p>{ms > 0 ? (ms < 60000 ? `${Math.round(ms / 100) / 10} s` : `${Math.round(ms / 60000 * 10) / 10} min`) : 'No timed steps'}{plungerMs > 0 ? ' pipetting (plunger only; head moves not included)' : ''}{unknownSteps && !plungerMs ? (ms > 0 ? ' of timed holds and waits; robot moves and pipetting are not timed, so the full run takes longer' : '; robot moves and pipetting are not timed') : ''}</p>
+        <h4>Tips</h4>
+        {racks.length ? <ul>{racks.map(r => <li key={r.tray}>Tip rack {r.tray}: {r.used ?? '?'} used, {r.left ?? '?'} left</li>)}</ul> : authoredRacks.length ? <ul>{authoredRacks.map(r => <li key={r.tray}>Tip rack {r.tray}: {r.tips}{r.type ? ` · ${r.type}` : ''} at start</li>)}</ul> : <p>No tip racks set on the starting deck.</p>}
+        <h4>Covers</h4>
+        {startCovers.length || coverMoves.length ? <>{startCovers.map(([name, location]) => <p key={`start-${name}`} className="bioxp-plan-start">Start: {COVERS[name]} {coverPlace(location)}</p>)}
+            {coverMoves.length > 0 && <ol>{coverMoves.map((m, i) => <li key={i} title={m.step}>{COVERS[m.name]} → {coverPlace(m.location)}</li>)}</ol>}</> : <p>No cover positions set or moved.</p>}
+        <h4>Volumes</h4>
+        {volumeRows.length ? <>{still.length > 0 && <p>{still.length} material{still.length === 1 ? '' : 's'}: not moved <button type="button" aria-expanded={showStill} onClick={() => setShowStill(!showStill)}>{showStill ? 'Hide' : 'Show all'}</button></p>}
+            {showStill && <ul className="bioxp-plan-still">{still.map(volumeLine)}</ul>}
+            {moved.length > 0 && <ul>{moved.map(volumeLine)}</ul>}</> : <p>No liquid moves.</p>}
+        {water > 0 && <><h4>Liquid settings</h4><p>{water} unspecified setting{water === 1 ? '' : 's'} use the matching Water class.</p></>}
         <small>Notes are advice only; they never block Run.</small>
+    </section>;
+}
+
+/** General notes, one line each; a note repeated for several settings lists each setting once with its count. */
+export function BioXpMethodPlanNotes({ result, method }: { result: MethodCompile; method: MethodValue }) {
+    const { grouped } = planModel(result, method);
+    return <section aria-label="General notes" className="bioxp-plan-notes">
+        <h3>Notes <small>{grouped.size}</small><small>advice only; they never block Run</small></h3>
+        {grouped.size === 0 && <p>No general notes.</p>}
+        <ul>{[...grouped].map(([message, fields]) => {
+            if (fields.length === 1 && fields[0]) return <li key={message}>{fields[0]}: {message}</li>;
+            if (fields.length < 2 || !fields.every(Boolean)) return <li key={message}>{message}</li>;
+            const counts = new Map<string, number>();
+            for (const field of fields) counts.set(field, (counts.get(field) ?? 0) + 1);
+            return <li key={message}>{message.replace(/\.$/, '')}<span className="bioxp-plan-chips">{[...counts].map(([field, n]) => <em key={field}>{field}{n > 1 ? ` × ${n}` : ''}</em>)}</span></li>;
+        })}</ul>
     </section>;
 }

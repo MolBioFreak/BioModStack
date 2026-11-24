@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 import pytest
 from fastapi import FastAPI
@@ -160,7 +161,7 @@ def test_historical_oem_docs_are_bannered_and_robot_host_is_redacted() -> None:
         encoding="utf-8"
     )
 
-    assert "100.124.140.56" not in quarantine
+    assert not re.search(r"\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b", quarantine)
     assert "HISTORICAL EVIDENCE — NOT THE CURRENT BMS CONTRACT" in quarantine
     assert "SUPERSEDED — HISTORICAL DESIGN EVIDENCE ONLY" in matrix
     assert "SUPERSEDED — HISTORICAL PLAN ONLY" in gripper

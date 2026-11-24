@@ -447,7 +447,7 @@ def test_v1_profile_selection_requires_exact_id_digest_and_scope(
     ("override", "expected_code"),
     [
         ({"water_model": "spce"}, "MD_CHEMISTRY_COMBINATION_UNSUPPORTED"),
-        ({"engine": "openmm"}, "MD_CHEMISTRY_COMBINATION_UNSUPPORTED"),
+        ({"engine": "other"}, "MD_CHEMISTRY_COMBINATION_UNSUPPORTED"),
         ({"requested_scope": "production"}, "MD_CHEMISTRY_COMBINATION_UNSUPPORTED"),
     ],
 )
@@ -914,10 +914,12 @@ def test_catalog_api_routes_are_registered_reachable_and_do_not_expose_host_path
 ) -> None:
     module = _catalog_module()
     router_module = importlib.import_module("routers.molecular_dynamics")
+    from services.md import native_launch
     main = importlib.import_module("main")
     catalog = _stock_catalog("amber99sb-ildn.ff")
     monkeypatch.setenv("BMS_FEATURE_MOLECULAR_DYNAMICS", "1")
     monkeypatch.setattr(router_module, "get_chemistry_catalog", lambda: catalog)
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: catalog)
 
     paths = main.app.openapi()["paths"]
     assert "/api/molecular-dynamics/capabilities" in paths
@@ -953,6 +955,7 @@ def test_each_catalog_route_captures_exactly_one_view(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     router_module = importlib.import_module("routers.molecular_dynamics")
+    from services.md import native_launch
     main = importlib.import_module("main")
     catalog = _stock_catalog("amber99sb-ildn.ff")
     original_view = catalog.view
@@ -973,6 +976,7 @@ def test_each_catalog_route_captures_exactly_one_view(
             ),
         )
     monkeypatch.setattr(router_module, "get_chemistry_catalog", lambda: catalog)
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: catalog)
     client = TestClient(main.app)
 
     for path in (
@@ -991,6 +995,7 @@ def test_every_catalog_route_maps_catalog_failure_to_sanitized_typed_503(
 ) -> None:
     module = _catalog_module()
     router_module = importlib.import_module("routers.molecular_dynamics")
+    from services.md import native_launch
     main = importlib.import_module("main")
 
     class BrokenCatalog:
@@ -998,6 +1003,7 @@ def test_every_catalog_route_maps_catalog_failure_to_sanitized_typed_503(
             raise module.ChemistryCatalogError("failed at /home/operator/private/catalog.yaml")
 
     monkeypatch.setattr(router_module, "get_chemistry_catalog", BrokenCatalog)
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", BrokenCatalog)
     client = TestClient(main.app)
 
     for path in (

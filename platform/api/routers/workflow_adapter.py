@@ -86,9 +86,7 @@ from services.resource_usage_evidence import (
     GLOBAL_RESOURCE_ADMISSION_PARAM,
     ResourceUsageEvidenceError,
     attach_pre_spawn_nonexecution_receipt,
-    dispatch_gpu_authority,
-    validate_dispatch_materialization_authority,
-    validate_resource_admission_handoff,
+    receive_resource_authority,
 )
 
 
@@ -195,15 +193,11 @@ def _bind_scheduler_gpu_assignment(
 
 def _validate_resource_gpu_authority(
     job: Any,
-    handoff: dict[str, Any],
-    dispatch_authority: dict[str, Any],
+    dispatch_gpu: int | None,
+    dispatch_uuid: str | None,
     *,
     inventory: dict[int, dict[str, Any]] | None = None,
 ) -> None:
-    dispatch_gpu, dispatch_uuid = dispatch_gpu_authority(
-        dispatch_authority,
-        handoff=handoff,
-    )
     assigned_gpu = getattr(job, "assigned_gpu", None)
     if assigned_gpu is None:
         if dispatch_gpu is not None:
@@ -436,8 +430,7 @@ def _runner_environment(
     identity: AdapterIdentity,
     unit_name: str,
     owner_nonce: str,
-    resource_handoff: dict[str, Any] | None,
-    dispatch_authority: dict[str, Any] | None = None,
+    cuda_visible_devices: str | None,
 ) -> dict[str, object]:
     """Pass the lane authority into systemd without passing request authority."""
     runtime_mode = DEV_RUNTIME_MODE if identity.lane == "development" else CONTAINER_RUNTIME_MODE
@@ -464,14 +457,8 @@ def _runner_environment(
             TRANSIENT_WORKFLOW_OWNER_NONCE_ENV: owner_nonce,
         }
     )
-    if resource_handoff is not None:
-        if dispatch_authority is None:
-            raise ResourceUsageEvidenceError("resource dispatch authority is required")
-        gpu_index, _gpu_uuid = dispatch_gpu_authority(
-            dispatch_authority,
-            handoff=resource_handoff,
-        )
-        environment["CUDA_VISIBLE_DEVICES"] = "" if gpu_index is None else str(gpu_index)
+    if cuda_visible_devices is not None:
+        environment["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices
     return environment
 
 
@@ -972,7 +959,7 @@ async def workflow_adapter_launch(
     generation: int | None = None
     attempt: int | None = None
     resource_handoff: dict[str, Any] | None = None
-    dispatch_authority: dict[str, Any] | None = None
+    cuda_visible_devices: str | None = None
     dispatch_gpu_index: int | None = None
     allowed_physical_devices: tuple[str, ...] | None = None
 
@@ -1029,27 +1016,21 @@ async def workflow_adapter_launch(
                 payload.params,
             )
             try:
-                resource_handoff = validate_resource_admission_handoff(
-                    params.get(GLOBAL_RESOURCE_ADMISSION_PARAM)
-                )
-                raw_dispatch_authority = params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM)
-                if (resource_handoff is None) != (raw_dispatch_authority is None):
+                admission = params.get(GLOBAL_RESOURCE_ADMISSION_PARAM)
+                dispatch = params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM)
+                if (admission is None) != (dispatch is None):
                     raise ResourceUsageEvidenceError(
                         "resource admission and dispatch authority must be paired"
                     )
-                if resource_handoff is not None:
-                    dispatch_authority = validate_dispatch_materialization_authority(
-                        raw_dispatch_authority,
-                        expected_handoff=resource_handoff,
+                if admission is not None:
+                    resource_handoff, _, (dispatch_gpu_index, dispatch_gpu_uuid) = receive_resource_authority(
+                        admission, dispatch,
                     )
                     if resource_handoff["canonical_job_id"] != str(job.id):
                         raise ResourceUsageEvidenceError(
                             "resource admission handoff binds another canonical Job"
                         )
-                    dispatch_gpu_index, _dispatch_gpu_uuid = dispatch_gpu_authority(
-                        dispatch_authority,
-                        handoff=resource_handoff,
-                    )
+                    cuda_visible_devices = "" if dispatch_gpu_index is None else str(dispatch_gpu_index)
             except HTTPException:
                 raise
             except ResourceUsageEvidenceError as exc:
@@ -1071,11 +1052,10 @@ async def workflow_adapter_launch(
                     detail="canonical FASTQ-QC launch requires CPU-only resource authority",
                 )
             if resource_handoff is not None:
-                assert dispatch_authority is not None
                 _validate_resource_gpu_authority(
                     job,
-                    resource_handoff,
-                    dispatch_authority,
+                    dispatch_gpu_index,
+                    dispatch_gpu_uuid,
                 )
                 if dispatch_gpu_index is not None:
                     try:
@@ -1193,8 +1173,7 @@ async def workflow_adapter_launch(
                 identity=identity,
                 unit_name=unit_name,
                 owner_nonce=owner_nonce,
-                resource_handoff=resource_handoff,
-                dispatch_authority=dispatch_authority,
+                cuda_visible_devices=cuda_visible_devices,
             ),
             working_directory=API_ROOT,
             cpu_threads=(resource_handoff["cpu_threads"] if resource_handoff else None),

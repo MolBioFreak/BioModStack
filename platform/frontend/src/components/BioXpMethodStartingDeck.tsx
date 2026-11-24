@@ -1,4 +1,7 @@
-import { useContext } from 'react';
+import { useContext, useState } from 'react';
+import { api } from '../lib/api';
+import { bioXpErrorText, type BioXpTipTraysV1 } from '../lib/bioxpClient';
+import { BioXpTipGrid } from './BioXpWellGrid';
 import { BioXpWorkflowProfilesContext } from './BioXpWorkflowProfiles';
 import { deckResources, deckStations } from '../lib/bioxpWorkflowDeck';
 import { slotDefaults, slotHolderLabels, type WorkflowDeckPlan, type WorkflowSlotHolder, type WorkflowSlotId, type WorkflowTipRack } from '../lib/bioxpWorkflowPlan';
@@ -16,8 +19,9 @@ const tipTypeForProfile = (id: string): WorkflowTipRack['tip_type'] => TIP_TYPES
 export const isStartingDeckStation = (station: string) => !!deckStations.find(s => s.id === station)?.tipTray || Object.hasOwn(STATION_OBJECTS, station) || Object.hasOwn(slotDefaults, station);
 
 /** Typed edits to deck_plan only; never robot state, never a Run requirement. */
-export function BioXpMethodStartingDeck({ plan, station, wells, onChange }: { plan: WorkflowDeckPlan; station: string; wells: string[]; onChange: (plan: WorkflowDeckPlan) => void }) {
+export function BioXpMethodStartingDeck({ plan, station, wells, onChange, generation = 0 }: { plan: WorkflowDeckPlan; station: string; wells: string[]; onChange: (plan: WorkflowDeckPlan) => void; generation?: number }) {
     const library = useContext(BioXpWorkflowProfilesContext);
+    const [copyNote, setCopyNote] = useState('');
     const meta = deckStations.find(s => s.id === station);
     const tray = meta?.tipTray;
     const objects = { ...(plan.movable_objects ?? {}) };
@@ -28,15 +32,31 @@ export function BioXpMethodStartingDeck({ plan, station, wells, onChange }: { pl
         const mode = !rack ? '' : typeof rack.tips === 'string' ? rack.tips : 'wells';
         const available = rack && typeof rack.tips === 'object' ? rack.tips.available : [];
         const allWells = deckResources.find(r => r.id === station)?.wells ?? [];
-        const profiles = (library?.profiles ?? []).filter(p => typeof p.id === 'string');
+        const present = mode === 'full' ? allWells : mode === 'wells' ? allWells.filter(w => available.includes(w)) : [];
+        // Painting all or none keeps the plain Full / Empty record.
+        const paint = (next: string[]) => setRack({ tips: next.length === allWells.length ? 'full' : next.length === 0 ? 'empty' : { available: next } });
+        const copyRobot = async () => {
+            setCopyNote('');
+            try {
+                const row = (await api.get<BioXpTipTraysV1>('/api/bioxp/operator-controls/tip-trays')).data.trays.find(r => r.tray === tray);
+                if (!row || !Array.isArray(row.occupancy) || row.occupancy.length !== 96) { setCopyNote('The robot has no tip record for this rack.'); return; }
+                paint(allWells.filter((_, i) => row.occupancy![i]));
+                setCopyNote(`Copied the robot's record: ${row.occupancy.filter(Boolean).length} of 96 tips.`);
+            } catch (cause) { setCopyNote(`Robot record unavailable: ${bioXpErrorText(cause)}`); }
+        };
+        const published = (library?.profiles ?? []).filter(p => typeof p.id === 'string');
+        const tipProfiles = published.filter(p => Object.hasOwn(p, 'source_variants') || tipTypeForProfile(String(p.id)) !== null);
+        const volume = (p: { id?: unknown }) => Number(/(\d+)\s*$/.exec(String(p.id))?.[1] ?? Infinity);
+        const profiles = tipProfiles.length ? [...tipProfiles].sort((a, b) => volume(a) - volume(b)) : published;
         return <section aria-label="Tip rack setup" className="bioxp-starting-deck">
             <h3>{meta?.label ?? `Tip rack ${tray}`}</h3>
             <div role="group" aria-label={`Tip rack ${tray} contents`}>
-                {(['full', 'empty', 'wells'] as const).map(choice => <button key={choice} type="button" aria-pressed={mode === choice} onClick={() => setRack({ tips: choice === 'wells' ? { available: wells.length ? [...wells] : available } : choice })}>{choice === 'full' ? 'Full' : choice === 'empty' ? 'Empty' : 'Pick wells'}</button>)}
+                {(['full', 'empty', 'wells'] as const).map(choice => <button key={choice} type="button" aria-pressed={mode === choice} onClick={() => setRack({ tips: choice === 'wells' ? { available: wells.length ? allWells.filter(w => wells.includes(w)) : present } : choice })}>{choice === 'full' ? 'Full' : choice === 'empty' ? 'Empty' : 'Pick wells'}</button>)}
                 {rack && <button type="button" onClick={() => setRack(null)}>Not set</button>}
             </div>
-            {mode === 'wells' && <><p>{available.length} of 96 tips present. Select wells on the deck, then use them.</p><button type="button" disabled={!wells.length} onClick={() => setRack({ tips: { available: allWells.filter(w => wells.includes(w)) } })}>Use selected wells as the tips present</button></>}
-            <label>Tip type<select aria-label={`Tip rack ${tray} tip type`} value={rack?.tip_type ?? ''} onChange={e => setRack({ tip_type: (e.target.value || null) as WorkflowTipRack['tip_type'] })}><option value="">Not set</option>{TIP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}</select></label>
+            {rack && <BioXpTipGrid label={`Tip rack ${tray} wells`} wells={present} onChange={paint} />}
+            {generation > 0 && <div className="bioxp-plan-actions"><button type="button" onClick={() => void copyRobot()}>Copy the robot's record for this rack</button>{copyNote && <small role="status">{copyNote}</small>}</div>}
+            <label>Tip type<select aria-label={`Tip rack ${tray} tip type`} value={rack?.tip_type ?? ''} onChange={e => setRack({ tip_type: (e.target.value || null) as WorkflowTipRack['tip_type'] })}><option value="">Not set</option>{TIP_TYPES.map(t => <option key={t} value={t}>{t === 'T201' ? 'Unknown' : `${t.slice(1)} µL`}</option>)}</select></label>
             {profiles.length > 0 && <section aria-label="Assign rack profile"><h4>Tips stored in this rack</h4><div>{profiles.map(profile => <button type="button" key={String(profile.id)} aria-pressed={rack?.profile_id === profile.id} onClick={() => {
                 library?.pin(profile);
                 const tipType = tipTypeForProfile(String(profile.id));

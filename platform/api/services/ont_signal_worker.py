@@ -12,7 +12,6 @@ import re
 import shutil
 import socket
 import stat
-import subprocess
 import time
 import tempfile
 import uuid
@@ -42,6 +41,7 @@ from database import (
 from molbio_ngs_models import MolBioNGSReferenceArtifact, MolBioNGSReferenceRevision
 from paths import get_allowed_roots, get_molbio_ngs_reference_root, get_results_dir
 from services import ngs_alignment_sessions, ont_raw_signal, ont_signal_workbench
+from services.ont_local_images import configured_container_runtime, local_image_identity
 from services.container_cli_environment import container_cli_environment as _container_cli_env, container_user_namespace_args
 from services.file_lease_signals import lease_break_generation
 
@@ -552,6 +552,8 @@ class OntSignalWorker:
         self._stop = asyncio.Event()
         self._child: asyncio.subprocess.Process | None = None
         self._active_container: tuple[str, str] | None = None
+        # The image each task was started with, kept until its result is recorded.
+        self._dispatched_runtime: dict[tuple[str, str], dict[str, str]] = {}
 
     async def start(self) -> bool:
         """Return False when the optional backend is absent; leave all work untouched.
@@ -626,8 +628,6 @@ class OntSignalWorker:
 
     @staticmethod
     def _runtime_identity() -> dict[str, str]:
-        image = os.environ.get("BMS_ONT_SQUIGUALISER_IMAGE", "").strip()
-        digest = os.environ.get("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", "").strip().lower()
         descriptor = os.open(
             RUNTIME_POLICY_PATH,
             os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -650,16 +650,11 @@ class OntSignalWorker:
             not isinstance(policy, dict)
             or policy.get("schema") != "bms.ont-squigualiser-runtime-policy.v1"
             or policy.get("network") != "none"
-            or policy.get("runtime_id") != policy.get("oci_digest")
-            or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(policy.get("runtime_id", "")))
         ):
             raise RuntimeError("approved runtime policy manifest is invalid")
-        if (
-            image != policy["runtime_id"]
-            or digest != policy["oci_digest"].removeprefix("sha256:")
-            or not HEX64.fullmatch(digest)
-        ):
-            raise RuntimeError("configured Squigualiser identity does not equal approved runtime policy")
+        image, digest = local_image_identity(
+            "BMS_ONT_SQUIGUALISER_IMAGE", configured_container_runtime()
+        )
         return {
             "image": image,
             "image_digest": digest,
@@ -669,39 +664,18 @@ class OntSignalWorker:
             "policy_manifest_sha256": policy_sha256,
         }
 
-    @staticmethod
-    def _assert_local_runtime_image(runtime: str, image: str) -> None:
-        try:
-            result = subprocess.run(
-                [runtime, "image", "inspect", "--format", "{{.Id}}", image],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-                timeout=30,
-                env=_container_cli_env(),
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise RuntimeError("local approved Squigualiser image inspection failed") from exc
-        observed = result.stdout.strip()
-        if runtime == "podman" and re.fullmatch(r"[0-9a-f]{64}", observed):
-            observed = f"sha256:{observed}"
-        if result.returncode != 0 or observed != image:
-            raise RuntimeError("local approved Squigualiser image is absent or diverged")
-
     def _container_command(
         self,
         output_dir: Path,
         broker_dir: Path,
         *,
         kind: str,
+        identity: dict[str, str] | None = None,
     ) -> list[str]:
-        identity = self._runtime_identity()
-        runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
+        identity = identity or self._runtime_identity()
+        runtime = configured_container_runtime()
         if runtime not in {"podman", "docker"}:
             raise RuntimeError("unsupported container runtime")
-        self._assert_local_runtime_image(runtime, identity["image"])
         uid, gid = self._container_user_identity()
         output = Path(os.path.abspath(output_dir))
         broker = Path(os.path.abspath(broker_dir))
@@ -754,27 +728,24 @@ class OntSignalWorker:
             not isinstance(policy, dict)
             or policy.get("schema") != schema
             or policy.get("network") != "none"
-            or policy.get("runtime_id") != policy.get("oci_digest")
-            or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(policy.get("runtime_id", "")))
             or not HEX64.fullmatch(str(policy.get("wrapper_sha256", "")))
         ):
             raise RuntimeError("approved comparison runtime policy is invalid")
-        image = os.environ.get(image_env, "").strip()
-        digest = os.environ.get(image_env + "_DIGEST", "").strip().lower()
-        if image != policy["runtime_id"] or digest != policy["oci_digest"].removeprefix("sha256:"):
-            raise RuntimeError(f"configured {stage} identity diverges from approved policy")
+        image, digest = local_image_identity(
+            image_env, configured_container_runtime()
+        )
         # The immutable image owns its wrapper, not an unused host-side copy.
         return {"stage": stage, "image": image, "image_digest": digest,
                 "policy_sha256": policy_sha256, "wrapper_sha256": policy["wrapper_sha256"]}
 
     def _comparison_container_command(
-        self, stage: str, output_dir: Path, broker_dir: Path
+        self, stage: str, output_dir: Path, broker_dir: Path,
+        identity: dict[str, str] | None = None,
     ) -> list[str]:
-        identity = self._comparison_runtime_identity(stage)
-        runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
+        identity = identity or self._comparison_runtime_identity(stage)
+        runtime = configured_container_runtime()
         if runtime not in {"podman", "docker"}:
             raise RuntimeError("unsupported container runtime")
-        self._assert_local_runtime_image(runtime, identity["image"])
         uid, gid = self._container_user_identity()
         output = Path(os.path.abspath(output_dir))
         broker = Path(os.path.abspath(broker_dir))
@@ -1032,7 +1003,7 @@ class OntSignalWorker:
         self._active_container = None
 
     async def _recover_stale_containers(self) -> None:
-        runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
+        runtime = configured_container_runtime()
         if runtime not in {"podman", "docker"}:
             raise RuntimeError("unsupported container runtime")
         try:
@@ -1114,6 +1085,15 @@ class OntSignalWorker:
         finally:
             connection.close()
 
+    def _runtime_that_ran(self, kind: str, item_id: str) -> dict[str, str]:
+        """The image a finished task was started with."""
+        dispatched = self._dispatched_runtime.get((kind, item_id))
+        if dispatched is not None:
+            return dict(dispatched)
+        if kind in {"squigulator_producer", "squigualiser_comparison_renderer"}:
+            return self._comparison_runtime_identity(kind)
+        return self._runtime_identity()
+
     async def _invoke(
         self,
         parents: RetainedParentSet | RetainedParentView,
@@ -1127,10 +1107,17 @@ class OntSignalWorker:
         broker_dir = Path(tempfile.mkdtemp(prefix=f"bms-ont-{kind}-", dir="/tmp"))
         os.chmod(broker_dir, 0o700)
         try:
+            # The image is resolved once, here. The command runs that image and the
+            # finished result is attributed to it, even if its tag moves meanwhile.
+            comparison = kind in {"squigulator_producer", "squigualiser_comparison_renderer"}
+            identity = self._comparison_runtime_identity(kind) if comparison else self._runtime_identity()
+            if len(self._dispatched_runtime) >= 64:
+                self._dispatched_runtime.pop(next(iter(self._dispatched_runtime)))
+            self._dispatched_runtime[(kind, item_id)] = identity
             command = (
-                self._comparison_container_command(kind, output_dir, broker_dir)
-                if kind in {"squigulator_producer", "squigualiser_comparison_renderer"}
-                else self._container_command(output_dir, broker_dir, kind=kind)
+                self._comparison_container_command(kind, output_dir, broker_dir, identity=identity)
+                if comparison
+                else self._container_command(output_dir, broker_dir, kind=kind, identity=identity)
             )
             return await self._execute(
                 command,
@@ -1524,10 +1511,8 @@ class OntSignalWorker:
             roots.append(managed_output_root)
         raw_signal_root = _lexical_absolute(
             Path(
-                os.getenv(
-                    ont_raw_signal.BLOW5_STAGING_ROOT_ENV,
-                    ont_raw_signal.BLOW5_DEFAULT_STAGING_ROOT,
-                )
+                os.getenv(ont_raw_signal.BLOW5_STAGING_ROOT_ENV)
+                or ont_raw_signal.blow5_default_staging_root()
             ).parent
             / "ont-raw-signal"
         )
@@ -1871,9 +1856,12 @@ class OntSignalWorker:
             or report.get("parent_sha256s", {}).get("move_inventory_actual_sha256") != snapshot_parents.get("move_read_inventory_sha256")
             or report.get("parent_sha256s", {}).get("blow5") != raw_identities["blow5"]
             or report.get("basecall_model_id") != snapshot_parents.get("basecall_model_id")
-            or selected.get("requested_count") != job.sample_count or selected.get("selected_count") != job.sample_count
-            or not isinstance(selected_ids, list) or len(selected_ids) != job.sample_count
-            or len(set(selected_ids)) != job.sample_count or any(not isinstance(read_id, str) or not read_id for read_id in selected_ids)
+            or selected.get("requested_count") != job.sample_count
+            or not isinstance(selected_ids, list) or not selected_ids
+            # Fewer reads than requested is a real result when that is all the run has.
+            or selected.get("selected_count") != len(selected_ids)
+            or len(selected_ids) != min(job.sample_count, selected.get("intersection_count") if isinstance(selected.get("intersection_count"), int) else -1)
+            or len(set(selected_ids)) != len(selected_ids) or any(not isinstance(read_id, str) or not read_id for read_id in selected_ids)
             or selected.get("selection_sha256") != selection_sha
             or tool.get("version") != "0.7.0" or tool.get("commit") != "5a2404f1f43bc3227a85475c59b2b77970078b2e"
             or recommendation.get("kmer_length") not in range(1, 10)
@@ -1881,7 +1869,7 @@ class OntSignalWorker:
             or recommendation.get("kmer_length") != recommendation.get("signal_move_offset") + 1
             or not isinstance(score_evidence, list) or len(score_evidence) != 9
             or [item.get("candidate_signal_move_offset") for item in score_evidence if isinstance(item, dict)] != list(range(9))
-            or any(not isinstance(item, dict) or item.get("read_count") != job.sample_count or not isinstance(item.get("score"), (int, float)) for item in score_evidence)
+            or any(not isinstance(item, dict) or item.get("read_count") != len(selected_ids) or not isinstance(item.get("score"), (int, float)) for item in score_evidence)
         ):
             raise RuntimeError("calibration report failed governed validation")
         async with self._session_factory() as session:
@@ -1896,7 +1884,7 @@ class OntSignalWorker:
                 move_source_id=job.move_source_id, basecall_model_id=report["basecall_model_id"],
                 sample_selection=report["sample_selection"], recommended_kmer_length=recommendation["kmer_length"],
                 recommended_signal_move_offset=recommendation["signal_move_offset"], score_evidence=report["score_evidence"],
-                runtime_identity={**self._runtime_identity(), **tool}, parent_sha256s=report["parent_sha256s"],
+                runtime_identity={**self._runtime_that_ran("calibration", item_id), **tool}, parent_sha256s=report["parent_sha256s"],
                 artifact_sha256=artifact_sha, created_at=self._now(),
             )
             session.add(artifact); await session.flush()
@@ -2075,7 +2063,7 @@ class OntSignalWorker:
             artifact = OntSignalMappingArtifact(
                 id=f"ont-signal-artifact-{uuid.uuid4().hex}", mapping_job_id=job.id, kind=artifact_kind,
                 managed_relative_path=str(artifact_path), media_type=media, sha256=digest, size_bytes=artifact_size,
-                parent_identities=parent_identities, runtime_identity=self._runtime_identity(), validation_receipt=validation,
+                parent_identities=parent_identities, runtime_identity=self._runtime_that_ran("mapping", item_id), validation_receipt=validation,
                 created_at=self._now(),
             )
             session.add(artifact)
@@ -2097,7 +2085,7 @@ class OntSignalWorker:
                 current = await session.get(OntSignalMappingJob, item_id)
                 if current is not None and current.cancel_requested_at is not None: raise asyncio.CancelledError()
                 raise TerminalFenceLost("mapping terminal publication fence was lost")
-            session.add(OntSignalMappingEvent(id=f"ont-signal-event-{uuid.uuid4().hex}", job_id=job.id, state="ready", reason_code=reason, receipt={"artifact_sha256": digest, "runtime": self._runtime_identity()}, created_at=self._now()))
+            session.add(OntSignalMappingEvent(id=f"ont-signal-event-{uuid.uuid4().hex}", job_id=job.id, state="ready", reason_code=reason, receipt={"artifact_sha256": digest, "runtime": self._runtime_that_ran("mapping", item_id)}, created_at=self._now()))
             parents.assert_unbroken()
             await session.commit()
 
@@ -2293,7 +2281,7 @@ class OntSignalWorker:
                 OntSquigualiserViewJob.lease_expires_at > self._now(),
             ).values(
                 output_manifest=manifest,
-                render_receipt={**(view.render_receipt or {}), "runtime": self._runtime_identity(), "selection_command": selection_receipt, "command": command_receipt, "parent_sha256s": expected_runtime_parents},
+                render_receipt={**(view.render_receipt or {}), "runtime": self._runtime_that_ran("view", item_id), "selection_command": selection_receipt, "command": command_receipt, "parent_sha256s": expected_runtime_parents},
                 state="ready", reason_code="bounded_squigualiser_view_ready", claim_token=None, lease_expires_at=None,
                 updated_at=self._now(), completed_at=self._now(),
             ))
@@ -2494,8 +2482,8 @@ class OntSignalWorker:
         if manifest.get("schema") != "bms.ont-signal-comparison-manifest.v1" or not isinstance(raw_artifacts, list):
             raise RuntimeError("comparison manifest artifact inventory is malformed")
         stage_receipts = {
-            "squigulator_producer": {**producer_receipt, "runtime_identity": self._comparison_runtime_identity("squigulator_producer")},
-            "squigualiser_comparison_renderer": {**renderer_receipt, "runtime_identity": self._comparison_runtime_identity("squigualiser_comparison_renderer")},
+            "squigulator_producer": {**producer_receipt, "runtime_identity": self._runtime_that_ran("squigulator_producer", item_id)},
+            "squigualiser_comparison_renderer": {**renderer_receipt, "runtime_identity": self._runtime_that_ran("squigualiser_comparison_renderer", item_id)},
         }
         manifest = {**manifest, "parents": expected_parents,
                     "runtime_identities": {key: value["runtime_identity"] for key, value in stage_receipts.items()},

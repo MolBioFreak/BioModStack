@@ -9,8 +9,10 @@ from uuid import uuid5, NAMESPACE_URL
 
 import pytest
 from sqlalchemy import select
+from services import job_submission
 from database import Job, Design
 from routers import jobs
+from services import binder_continuation
 from services import nextflow
 from services.declared_job_expansion import KEY
 from tests.test_remote_rectify_admission import admission
@@ -26,6 +28,7 @@ async def seed_request(admission, monkeypatch, target_kind=None):
     target = inputs / 'target-reference.pdb'
     target.write_bytes(pdb.read_bytes())
     monkeypatch.setattr(jobs, '_resolve_design_structure_path', lambda value: Path(value))
+    monkeypatch.setattr(binder_continuation, '_resolve_design_structure_path', lambda value: Path(value))
     # Scientific numbering double: no ANARCI/model run is permitted here.
     monkeypatch.setattr(jobs, '_resolve_loop_region_map', lambda _: {'H1': (1, 2)})
     monkeypatch.setattr(jobs, '_resolve_loop_target_chain', lambda *args: 'A')
@@ -194,7 +197,7 @@ async def test_rollback_recovery_reuses_prepared_selection(admission, monkeypatc
     _, factory = admission
     owner, members, pdb = await admit_seed(admission, monkeypatch)
     await complete(factory, members, pdb)
-    original = jobs.create_job
+    original = job_submission.submit_job
     original_link = jobs.shutil.copyfile
     links = []
     def record_link(source, destination, *args, **kwargs):
@@ -204,13 +207,13 @@ async def test_rollback_recovery_reuses_prepared_selection(admission, monkeypatc
     monkeypatch.setattr(jobs.shutil, 'copyfile', record_link)
     async def fail_before_insertion(*args, **kwargs):
         raise RuntimeError('controlled prequeue interruption')
-    monkeypatch.setattr(jobs, 'create_job', fail_before_insertion)
+    monkeypatch.setattr(job_submission, 'submit_job', fail_before_insertion)
     await trigger(factory, members[0])
     async with factory() as session:
         assert await session.get(Job, child_id(owner)) is None
         assert not (await session.get(Job, owner)).params.get('_mutation_seed_refinement_triggered')
     assert len(links) == len(members)
-    monkeypatch.setattr(jobs, 'create_job', original)
+    monkeypatch.setattr(job_submission, 'submit_job', original)
     await trigger(factory, members[-1])
     assert len(links) == len(members)
     async with factory() as session:
@@ -223,7 +226,7 @@ async def test_derived_child_forgery_rejected_at_canonical_admission(admission, 
     _, factory = admission
     owner, members, pdb = await admit_seed(admission, monkeypatch)
     await complete(factory, members, pdb)
-    original = jobs.create_job
+    original = job_submission.submit_job
     reached = []
     async def forge_before_admission(request, *args, **kwargs):
         reached.append(True)
@@ -233,13 +236,18 @@ async def test_derived_child_forgery_rejected_at_canonical_admission(admission, 
             from component_runtime import SourceIdentity
             monkeypatch.setattr(SourceIdentity, 'from_checkout', lambda *_: SourceIdentity('c' * 40, 'd' * 40))
         elif forgery == 'fixed_positions':
-            Path(request.params['manual_mutation_fixed_positions_json']).write_text('{}')
+            import json
+            path = Path(request.params['manual_mutation_fixed_positions_json'])
+            original_positions = json.loads(path.read_text())
+            forged_positions = {} if original_positions else {'unreviewed': {'A': [1]}}
+            assert forged_positions != original_positions
+            path.write_text(json.dumps(forged_positions))
         else:
             selected = next(Path(request.params['iteration_selection_dir']).glob('*.pdb'))
             selected.unlink()  # do not edit the native source through its symlink
             selected.write_text('HEADER forged seed\n')
         return await original(request, *args, **kwargs)
-    monkeypatch.setattr(jobs, 'create_job', forge_before_admission)
+    monkeypatch.setattr(job_submission, 'submit_job', forge_before_admission)
     await trigger(factory, members[0])
     assert reached == [True]
     async with factory() as session:

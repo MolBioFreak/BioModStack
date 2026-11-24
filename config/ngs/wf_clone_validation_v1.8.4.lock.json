@@ -2,42 +2,42 @@
   "compatibility_patch": {
     "base_commit": "b3bf4ee47f730bba2239fa7f1d5e8e9bac328b42",
     "path": "../../patches/wf-clone-validation-v1.8.4-nextflow25.patch",
-    "result_commit": "a575ddbc5513759a962cf41f8f64d7b246662bdc",
-    "result_tree": "8b5372ce0c249154ca86005e82de50b334804c53",
-    "sha256": "e177e6ecaa027a60d2465196f373cd86175202d9105e1f7690ef70eb4b2e522f"
+    "result_commit": "ebc97a46a08dc79eb5628a00f680db18aef9865d",
+    "result_tree": "de81faad199b22dc672b60c56691585750a0d4ea",
+    "sha256": "3d9ab967ded01c940a9378d587ff3f5682a4d79b31bfad60df1891645ef6fce2"
   },
   "containers": {
-    "cache_dir": "/mnt/BioModStack/apptainer/singularity_cache",
+    "cache_dir": "${BMS_CONTAINER_DIR}/ngs/wf-clone-validation/v1.8.4-bms.3/images",
     "images": [
       {
         "cache_file": "ontresearch-wf-clone-validation-sha0ebc91d22c0ea5183272af8bf2b96ca51e88ad5d.img",
-        "sha256": "f1a8b4bd4d1e00a12a19e48d9125301803f72759fe391202d1042415c1879937",
+        "sha256": "614934b70ea490712dbb9babb12c7c0565e60c267499c84a38b08cf045b851b5",
         "uri": "docker://ontresearch/wf-clone-validation:sha0ebc91d22c0ea5183272af8bf2b96ca51e88ad5d",
         "label": "wfplasmid"
       },
       {
         "cache_file": "ontresearch-canu-sha50e56c57b7dfcc28ea176895c6ad98b43c607df2.img",
-        "sha256": "7bb99dd38ebdfeaa9785c9617b7c0193f29828753362ec0c11180e353d0cb044",
+        "sha256": "6f35453b17f0cf037f02a94c6bbbb478efcd799459b56b0d6c0d54f90aecc3b9",
         "uri": "docker://ontresearch/canu:sha50e56c57b7dfcc28ea176895c6ad98b43c607df2",
         "label": "canu",
         "assembly_tool": "canu"
       },
       {
         "cache_file": "medaka-2.2.2.img",
-        "sha256": "66ff42ab4839cb711354e11daa24500bf4207a5580b4fd386a257bbb6724f6a7",
+        "sha256": "3234e2c8447db8685b0b7927b84fee7b1c7b097bc3cd5ca9718c3cf9183a4a77",
         "uri": "docker://ontresearch/medaka@sha256:6794e1b293ffa125b4a57a042cbc7f85db2584f34a44ffd415e7eb501684c430",
         "label": "medaka",
         "definition": "../../apptainer/medaka.def"
       },
       {
         "cache_file": "ontresearch-wf-common-shafdd79f8e4a6faad77513c36f623693977b92b08e.img",
-        "sha256": "3371148352b3c8004eb564198184503bd577f1d3ee7a823f1c89bc398adad30f",
+        "sha256": "cb6b7101bde38bc4b200477dae28bbf5e0c2c24617f2818c4fefeb75eceba459",
         "uri": "docker://ontresearch/wf-common:shafdd79f8e4a6faad77513c36f623693977b92b08e",
         "label": "wf_common"
       },
       {
         "cache_file": "ontresearch-plannotate-shae4901fb4353581a26049f564d279edd81fe38805.img",
-        "sha256": "0d7d7beb3f08397b7369cf5b68367dedd17ff49c9360c52b6788e403a99c643c",
+        "sha256": "9d56b3790e3be99a37a2ec2972a1833b4272637b87c6967a7cfbd89643185e3d",
         "uri": "docker://ontresearch/plannotate:shae4901fb4353581a26049f564d279edd81fe38805",
         "label": "plannotate"
       }
@@ -90,13 +90,21 @@
   },
   "nextflow": {
     "build": "10289",
-    "executable": "/usr/local/bin/nextflow",
+    "executable": "${BMS_RUNTIME_HOME}/nextflow-25.10.0/nextflow",
+    "framework": {
+      "sha256": "2189a0147496fa2ce32230cfbe4972c2017c0e1795d4bc9fe8ffbceb2a0ee3f2",
+      "url": "https://www.nextflow.io/releases/v25.10.0/nextflow-25.10.0-one.jar"
+    },
+    "launcher": {
+      "sha256": "2a398d1dbf3a7258218ae8991429369ac4fdd86cb99b8c6c8f6c922202d9d524",
+      "url": "https://github.com/nextflow-io/nextflow/releases/download/v25.10.0/nextflow"
+    },
     "version": "25.10.0"
   },
   "patched_source": {
-    "commit": "a575ddbc5513759a962cf41f8f64d7b246662bdc",
-    "path": "/mnt/BioModStack/ngs/wf-clone-validation/v1.8.4-bms.2",
-    "tree": "8b5372ce0c249154ca86005e82de50b334804c53"
+    "commit": "ebc97a46a08dc79eb5628a00f680db18aef9865d",
+    "path": "${BMS_CONTAINER_DIR}/ngs/wf-clone-validation/v1.8.4-bms.3/source",
+    "tree": "de81faad199b22dc672b60c56691585750a0d4ea"
   },
   "runtime_policy": {
     "network": "forbidden",

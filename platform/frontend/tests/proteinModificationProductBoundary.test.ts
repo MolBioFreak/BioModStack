@@ -41,7 +41,7 @@ describe('De Novo Design product boundary', () => {
         assert.equal(submission.includes("selectedTemplateId === 'protein_local_redesign'"), false);
         const catalog = src('lib/launcherCatalog.ts');
         assert.match(submission, /visibleLauncherTemplates/);
-        assert.match(catalog, /name: 'De Novo Design'[\s\S]*Generate · RFD3[\s\S]*Redesign structure[\s\S]*Shape[\s\S]*DISCO · La-Proteina/);
+        assert.match(catalog, /name: 'De Novo Design'[\s\S]*Generate · RFD4-Proteina[\s\S]*Redesign structure[\s\S]*Shape[\s\S]*Resequence/);
         assert.match(catalog, /'protein_cad_experimental', 'protein_local_redesign'/);
         assert.match(submission, /isDeNovoModel\(data.model_id\)/);
     });

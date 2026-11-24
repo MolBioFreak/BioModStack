@@ -61,7 +61,7 @@ def test_worker_continuation_rebinds_actual_budget(tmp_path, monkeypatch, denial
     worker.atomic_json(worker.envelope_path(tmp_path), {})
     status = dict(attempt_id='attempt', boot_id='boot', state='awaiting_input', quiescent=True)
     worker.atomic_json(worker.status_path(tmp_path), status)
-    monkeypatch.setattr(worker, 'status', lambda _: status)
+    monkeypatch.setattr(worker, 'status', lambda _, **kwargs: status)
     monkeypatch.setattr(worker, 'boot_id', lambda: 'boot')
     monkeypatch.setattr(worker, '_component_checkpoint_runtime', lambda _: runtime)
     monkeypatch.setattr(nextflow, 'compile_component_checkpoint_continuation', lambda *args: invocation)
@@ -164,7 +164,7 @@ def test_worker_pause_is_quiescent_not_result_ready_and_resume_is_fenced(tmp_pat
     status = worker.load_json(worker.status_path(tmp_path))
     assert status["state"] == "awaiting_input" and status["quiescent"]
     assert status["result_manifest_sha256"] is None
-    monkeypatch.setattr(worker, "status", lambda path: status)
+    monkeypatch.setattr(worker, "status", lambda path, **kwargs: status)
     kwargs = dict(attempt_id="attempt", expected_boot_id="boot", lease_id="lease", operation_id='review-op',
                   checkpoint_id="root:review", checkpoint_sha256=checkpoint["checkpoint_sha256"],
                   decision={"selected_artifacts": ["one.pdb"]}, continuation_lease_id="next-lease")
@@ -476,3 +476,35 @@ def test_local_reporter_http_contract_is_unchanged(tmp_path, monkeypatch):
     assert calls == [("http://local.invalid/api/jobs/local-job/stage-complete", {
         "params": {"stage": "protenix"}, "json": ["final/model.cif"],
         "headers": {"Authorization": "Bearer unit-fixture-token"}, "timeout": 10})]
+
+
+def test_stage_reads_once_but_checks_each_reference(remote, monkeypatch):
+    from collections import Counter
+
+    root, attempt = remote
+    body, alias = root / "body", root / "alias"
+    body.write_bytes(b"data")
+    alias.hardlink_to(body)
+    first = write(stage="first", outputs=["body"])
+    second = write(stage="second", outputs=["body", "alias"])
+    bound = manifest(root, attempt)
+    args = dict(output_root=root, job_id="job-one", attempt_id=attempt, manifest=bound)
+    opened = Counter()
+    original_open = Path.open
+
+    def count(path, mode="r", *args, **kwargs):
+        if mode == "rb":
+            opened[path] += 1
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", count)
+    assert len(validate_remote_stage_receipts(**args)) == 2
+    assert opened == {first: 1, second: 1, body: 1}
+    alias_record = next(record for record in bound.artifacts if record.relative_path == "alias")
+    alias_record.sha256 = "0" * 64
+    with pytest.raises(ValueError, match="digest mismatch"):
+        validate_remote_stage_receipts(**args)
+    alias_record.sha256 = hashlib.sha256(b"data").hexdigest()
+    body.write_bytes(b"edit")
+    with pytest.raises(ValueError, match="digest mismatch"):
+        validate_remote_stage_receipts(**args)

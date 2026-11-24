@@ -36,7 +36,7 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
             params={"very_large": "x" * 10000, "antibody_chains": "H"},
             created_at=datetime(2026, 6, 10, 12, 0, 0),
             completed_at=datetime(2026, 6, 10, 12, 5, 0),
-            output_dir="/mnt/BioModStack/bms_results/heavy",
+            output_dir="/data/bms/bms_results/heavy",
             provenance={"selected_design_ids": [str(i) for i in range(1000)]},
             saved_selection_sets=[{"id": "filter-a", "filters": {"huge": "y" * 1000}}],
             completed_stages=["rfantibody", "fampnn"],
@@ -106,6 +106,11 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
     policy_projection = "json_extract(jobs.params, ?) as remote_result_policy"
     assert summary_job_query.count(policy_projection) == 1
     summary_without_policy = summary_job_query.replace(policy_projection, "remote_result_policy")
+    # Public Job visibility (visible_job_clause) is one bounded scalar predicate
+    # on the permanent-delete flag in the WHERE clause, never a params fetch.
+    visibility_predicate = "coalesce(json_extract(jobs.params, ?), ?) is 0"
+    assert summary_without_policy.count(visibility_predicate) == 1
+    summary_without_policy = summary_without_policy.replace(visibility_predicate, "visible")
     # Only the retained stage inventories/receipts are projected, never the
     # complete provenance or heavyweight scientific params.
     for alias in ('stage_plan_components', 'stage_assigned_components', 'stage_terminal_states',

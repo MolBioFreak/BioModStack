@@ -139,10 +139,9 @@ it.each(['standalone', 'context'])('selected native document reaches the mounted
     await click('Redesign selected structure');
     expect(calls.filter(call => call.url === '/api/files/materialize-structure').map(call => call.body)).toEqual([
         { job_id: 'shape', design_id: 'id-0', document: { artifact_id: 'source-0' }, expected_sha256: 'b'.repeat(64), model_number: 7, output_format: 'native' },
-        { path: 'inputs/exact-native.cif', expected_sha256: 'b'.repeat(64), model_number: 7, output_format: 'pdb' },
     ]);
-    expect(calls.filter(call => call.url === '/api/files/materialize-structure').map(call => call.context)).toEqual(destination === 'context' ? ['deliberate-context', 'deliberate-context'] : [undefined, undefined]);
-    expect(mounted!.root.findByType(ProteinModificationTemplate).props.initialValues).toMatchObject({ input_structure: 'inputs/exact-derived.pdb', source_structure: { design_id: 'id-0', document: { artifact_id: 'source-0' } }, _source_native_prepared: { format: 'cif' } });
+    expect(calls.filter(call => call.url === '/api/files/materialize-structure').map(call => call.context)).toEqual(destination === 'context' ? ['deliberate-context'] : [undefined]);
+    expect(mounted!.root.findByType(ProteinModificationTemplate).props.initialValues).toMatchObject({ input_structure: 'inputs/exact-native.cif', source_structure: { design_id: 'id-0', document: { artifact_id: 'source-0' } }, _source_native_prepared: { format: 'cif' } });
     expect(calls.some(call => call.url === '/api/jobs' && call.body)).toBe(false);
 });
 

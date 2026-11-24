@@ -1,4 +1,6 @@
 """Publisher/cold reader relations, plus opt-in retained scientific evidence replay."""
+
+from services import binder_source_materialization
 import copy
 import csv
 import json
@@ -155,7 +157,7 @@ async def test_existing_state_hash_acquisition(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, 'resolve_allowed_path', lambda value: tmp_path / value)
     monkeypatch.setattr(paths, 'to_allowed_relative', lambda value: str(Path(value).relative_to(tmp_path)))
     async def no_governed(_): return []
-    monkeypatch.setattr(files, 'get_governed_ngs_result_roots', no_governed)
+    monkeypatch.setattr(binder_source_materialization, 'governed_ngs_result_roots', no_governed)
     # Retained native checkpoint bytes, when supplied, are never unpickled or
     # executed. Otherwise this is explicitly an inert transport-only specimen.
     state = tmp_path / 'state.pt'

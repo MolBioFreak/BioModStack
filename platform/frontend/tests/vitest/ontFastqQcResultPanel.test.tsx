@@ -39,6 +39,17 @@ afterEach(async () => {
 });
 
 describe('ONT FASTQ-QC decision report', () => {
+    it('says when the optional standalone IGV page was not made, and shows the result all the same', async () => {
+        const result = resultFixture();
+        await act(async () => root.render(<OntFastqQcResultPanel result={result} loading={false} error={null} />));
+        expect(container.textContent).not.toContain('Standalone IGV page');
+        result.summary.igv_report_status = 'unavailable_VALIDATE_FAILED';
+        await act(async () => root.render(<OntFastqQcResultPanel result={{ ...result }} loading={false} error={null} />));
+        const summary = container.querySelector('[aria-label="Sample summary"]')!;
+        expect(summary.textContent).toContain('Standalone IGV page');
+        expect(summary.textContent).toContain('not made for this run; the built-in IGV view is unaffected');
+        expect(container.querySelector('[data-testid="ont-fastq-qc-result"]')).not.toBeNull();
+    });
     it('separates configured-check PASS from unchanged experimental calibration metadata', async () => {
         const result = resultFixture();
         result.verification.verdict = 'PASS';
@@ -153,7 +164,8 @@ describe('ONT FASTQ-QC decision report', () => {
         const onOpenViewer = vi.fn();
         await act(async () => root.render(<OntFastqQcResultPanel result={result} loading={false} error={null} onOpenViewer={onOpenViewer} />));
         const summary = container.querySelector('[aria-label="Sample summary"]')!;
-        expect(summary.textContent).toContain('Monomer');
+        expect(summary.textContent).toContain('Below 1.5x expected size');
+        expect(summary.textContent).not.toContain('Monomer');
         expect(summary.textContent).toContain('Dimer');
         const review = container.querySelector('[aria-label="Positions to review"]')!;
         expect(review.textContent).toContain('13 GATC (Dam) and 16 CCWGG (Dcm)');
@@ -166,6 +178,25 @@ describe('ONT FASTQ-QC decision report', () => {
         expect(onOpenViewer).toHaveBeenCalledWith(expect.stringMatching(/:385-585$/));
         raw.site_review = { ...(raw.site_review as object), sites: [{ position_1based: 1 }] };
         expect(() => parseOntFastqQcResult(raw, JOB_ID)).toThrow(/site 0/);
+    });
+    it('shows read ends for a linear construct by how the library was made', async () => {
+        const payload = resultFixture();
+        const ends = { library_prep: 'rapid', sequencing_kits: ['sqk-rbk114-96'], aligned_reads: 400, reads_spanning_both_ends: 12,
+            spanning_fraction: 0.03, spanning_tolerance_bp: 60, end_window_bp: 50, mean_depth_first_window: 41.5, mean_depth_last_window: 38,
+            read_end_histogram: { bin_width_bp: 30, bins: [{ start_bp: 1, read_starts: 20, read_ends: 3 }] } };
+        payload.verification.checks.topology.metrics = { ...payload.verification.checks.topology.metrics, expected_topology: 'linear', linear_ends: ends };
+        await act(async () => root.render(<OntFastqQcResultPanel result={parseOntFastqQcResult(payload, JOB_ID)} loading={false} error={null} />));
+        const block = container.querySelector('[data-testid="linear-read-ends"]')!;
+        expect(block.textContent).toContain('Library prepRapidfrom the raw data');
+        expect(block.textContent).toContain('Reads spanning both ends12 · 3.0%of 400 aligned reads');
+        expect(block.textContent).toContain('Depth at the ends41.5× / 38×first and last 50 bp');
+        expect(block.textContent).toContain('Not reported as damage.');
+        expect(container.textContent).toContain('End-to-end junction reads');
+        expect(container.textContent).not.toContain('Linear ends');
+    });
+    it('shows no read-end block for a circular reference', async () => {
+        await act(async () => root.render(<OntFastqQcResultPanel result={resultFixture()} loading={false} error={null} />));
+        expect(container.querySelector('[data-testid="linear-read-ends"]')).toBeNull();
     });
     it('does not interpret absent variant records as a completed negative analysis', async () => {
         const payload = resultFixture();

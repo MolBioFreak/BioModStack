@@ -110,7 +110,7 @@ test('keeps native validation outputs tagged as validation', () => {
 test('keeps boltz2 prediction rows tagged as validation even when pSCE metrics are present', () => {
     const boltzPredictionDesign = {
         name: 'gb1_canary_model_0',
-        pdb_path: '/mnt/BioModStack/bms_results/boltz2_community_canary_gb1_20260417_20260417_212106/pdb_files/predictions/gb1_canary_model_0.pdb',
+        pdb_path: '/data/bms/bms_results/boltz2_community_canary_gb1_20260417_20260417_212106/pdb_files/predictions/gb1_canary_model_0.pdb',
         confidence_metrics: {
             confidence_score: 0.4704,
             ptm: 0.3989,
@@ -136,7 +136,7 @@ test('keeps boltz2 prediction rows tagged as validation even when pSCE metrics a
 test('keeps fold-cp prediction rows tagged as boltz-2 validation even when pSCE metrics are present', () => {
     const foldCpPredictionDesign = {
         name: 'boltz_cp_input_model_0',
-        pdb_path: '/mnt/BioModStack/bms_results/Boltz2 Context Parallelism Test 002_20260419_190648/cif_files/predictions/boltz_cp_input_model_0.cif',
+        pdb_path: '/data/bms/bms_results/Boltz2 Context Parallelism Test 002_20260419_190648/cif_files/predictions/boltz_cp_input_model_0.cif',
         confidence_metrics: {
             fampnn: {
                 fampnn_avg_psce: 48.97,
@@ -157,7 +157,7 @@ test('keeps fold-cp prediction rows tagged as boltz-2 validation even when pSCE 
 test('classifies ESMFold2 experimental rows from provenance rather than FA-MPNN-looking fallback metrics', () => {
     const esmfold2Design = {
         name: 'rnaseh_000',
-        pdb_path: '/mnt/BioModStack/bms_results/rnaseh/final/esmfold2/rnaseh_000.cif',
+        pdb_path: '/data/bms/bms_results/rnaseh/final/esmfold2/rnaseh_000.cif',
         stage_family: 'esmfold2',
         stage_mode: 'predict',
         artifact_group: 'esmfold2',

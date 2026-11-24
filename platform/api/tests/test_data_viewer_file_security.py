@@ -8,6 +8,7 @@ from fastapi import HTTPException, UploadFile
 
 import paths
 from routers import files
+from services import binder_source_materialization
 
 
 def test_generic_allowed_roots_exclude_complete_runtime_data_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -32,7 +33,9 @@ async def test_generic_upload_refuses_to_replace_existing_file(
     existing.write_bytes(b"original")
     monkeypatch.setattr(files, "_allowed_lexical_path", lambda _path: target_dir)
     monkeypatch.setattr(files, "resolve_allowed_path", lambda _path: target_dir)
+    monkeypatch.setattr(binder_source_materialization, "resolve_allowed_path", lambda _path: target_dir)
     monkeypatch.setattr(files, "to_allowed_relative", lambda path: f"inputs/{path.name}")
+    monkeypatch.setattr(binder_source_materialization, "to_allowed_relative", lambda path: f"inputs/{path.name}")
 
     upload = UploadFile(filename=existing.name, file=io.BytesIO(b"replacement"))
     with pytest.raises(HTTPException) as exc_info:
@@ -51,7 +54,9 @@ async def test_generic_upload_creates_new_file(
     target_dir.mkdir()
     monkeypatch.setattr(files, "_allowed_lexical_path", lambda _path: target_dir)
     monkeypatch.setattr(files, "resolve_allowed_path", lambda _path: target_dir)
+    monkeypatch.setattr(binder_source_materialization, "resolve_allowed_path", lambda _path: target_dir)
     monkeypatch.setattr(files, "to_allowed_relative", lambda path: f"inputs/{path.name}")
+    monkeypatch.setattr(binder_source_materialization, "to_allowed_relative", lambda path: f"inputs/{path.name}")
 
     upload = UploadFile(filename="candidate.cif", file=io.BytesIO(b"new-content"))
     response = await files.upload_file(path="inputs", file=upload, governed_roots=())

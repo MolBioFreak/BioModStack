@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, NoReturn, Sequence, Tuple
 
+from phase0_roots import extra_evidence_roots
+
 
 AA_ORDER = "ACDEFGHIKLMNPQRSTVWY"
 INT32_MIN = -(2**31)
@@ -282,7 +284,7 @@ def validate_registry_structure(registry: Any) -> List[Mapping[str, Any]]:
     require_sha256(definitions["sha256"], "definitions.sha256")
     if top["required_validation_command"] != VALIDATION_COMMAND:
         fail("required_validation_command: exact command drift")
-    if top["evidence_root_template"] != "/mnt/BioModStack/bms_results/conformational_mapping_phase0/<approved_run_id>":
+    if top["evidence_root_template"] != "$BMS_RESULTS_DIR/conformational_mapping_phase0/<approved_run_id>":
         fail("evidence_root_template: unexpected value")
     if "unmeasured" not in require_nonempty_string(top["runtime_status_policy"], "runtime_status_policy"):
         fail("runtime_status_policy must preserve unmeasured state")
@@ -313,7 +315,7 @@ def validate_registry_structure(registry: Any) -> List[Mapping[str, Any]]:
         expected_probe = (
             "python scripts/probes/conformational_mapping/probe_phase0_runtime.py "
             f"--vectors {VECTORS_PATH.as_posix()} "
-            "--output /mnt/BioModStack/bms_results/conformational_mapping_phase0/"
+            "--output $BMS_RESULTS_DIR/conformational_mapping_phase0/"
             "<approved_run_id>"
         )
         if vector["probe_command"] != expected_probe:
@@ -760,7 +762,7 @@ def verify_evidence(
     expected_command = (
         "python scripts/probes/conformational_mapping/probe_phase0_runtime.py "
         f"--vectors {VECTORS_PATH.as_posix()} "
-        "--output /mnt/BioModStack/bms_results/conformational_mapping_phase0/<approved_run_id>"
+        "--output $BMS_RESULTS_DIR/conformational_mapping_phase0/<approved_run_id>"
     )
     summary_by_id = {item["id"]: item for item in raw_results}
     from probe_phase0_runtime import classify as rederive_vector_result
@@ -816,10 +818,9 @@ def verify_evidence(
         tree_doc = load_json_bytes((root / vector_id / "artifact_tree.json").read_bytes(), f"{vector_id}/artifact_tree.json")
         hash_doc = load_json_bytes((root / vector_id / "output_hashes.json").read_bytes(), f"{vector_id}/output_hashes.json")
         observation_root = Path(tree_doc.get("observation_root", "")).resolve(strict=True)
-        approved_observation_roots = {
-            root.parent.resolve(strict=True),
-            (Path("/home/dalab/biomodstack-phase-evidence/conformational_mapping/phase_0") / root.name).resolve(strict=True),
-        }
+        approved_observation_roots = {root.parent.resolve(strict=True)}
+        for extra_root in extra_evidence_roots():
+            approved_observation_roots.add((extra_root / root.name).resolve(strict=True))
         if observation_root not in approved_observation_roots:
             fail(f"{vector_id}: observation root is not an approved current-attempt root")
         tree_files = tree_doc.get("files")

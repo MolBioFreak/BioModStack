@@ -24,6 +24,9 @@ def test_readback_route_pages_and_rejects_unpublished_or_wrong_model(monkeypatch
     }
 
     class Session:
+        async def scalar(self, _statement):
+            return None  # No hidden jobs in this route-only fixture.
+
         async def get(self, _cls, job_id):
             return jobs.get(job_id)
 

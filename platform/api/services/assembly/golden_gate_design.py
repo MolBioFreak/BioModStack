@@ -18,6 +18,7 @@ from services.restriction_catalog import catalog_authority
 from services.restriction_digest import DigestEnd, DigestFragment, simulate_digest
 
 from .common import overhangs_compatible
+from .feature_mapping import map_features, position_mappings, region_positions
 from .golden_gate import TypeIISEnzyme, resolve_golden_gate_enzyme, simulate_golden_gate
 from .golden_gate_design_types import (
     DesignMaterial, DigestOutcome, Feature, Geometry, GoldenGateDesignRequest,
@@ -26,119 +27,32 @@ from .golden_gate_design_types import (
     PCRPreparation, SynthesisPreparation, PreparedPreparation,
 )
 from .ligation import simulate_ligation
+from .physical_ends import digest_end_to_fragment_end
 from .types import AssemblyError, AssemblyFragment, FragmentEnd, EndType
-
-RAW_ENZYMES = ("BsaI", "BsmBI", "Esp3I", "BbsI", "SapI")
-
 
 def preparation_geometry(enzyme: TypeIISEnzyme) -> Geometry:
     """Derive offsets from catalog authority, never an enzyme-name offset map."""
     event = enzyme.record.cleavage.events[0]
-    spacer = event.top_offset - len(enzyme.site)
-    if spacer < 0 or event.bottom_offset <= event.top_offset:
-        raise AssemblyError("Raw preparation adapter requires downstream five-prime cleavage")
-    return Geometry(site=enzyme.site, top_offset=event.top_offset,
-                    bottom_offset=event.bottom_offset, spacer_length=spacer,
-                    overhang_length=event.overhang_length_nt)
+    top, bottom = event.top_offset, event.bottom_offset
+    from Bio.Data.IUPACData import ambiguous_dna_values
+    site = "".join(sorted(ambiguous_dna_values[base])[0] for base in enzyme.site)
+    if max(top, bottom) <= 0:
+        site = reverse_complement(site)
+        top, bottom = len(site) - bottom, len(site) - top
+    spacer = min(top, bottom) - len(site)
+    if spacer < 0 or top == bottom:
+        raise AssemblyError("Recognition site cannot be removed: cleavage intersects the motif or is blunt")
+    return Geometry(site=site, top_offset=top, bottom_offset=bottom, spacer_length=spacer,
+                    overhang_length=event.overhang_length_nt, polarity=event.overhang_kind)
 
 
-def _positions(region: Region, material: Material) -> list[int]:
-    n = len(material.sequence)
-    if region.start >= n or region.end > n:
-        raise AssemblyError("Selected interval is outside its source")
-    if region.wraps_origin:
-        if material.topology != "circular" or region.end > region.start:
-            raise AssemblyError("Origin-wrapping interval requires a circular source and end <= start")
-        return list(range(region.start, n)) + list(range(region.end))
-    if region.end <= region.start:
-        raise AssemblyError("Selected interval must be nonempty")
-    return list(range(region.start, region.end))
-
-
-def _mappings(positions: Sequence[int | None], parent: str, strand: Literal[-1, 1] = 1) -> list[Mapping]:
-    """Compress coordinate runs; synthesized bases have no invented parent slice."""
-    runs: list[Mapping] = []
-    i = 0
-    while i < len(positions):
-        first = positions[i]
-        if first is None:
-            i += 1
-            continue
-        j = i + 1
-        while j < len(positions) and positions[j] == first + (j - i) * strand:
-            j += 1
-        a, b = first, first + (j - i - 1) * strand
-        runs.append(Mapping(output_start=i, output_end=j, parent_id=parent,
-                            parent_start=min(a, b), parent_end=max(a, b) + 1, strand=strand))
-        i = j
-    return runs
-
-
-def _map_features(features: list[Feature], parent: Material, positions: Sequence[int | None], strand: Literal[-1, 1] = 1) -> list[Feature]:
-    lookup: dict[int, list[int]] = {}
-    for out, coordinate in enumerate(positions):
-        if coordinate is not None:
-            lookup.setdefault(coordinate, []).append(out)
-    mapped = []
-    for feature in features:
-        # Match the shared GenBank owner: ordered location parts, each traversed
-        # biologically on its own strand. Reverse orientation must not swap exons.
-        chunks = []
-        for segment in feature.segments:
-            coordinates = _positions(segment, parent)
-            if segment.wraps_origin:
-                split = len(parent.sequence) - segment.start
-                chunks.extend((coordinates[:split], coordinates[split:]))
-            else:
-                chunks.append(coordinates)
-        original = [p for chunk in chunks for p in (reversed(chunk) if feature.strand == -1 else chunk)]
-        retained_indices = [i for i, p in enumerate(original) if p in lookup]
-        retained = list(dict.fromkeys(out for i in retained_indices for out in lookup[original[i]]))
-        if not retained:
-            continue
-        direction = (feature.strand or 1) * strand
-        segments = []
-        start = previous = retained[0]
-        for coordinate in retained[1:]:
-            if coordinate != previous + direction:
-                segments.append(Region(start=min(start, previous), end=max(start, previous) + 1))
-                start = coordinate
-            previous = coordinate
-        segments.append(Region(start=min(start, previous), end=max(start, previous) + 1))
-        intact = len(retained_indices) == len(original)
-        internal_loss = any(b != a + 1 for a, b in zip(retained_indices, retained_indices[1:]))
-        status = feature.status if intact else "disrupted" if internal_loss or feature.status == "disrupted" else "truncated"
-        qualifiers = dict(feature.qualifiers)
-        codon_start = feature.codon_start
-        if feature.type == "CDS" and not intact:
-            if feature.strand:
-                old = codon_start if codon_start is not None else qualifiers.get("codon_start", 1)
-                if isinstance(old, list):
-                    old = old[0] if old else None
-                if old in (1, 2, 3, "1", "2", "3"):
-                    codon_start = (int(old) - 1 - retained_indices[0]) % 3 + 1
-                    if "codon_start" in qualifiers:
-                        previous_value = qualifiers["codon_start"]
-                        qualifiers["codon_start"] = ([str(codon_start)] if isinstance(previous_value, list)
-                            else str(codon_start) if isinstance(previous_value, str) else codon_start)
-            # Original translation remains on the source; it no longer describes
-            # this truncated/disrupted feature. This annotation never blocks use.
-            qualifiers.pop("translation", None)
-        mapped.append(feature.model_copy(update={
-            "segments": segments, "strand": feature.strand * strand, "status": status,
-            "codon_start": codon_start, "qualifiers": qualifiers,
-            "frame_preserved": (feature.frame_preserved if feature.frame_preserved is not None else True)
-            if intact and feature.type == "CDS" else (False if feature.type == "CDS" else None),
-        }))
-    return mapped
+_positions = region_positions
+_mappings = position_mappings
+_map_features = map_features
 
 
 def _digest_end(value: DigestEnd) -> FragmentEnd:
-    if value.kind == "no_cut_circular":
-        raise AssemblyError("An uncut circular molecule has no ligatable ends")
-    kind: EndType = "sticky_5" if value.kind == "five_prime_overhang" else "sticky_3" if value.kind == "three_prime_overhang" else "blunt"
-    return FragmentEnd(type=kind, overhang=value.overhang_sequence_5to3 or "",
-                       protruding_strand=value.protruding_strand)
+    return digest_end_to_fragment_end(value)
 
 
 def digest_fragment_to_assembly(fragment: DigestFragment, *, part: Part) -> AssemblyFragment:
@@ -210,8 +124,6 @@ def design_golden_gate(
     enzyme = resolve_golden_gate_enzyme(enzyme_id=request.enzyme.enzyme_id,
         catalog_id=request.enzyme.catalog_id, expected_catalog_sha256=request.enzyme.catalog_sha256)
     geometry = preparation_geometry(enzyme)
-    if any(p.preparation.kind in {"pcr", "synthesis"} for p in request.parts) and enzyme.name not in RAW_ENZYMES:
-        raise AssemblyError("Raw tail adapter not qualified for this enzyme; prepared mode remains available")
     if not request.parts or len({p.id for p in request.parts}) != len(request.parts):
         raise AssemblyError("Parts must be nonempty and have distinct instance IDs")
     if len({s.id for s in request.sources}) != len(request.sources):
@@ -275,15 +187,15 @@ def design_golden_gate(
             for tail in (prep.left, prep.right):
                 if len(tail.spacer) != geometry.spacer_length or len(tail.fusion) != geometry.overhang_length:
                     raise AssemblyError("Spacer/fusion lengths disagree with catalog cleavage geometry")
-            left_tail = prep.left.clamp + enzyme.site + prep.left.spacer + prep.left.fusion
-            right_tail = prep.right.clamp + enzyme.site + prep.right.spacer + reverse_complement(prep.right.fusion)
+            left_tail = prep.left.clamp + geometry.site + prep.left.spacer + prep.left.fusion
+            right_tail = prep.right.clamp + geometry.site + prep.right.spacer + reverse_complement(prep.right.fusion)
             sequence = left_tail + payload + reverse_complement(right_tail)
             coords = [None] * len(left_tail) + positions + [None] * len(right_tail)
             prepared = DesignMaterial(id=f"preparation:{part.id}", sequence=sequence, topology="linear",
                 stage="prepared", parent_id=source.id, transformation=prep.kind,
                 mappings=_mappings(coords, source.id, strand),
                 features=_map_features(source.features, source, coords, strand))
-            expected = prep.left.fusion + payload
+            expected = (prep.left.fusion + payload if geometry.polarity == "five_prime" else payload + prep.right.fusion)
             if prep.kind == "pcr":
                 if max(prep.forward_anneal_length, prep.reverse_anneal_length) > len(payload):
                     raise AssemblyError("Primer footprint is longer than selected template region")
@@ -296,7 +208,7 @@ def design_golden_gate(
                     selected_positions = positions[:len(footprint)] if direction == "forward" else positions[-len(footprint):][::-1]
                     primer_strand = strand if direction == "forward" else -strand
                     primers.append(Primer(id=primer_id, part_id=part.id, direction=direction,
-                        full_sequence=oligo, clamp=tail.clamp, recognition_site=enzyme.site,
+                        full_sequence=oligo, clamp=tail.clamp, recognition_site=geometry.site,
                         spacer=tail.spacer, fusion=tail.fusion if direction == "forward" else reverse_complement(tail.fusion),
                         annealing_sequence=footprint,
                         tm=calculate_primer_tm_result(footprint, "dna", request.primer_settings),
@@ -328,8 +240,8 @@ def design_golden_gate(
             assert isinstance(prep, (PCRPreparation, SynthesisPreparation))
             matches = [row.fragment_index for row in simulation.fragments
                        if row.top_strand_sequence == expected
-                       and row.left_end.overhang_sequence_5to3 == prep.left.fusion
-                       and row.right_end.overhang_sequence_5to3 == reverse_complement(prep.right.fusion)]
+                       and row.left_end.overhang_sequence_5to3 == (prep.left.fusion if geometry.polarity == "five_prime" else reverse_complement(prep.left.fusion))
+                       and row.right_end.overhang_sequence_5to3 == (reverse_complement(prep.right.fusion) if geometry.polarity == "five_prime" else prep.right.fusion)]
             if len(matches) == 1:
                 retained_index = matches[0]
             else:

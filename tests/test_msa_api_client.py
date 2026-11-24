@@ -525,6 +525,27 @@ def test_paired_poll_restart_does_not_resubmit_unpaired(tmp_path, setup):
     assert not any('/result/download/fixture-ticket' in url for _, url, _ in second.calls)
 
 
+def test_cancel_after_partial_multichain_submission(tmp_path, setup):
+    args = {**setup, "sequences": [SEQ, SEQ2, SEQ2, SEQ[::-1]]}
+    first = FixtureHTTP(*ns_success(), response("running-job"), response("running"))
+    with pytest.raises(api.PendingMSA):
+        client(tmp_path, first, max_polls=1).prepare_msa(**args)
+    entries = set((setup["cache_root"] / setup["provider"]).iterdir())
+    assert len(entries) == 2
+    cancel = FixtureHTTP(response(b""))
+    for _ in range(2):
+        result = client(tmp_path, cancel).cancel(**args)
+        assert result["chains"] == [
+            {"status": "complete", "remote_id": "fixture-job"},
+            {"status": "cancel_requested", "remote_id": "running-job"},
+            {"status": "cancel_requested", "remote_id": "running-job"},
+            {"status": "not_submitted"},
+        ]
+    assert [(m, u) for m, u, _ in cancel.calls] == [
+        ("POST", api.SERVICES["neurosnap_api"] + "/job/cancel/running-job")]
+    assert set((setup["cache_root"] / setup["provider"]).iterdir()) == entries
+
+
 def test_cancel_explicit_once_then_terminal_reconciliation(tmp_path, setup):
     first = FixtureHTTP(response("fixture-job"), response("running"))
     with pytest.raises(api.PendingMSA):

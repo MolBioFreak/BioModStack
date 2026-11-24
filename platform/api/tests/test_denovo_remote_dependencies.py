@@ -193,7 +193,6 @@ def test_independent_nested_member_keeps_containment_owner(assets, tmp_path, mon
 
 @pytest.mark.parametrize('model,expected', [
     ('protenix', {('image', 'protenix.sif'), ('weights', 'protenix')}),
-    ('af2', {('image', 'af2.sif'), ('image', 'pyrosetta_tools.sif'), ('weights', 'alphafold')}),
     ('proteinmpnn', {('image', 'dl_binder_design.sif'), ('image', 'pyrosetta_tools.sif')}),
 ])
 def test_unrelated_independent_model_closures_unchanged(model, expected):

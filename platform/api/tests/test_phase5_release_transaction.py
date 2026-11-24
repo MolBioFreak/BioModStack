@@ -995,7 +995,7 @@ def test_snapshot_and_rollback_restore_exact_core_enabled_and_active_truth(
 def test_known_good_validation_records_only_production_core_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = Path("/home/dalab/biomodstack/prod-main-canonical")
+    root = tmp_path / "prod-main-canonical"
     backend = release.ProductionReleaseBackend(
         repo_root=tmp_path, state_dir=tmp_path / "state", allow_first_install=True
     )
@@ -1045,9 +1045,9 @@ def test_known_good_validation_records_only_production_core_root(
 def test_snapshot_captures_exact_multi_root_container_topology_without_selector_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    frontend_root = Path("/home/dalab/biomodstack/dev-test-canonical")
-    workflow_root = Path("/home/dalab/worktrees/bms-tailnet-production-03dea8c")
-    core_root = Path("/home/dalab/worktrees/bms-tailnet-environment-selector-20260726")
+    frontend_root = tmp_path / "dev-test-canonical"
+    workflow_root = tmp_path / "workflow-root"
+    core_root = tmp_path / "core-root"
     backend = release.ProductionReleaseBackend(repo_root=tmp_path, state_dir=tmp_path / "state")
     monkeypatch.setattr(
         release.services, "runtime_listener_ownership", lambda *args, **kwargs: {"ok": True}

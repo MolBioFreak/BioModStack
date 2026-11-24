@@ -4,10 +4,10 @@ Generated from local decompiled OEM source. No live robot calls were made.
 
 ## Sources
 
-- ClassControlInterface: `/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup/decompiled_src/BioXPControlLib/ClassControlInterface.cs`
-- ControlLib: `/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup/decompiled_src/BioXPControlLib/ControlLib.cs`
-- BioXPMainWindow: `/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup/decompiled_src_genbotapp/GenBotApp/BioXPMainWindow.cs`
-- ClassBioXPSettings: `/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup/decompiled_src_bioxpcommon/BioXPCommonLib/ClassBioXPSettings.cs`
+- ClassControlInterface: `OEM-source/BioXP_SSD_Backup/decompiled_src/BioXPControlLib/ClassControlInterface.cs`
+- ControlLib: `OEM-source/BioXP_SSD_Backup/decompiled_src/BioXPControlLib/ControlLib.cs`
+- BioXPMainWindow: `OEM-source/BioXP_SSD_Backup/decompiled_src_genbotapp/GenBotApp/BioXPMainWindow.cs`
+- ClassBioXPSettings: `OEM-source/BioXP_SSD_Backup/decompiled_src_bioxpcommon/BioXPCommonLib/ClassBioXPSettings.cs`
 
 ## Extracted method anchors
 

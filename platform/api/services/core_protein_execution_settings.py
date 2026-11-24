@@ -23,7 +23,7 @@ class Setting(Closed):
     scope: str = Field(min_length=1, max_length=160)
     requested: Scalar
     effective: Scalar
-    origin: Literal['request','workflow_default','runner_default','compute_tier']
+    origin: Literal['request','workflow_default','runner_default']
 
 class Source(Closed):
     scope: str = Field(min_length=1, max_length=160)
@@ -31,7 +31,7 @@ class Source(Closed):
     size_bytes: int | None = Field(default=None, ge=0)
 
 class ExecutionReceipt(Closed):
-    model: Literal['esmfold2','openmm']
+    model: Literal['esmfold2']
     artifact_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     settings: list[Setting]
     sources: list[Source]
@@ -44,7 +44,6 @@ class ExecutionSettings(Closed):
 ESM_KEYS = {'seed','model_variant','local_files_only','num_loops','num_sampling_steps',
     'num_diffusion_samples','msa_format','msa_max_sequences','msa_remove_insertions',
     'pdb_include_dna_rna','chain_id'}
-OPENMM_KEYS = {'cdr_only','force_field','max_iterations','energy_tolerance','restraint_mode','antibody_chain','fix_structure'}
 
 
 def canonical(value):
@@ -63,8 +62,7 @@ def _requested(original, model, key, scope):
                 and key in ('msa_max_sequences', 'msa_remove_insertions') and key not in component):
             return key in original, original.get(key)
         return key in component, component.get(key)
-    prefix = 'esmf_' if model == 'esmfold2' else 'openmm_'
-    alias = prefix + key
+    alias = 'esmf_' + key
     if alias in original and key in original and canonical(original[alias]) != canonical(original[key]):
         raise ValueError('conflicting request aliases')
     name = alias if alias in original else key
@@ -184,44 +182,31 @@ def prepare_receipt(job, root: Path, path: Path):
     if not isinstance(original, dict):
         raise ValueError('missing trusted request origin')
     model = payload['model']
-    if model not in ('esmfold2','openmm'):
+    if model != 'esmfold2':
         raise ValueError('unsupported execution receipt')
     argv = payload['argv']
     if not isinstance(argv, list) or any(type(v) is not str for v in argv):
         raise ValueError('invalid execution argv')
-    if model == 'esmfold2':
-        runner_path = Path(__file__).resolve().parents[3] / 'scripts/run_esmfold2_inference.py'
-        spec = importlib.util.spec_from_file_location('esm_receipt_parser', runner_path)
-        runner = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(runner)
-        try:
-            effective = vars(runner.build_parser().parse_args(argv))
-        except SystemExit as exc:
-            raise ValueError('invalid execution argv') from exc
-        component_effective = json.loads(effective['complex_components_json'] or '[]')
-        if isinstance(component_effective, dict):
-            component_effective = component_effective.get('components', component_effective.get('sequences', []))
-        if effective.get('complex_components_file'):
-            raise ValueError('unreceipted component file input')
-        _esm_sources(original, effective, component_effective, payload['sources'],
-                     (job.provenance or {}).get('esmf_msa_preparation'))
-    else:
-        effective = {}
-        for key in OPENMM_KEYS:
-            flag = '--' + key
-            if key in ('cdr_only','fix_structure'):
-                effective[key] = flag in argv
-            elif flag in argv:
-                if argv.count(flag) != 1: raise ValueError('duplicate execution argument')
-                value = argv[argv.index(flag)+1]
-                effective[key] = int(value) if key == 'max_iterations' else float(value) if key == 'energy_tolerance' else value
-            elif key == 'restraint_mode':
-                effective[key] = 'none'
+    runner_path = Path(__file__).resolve().parents[3] / 'scripts/run_esmfold2_inference.py'
+    spec = importlib.util.spec_from_file_location('esm_receipt_parser', runner_path)
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    try:
+        effective = vars(runner.build_parser().parse_args(argv))
+    except SystemExit as exc:
+        raise ValueError('invalid execution argv') from exc
+    component_effective = json.loads(effective['complex_components_json'] or '[]')
+    if isinstance(component_effective, dict):
+        component_effective = component_effective.get('components', component_effective.get('sequences', []))
+    if effective.get('complex_components_file'):
+        raise ValueError('unreceipted component file input')
+    _esm_sources(original, effective, component_effective, payload['sources'],
+                 (job.provenance or {}).get('esmf_msa_preparation'))
     settings = []
     seen = set()
     for raw_key, item in payload['settings'].items():
         key = raw_key.split('.',1)[1] if raw_key.startswith('component:') else raw_key
-        if key not in (ESM_KEYS if model == 'esmfold2' else OPENMM_KEYS):
+        if key not in ESM_KEYS:
             continue
         scope = item['scope']
         if (scope,key) in seen: raise ValueError('duplicate scoped setting')
@@ -231,7 +216,7 @@ def prepare_receipt(job, root: Path, path: Path):
             raise ValueError('receipt requested settings differ from owning Job')
         if item['origin'] == 'request' and not present:
             raise ValueError('forged request origin')
-        if present and not (model == 'openmm' and requested is None) and item['origin'] not in ('request','compute_tier'):
+        if present and item['origin'] != 'request':
             raise ValueError('lost request origin')
         observed = effective
         if scope.startswith('component:'):
@@ -242,53 +227,19 @@ def prepare_receipt(job, root: Path, path: Path):
             raise ValueError('effective settings differ from executed argv')
         settings.append(Setting(key=key, scope=scope, requested=requested,
                                 effective=item['effective'], origin=item['origin']))
-    expected_keys = ESM_KEYS if model == 'esmfold2' else OPENMM_KEYS
-    if {s.key for s in settings if not s.scope.startswith('component:')} != expected_keys:
+    if {s.key for s in settings if not s.scope.startswith('component:')} != ESM_KEYS:
         raise ValueError('missing required effective settings')
-    if model == 'esmfold2':
-        required_components = {
-            ('component:' + component['id'], key)
-            for component in component_effective
-            for key in ('msa_format', 'msa_max_sequences', 'msa_remove_insertions')
-        }
-        observed_components = {(s.scope, s.key) for s in settings if s.scope.startswith('component:')}
-        if observed_components != required_components:
-            raise ValueError('missing or foreign component effective settings')
+    required_components = {
+        ('component:' + component['id'], key)
+        for component in component_effective
+        for key in ('msa_format', 'msa_max_sequences', 'msa_remove_insertions')
+    }
+    observed_components = {(s.scope, s.key) for s in settings if s.scope.startswith('component:')}
+    if observed_components != required_components:
+        raise ValueError('missing or foreign component effective settings')
     sources = [Source(scope=s['scope'], sha256=s['sha256'], size_bytes=s.get('size_bytes')) for s in payload['sources']]
     projection = ExecutionReceipt(model=model, artifact_sha256=evidence['sha256'], settings=settings, sources=sources).model_dump()
     return {'artifact': evidence, 'receipt': projection}
-
-
-async def persist_openmm_receipts(job, root, session):
-    """Retain job-scoped execution evidence, not candidate numerical authority.
-
-    Every direct Design receives the owning Job's receipt set for provenance;
-    these records deliberately make no per-candidate OpenMM association claim.
-    """
-    from services.core_protein_scientific_contract import revision_for_job
-    from sqlalchemy import select
-    from database import Design
-    if revision_for_job(job) != 1 or REQUEST_KEY not in (job.provenance or {}):
-        return
-    root = Path(root)
-    paths = sorted((root / 'run/openmm/relaxation').rglob('*effective_settings.json'))
-    if not paths:
-        if (job.params or {}).get('openmm_enabled') is True:
-            raise ValueError('missing OpenMM execution receipts')
-        return
-    records = [prepare_receipt(job, root, path) for path in paths]
-    if any(r['receipt']['model'] != 'openmm' for r in records):
-        raise ValueError('foreign OpenMM execution receipt')
-    prior = (job.provenance or {}).get(KEY, [])
-    prior_openmm = [r for r in prior if r['receipt']['model'] == 'openmm']
-    if prior_openmm and canonical(prior_openmm) != canonical(records):
-        raise ValueError('OpenMM receipt replay changed')
-    records = [r for r in prior if r['receipt']['model'] != 'openmm'] + records
-    job.provenance = {**(job.provenance or {}), KEY: records}
-    rows = list((await session.execute(select(Design).where(Design.job_id == job.id))).scalars())
-    for row in rows:
-        row.confidence_metrics = {**(row.confidence_metrics or {}), KEY: records}
-    await session.flush()
 
 
 def verify_receipts(job):

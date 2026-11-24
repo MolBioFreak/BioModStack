@@ -142,7 +142,7 @@ def test_launch_request_posts_expected_payload_to_adapter(monkeypatch: pytest.Mo
         model_id="boltz2",
         mode="predict",
         params={"gpu_id": 1, "allow_retries": True},
-        output_dir="/mnt/BioModStack/bms_results/job-123",
+        output_dir="/data/bms/bms_results/job-123",
     )
 
     assert captured["url"] == "http://127.0.0.1:8001/api/workflow-adapter/launch"
@@ -153,7 +153,7 @@ def test_launch_request_posts_expected_payload_to_adapter(monkeypatch: pytest.Mo
         "model_id": "boltz2",
         "mode": "predict",
         "params": {"gpu_id": 1, "allow_retries": True},
-        "output_dir": "/mnt/BioModStack/bms_results/job-123",
+        "output_dir": "/data/bms/bms_results/job-123",
     }
     assert response == {"accepted": True, "job_id": "job-123", "launch_mode": "native-host"}
 
@@ -161,7 +161,7 @@ def test_launch_request_posts_expected_payload_to_adapter(monkeypatch: pytest.Mo
 
 def test_launch_request_translates_container_paths_for_host_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://127.0.0.1:8001")
-    monkeypatch.setenv("BMS_STATE_DIR", "/mnt/BioModStack")
+    monkeypatch.setenv("BMS_STATE_DIR", "/data/bms")
     monkeypatch.setenv("BMS_CONTAINER_STATE_PATH", "/var/lib/biomodstack")
     monkeypatch.setenv("BMS_INPUTS_CONTAINER_PATH", "/var/lib/biomodstack/inputs")
     monkeypatch.setenv("BMS_DB_CONTAINER_PATH", "/var/lib/biomodstack/biomodstack.db")
@@ -205,13 +205,13 @@ def test_launch_request_translates_container_paths_for_host_adapter(monkeypatch:
         "model_id": "boltz_cp_experimental",
         "mode": "design",
         "params": {
-            "input_path": "/mnt/BioModStack/inputs/smoke/input.yaml",
-            "db_path": "/mnt/BioModStack/biomodstack.db",
+            "input_path": "/data/bms/inputs/smoke/input.yaml",
+            "db_path": "/data/bms/biomodstack.db",
             "nested": {
-                "manifest": "/mnt/BioModStack/bms_results/job-123/manifest.json",
+                "manifest": "/data/bms/bms_results/job-123/manifest.json",
             },
         },
-        "output_dir": "/mnt/BioModStack/bms_results/job-123",
+        "output_dir": "/data/bms/bms_results/job-123",
     }
 
 

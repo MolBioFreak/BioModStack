@@ -1,0 +1,34 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "ppiflow",
+  "name": "PPIFlow",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/Mingchenchen/PPIFlow"
+  },
+  "notes": "Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "ppiflow.sif",
+      "def": "apptainer/ppiflow.def",
+      "approx_size_gb": 10,
+      "run_definition_test": false
+    }
+  ],
+  "weights": [
+    {
+      "id": "ppiflow",
+      "required": true,
+      "present_if": [
+        "ppiflow"
+      ],
+      "fetch": {
+        "type": "manual",
+        "instructions": "Download the PPIFlow checkpoints named in the PPIFlow README into <weights>/ppiflow (mounted at /opt/ppiflow/ckpt)."
+      }
+    }
+  ]
+}

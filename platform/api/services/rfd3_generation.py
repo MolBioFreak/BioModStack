@@ -271,7 +271,7 @@ def generation_result_contract(params: Mapping[str, Any]) -> dict[str, Any] | No
             or not params.get("rfd3_generation_request_path")):
         return None
     return {"contract_id": "rfd3_generation_v1", "aggregate_schema": RESULT_SCHEMA_V2,
-        "native_contract_authority": "platform/api/services/result_ingester.py:_ingest_rfd3_generation_manifest",
+        "native_contract_authority": "platform/api/services/rfd3_generation_results.py:_ingest_rfd3_generation_manifest",
         "completion_authority": "platform/api/services/rfd3_generation.py:validate_result_manifest"}
 
 

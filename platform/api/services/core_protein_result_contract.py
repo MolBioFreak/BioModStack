@@ -129,12 +129,35 @@ def _validate_esmfold2_inventory(root, candidates):
         raise CandidateIntegrityError('candidate_publication_mismatch', 'scientific publication inventory differs from manifest')
 
 
+def publication_manifests(receipt):
+    return receipt['manifests'] if 'manifests' in receipt else [receipt['manifest']]
+
+
+def candidate_manifest(receipt, name):
+    from pathlib import Path
+    if 'manifests' not in receipt:
+        return receipt['manifest']
+    directory = Path(receipt['candidates'][name]['metrics']['path']).parent
+    manifest, = [m for m in receipt['manifests'] if Path(m['path']).parent == directory]
+    return manifest
+
+
+def _revalidate_esmfold2_inventory(receipt):
+    from pathlib import Path
+    if 'manifests' not in receipt:
+        _validate_esmfold2_inventory(Path(receipt['manifest']['path']).parent, receipt['candidates'])
+        return
+    for manifest in receipt['manifests']:
+        directory = Path(manifest['path']).parent
+        _validate_esmfold2_inventory(directory, {i: a for i, a in receipt['candidates'].items()
+                                                if Path(a['metrics']['path']).parent == directory})
+
+
 def revalidate_prepared_publication(root, receipt):
     """Controlled path revalidation only: never reinterpret replacement payloads."""
     if receipt['summary'].get('stage_id') == 'esmfold2':
-        from pathlib import Path
-        _validate_esmfold2_inventory(Path(receipt['manifest']['path']).parent, receipt['candidates'])
-    evidence = [receipt['manifest']]
+        _revalidate_esmfold2_inventory(receipt)
+    evidence = list(publication_manifests(receipt))
     evidence.extend(r['artifact'] for r in receipt.get('execution_settings', []))
     evidence.extend(artifact for candidate in receipt['candidates'].values() for artifact in candidate.values())
     for expected in evidence:
@@ -143,7 +166,7 @@ def revalidate_prepared_publication(root, receipt):
             raise CandidateIntegrityError('candidate_replay_changed', 'prepared publication bytes changed')
 
 
-def prepare_esmfold2_publication(job, root, existing):
+def _prepare_esmfold2_task(job, root):
     """Bind the existing ESMFold2 producer samples manifest, before any row mutation."""
     import json
     manifest_artifact, content = _artifact(root, 'manifest.json')
@@ -185,7 +208,7 @@ def prepare_esmfold2_publication(job, root, existing):
             if payload['native_confidence'] != entry.get('native_confidence'):
                 raise CandidateIntegrityError('foreign_candidate_artifact', 'confidence differs from declared sample')
             artifacts['native_confidence'], snapshots['native_confidence'] = _artifact(root, payload['native_confidence'], candidate)
-        prepared[candidate] = {'block': block, 'payload': {**manifest, **entry, **payload},
+        prepared[candidate] = {'manifest_path': root / 'manifest.json', 'block': block, 'payload': {**manifest, **entry, **payload},
                                'structure_confidence': confidence,
                                'artifacts': artifacts, 'snapshots': snapshots}
     params = job.params or {}
@@ -202,6 +225,28 @@ def prepare_esmfold2_publication(job, root, existing):
     if 'core_protein_requested_params' in (job.provenance or {}):
         from services.core_protein_execution_settings import prepare_receipt
         receipt['execution_settings'] = [prepare_receipt(job, root, root / 'effective_settings.json')]
+    return prepared, receipt
+
+
+def prepare_esmfold2_publication(job, root, existing):
+    roots = sorted(root.glob('*/esmfold2_results')) if root.name == 'esmfold2' else []
+    if not roots:
+        prepared, receipt = _prepare_esmfold2_task(job, root)
+    else:
+        prepared, receipts = {}, []
+        for child in roots:
+            rows, part = _prepare_esmfold2_task(job, child)
+            if set(rows) & prepared.keys() or any(row['payload'].get('sequence_name') != child.parent.name for row in rows.values()):
+                raise CandidateIntegrityError('foreign_candidate_id', 'duplicate or foreign ESMFold2 task candidate')
+            prepared.update(rows)
+            receipts.append(part)
+        summary = {key: (value if key == 'stage_id' or value is None else
+                         sum(part['summary'][key] for part in receipts))
+                   for key, value in receipts[0]['summary'].items()}
+        receipt = dict(summary=summary, manifests=[p['manifest'] for p in receipts],
+                       candidates={i: row['artifacts'] for i, row in prepared.items()})
+        if 'execution_settings' in receipts[0]:
+            receipt['execution_settings'] = [item for part in receipts for item in part['execution_settings']]
     prior = (job.provenance or {}).get('core_protein_candidate_publication')
     if prior is not None and prior != receipt:
         raise CandidateIntegrityError('candidate_replay_changed', 'candidate replay evidence changed')
@@ -262,7 +307,7 @@ def validate_persisted_publication(job, rows, root, *, observations=None):
         raise CandidateIntegrityError('missing_candidate_declaration', 'marked generic result lacks candidate publication authority')
     expected = receipt['candidates']
     if receipt['summary'].get('stage_id') == 'esmfold2':
-        _validate_esmfold2_inventory(Path(receipt['manifest']['path']).parent, expected)
+        _revalidate_esmfold2_inventory(receipt)
     actual = _ids([row.name for row in rows], 'persisted candidates')
     if actual != set(expected):
         raise CandidateIntegrityError('candidate_publication_mismatch', 'persisted identities differ from expected publication')
@@ -275,8 +320,7 @@ def validate_persisted_publication(job, rows, root, *, observations=None):
             current = observed(evidence)
             if current != evidence:
                 raise CandidateIntegrityError('candidate_replay_changed', 'candidate artifact bytes changed')
-    current = observed(receipt['manifest'])
-    if current != receipt['manifest']:
+    if any(observed(m) != m for m in publication_manifests(receipt)):
         raise CandidateIntegrityError('candidate_replay_changed', 'producer manifest changed')
     return receipt['summary']
 
@@ -409,7 +453,7 @@ def verify_addressed_design_artifacts(job, row, root, *, verify_file):
         structure = native.get('structure')
         if not isinstance(structure, dict) or structure.get('path') != row.pdb_path or structure.get('sha256') != selected['sha256']:
             raise CandidateIntegrityError('candidate_publication_mismatch', 'selected structure differs from native authority')
-        evidence = list(native.values()) + [publication.get('manifest')]
+        evidence = list(native.values()) + [candidate_manifest(publication, row.name)]
         evidence.extend(record['artifact'] for record in publication.get('execution_settings', []))
     seen = set()
     for artifact in evidence:

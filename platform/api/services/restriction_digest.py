@@ -18,6 +18,7 @@ from services.restriction_analysis import (
     reverse_complement,
 )
 from services.restriction_catalog import CatalogView, RestrictionRecord
+from services.restriction_digest_substrate import DuplexSubstrate, SubstrateEnd, classify_occurrences
 
 DIGEST_ALGORITHM_ID = "bms-restriction-duplex-digest"
 DIGEST_ALGORITHM_VERSION = "1.1.0"
@@ -78,6 +79,10 @@ class DigestEnd(StrictModel):
     contributing_enzyme_ids: tuple[str, ...]
     contributors: tuple[CleavageContributor, ...]
     contributor_group_id: str | None
+    # Omitted while unknown, so results written before this field keep their exact bytes.
+    five_prime_phosphate: Literal["unknown", "phosphorylated", "unphosphorylated"] = Field(
+        default="unknown", exclude_if=lambda value: value == "unknown",
+    )
 
 
 class PhysicalCleavage(StrictModel):
@@ -173,6 +178,12 @@ class DigestCatalogReceipt(StrictModel):
     digest_enabled: Literal[True]
 
 
+class NotCuttableSite(StrictModel):
+    enzyme_id: str
+    site_start: int
+    reason: str
+
+
 class DigestSimulation(StrictModel):
     schema_: Literal["bms.molbio.restriction-digest-simulation.v1"] = Field(alias="schema")
     cleavage_state: Literal["uncut", "linearized", "fragmented"]
@@ -195,6 +206,9 @@ class DigestSimulation(StrictModel):
     fragments: tuple[DigestFragment, ...]
     warnings: tuple[str, ...]
     limitations: tuple[str, ...]
+    # Omitted while empty so ordinary full digests keep their exact bytes.
+    excluded_cleavage_group_ids: tuple[str, ...] = Field(default=(), exclude_if=lambda value: not value)
+    not_cuttable: tuple[NotCuttableSite, ...] = Field(default=(), exclude_if=lambda value: not value)
     simulation_sha256: str | None = None
 
     def canonical_unsigned_bytes(self) -> bytes:
@@ -249,6 +263,25 @@ def _no_cut_circular(side: Literal["left", "right"]) -> DigestEnd:
     )
 
 
+def _inherited_end(
+    side: Literal["left", "right"], boundary: int, end: SubstrateEnd | None,
+) -> DigestEnd:
+    """A terminus kept from the parent fragment: natural, or its retained overhang."""
+    if end is None:
+        return _natural(side, boundary)
+    top_strand = (side == "left") == (end.kind == "five_prime_overhang")
+    other = boundary + end.offset
+    return DigestEnd(
+        kind=end.kind, enzyme_created=False, side=side,
+        protruding_strand="top" if top_strand else "bottom",
+        overhang_sequence_5to3=end.overhang_5to3, length_nt=len(end.overhang_5to3),
+        top_boundary=boundary, bottom_boundary=other,
+        top_boundary_unwrapped=boundary, bottom_boundary_unwrapped=other,
+        top_winding=0, bottom_winding=0, contributing_enzyme_ids=(), contributors=(),
+        contributor_group_id=None, five_prime_phosphate=end.phosphate,
+    )
+
+
 def _cut_end(
     sequence: str,
     topology: str,
@@ -283,12 +316,18 @@ def _cut_end(
     )
 
 
-def _physical_cuts(analysis, sequence_length: int, topology: str) -> tuple[PhysicalCleavage, ...]:
+def _physical_cuts(
+    analysis, sequence_length: int, topology: str,
+    excluded_group_ids: frozenset[str] = frozenset(),
+    skipped_occurrence_ids: frozenset[str] = frozenset(),
+) -> tuple[PhysicalCleavage, ...]:
     event_by_group: dict[str, list[Any]] = {}
     definite_occurrences = [row for row in analysis.occurrences if row.certainty == "definite"]
     for occurrence in definite_occurrences:
+        if skipped_occurrence_ids and occurrence.occurrence_id in skipped_occurrence_ids:
+            continue
         for event in occurrence.double_strand_events:
-            if event.status == "complete":
+            if event.status == "complete" and event.contributor_group_id not in excluded_group_ids:
                 event_by_group.setdefault(event.contributor_group_id, []).append(event)
     raw: list[tuple[int, int, int, int, str, tuple[Any, ...]]] = []
     for group_id, events in event_by_group.items():
@@ -443,14 +482,22 @@ def _fragment(
     )
 
 
-def _construct_fragments(sequence: str, topology: str, cuts: tuple[PhysicalCleavage, ...]) -> tuple[DigestFragment, ...]:
+def _construct_fragments(
+    sequence: str, topology: str, cuts: tuple[PhysicalCleavage, ...],
+    substrate: DuplexSubstrate | None = None,
+) -> tuple[DigestFragment, ...]:
     length = len(sequence)
+    first_left = substrate.left if substrate else None
+    last_right = substrate.right if substrate else None
+    bottom_first = substrate.bottom_start if substrate else 0
+    bottom_last = substrate.bottom_end if substrate else length
     if not cuts:
         if topology == "linear":
             return (_fragment(
                 sequence=sequence, source_topology="linear", index=0,
-                start_top=0, end_top=length, start_bottom=0, end_bottom=length,
-                left=_natural("left", 0), right=_natural("right", length),
+                start_top=0, end_top=length, start_bottom=bottom_first, end_bottom=bottom_last,
+                left=_inherited_end("left", 0, first_left),
+                right=_inherited_end("right", length, last_right),
                 lineage=(), enzyme_ids=(), topology="linear",
             ),)
         end = _no_cut_circular("right")
@@ -469,11 +516,11 @@ def _construct_fragments(sequence: str, topology: str, cuts: tuple[PhysicalCleav
         boundaries: list[PhysicalCleavage | None] = [None, *cuts, None]
         for index, (left_cut, right_cut) in enumerate(zip(boundaries, boundaries[1:])):
             start_top = 0 if left_cut is None else left_cut.top_boundary_unwrapped
-            start_bottom = 0 if left_cut is None else left_cut.bottom_boundary_unwrapped
+            start_bottom = bottom_first if left_cut is None else left_cut.bottom_boundary_unwrapped
             end_top = length if right_cut is None else right_cut.top_boundary_unwrapped
-            end_bottom = length if right_cut is None else right_cut.bottom_boundary_unwrapped
-            left_end = _natural("left", 0) if left_cut is None else _cut_end(sequence, topology, left_cut, "left")
-            right_end = _natural("right", length) if right_cut is None else _cut_end(sequence, topology, right_cut, "right")
+            end_bottom = bottom_last if right_cut is None else right_cut.bottom_boundary_unwrapped
+            left_end = _inherited_end("left", 0, first_left) if left_cut is None else _cut_end(sequence, topology, left_cut, "left")
+            right_end = _inherited_end("right", length, last_right) if right_cut is None else _cut_end(sequence, topology, right_cut, "right")
             adjacent = tuple(cut for cut in (left_cut, right_cut) if cut is not None)
             fragments.append(_fragment(
                 sequence=sequence, source_topology=topology, index=index,
@@ -519,6 +566,8 @@ def simulate_digest_canonical(
     source_receipt: dict[str, Any],
     catalog_receipt: dict[str, Any],
     persisted_identity: bool = True,
+    excluded_cleavage_group_ids: Sequence[str] = (),
+    substrate: DuplexSubstrate | None = None,
 ) -> tuple[DigestSimulation, bytes]:
     normalized = normalize_dna(sequence)
     return _simulate_normalized_digest_canonical(
@@ -526,6 +575,7 @@ def simulate_digest_canonical(
         topology=topology, catalog=catalog, records=records,
         selected_enzyme_ids=selected_enzyme_ids, source_receipt=source_receipt,
         catalog_receipt=catalog_receipt, persisted_identity=persisted_identity,
+        excluded_cleavage_group_ids=excluded_cleavage_group_ids, substrate=substrate,
     )
 
 
@@ -535,6 +585,8 @@ def _simulate_normalized_digest_canonical(
     selected_enzyme_ids: Sequence[str], source_receipt: dict[str, Any],
     catalog_receipt: dict[str, Any],
     persisted_identity: bool = True,
+    excluded_cleavage_group_ids: Sequence[str] = (),
+    substrate: DuplexSubstrate | None = None,
 ) -> tuple[DigestSimulation, bytes]:
     """Internal pipeline using the source boundary's canonical DNA and digest."""
     selected_ids = tuple(selected_enzyme_ids)
@@ -558,13 +610,19 @@ def _simulate_normalized_digest_canonical(
         )
     if any(row.certainty == "possible" for row in analysis.occurrences):
         raise DigestGeometryError("possible_site_not_digestible", "selected enzyme has a possible-only recognition site")
+    # On a retained sticky fragment, sites that touch an unpaired overhang are reported, not cut.
+    skipped, not_cuttable = (
+        classify_occurrences(substrate, analysis.occurrences) if substrate else (frozenset(), [])
+    )
     if topology == "linear" and any(
         row.certainty == "definite" and event.status == "geometry_out_of_bounds"
-        for row in analysis.occurrences for event in row.double_strand_events
+        for row in analysis.occurrences if row.occurrence_id not in skipped
+        for event in row.double_strand_events
     ):
         raise DigestGeometryError("linear_cut_out_of_bounds", "selected enzyme has incomplete off-molecule DSB geometry")
-    cuts = _physical_cuts(analysis, len(sequence), topology)
-    fragments = _construct_fragments(sequence, topology, cuts)
+    excluded = frozenset(excluded_cleavage_group_ids)
+    cuts = _physical_cuts(analysis, len(sequence), topology, excluded, skipped)
+    fragments = _construct_fragments(sequence, topology, cuts, substrate)
     state = "uncut" if not cuts else "linearized" if topology == "circular" and len(cuts) == 1 else "fragmented"
     policy = resource_policy_receipt()
     policy_sha = request_sha = None
@@ -581,6 +639,8 @@ def _simulate_normalized_digest_canonical(
             "resource_policy_sha256": policy_sha,
             "activity_assessment": "not_evaluated",
         }
+        if excluded:
+            request_authority["excluded_cleavage_group_ids"] = sorted(excluded)
         request_sha = hashlib.sha256(rfc8785.dumps(request_authority)).hexdigest()
     occurrences = tuple(row for row in analysis.occurrences if row.certainty == "definite")
     payload = {
@@ -596,6 +656,7 @@ def _simulate_normalized_digest_canonical(
         "resource_policy": policy, "resource_policy_sha256": policy_sha,
         "request_sha256": request_sha, "occurrences": occurrences,
         "cleavages": cuts, "fragments": fragments,
+        "excluded_cleavage_group_ids": tuple(sorted(excluded)), "not_cuttable": not_cuttable,
         "warnings": tuple(analysis.warnings) + tuple(
             f"{enzyme}: requires methylated adenine at its GATC site; ordinary unmethylated PCR products are not substrates."
             for enzyme in selected_ids if enzyme in {"DpnI", "MalI"}
@@ -625,6 +686,8 @@ def simulate_digest(
     source_receipt: dict[str, Any],
     catalog_receipt: dict[str, Any],
     persisted_identity: bool = False,
+    excluded_cleavage_group_ids: Sequence[str] = (),
+    substrate: DuplexSubstrate | None = None,
 ) -> DigestSimulation:
     result, _canonical = simulate_digest_canonical(
         sequence=sequence,
@@ -634,6 +697,7 @@ def simulate_digest(
         selected_enzyme_ids=selected_enzyme_ids,
         source_receipt=source_receipt,
         catalog_receipt=catalog_receipt, persisted_identity=persisted_identity,
+        excluded_cleavage_group_ids=excluded_cleavage_group_ids, substrate=substrate,
     )
     return result
 

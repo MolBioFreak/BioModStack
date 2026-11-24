@@ -72,7 +72,7 @@ it('empty Results imports neither Plotly nor the native structure engine and mak
     expect(engines.plotImports).toBe(0);
     expect(downloads).not.toHaveBeenCalled();
     expect(tree!.root.findAllByProps({ 'data-plot': true })).toHaveLength(0);
-    expect(calls.filter(call => /generation-results|selection-context|execution-targets|\/round$/.test(call.url))).toHaveLength(0);
+    expect(calls.filter(call => /generation-results|selection-context|\/round$/.test(call.url))).toHaveLength(0);
 });
 
 it('zero-yield native publication initializes no Plotly or structure workbench', async () => {

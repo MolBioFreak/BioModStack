@@ -9,6 +9,7 @@ import { BioXpWellPipettingPanel } from '../../src/components/BioXpWellPipetting
 import { api } from '../../src/lib/api';
 import type { BioXpDeckDestinationV1 } from '../../src/lib/bioxpClient';
 import { manualPipettingDocument, type BioXpManualStep } from '../../src/lib/bioxpManualPipetting';
+import holderCatalog from '../fixtures/bioxp_bulk_holder_destinations.json';
 
 let host: HTMLDivElement, root: Root, client: QueryClient;
 let requests: any[], job: any, delay: (() => Promise<void>) | null, denial: boolean;
@@ -448,4 +449,11 @@ it('rejects schema-invalid diagnostic inputs without refusing later valid source
     await change('Diagnostic speed', '1'); await change('Diagnostic volume (µL)', '0'); await click('Pipette diagnostics now'); expect(requests).toHaveLength(1);
     await change('Diagnostic action', 'plunger_up'); await change('Diagnostic Z steps', '-1'); await click('Pipette diagnostics now'); expect(requests).toHaveLength(1);
     await click('Load selected tips now'); expect(requests).toHaveLength(2);
+});
+
+it('keeps Bulk reagent holder XY targets out of the station-number selector', async () => {
+    await mount(77, [...destinations, ...structuredClone(holderCatalog.destination_options) as unknown as BioXpDeckDestinationV1[]]);
+    await category('Move & pipette');
+    const options = [...host.querySelectorAll('[aria-label="Station"] option')].map(o => [(o as HTMLOptionElement).value, o.textContent]);
+    expect(options).toEqual([['', 'Select a station'], ['4', 'Source supplied block'], ['2', 'Destination supplied block'], ['16', 'Bulk reagent holder']]);
 });

@@ -1042,8 +1042,8 @@ def test_assembly_schemas_and_golden_gate_reject_unsupported_or_ambiguous_ends()
         AssemblyFragment(
             id="junction-two",
             name="junction-two",
-            sequence="CCTTTT",
-            left_end=FragmentEnd(type="sticky_5", overhang="GGGG"),
+            sequence="CCCCTTTT",
+            left_end=FragmentEnd(type="sticky_5", overhang="CCCC"),
             right_end=FragmentEnd(type="sticky_5", overhang="TTTT"),
         ),
     ]

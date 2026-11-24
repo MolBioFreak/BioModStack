@@ -761,8 +761,8 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         await renderWorkbench({ viewerSession: viewerSession({ selected_read_id: 'read-42' }) });
         await waitUntil(() => expect(container.textContent).toContain('Ideal comparison'));
         await act(async () => { button('Ideal comparison').click(); await Promise.resolve(); });
-        expect(container.textContent).toContain('Profile-fixed values');
-        expect(container.textContent).toContain('Real acquired signal');
+        expect(container.textContent).toContain('Model constants');
+        expect(container.textContent).toContain('Preview, then Generate and compare, to draw this read above its ideal trace.');
     });
 
     it('registers one path-opaque external move BAM candidate to the exact run tuple', async () => {
@@ -2534,6 +2534,9 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(container.textContent).toContain('calibration_evidence_ready');
         expect(container.textContent).toContain(calibrationArtifact.calibration_artifact_id);
         expect(container.textContent).toContain(calibrationArtifact.artifact_sha256);
+        // Ten reads were available against 100 requested; the page says what was used.
+        expect(container.querySelector('[data-testid="ont-signal-calibration-read-count"]')!.textContent)
+            .toBe('Calibrated on 10 reads (100 requested; the run has 10 with signal and moves).');
         expect(container.textContent).toContain('digest_ordered_intersection');
         expect(container.textContent).toContain('squigualiser@sha256:fixture');
 
@@ -2698,7 +2701,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         await act(async () => button('Locate read in IGV').click());
         expect(onNavigateIgv).toHaveBeenCalledWith('chr7', 510, 530, 'selected raw-signal read');
 
-        await act(async () => button('Open mapped locus in IGV').click());
+        await act(async () => button('Show region in IGV').click());
         expect(onNavigateIgv).toHaveBeenCalledWith('chr7', 500, 560, 'signal view');
 
         await act(async () => {
@@ -2735,6 +2738,70 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
     });
 
+    it('keeps the typed region when the session is saved, and follows IGV only when IGV moves', async () => {
+        const persisted = viewerSession({ selected_read_id: 'read-42', contig: 'chr7', locus_start: 1, locus_end: 5570 });
+        await renderWorkbench({ viewerSession: persisted, currentLocus: { contig: 'chr7', start: 1, end: 5570 } });
+        await waitUntil(() => expect(input('Start').value).toBe('1'));
+        const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+        await act(async () => {
+            setValue.call(input('Start'), '40'); input('Start').dispatchEvent(new Event('input', { bubbles: true }));
+            setValue.call(input('End'), '239'); input('End').dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        const saved = { ...persisted, locus_start: 40, locus_end: 239, revision: 8 };
+        apiMocks.updateViewerSession.mockResolvedValue(saved);
+        await act(async () => { button('Save session').click(); await Promise.resolve(); });
+        await settlePromises();
+        expect(apiMocks.updateViewerSession).toHaveBeenCalledWith('viewer-session-1', expect.objectContaining({ locus_start: 40, locus_end: 239 }));
+        // The parent hands back the saved session while IGV still shows the whole plasmid.
+        await renderWorkbench({ viewerSession: saved, currentLocus: { contig: 'chr7', start: 1, end: 5570 } });
+        await settlePromises();
+        expect([input('Start').value, input('End').value]).toEqual(['40', '239']);
+        await renderWorkbench({ viewerSession: saved, currentLocus: { contig: 'chr7', start: 500, end: 560 } });
+        await waitUntil(() => expect([input('Start').value, input('End').value]).toEqual(['500', '560']));
+    });
+
+    it('keeps IDs, digests and status codes inside Technical details at the bottom', async () => {
+        await renderWorkbench({ viewerSession: viewerSession({ selected_read_id: 'read-42' }) });
+        await waitUntil(() => expect(container.querySelector('details[data-signal-diagnostics]')).not.toBeNull());
+        const technical = container.querySelector('details[data-signal-diagnostics]') as HTMLDetailsElement;
+        expect(technical.open).toBe(false);
+        expect(technical.querySelector('summary')!.textContent).toBe('Technical details');
+        // It is the last block of the panel, after the views.
+        const scroll = container.querySelector('[data-signal-workbench-scroll]')!;
+        expect(scroll.lastElementChild).toBe(technical);
+        const outside = Array.from(scroll.children).filter((child) => child !== technical).map((child) => child.textContent).join(' ');
+        expect(outside).not.toContain('blow5-indexed-1');
+        expect(outside).not.toContain(moveSource.move_source_id);
+        expect(outside).not.toMatch(/[0-9a-f]{64}/);
+        await act(async () => { button('Ideal comparison').click(); await Promise.resolve(); });
+        const comparison = container.querySelector('[data-testid="ont-ideal-comparison"]')!;
+        const visible = Array.from(comparison.children).filter((child) => child.tagName !== 'DETAILS').map((child) => child.textContent).join(' ');
+        expect(visible).not.toContain('reference-revision-7');
+        expect(visible).not.toContain('run-1 · generation');
+    });
+
+    it('opens IGV on the saved region of a reopened session', async () => {
+        await renderWorkbench({ viewerSession: viewerSession({ selected_read_id: 'read-42', contig: 'chr7', locus_start: 401, locus_end: 460 }) });
+        await waitUntil(() => expect(onNavigateIgv).toHaveBeenCalledWith('chr7', 401, 460, 'saved signal region'));
+        // IGV echoing that move back (padded) does not overwrite the panel's region.
+        await renderWorkbench({ viewerSession: viewerSession({ selected_read_id: 'read-42', contig: 'chr7', locus_start: 401, locus_end: 460 }), currentLocus: { contig: 'chr7', start: 395, end: 466 } });
+        await settlePromises();
+        expect([input('Start').value, input('End').value]).toEqual(['401', '460']);
+        expect(onNavigateIgv).toHaveBeenCalledTimes(1);
+    });
+
+    it('offers one plain button to prepare squiggle views outside Diagnostics', async () => {
+        apiMocks.fetchCapabilities.mockResolvedValue(capabilities({ signal_to_read_mapping_job_id: null, signal_to_reference_mapping_job_id: null, calibration_job_id: null }));
+        await renderWorkbench();
+        await waitUntil(() => expect(container.querySelector('[data-testid="ont-squiggle-prepare"]')?.textContent).toContain('Squiggle views are not prepared for this file yet.'));
+        const prepare = container.querySelector('[data-testid="ont-squiggle-prepare"] button') as HTMLButtonElement;
+        expect(prepare.textContent).toBe('Prepare squiggle views');
+        expect(prepare.closest('details')).toBeNull();
+        await act(async () => { prepare.click(); await Promise.resolve(); });
+        await settlePromises();
+        expect(apiMocks.createCalibration).toHaveBeenCalledWith('run-1', 3, expect.objectContaining({ sample_count: 100 }));
+    });
+
     it('clears a persisted view artifact when switching viewer sessions within the same dataset authority', async () => {
         const sessionA = viewerSession({
             viewer_session_id: 'viewer-session-a',
@@ -2757,7 +2824,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         await settlePromises();
 
         expect(container.querySelector('iframe')).toBeNull();
-        expect(container.textContent).toContain('Open Diagnostics to prepare an aligned signal view.');
+        expect(container.textContent).toMatch(/Prepare squiggle views above to draw this view\.|Pick a read, then press Render reference\./);
         expect(apiMocks.fetchView).toHaveBeenCalledTimes(1);
         expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:bounded-signal-view');
     });
@@ -2850,7 +2917,8 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         vi.useFakeTimers();
         await renderWorkbench({ viewerSession: persisted });
         await settlePromises();
-        expect(container.textContent).toContain('requested: squigualiser_view_requested');
+        expect(container.querySelector('[data-view-state="requested"]')?.getAttribute('title')).toBe('squigualiser_view_requested');
+        expect(container.querySelector('[data-view-state]')?.textContent).toBe('Waiting to start');
         await act(async () => {
             await vi.advanceTimersByTimeAsync(1_500);
         });

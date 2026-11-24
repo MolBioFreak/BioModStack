@@ -11,6 +11,7 @@ import retainedFailure from '../fixtures/bioxp_retained_deck_failure_followup.js
 import retainedWasteFailure from '../fixtures/bioxp_retained_waste_failure_followup.json';
 import type { BioXpOperatorUpdates } from '../../src/lib/bioxpClient';
 const connection = vi.hoisted(() => ({ generation: 7, active: true, reachable: true }));
+vi.mock('../../src/components/BioXpThermalControls', () => ({ BioXpThermalControls: () => null }));
 vi.mock('../../src/lib/bioxpClient', async original => ({
     ...await original<typeof import('../../src/lib/bioxpClient')>(),
     useBioXpStatus: () => ({ data: { connection: { active: connection.active, configured: true, generation: connection.generation, reachable: connection.reachable, runtime_ready: true }, mutation_access: { enabled: true } }, isError: false }),
@@ -238,7 +239,7 @@ it('retains one real camera panel and its controls over subtab changes and hides
     const capture = [...host.querySelectorAll('button')].find(b => b.textContent?.includes('Capture'))!;
     expect(capture).toBeDefined();
     const tabs = [...host.querySelectorAll('[role="tab"]')];
-    await click(tabs.find(t => t.textContent === 'Robot controls')!); await click(tabs.find(t => t.textContent === 'Live deck movement')!);
+    await click(tabs.find(t => t.textContent === 'Robot controls')!); await click(tabs.find(t => t.textContent === 'Live deck')!);
     expect([...host.querySelectorAll('button')].filter(b => b.textContent?.includes('Capture'))).toEqual([capture]);
     const reads = vi.mocked(api.get).mock.calls.length;
     await act(async () => { Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' }); document.dispatchEvent(new Event('visibilitychange')); });

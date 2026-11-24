@@ -27,7 +27,9 @@ const button = (label: string, owner: ParentNode = live()) => {
     const el = [...owner.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === label);
     expect(el, label).toBeTruthy(); return el!;
 };
-const click = async (el: Element) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); }); await advance(); };
+const moveHere = () => [...document.querySelectorAll<HTMLButtonElement>('.bld-popup button')].find(b => b.textContent?.trim() === 'Move here');
+// A well click opens the well menu; its Move here button sends the well intent.
+const click = async (el: Element) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); }); const go = el.hasAttribute('data-well') ? moveHere() : undefined; if (go) await act(async () => go.click()); await advance(); };
 const well = (station: string, address: string) => live().querySelector(`[data-station="${station}"][data-well="${address}"]`)!;
 const move = (target: string) => live().querySelector(`svg g[data-move-to="${target}"]`)!;
 const status = () => live().querySelector('[data-testid="deck-lane-status"]')?.textContent;
@@ -142,7 +144,7 @@ it('Fast lane notices robot completion without an update-feed notice and sends t
     expect(status()).toBe('Active: Output chiller · A12 · Queued: Output chiller · H12');
     // The robot finishes; nothing refetches explicitly and the update feed stays silent.
     for (const [id, row] of receipts) receipts.set(id, { ...row, status: 'completed', terminal: true, completion_class: 'completed' });
-    await advance(600); await advance(50);
+    await advance(300); await advance(50);
     expect(writes()).toHaveLength(2);
     expect(writes()[1].body.inputs).toEqual({ targets: [{ location_id: 1, well: 'H12' }] });
 });
@@ -151,7 +153,7 @@ it('Fast lane station clicks carry the current camera-offset choice', async () =
     await mount();
     const select = [...live().querySelectorAll('label')].find(el => el.textContent?.trim().startsWith('Robot destination'))!.querySelector('select')!;
     await act(async () => { select.value = 'LOC_TC'; select.dispatchEvent(new Event('change', { bubbles: true })); }); await advance();
-    await click(live().querySelector<HTMLInputElement>('input[type="checkbox"]')!);
+    await click(live().querySelector<HTMLInputElement>('[aria-label="Move head"] input[type="checkbox"]')!);
     await click(button('Fast lane'));
     await click(move('LOC_RC')); await click(move('LOC_PARK'));
     await release(); await finishAll();

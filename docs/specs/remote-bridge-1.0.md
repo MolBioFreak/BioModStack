@@ -6,7 +6,7 @@
 
 **Change control:** preserve scientific settings, canonical runners, required analysis and provenance. Changes to scientific grouping, requiredness, partial-failure policy or accepted model combinations must be explicitly reviewed, not hidden within orchestration cleanup. No production configuration or scientific data is changed by finalizing this document.
 
-**Baseline reviewed:** `5964d755740458b866ef1ef293a420980245904d`, `wt-remote-worker-complete`. This is a source-review baseline, not the live service revision. Evidence: `/home/dalab/bms-remote-bridge-1.0-review.md` and its detailed reports.
+**Baseline reviewed:** `5964d755740458b866ef1ef293a420980245904d`, `wt-remote-worker-complete`. This is a source-review baseline, not the live service revision. Evidence: `bms-remote-bridge-1.0-review.md` (kept outside the repository) and its detailed reports.
 
 ## 1. Product objective
 
@@ -190,7 +190,7 @@ Required evidence matrix covers every advertised workflow/mode/selected-stage co
 
 ## 13. Workflow adaptations and safeguards
 
-The shared-runtime approach and modernization of legacy child workflows are directionally approved. Source evidence is recorded in `/home/dalab/bms-1.0-workflow-change-proposals.md`; its older approval labels are historical and superseded by this specification.
+The shared-runtime approach and modernization of legacy child workflows are directionally approved. Source evidence is recorded in `bms-1.0-workflow-change-proposals.md` (kept outside the repository); its older approval labels are historical and superseded by this specification.
 
 - **Shared FrustraMPNN:** converge local/remote submission, preparation, candidate ordering/grouping, joins, receipts and artifact resolution. Reuse canonical inference. Establish one scientifically authoritative grouping contract, with any intentional change reviewed explicitly.
 - **Protein design:** include BoltzGen child orchestration and direct database-ingestion removal from the worker computation path, not only FrustraMPNN.

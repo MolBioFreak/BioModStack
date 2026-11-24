@@ -93,8 +93,13 @@ async function mount(values: Record<string, unknown> = {}) {
 }
 async function open() {
     const detail = document.querySelector<HTMLDetailsElement>('[data-molecular-construction-panel]')!;
-    expect(detail).toBeTruthy();
-    await act(async () => { detail.open = true; detail.dispatchEvent(new Event('toggle')); });
+    if (detail) await act(async () => { detail.open = true; detail.dispatchEvent(new Event('toggle')); });
+    else {
+        await wait(() => expect(document.querySelector('[aria-label="AtomWorks entry workspace"]')).not.toBeNull());
+        await click('Starting points');
+        await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Start from a sequence"]')!.click());
+        if (control('Molecule')?.value === 'protein') await edit('Molecule', 'dna');
+    }
     await wait(() => expect(document.querySelector('[aria-label="Molecular construction workbench"]')).not.toBeNull());
 }
 async function click(text: string) {
@@ -120,6 +125,25 @@ it.each(['rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa'])('shared op
     expect(JSON.stringify(latest.native_job_request)).toBe(before);
     expect(latest).not.toHaveProperty('molecular_construction');
     expect(calls.filter(c => c.method !== 'get')).toEqual([]);
+});
+it.each(['rfd3', 'disco', 'laproteina', 'complexa'])('opens the common RFD4 entry explicitly from %s and restores its exact request', async generator => {
+    await mount({ generator, complexa_request: { task: 'unconditional', task_name: 'retained' } });
+    const before = JSON.stringify(latest.native_job_request);
+    expect(control('Engine')?.value).toBe(generator);
+    expect(document.querySelector('[aria-label="AtomWorks entry workspace"]')).toBeNull();
+    await click('RFD4-Proteina starting points');
+    await wait(() => expect(document.querySelector('[aria-label="New chains"]')).not.toBeNull());
+    expect(control('Engine')?.value).toBe('rfd4_proteina');
+    await edit('Engine', generator);
+    expect(latest.native_job_request).toStrictEqual(JSON.parse(before));
+    expect(calls.filter(c => c.method !== 'get')).toEqual([]);
+});
+it('reopens starting points from Optional operations without replacing the current RFD4 input', async () => {
+    await mount(); const before = JSON.stringify(latest.native_job_request);
+    await click('Optional operations'); await click('RFD4-Proteina starting points');
+    await wait(() => expect(document.querySelector('[aria-label="New chains"]')?.closest('[hidden]')).toBeNull());
+    await click('Return to task');
+    expect(JSON.stringify(latest.native_job_request)).toBe(before);
 });
 it.each(['dna_conditioned', 'rna_conditioned'])('untouched DISCO %s shorthand retains exact request and historical complement behavior', async design_task => {
     await mount({ generator: 'disco', design_task, disco_na_sequence: design_task === 'dna_conditioned' ? 'ACGT' : 'ACGU' });

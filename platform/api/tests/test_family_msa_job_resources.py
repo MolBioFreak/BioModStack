@@ -4,6 +4,7 @@ from fastapi import BackgroundTasks, Request, Response
 from database import Job
 from schemas import JobCreate
 from routers import jobs
+from services import job_submission
 from services.gpu_orchestrator import estimate_vram
 from tests.test_core_protein_scientific_admission import admission
 
@@ -14,7 +15,7 @@ async def test_create_and_resubmit_cpu_job(admission, molecule, model):
     payload = {'roster': {'molecule': molecule, 'rows': [
         {'row_id': 'r1', 'header': 'one', 'sequence': 'ACGT'},
         {'row_id': 'r2', 'header': 'two', 'sequence': 'ACGT'}]}, 'settings': {'threads': 2}}
-    created = await jobs._create_job(JobCreate(name='scratch alignment', model_id=model,
+    created = await job_submission._create_job(JobCreate(name='scratch alignment', model_id=model,
         mode='family_msa', params=payload, pinned_gpu=1), BackgroundTasks(), admission)
     row = await admission.get(Job, created.id)
     assert row.status == 'queued' and row.vram_estimate_mb == 0 and row.pinned_gpu is None
@@ -38,7 +39,7 @@ async def test_create_and_resubmit_cpu_job(admission, molecule, model):
 async def test_mixed_case_family_identity_is_canonical(admission):
     payload = {'roster': {'molecule': 'dna', 'rows': [
         {'row_id': 'r1', 'header': 'one', 'sequence': 'ACGT'}]}, 'settings': {}}
-    created = await jobs._create_job(JobCreate(name='canonical', model_id=' FAMILY_MSA_NUCLEIC ',
+    created = await job_submission._create_job(JobCreate(name='canonical', model_id=' FAMILY_MSA_NUCLEIC ',
         mode=' FAMILY_MSA ', params=payload), BackgroundTasks(), admission)
     row = await admission.get(Job, created.id)
     assert (row.model_id, row.mode) == ('family_msa_nucleic', 'family_msa')

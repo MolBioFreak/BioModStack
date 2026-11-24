@@ -5,6 +5,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from routers import models, jobs
+from services import job_requests
 from schemas import JobCreate
 from services.nextflow import compile_nextflow_invocation, resolve_nextflow_entrypoint
 from component_runtime import SourceIdentity
@@ -79,7 +80,7 @@ def test_rfd4_real_normalization_pure_compile_and_materialization(tmp_path, pare
     mode = 'de_novo_design' if parent else 'generate'
     params = {'rfd4_request': rfd4(), **({'generator': 'rfd4_proteina'} if parent else {})}
     request = JobCreate(name='native', model_id=model, mode=mode, params=params, execution_target_id=None)
-    normalized = jobs.normalize_job_request(request)
+    normalized = job_requests.normalize_job_request(request)
     output = tmp_path / 'not-allocated'
     invocation = compile_nextflow_invocation(model, mode, normalized.params, str(output), job_id='fixture',
         source_identity=SourceIdentity('a' * 40, 'b' * 40), _preview_only=True)

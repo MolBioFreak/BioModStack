@@ -17,6 +17,8 @@ interface SequenceHeaderProps {
     onFocusViewer?: () => void;
     onExportToProject?: () => void;
     projectExportDisabled?: boolean;
+    onExportBranch?: () => Promise<void>;
+    branchExportDisabled?: boolean;
     onUndo?: () => void;
     onRedo?: () => void;
     onAutoAnnotate?: () => void;
@@ -53,6 +55,8 @@ export function SequenceHeader({
     onFocusViewer,
     onExportToProject,
     projectExportDisabled,
+    onExportBranch,
+    branchExportDisabled,
     onUndo,
     onRedo,
     onAutoAnnotate,
@@ -259,7 +263,7 @@ export function SequenceHeader({
                     title="Save the sequence before attaching its exact revision">Add to Project</button>}
 
                 {/* Export */}
-                <ExportDropdown sequenceData={sequenceData} historyJournal={historyJournal} onExportToProject={onExportToProject} projectExportDisabled={projectExportDisabled} />
+                <ExportDropdown sequenceData={sequenceData} historyJournal={historyJournal} onExportToProject={onExportToProject} projectExportDisabled={projectExportDisabled} onExportBranch={onExportBranch} branchExportDisabled={branchExportDisabled} />
 
                 {/* Save */}
                 {onSave && (

@@ -1,0 +1,54 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "boltzgen",
+  "name": "BoltzGen and Fold-CP",
+  "label": "starting-point",
+  "modules": [
+    "design",
+    "structure_prediction"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/HannesStark/boltzgen",
+    "also": [
+      "https://github.com/NVIDIA-BioNeMo/boltz-cp",
+      "https://github.com/jwohlwend/boltz"
+    ]
+  },
+  "license": {
+    "id": "MIT",
+    "url": "https://github.com/HannesStark/boltzgen/blob/main/LICENSE"
+  },
+  "notes": "boltzgen.def builds BoltzGen at the commit BMS is integrated against, on PyTorch 2.11.0, and applies the ligand-only mmCIF parser fix. fold-cp.sif is built on top of boltzgen.sif. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "boltzgen.sif",
+      "def": "apptainer/boltzgen.def",
+      "approx_size_gb": 12
+    },
+    {
+      "filename": "fold-cp.sif",
+      "def": "apptainer/fold_cp.def",
+      "approx_size_gb": 12,
+      "needs": [
+        "boltzgen.sif"
+      ],
+      "build_args": {
+        "container_dir": "{container_dir}"
+      }
+    }
+  ],
+  "weights": [
+    {
+      "id": "boltzgen",
+      "required": true,
+      "present_if": [
+        "boltzgen/boltzgen1_diverse.ckpt"
+      ],
+      "fetch": {
+        "type": "manual",
+        "instructions": "Download the BoltzGen artifacts from the upstream Hugging Face repositories listed in the BoltzGen README into <weights>/boltzgen: boltzgen1_diverse.ckpt, boltzgen1_adherence.ckpt, boltzgen1_ifold.ckpt, boltz2_conf_final.ckpt, boltz2_aff.ckpt and mols.zip."
+      },
+      "approx_size_gb": 8
+    }
+  ]
+}

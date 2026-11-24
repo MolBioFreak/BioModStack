@@ -20,7 +20,7 @@ def owners():
         package.__path__ = [str(ROOT / 'platform/api/routers')]
         sys.modules['routers'] = package
     from routers.models import get_generation_settings
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from schemas import JobCreate
     return get_generation_settings, normalize_job_request, JobCreate
 

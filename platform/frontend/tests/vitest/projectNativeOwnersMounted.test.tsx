@@ -63,7 +63,10 @@ test('mounted structure owner hydrates and reports Project ESMFold2 values', asy
     };
     // The common draft also includes launcher/provider metadata; assert the full
     // effective native settings instead of an obsolete exact sparse projection.
-    for (const [key, value] of Object.entries(expected)) assert.deepEqual(draft[key], value);
+    for (const [key, value] of Object.entries(expected)) {
+        assert.deepEqual((draft.editor_state as Record<string, unknown>)[key], value, `editor ${key}`);
+        assert.deepEqual((draft.native_job_request as { params: Record<string, unknown> }).params[key], value, `request ${key}`);
+    }
     await act(async () => renderer.unmount());
 });
 

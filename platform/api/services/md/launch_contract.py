@@ -19,6 +19,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 import yaml
 
+from scripts.bms_md.chemistry.prepare import preparation_owner, validate_amber_solvent
 from scripts.bms_md.contract import normalize_job_config
 from scripts.bms_md.native_config import INPUT_FILE_FIELDS, NATIVE_JOB_SCHEMA, parse_mdp
 from services.md.chemistry_catalog import (
@@ -103,28 +104,14 @@ def _validate_raw_input_semantics(candidate: Mapping[str, Any]) -> None:
     has_structure = bool(str(input_config.get("structure") or "").strip())
     has_coordinates = bool(str(input_config.get("coordinates") or "").strip())
     has_topology = bool(str(input_config.get("topology") or "").strip())
-    if has_structure and (has_coordinates or has_topology):
-        raise ValueError("MD input must use exactly one input mode: structure or prepared coordinates plus topology")
-    if not has_structure and not (has_coordinates and has_topology):
-        raise ValueError("input requires structure or coordinates plus topology")
-    if has_structure:
-        return
-    if str(candidate.get("engine") or "").strip().lower() == "gromacs":
+    if has_coordinates or has_topology:
         raise MDLaunchError(
             "MD_ENGINE_INPUT_UNSUPPORTED",
-            "Prepared coordinates and topology are supported only with engine=openmm.",
+            "Prepared coordinates and topology require the native job schema.",
             status_code=422,
         )
-    preparation = candidate.get("preparation")
-    if not isinstance(preparation, Mapping):
-        return
-    attached_claims = [field for field in PROFILE_CLAIM_FIELDS if field in preparation]
-    if attached_claims:
-        raise ChemistryProfileSelectionError(
-            "MD_CHEMISTRY_PROFILE_FORBIDDEN",
-            "Prepared external systems cannot carry v1 chemistry profile claims: "
-            f"{', '.join(attached_claims)}.",
-        )
+    if not has_structure:
+        raise ValueError("input requires structure")
 
 
 def _validate_raw_v2_semantics(candidate: Mapping[str, Any]) -> None:
@@ -175,13 +162,17 @@ def _bounded_resource_number(
     return float(value)
 
 
+def _validate_thread_bounds(execution: Mapping[str, Any]) -> None:
+    _bounded_resource_int(execution.get("ntmpi"), "execution.ntmpi", minimum=1, maximum=1)
+    _bounded_resource_int(execution.get("ntomp"), "execution.ntomp", minimum=1, maximum=128)
+
+
 def _validate_resource_contract(candidate: Mapping[str, Any]) -> None:
     if candidate.get("schema") == NATIVE_JOB_SCHEMA:
         execution = candidate.get("execution")
         if not isinstance(execution, Mapping):
             raise _resource_violation("execution")
-        _bounded_resource_int(execution.get("ntmpi"), "execution.ntmpi", minimum=1, maximum=1)
-        _bounded_resource_int(execution.get("ntomp"), "execution.ntomp", minimum=1, maximum=128)
+        _validate_thread_bounds(execution)
         return
     if "replicas" not in candidate:
         return
@@ -253,26 +244,21 @@ def _validate_resource_contract(candidate: Mapping[str, Any]) -> None:
     if energy_records > 5_000_000:
         raise _resource_violation("aggregate_energy_records")
 
-    _bounded_resource_int(execution.get("ntmpi"), "execution.ntmpi", minimum=1, maximum=1)
-    _bounded_resource_int(execution.get("ntomp"), "execution.ntomp", minimum=1, maximum=128)
+    _validate_thread_bounds(execution)
     if enabled_steps * replicas > 500_000_000:
         raise _resource_violation("aggregate_enabled_stage_steps")
 
 
 def _validate_raw_md_job_spec(candidate: Mapping[str, Any]) -> None:
     try:
-        errors = sorted(
-            _md_job_validator(str(candidate.get("schema") or "")).iter_errors(candidate),
-            key=lambda error: tuple(str(part) for part in error.absolute_path),
-        )
+        if _md_job_validator(str(candidate.get("schema") or "")).is_valid(candidate):
+            return
     except (OSError, json.JSONDecodeError, SchemaError) as exc:
         raise MDLaunchError(
             "MD_LAUNCH_SERVICE_UNAVAILABLE",
             "The molecular-dynamics launch contract is temporarily unavailable.",
             status_code=503,
         ) from exc
-    if not errors:
-        return
     raise MDLaunchError(
         "MD_JOB_CONTRACT_INVALID",
         "The molecular-dynamics job contract is invalid.",
@@ -410,11 +396,15 @@ def _normalize_topology_include(raw: str) -> PurePosixPath:
     return path
 
 
-def _bound_engine_runtime_identity(engine: str) -> dict[str, Any] | None:
-    variable = "BMS_MD_GROMACS_SIF" if engine == "gromacs" else "BMS_MD_OPENMM_SIF"
-    default_name = "gromacs-md-2025.3.sif" if engine == "gromacs" else "openmm-md-8.5.2.sif"
-    configured = str(os.getenv(variable) or "").strip()
-    path = Path(configured) if configured else Path("/mnt/BioModStack/apptainer") / default_name
+def _container_dir() -> Path:
+    from paths import get_container_dir
+    return get_container_dir()
+
+
+def _bound_engine_runtime_identity() -> dict[str, Any] | None:
+    default_name = "gromacs-md-2025.3.sif"
+    configured = str(os.getenv("BMS_MD_GROMACS_SIF") or "").strip()
+    path = Path(configured) if configured else _container_dir() / default_name
     if not path.is_file() or path.is_symlink():
         return None
     return {"sif_sha256": _memoized_sif_sha256(path), "image_name": default_name}
@@ -428,65 +418,6 @@ def _bound_gromacs_topology_runtime_identity() -> dict[str, Any] | None:
     return {
         "runtime_id": probe.runtime_id, "runtime_version": probe.runtime_version,
         "sif_sha256": probe.sif_sha256, "asset_ids": sorted(probe.asset_ids),
-    }
-
-
-def _openmm_runtime_image_path() -> Path | None:
-    direct = str(os.getenv("BMS_MD_OPENMM_SIF") or "").strip()
-    candidates: list[Path] = []
-    if direct:
-        candidates.append(Path(direct))
-    container_dir = str(os.getenv("BMS_CONTAINER_DIR") or "").strip()
-    if container_dir:
-        candidates.append(Path(container_dir) / "openmm-md-8.5.2.sif")
-    data_root = str(os.getenv("BMS_DATA") or "").strip()
-    if data_root:
-        candidates.append(Path(data_root) / "apptainer" / "openmm-md-8.5.2.sif")
-    candidates.append(Path("/mnt/BioModStack/apptainer/openmm-md-8.5.2.sif"))
-    return next((candidate for candidate in candidates if candidate.is_file()), None)
-
-
-def _bound_openmm_runtime_identity() -> dict[str, Any] | None:
-    """Return the exact deployed OpenMM SIF identity and its probed force-field roots."""
-
-    image = _openmm_runtime_image_path()
-    if image is None:
-        return None
-    try:
-        sif_sha256 = _memoized_sif_sha256(image)
-        completed = subprocess.run(
-            [
-                container_executable("apptainer"),
-                "exec",
-                str(image),
-                "sh",
-                "-c",
-                "set -eu; test -d /opt/conda/share/gromacs/top; "
-                "for d in /opt/conda/share/gromacs/top/*.ff; do test -d \"$d\" && basename \"$d\"; done",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if completed.returncode != 0:
-        return None
-    asset_ids = sorted(
-        {
-            line.strip()
-            for line in completed.stdout.splitlines()[:128]
-            if re.fullmatch(r"[A-Za-z0-9_.+-]{1,96}\.ff", line.strip())
-        }
-    )
-    if not asset_ids:
-        return None
-    return {
-        "runtime_id": "openmm-md-8.5.2",
-        "runtime_version": "8.5.2+gromacs-2025.3",
-        "sif_sha256": sif_sha256,
-        "asset_ids": asset_ids,
     }
 
 
@@ -939,6 +870,11 @@ def _resolve_v2_chemistry(
         compatibility = copy.deepcopy(normalized)
         compatibility["preparation"] = {**dict(normalized["preparation"]), **dict(resolved_preparation)}
         _validate_profile_launch_constraints(compatibility, profile)
+    elif preparation_owner(normalized) == "amber":
+        try:
+            validate_amber_solvent(**normalized["preparation"])
+        except ValueError as exc:
+            raise MDLaunchError("MD_PREPARATION_UNSUPPORTED", str(exc), status_code=422) from exc
     return normalized
 
 
@@ -989,11 +925,7 @@ def normalize_md_job_spec(
     has_structure = bool(normalized["input"].get("structure"))
     has_prepared = bool(normalized["input"].get("coordinates")) or bool(normalized["input"].get("topology"))
     if has_structure and has_prepared:
-        raise ValueError("MD input must use exactly one input mode: structure or prepared coordinates plus topology")
-    if normalized["engine"] == "openmm" and any(
-        normalized["stages"][stage]["enabled"] for stage in ("minimization", "nvt", "npt")
-    ):
-        raise ValueError("OpenMM is production-only; disable minimization, nvt, and npt")
+        raise ValueError("MD input must use exactly one input mode: structure or coordinates plus topology")
 
     for field in INPUT_FILE_FIELDS:
         value = normalized["input"].get(field)
@@ -1017,7 +949,7 @@ def normalize_md_job_spec(
         catalog = chemistry_catalog or get_chemistry_catalog()
         captured_view = chemistry_view or catalog.view()
         normalized = _resolve_v2_chemistry(normalized, catalog=catalog, view=captured_view)
-    elif has_structure:
+    else:
         catalog = chemistry_catalog or get_chemistry_catalog()
         captured_view = chemistry_view or catalog.view()
         profile = catalog.validate_v1_profile_selection(
@@ -1036,20 +968,6 @@ def normalize_md_job_spec(
             )
         normalized["preparation"] = preparation
         _validate_profile_launch_constraints(normalized, profile)
-    else:
-        attached_claims = [field for field in PROFILE_CLAIM_FIELDS if field in preparation]
-        if attached_claims:
-            raise ChemistryProfileSelectionError(
-                "MD_CHEMISTRY_PROFILE_FORBIDDEN",
-                "Prepared external systems cannot carry v1 chemistry profile claims: "
-                f"{', '.join(attached_claims)}.",
-            )
-        if preparation.get("chemistry_assurance") != "external_unreviewed":
-            raise ChemistryProfileSelectionError(
-                "MD_CHEMISTRY_PROFILE_REQUIRED",
-                "Prepared external systems must declare chemistry_assurance=external_unreviewed.",
-            )
-        normalized["preparation"] = preparation
     return normalized
 
 
@@ -1060,7 +978,7 @@ def materialize_md_job_spec(
     output_dir: Path,
     resolve_runtime_path: Callable[[str], str],
     chemistry_catalog: ChemistryCatalog | None = None,
-    runtime_identity_resolver: Callable[[], Mapping[str, Any] | None] = _bound_openmm_runtime_identity,
+    runtime_identity_resolver: Callable[[], Mapping[str, Any] | None] = _bound_gromacs_topology_runtime_identity,
 ) -> dict[str, Any]:
     """Validate and persist the authoritative MD contract for a parent job."""
 
@@ -1076,7 +994,7 @@ def materialize_md_job_spec(
         chemistry_catalog=catalog,
         chemistry_view=captured_view,
     )
-    engine_runtime = _bound_engine_runtime_identity(str(normalized["engine"]))
+    engine_runtime = _bound_engine_runtime_identity()
     if engine_runtime is None:
         raise MDLaunchError(
             "MD_ENGINE_RUNTIME_IDENTITY_REQUIRED",

@@ -194,7 +194,7 @@ def test_legacy_recovery_requires_complete_exact_publication_custody(tmp_path,mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('pull_mode',['manual','automatic'])
-async def test_builtin_return_native_import_failure_rollback_then_retained_retry(store,tmp_path,monkeypatch,pull_mode):
+async def test_builtin_return_optional_attachment_failure_retains_primary_and_terminal_state(store,tmp_path,monkeypatch,pull_mode):
     from fastapi import BackgroundTasks
     from database import ExecutionTarget
     from services import analysis_autorun
@@ -251,36 +251,31 @@ async def test_builtin_return_native_import_failure_rollback_then_retained_retry
     monkeypatch.setattr(ex,'remote_status',remote_status)
     monkeypatch.setattr(ex,'collect_remote_results',collect)
     monkeypatch.setattr(analysis_autorun,'schedule_viewer_minimum_analyses_for_job',lambda *_:None)
-    for retry in range(2):
-        tasks=BackgroundTasks()
-        async with store() as session:
-            job=await session.get(Job,'job')
-            if pull_mode=='automatic' and retry==0:
-                assert await ex.reconcile_remote_job(session,job,background_tasks=tasks)
-            else:
-                assert not await ex.reconcile_remote_job(session,job,background_tasks=BackgroundTasks())
-                await ex.request_remote_result_pull(session,job,tasks)
-        with monkeypatch.context() as scoped:
-            if retry==0:
-                # Reproduce the old exact-key-only association at the actual owner;
-                # all native ingestion, transactions and publication remain real.
-                scoped.setattr(persistence,'_verified_legacy_protenix_sequence_link',lambda *_:False)
-            await tasks()
-        async with store() as session:
-            job=await session.get(Job,'job')
-            count=await session.scalar(select(func.count()).select_from(Design).where(Design.job_id=='job'))
-            frustra_count=await session.scalar(select(func.count()).select_from(FrustraMPNNResult).where(FrustraMPNNResult.parent_job_id=='job'))
-            assert calls==['proof','status','collect'], calls
-            if retry==0:
-                assert count==frustra_count==0
-                assert job.remote_state=='result_pull_failed' and job.awaiting_input
-                assert (Path(job.output_dir)/'prior-good.txt').read_text()=='retained'
-                assert all(hashlib.sha256((incoming/name).read_bytes()).hexdigest()==sha for name,sha in before.items())
-            else:
-                assert (job.status,job.remote_state,job.awaiting_input)==('completed','ingested',False),job.error_message
-                assert count==frustra_count==1
-                assert not gen.journal_path(job).exists()
-                assert all(hashlib.sha256((Path(job.output_dir)/name).read_bytes()).hexdigest()==sha for name,sha in before.items())
-                assert (await session.get(ExecutionTarget,'target')).leased_job_id=='other-job'
-                with pytest.raises(ex.RemoteExecutionError):
-                    await ex.request_remote_result_pull(session,job,BackgroundTasks())
+    tasks=BackgroundTasks()
+    async with store() as session:
+        job=await session.get(Job,'job')
+        if pull_mode=='automatic':
+            assert await ex.reconcile_remote_job(session,job,background_tasks=tasks)
+        else:
+            assert not await ex.reconcile_remote_job(session,job,background_tasks=BackgroundTasks())
+            await ex.request_remote_result_pull(session,job,tasks)
+    with monkeypatch.context() as scoped:
+        # Reject only the optional association, not the verified primary result.
+        scoped.setattr(persistence,'_verified_legacy_protenix_sequence_link',lambda *_:False)
+        await tasks()
+    async with store() as session:
+        job=await session.get(Job,'job')
+        count=await session.scalar(select(func.count()).select_from(Design).where(Design.job_id=='job'))
+        frustra_count=await session.scalar(select(func.count()).select_from(FrustraMPNNResult).where(FrustraMPNNResult.parent_job_id=='job'))
+        assert calls==['proof','status','collect'], calls
+        assert count == 1 and frustra_count == 0
+        integrity = job.provenance['result_integrity']
+        assert integrity['partial'] is True and integrity['primary_validated'] is True
+        assert integrity['failed_stage'] == 'frustrampnn'
+        assert (job.status, job.queue_status, job.remote_state, job.awaiting_input) == (
+            'failed', 'failed', 'returned_ingestion_failed', False)
+        assert not gen.journal_path(job).exists()
+        assert all(hashlib.sha256((Path(job.output_dir)/name).read_bytes()).hexdigest()==sha for name,sha in before.items())
+        assert (await session.get(ExecutionTarget,'target')).leased_job_id=='other-job'
+        with pytest.raises(ex.RemoteExecutionError, match='not awaiting an explicit result pull'):
+            await ex.request_remote_result_pull(session,job,BackgroundTasks())

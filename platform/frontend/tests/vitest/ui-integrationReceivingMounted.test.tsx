@@ -214,13 +214,13 @@ it('actual campaign Save/unmount/fresh Template Manager Load restores governed s
     const settings = { targets: [{ name: '6ARU', target_path: path, chains: 'A', hotspots: 'A42' }], modality: ['VHH'], max_trajectories: 4, trajectory_only: false };
     const round = { schema_version: 1, enabled: true, sequence_design: { model_id: 'fampnn', params: { seqs_per_design: 3, fampnn_psce_threshold: 0 } }, prediction: { model_id: 'protenix', params: { protenix_model_weights: 'protenix-v2', protenix_use_msa: false } }, binder_chains: [], target_chains: [] };
     const roundDrafts = { fampnn: { seqs_per_design: 3, fampnn_psce_threshold: 0 }, caliby_binder: { caliby_num_seqs_per_pdb: 5, caliby_verbose: false } };
-    localStorage.setItem('clonedJobData', JSON.stringify({ model_id: 'bindcraft2', mode: 'campaign', name: 'Saved campaign', params: { bindcraft2_settings: settings, bc2_source_references: references, binder_round: round, binder_round_drafts: roundDrafts } }));
+    localStorage.setItem('clonedJobData', JSON.stringify({ model_id: 'bindcraft2', mode: 'campaign', name: 'Saved campaign', binder_round: round, params: { bindcraft2_settings: settings, bc2_source_references: references, binder_round_drafts: roundDrafts } }));
     await mount('/submit'); await ready(() => !!document.querySelector('[aria-label="BindCraft2 campaign"]'));
     await click('Save campaign draft'); await ready(() => !!document.querySelector('input[placeholder="e.g., My Boltz Config"]'));
     await edit('input[placeholder="e.g., My Boltz Config"]', 'Campaign saved'); await click('Save Template'); await ready(() => rows.length === 1);
     const saved = JSON.parse(JSON.stringify(rows[0]));
     expect(saved.model_id).toBe('bindcraft2'); expect(saved.mode).toBe('campaign');
-    expect(saved.params.bindcraft2_settings).toEqual(settings); expect(saved.params.binder_round).toEqual(round);
+    expect(saved.params.bindcraft2_settings).toEqual({ subbatch_size: null, ...settings }); expect(saved.params.binder_round).toEqual(round);
     expect(saved.params.bc2_source_references).toEqual(references); expect(saved.params.binder_round_drafts).toMatchObject(roundDrafts);
     await unmount(); (fetch as any).mockClear(); calls = [];
     await mount('/submit'); expect(document.querySelector('[aria-label="BindCraft2 campaign"]')).toBeNull();
@@ -233,7 +233,7 @@ it('actual campaign Save/unmount/fresh Template Manager Load restores governed s
     expect(document.querySelector('[aria-label="targets.0.target_path"]')!.textContent).toBe(path);
     expect((fetch as any).mock.calls.map(([url]: any[]) => String(url)).filter((url: string) => !url.includes('/native-settings'))).toEqual([`/api/files/download/${encodeURIComponent(path)}`]);
     await click('Save campaign draft'); await edit('input[placeholder="e.g., My Boltz Config"]', 'Campaign reopened'); await click('Save Template'); await ready(() => rows.length === 2);
-    expect(rows[1].params.bindcraft2_settings).toEqual(settings); expect(rows[1].params.bc2_source_references).toEqual(references);
+    expect(rows[1].params.bindcraft2_settings).toEqual({ subbatch_size: null, ...settings }); expect(rows[1].params.bc2_source_references).toEqual(references);
     expect(rows[1].params.binder_round).toEqual(round); expect(rows[1].params.binder_round_drafts).toEqual(saved.params.binder_round_drafts);
     expect(calls.some(call => call.url === '/api/jobs' && call.method === 'post')).toBe(false);
     expect(calls.some(call => call.url === '/api/files/materialize-structure' || call.url === '/api/files/upload')).toBe(false);
@@ -294,6 +294,9 @@ it('campaign browse/save use real modal; incompatible Load stays open and explic
     await ready(() => !!document.querySelector('[aria-label="BindCraft2 campaign"]'));
     await click('Saved campaigns'); await ready(() => !!document.querySelector('input[placeholder="Search templates..."]'));
     expect(document.body.textContent).toContain('My Templates');
+    // The modal now scopes to the current workflow by default; reveal the other workflow's template explicitly.
+    const all = [...document.querySelectorAll<HTMLLabelElement>('label')].find(node => node.textContent?.includes('All workflows'))!.querySelector('input')!;
+    await act(async () => all.click()); await settle();
     await click('Load'); expect(document.body.textContent).toContain('belongs to another workflow');
     expect(document.querySelector('input[placeholder="Search templates..."]')).not.toBeNull();
     await click('Load in its own workflow'); await ready(() => !!document.querySelector('[aria-label="Native binder job name"]'));

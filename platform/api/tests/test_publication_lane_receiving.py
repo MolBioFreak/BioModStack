@@ -33,9 +33,9 @@ async def test_round_inputs_once_per_missing_candidate_target_pair(selected, mon
     request = BinderRoundRequest.model_validate(envelope)
     calls = []
     original = inputs.prediction_request
-    def prediction(*args):
+    def prediction(*args, **kwargs):
         calls.append(args[2].id)
-        return original(*args)
+        return original(*args, **kwargs)
     monkeypatch.setattr(inputs, 'prediction_request', prediction)
     progress = rounds.progress_of(root)
     await rounds._plan(session, root, progress, request)
@@ -62,7 +62,7 @@ async def test_round_inputs_once_per_missing_candidate_target_pair(selected, mon
 def test_ppiflow_display_requiredness_does_not_change_normalizer(mode, tmp_path):
     from services.ppiflow_generation import ppiflow_generation_inventory, parameter_contract
     from test_ppiflow_generation_launch import settings
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from schemas import JobCreate
     before = parameter_contract(mode)
     target, framework = tmp_path / 'target.pdb', tmp_path / 'framework.pdb'
@@ -114,7 +114,7 @@ def test_preview_materialization_reuses_only_leading_observations(tmp_path, monk
         return stub_compiler(*args)
     preview = launch.preview_campaign(settings, compiler=compiler)
     launch.materialize_campaign(settings, tmp_path / 'job', preview_digest=preview['preview_digest'], compiler=compiler)
-    assert counts == {'validate_request': 3, '_sources': 3, '_identity': 6, 'compiler': 3}
+    assert counts == {'validate_request': 1, '_sources': 3, '_identity': 6, 'compiler': 3}
     def mutate(request, destination):
         result = stub_compiler(request, destination)
         source.write_text('>changed\nG\n')
@@ -197,9 +197,9 @@ async def test_bc2_one_inventory_pass_and_launch_offline_reopen(tmp_path, monkey
             job = await session.get(Job, 'bc')
             reads = Counter()
             original = publication._regular
-            def regular(root, relative):
+            def regular(root, relative, **kwargs):
                 reads[relative] += 1
-                return original(root, relative)
+                return original(root, relative, **kwargs)
             monkeypatch.setattr(publication, '_regular', regular)
             native, receipt = await publication.read_published_native_results(job, session)
             assert reads == Counter({name: 1 for name in receipt['files']})

@@ -151,6 +151,67 @@ export function createIgvGenerationMount(container: HTMLElement): HTMLDivElement
     return mount;
 }
 
+/** IGV draws inside a shadow root, so page CSS cannot reach it. Keep its width readout on one line
+ *  and let its toolbar wrap rather than run under a side panel. */
+export function styleIgvShadow(mount: HTMLElement): void {
+    const host = mount.shadowRoot ? mount : mount.querySelector<HTMLElement>('*');
+    const root = mount.shadowRoot ?? Array.from(mount.querySelectorAll<HTMLElement>('*')).find((item) => item.shadowRoot)?.shadowRoot ?? host?.shadowRoot;
+    if (!root || root.querySelector('style[data-bms-igv]')) return;
+    const style = mount.ownerDocument.createElement('style');
+    style.setAttribute('data-bms-igv', '');
+    style.textContent = [
+        // IGV's own rules are more specific, hence !important.
+        '.igv-windowsize-panel-container { white-space: nowrap !important; }',
+        '.igv-navbar { flex-wrap: wrap !important; height: auto !important; min-height: 32px; row-gap: 4px; }',
+        '.igv-navbar-left-container, .igv-navbar-right-container { flex-wrap: wrap !important; min-width: 0; }',
+        '.igv-navbar-right-container { margin-left: auto; justify-content: flex-end !important; }',
+    ].join('\n');
+    root.appendChild(style);
+}
+
+interface IgvRulerDrawArgs {
+    context: CanvasRenderingContext2D;
+    pixelWidth: number;
+    bpStart?: number;
+    referenceFrame?: { start: number; bpPerPixel: number };
+}
+
+/** IGV paints the ruler on a canvas three viewports wide and shows the middle third, so a label
+ *  drawn across a viewport edge appears cut in half. Skip labels that straddle a visible edge;
+ *  labels wholly off-screen are kept so panning still shows them. */
+export function hideClippedIgvRulerLabels(browser: { findTracks?: (filter: (track: { type?: unknown }) => boolean) => unknown[] }): boolean {
+    let found: unknown[] | undefined;
+    try { found = browser.findTracks?.((track) => track?.type === 'ruler'); } catch { return false; }
+    const ruler = (Array.isArray(found) ? found[0] : undefined) as
+        | { doDraw?: (args: IgvRulerDrawArgs) => void; __bmsClipped?: boolean }
+        | undefined;
+    if (!ruler || typeof ruler.doDraw !== 'function') return false;
+    if (ruler.__bmsClipped) return true;
+    const draw = ruler.doDraw.bind(ruler);
+    ruler.doDraw = (args) => {
+        const context = args.context;
+        const frame = args.referenceFrame;
+        const offset = frame && typeof args.bpStart === 'number' && frame.bpPerPixel > 0
+            ? (frame.start - args.bpStart) / frame.bpPerPixel
+            : 0;
+        const visibleLeft = offset > 0.5 ? offset : 0;
+        const visibleRight = offset > 0.5 ? offset + args.pixelWidth / 3 : args.pixelWidth;
+        const fillText = context.fillText;
+        context.fillText = function clippedFillText(text: string, x: number, y: number, maxWidth?: number) {
+            const width = context.measureText(text).width;
+            const left = context.textAlign === 'center' ? x - width / 2 : context.textAlign === 'right' || context.textAlign === 'end' ? x - width : x;
+            const right = left + width;
+            const straddles = (edge: number) => left < edge && right > edge;
+            if (straddles(visibleLeft) || straddles(visibleRight) || left < 0 || right > args.pixelWidth) return;
+            if (maxWidth === undefined) fillText.call(context, text, x, y);
+            else fillText.call(context, text, x, y, maxWidth);
+        };
+        try { draw(args); } finally { context.fillText = fillText; }
+    };
+    ruler.__bmsClipped = true;
+    return true;
+}
+
 export function removeIgvGenerationMount(container: HTMLElement, mount: HTMLElement): void {
     if (mount.parentElement === container) container.removeChild(mount);
 }
@@ -316,14 +377,7 @@ export function buildFullSourceCoverageTrackConfig(presentation: AlignmentPresen
 }
 
 export function buildLocalIgvConfig(input: LocalIgvConfigInput): Record<string, unknown> {
-    const sequenceTrack = {
-        id: 'ngs-reference-bases',
-        name: 'Reference bases',
-        type: 'sequence',
-        fastaURL: input.fastaUrl,
-        ...(input.faiUrl ? { indexURL: input.faiUrl } : {}),
-        order: -1000,
-    };
+    // IGV adds its own reference-bases row from `reference`; adding another drew the bases twice.
     return {
         loadDefaultGenomes: false,
         genomeList: [],
@@ -338,10 +392,7 @@ export function buildLocalIgvConfig(input: LocalIgvConfigInput): Record<string, 
                 : { indexed: false }),
         },
         ...(input.initialLocus ? { locus: input.initialLocus } : {}),
-        tracks: [
-            sequenceTrack,
-            ...input.auxiliaryTracks,
-        ],
+        tracks: [...input.auxiliaryTracks],
     };
 }
 

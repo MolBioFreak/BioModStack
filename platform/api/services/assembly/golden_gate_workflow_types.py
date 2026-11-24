@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Literal
-from pydantic import Field, TypeAdapter, create_model, JsonValue
+from pydantic import Field, TypeAdapter, create_model, JsonValue, field_validator
 from routers.molbio_ops import PrimerDesignRequest, SequenceInput
 from services.assembly.golden_gate_design_types import (
     Closed, GoldenGateDesignRequest, GoldenGateDesignResult, EnzymeBinding,
@@ -37,6 +37,13 @@ class SearchControls(Closed):
     unique_classes: bool = True
     exclude_palindromes: bool = True
     ranking_mode: Literal['empirical', 'lexicographic'] = 'empirical'
+
+    @field_validator('unique_classes')
+    @classmethod
+    def _unique_classes_required(cls, value: bool) -> bool:
+        if not value:
+            raise ValueError('Duplicate overhangs are not allowed')
+        return value
 
 class EndInventory(Closed):
     instance_id: str
@@ -109,6 +116,8 @@ class SplitTask(Closed):
     min_fragment_length: int = Field(default=1, ge=1)
     max_fragment_length: int | None = Field(default=None, ge=1)
     target_fragment_length: int | None = Field(default=None, ge=1)
+    max_homopolymer_run: int | None = Field(default=None, ge=1, description="Optional junction-only rule: the full cohesive footprint must avoid longer target homopolymer tracts; target bases are unchanged.")
+    homopolymer_junction_buffer: int = Field(default=0, ge=0, description="Adjacent target bases excluded on each side of a long tract; active only when max_homopolymer_run is set.")
     display_origin: int = Field(default=0, ge=0)
     preparation: SplitPreparation
     terminal_right_fusion: str | None = None

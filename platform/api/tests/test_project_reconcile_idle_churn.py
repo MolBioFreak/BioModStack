@@ -19,6 +19,7 @@ async def _running_bc2(native_http, setup_store, native_core_store):
     from database import Job
     from experiment_models import ExperimentWorkflowPreparation
     from routers import project_manager as pm
+    from services.global_experiments import launch_contexts
     from services.global_experiments.launch_contexts import claim_launch_context, consume_launch_context
 
     project_id, _setup, prepared, domain_path = await prepared_setup(native_http, 'bindcraft2')
@@ -42,7 +43,7 @@ async def _running_bc2(native_http, setup_store, native_core_store):
         context, binding = await consume_launch_context(
             session, launch_context_id=context.launch_context_id, claim_token=token,
             canonical_job_id=job.id, canonical_batch_id=None)
-        await pm._project_bound_job(session, core, context, job, binding)
+        await launch_contexts._project_bound_job(session, core, context, job, binding)
         await session.commit()
         await core.commit()
     return project_id, group_doc['run_group_id'], attempt_doc['attempt_id'], job.id

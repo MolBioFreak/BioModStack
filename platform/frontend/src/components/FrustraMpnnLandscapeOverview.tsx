@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { themeFont } from '../lib/themeFont';
 import {
     CANONICAL_AMINO_ACIDS,
     type CmLandscapeResidue,
@@ -125,7 +126,7 @@ export default function FrustraMpnnLandscapeOverview({
         context.setTransform(ratio, 0, 0, ratio, 0, 0);
         context.fillStyle = '#07101f';
         context.fillRect(0, 0, width, height);
-        context.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
+        context.font = `10px ${themeFont('mono')}`;
         context.textAlign = 'right';
         context.textBaseline = 'middle';
         context.fillStyle = '#94a3b8';
@@ -171,7 +172,7 @@ export default function FrustraMpnnLandscapeOverview({
             context.fillText(`Chain ${chain.authAsymId} · ${chain.end - chain.start} residues`, x + 5, top - 15);
         });
         const tickStep = Math.max(10, Math.ceil(model.residues.length / 12 / 10) * 10);
-        context.font = '9px ui-monospace, SFMono-Regular, Menlo, monospace';
+        context.font = `9px ${themeFont('mono')}`;
         context.textAlign = 'center';
         context.textBaseline = 'top';
         context.fillStyle = '#64748b';

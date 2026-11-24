@@ -5,8 +5,11 @@ import type { RestrictionDigestFragment } from '../../../lib/restrictionAnalysis
 const GoldenGateWorkflowWorkspace = lazy(() => import('./golden-gate/GoldenGateWorkflowWorkspace'));
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useInputOwnership } from './useInputOwnership';
+import { FragmentChooser, loadChooserFragment } from '../FragmentChooser';
+import { inlineFragmentFeatures } from '../utils/assemblyFeatures';
 import {
     fetchGoldenGateAssemblyOptions,
+    endOperations,
     fetchSavedGibsonWorkups,
     planDnaWeaverGibsonAssembly,
     saveDnaWeaverGibsonAssembly,
@@ -19,12 +22,19 @@ import {
     type AssemblyFragmentEnd,
     type AssemblyFragmentInput,
     type AssemblyOperationResponse,
+    type EndOperationName,
+    type EndOperationRequest,
+    type EndOperationResponse,
+    type SavedGibsonDesignRequest,
+    type SequenceFeature,
     type DnaWeaverPlanRequest,
     type DnaWeaverPlanResponse,
 } from '../../../lib/api';
 import { buildAssemblyReloadOperationParams, buildGoldenGateAssemblyRequest } from '../../../lib/goldenGateAuthority';
 import type { SequenceData, SelectionInfo } from '../types';
 import { GibsonDesignWorkspace } from './GibsonDesignWorkspace';
+import { SuggestPlan } from './SuggestPlan';
+import type { WorkflowRequest } from '../../../lib/goldenGateWorkflowTypes';
 
 interface AssemblyPanelProps {
     transferredFragments?: AssemblyFragmentInput[] | null;
@@ -95,6 +105,7 @@ function fragmentFromSequence(
         sourceEnd?: number;
         wrapsOrigin?: boolean;
         digestFragment?: RestrictionDigestFragment;
+        features?: SequenceFeature[];
     },
     mode: AssemblyMode,
 ): AssemblyFragmentInput {
@@ -110,6 +121,7 @@ function fragmentFromSequence(
         source_start: source.sourceStart,
         source_end: source.sourceEnd,
         source_wraps_origin: source.wrapsOrigin,
+        ...(source.features ? { features: source.features } : {}),
         ...(source.digestFragment ? {
             ...digestFragmentEnds(source.digestFragment),
             metadata: { digest_fragment: source.digestFragment },
@@ -143,11 +155,11 @@ function EndEditor({
     return (
         <div className="space-y-1">
             <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">{label}</div>
-            <div className="grid grid-cols-[132px_minmax(0,1fr)] gap-2">
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2">
                 <select
                     value={current.type}
                     onChange={(event) => onChange({ ...current, type: event.target.value as AssemblyFragmentEnd['type'] })}
-                    className="rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs"
+                    className="min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs"
                 >
                     <option value="blunt">Blunt</option>
                     <option value="sticky_5">5' sticky</option>
@@ -158,9 +170,10 @@ function EndEditor({
                     disabled={current.type === 'blunt'}
                     onChange={(event) => onChange({ ...current, overhang: event.target.value.toUpperCase().replace(/[^A-Z]/g, '') })}
                     placeholder={current.type === 'blunt' ? 'No overhang' : 'Overhang 5′→3′'}
-                    className="rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs disabled:opacity-50"
+                    className="min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs disabled:opacity-50"
                 />
                 <select aria-label={`${label} notation`} value={current.protruding_strand || ''}
+                    className="col-span-full min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs"
                     disabled={current.type === 'blunt'}
                     onChange={(event) => onChange({ ...current, protruding_strand: (event.target.value || null) as AssemblyFragmentEnd['protruding_strand'] })}>
                     <option value="">Historical / unspecified</option>
@@ -170,6 +183,78 @@ function EndEditor({
             </div>
         </div>
     );
+}
+
+const END_OPERATIONS: Array<[EndOperationName, string]> = [
+    ['fill_in', 'Fill in 5′ overhang'],
+    ['remove_3_overhang', 'Remove 3′ overhang'],
+    ['remove_5_overhang_nuclease', 'Remove 5′ overhang (nuclease)'],
+    ['phosphorylate', 'Phosphorylate 5′'],
+    ['dephosphorylate', 'Dephosphorylate 5′'],
+];
+
+function EndOperations({ fragment, onApplied }: { fragment: AssemblyFragmentInput; onApplied: (child: AssemblyFragmentInput) => void }) {
+    const [operation, setOperation] = useState<EndOperationName>('fill_in');
+    const [end, setEnd] = useState<'left' | 'right' | 'both'>('both');
+    const [state, setState] = useState<{ pending?: 'preview' | 'apply'; preview?: EndOperationResponse; error?: string }>({});
+    // A retained child carries its revision id in metadata (chooser / saved digest); anything else goes inline.
+    const revisionId = [fragment.metadata?.revision_id, (fragment.metadata?.saved_digest_child as { revision_id?: unknown } | undefined)?.revision_id].find((value): value is string => typeof value === 'string');
+    const source = (): EndOperationRequest['source'] => revisionId
+        ? { kind: 'molecular_revision', revision_id: revisionId }
+        : { kind: 'inline', name: fragment.name, sequence: fragment.sequence, left_end: fragment.left_end ?? null, right_end: fragment.right_end ?? null, features: fragment.features ?? null };
+    const run = async (mode: 'preview' | 'apply') => {
+        setState((current) => ({ ...current, pending: mode, error: undefined }));
+        try {
+            const response = (await endOperations(mode, { source: source(), operation, end, new_name: `${fragment.name} ${operation.replace(/_/g, ' ')}` })).data;
+            if (mode === 'preview') { setState({ preview: response }); return; }
+            onApplied({
+                id: nextFragmentId(), name: `${fragment.name} ${operation.replace(/_/g, ' ')}`, sequence: response.sequence, orientation: 'forward', circular: false,
+                role: fragment.role, left_end: response.left_end, right_end: response.right_end, features: response.features,
+                ...(response.document_id ? { source_sequence_id: response.document_id, source_revision: 1, source_name: fragment.name, source_start: 0, source_end: response.sequence.length } : {}),
+                metadata: { ...(response.revision_id ? { revision_id: response.revision_id } : {}), retained_ends: true },
+            });
+            setState({});
+        } catch (error: UntypedApiValue) {
+            setState({ error: error?.response?.data?.detail || error?.message || 'End operation failed' });
+        }
+    };
+    return (
+        <details className="rounded border border-slate-800 bg-slate-950/60 p-2" data-end-operations={fragment.id}>
+            <summary className="cursor-pointer text-xs text-slate-300">End operations</summary>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                <select aria-label="End operation" value={operation} onChange={(event) => { setOperation(event.target.value as EndOperationName); setState({}); }} className="rounded border border-slate-600 bg-slate-800 px-2 py-1">
+                    {END_OPERATIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+                <select aria-label="End" value={end} onChange={(event) => { setEnd(event.target.value as typeof end); setState({}); }} className="rounded border border-slate-600 bg-slate-800 px-2 py-1">
+                    <option value="both">Both ends</option><option value="left">Left end</option><option value="right">Right end</option>
+                </select>
+                <button type="button" onClick={() => void run('preview')} disabled={Boolean(state.pending)} className="rounded bg-slate-800 px-2 py-1">{state.pending === 'preview' ? 'Previewing…' : 'Preview'}</button>
+                <button type="button" onClick={() => void run('apply')} disabled={Boolean(state.pending) || !state.preview} className="rounded bg-emerald-700 px-2 py-1 disabled:opacity-40">{state.pending === 'apply' ? 'Applying…' : 'Apply'}</button>
+            </div>
+            {state.preview && <div className="mt-2 space-y-1 text-xs text-slate-300" data-end-operation-preview="true">
+                <div>{state.preview.sequence.length.toLocaleString()} nt · +{state.preview.changed.bases_added} / −{state.preview.changed.bases_removed} bases</div>
+                {state.preview.notes.map((note) => <div key={note} className="text-amber-300">{note}</div>)}
+            </div>}
+            {state.error && <div role="alert" className="mt-2 text-xs text-red-300">{state.error}</div>}
+        </details>
+    );
+}
+
+/** Enzymes that made the fragment ends (digest transfer / cloning proposals); undefined when none are recorded. */
+function observedEnzymes(fragments: AssemblyFragmentInput[]): string[] | undefined {
+    const names = new Set<string>();
+    for (const fragment of fragments) {
+        const ends = (fragment.metadata as { end_enzymes?: { left?: string[]; right?: string[] } } | null | undefined)?.end_enzymes;
+        for (const name of [...(ends?.left ?? []), ...(ends?.right ?? [])]) names.add(name);
+    }
+    return names.size ? [...names] : undefined;
+}
+
+function sealedLabel(sealed: string | undefined): string {
+    if (sealed === 'both') return 'joined, sealed';
+    if (sealed === 'one_strand') return 'joined, nicked';
+    if (sealed === 'none') return 'joined, not sealed';
+    return 'joined, ligation chemistry not established';
 }
 
 type SavedWorkupRecord = Record<string, unknown>;
@@ -360,13 +445,16 @@ export function AssemblyPanel({
 }: AssemblyPanelProps) {
     const [mode, setMode] = useState<AssemblyMode>('ligation');
     const [rawGoldenGate, setRawGoldenGate] = useState(false);
+    const [targetBuilder, setTargetBuilder] = useState(true);
     const goldenGateOperationId = sequenceData.operation === 'golden_gate_design' && typeof sequenceData.operationParams?.operation_id === 'string' ? sequenceData.operationParams.operation_id : undefined;
-    useEffect(() => { if (goldenGateOperationId) { setMode('golden_gate'); setRawGoldenGate(true); } }, [goldenGateOperationId]);
+    useEffect(() => { if (goldenGateOperationId) { setMode('golden_gate'); setTargetBuilder(false); setRawGoldenGate(true); } }, [goldenGateOperationId]);
     const [fragments, setFragments] = useState<AssemblyFragmentInput[]>([]);
+    const savedFragmentLoads = useRef(Promise.resolve());
     useEffect(() => { if (transferredFragments) { setFragments(structuredClone(transferredFragments)); setMode('ligation'); setRawGoldenGate(false); } }, [transferredFragments]);
     const [gibsonWorkflow, setGibsonWorkflow] = useState<'plan' | 'design' | 'validate'>('plan');
     const [gibsonPreparations, setGibsonPreparations] = useState<Record<string, 'pcr' | 'ready_linear'>>({});
     const [saveName, setSaveName] = useState('');
+    const [ligationCircular, setLigationCircular] = useState<boolean | null>(null);
     const [saveDescription, setSaveDescription] = useState('');
     const queryClient = useQueryClient();
     const optionsQuery = useQuery({
@@ -419,7 +507,7 @@ export function AssemblyPanel({
     const planOwner = useInputOwnership([selectedSequenceId, sequenceData.sequence, sequenceData.circular, mode, gibsonWorkflow, plannerMinFragmentLength, plannerMaxFragmentLength, plannerOverlapLength, plannerVendorName, plannerPricePerBp, plannerLeadTimeDays]);
     const dnaWeaverPlan = planState?.token === planOwner.token ? planState.value : null;
     const setDnaWeaverPlan = (value: DnaWeaverPlanResponse | null) => setPlanState(value ? { token: planOwner.token, value } : null);
-    const owner = useInputOwnership([selectedSequenceId, sequenceData.sequence, sequenceData.circular, mode, gibsonWorkflow, fragments, goldenGateEnzyme, goldenGateOptions, gibsonMinOverlap, gibsonPreferredOverlap, gibsonMaxOverlap, saveName, saveDescription]);
+    const owner = useInputOwnership([selectedSequenceId, sequenceData.sequence, sequenceData.circular, mode, gibsonWorkflow, fragments, goldenGateEnzyme, goldenGateOptions, gibsonMinOverlap, gibsonPreferredOverlap, gibsonMaxOverlap, saveName, saveDescription, ligationCircular]);
     const result = resultState?.token === owner.token ? resultState.value : (mode === 'gibson' && gibsonWorkflow === 'plan' && dnaWeaverPlan && fragments === dnaWeaverPlan.ordered_fragments ? { product: dnaWeaverPlan.selected_product, saved_sequence: dnaWeaverPlan.saved_sequence || undefined, message: dnaWeaverPlan.message } : null);
     const setResult = (value: AssemblyOperationResponse | null) => setResultState(value ? { token: owner.token, value } : null);
     useEffect(() => { setLoading(null); setPlanning(false); setError(null); }, [owner.token]);
@@ -427,10 +515,28 @@ export function AssemblyPanel({
     useEffect(() => {
         setDnaWeaverPlan(null);
         setResult(null);
+        setLigationCircular(null);
     }, [selectedSequenceId, sequenceData.sequence, sequenceData.circular]);
 
+    const [restoredGibson, setRestoredGibson] = useState<{ token: object; request: SavedGibsonDesignRequest } | null>(null);
+    // Shared by saved-design reopen and Suggest plan "Use this plan".
+    const restoreGibsonDesign = (restored: SavedGibsonDesignRequest) => {
+        setMode('gibson'); setGibsonWorkflow('design'); setRawGoldenGate(false);
+        setFragments(restored.fragments.map(({ preparation: _preparation, ...fragment }) => fragment));
+        setGibsonPreparations(Object.fromEntries(restored.fragments.map((fragment) => [fragment.id, fragment.preparation === 'ready_linear' ? 'ready_linear' : 'pcr'])));
+        setRestoredGibson({ token: {}, request: restored });
+    };
+    const [suggestedGoldenGate, setSuggestedGoldenGate] = useState<{ request: WorkflowRequest } | null>(null);
     useEffect(() => {
         const params = sequenceData.operationParams;
+        if (params?.mode === 'gibson') {
+            // Saved Gibson design: parts, order, orientation, preparation and settings come back for editing.
+            const design = asWorkupRecord(params.design_request) ?? asWorkupRecord(params.assembly_request);
+            if (design && Array.isArray(design.fragments) && design.fragments.length > 0) {
+                restoreGibsonDesign(design as unknown as SavedGibsonDesignRequest);
+                return;
+            }
+        }
         const saved = asWorkupRecord(params?.assembly_request);
         if (saved && Array.isArray(saved.fragments) && (params?.mode === 'ligation' || params?.mode === 'golden_gate')) {
             setMode(params.mode);
@@ -466,8 +572,19 @@ export function AssemblyPanel({
                 sequence: sequenceData.sequence,
                 digestFragment: sequenceData.digestFragment,
                 role: current.length === 0 ? 'vector' : 'insert',
+                features: inlineFragmentFeatures(sequenceData.features, sequenceData.sequence.length),
             }, mode),
         ]);
+    };
+
+    const addSavedFragment = (input: AssemblyFragmentInput) => {
+        setDnaWeaverPlan(null);
+        const ends = input.left_end || input.right_end ? {} : defaultEnds(mode);
+        setFragments((current) => [...current, {
+            ...input, ...ends,
+            id: current.some((fragment) => fragment.id === input.id) || !input.id ? nextFragmentId() : input.id,
+            role: input.role || (current.length === 0 ? 'vector' : 'insert'),
+        }]);
     };
 
     const addSelectionFragment = () => {
@@ -485,6 +602,7 @@ export function AssemblyPanel({
                 sourceStart: activeSelection.start,
                 sourceEnd: activeSelection.end,
                 wrapsOrigin: activeSelection.wrapsOrigin,
+                features: inlineFragmentFeatures(sequenceData.features, sequenceData.sequence.length, { start: activeSelection.start, end: activeSelection.end, wrapsOrigin: activeSelection.wrapsOrigin }),
             }, mode),
         ]);
     };
@@ -543,7 +661,7 @@ export function AssemblyPanel({
         setError(null);
         setFragments((current) => current.map((fragment) => ({
             ...fragment,
-            ...(fragment.metadata?.digest_fragment ? {} : defaultEnds(nextMode)),
+            ...(fragment.metadata?.digest_fragment || fragment.metadata?.retained_ends ? {} : defaultEnds(nextMode)),
         })));
     };
 
@@ -605,7 +723,7 @@ export function AssemblyPanel({
     };
 
     const downloadVendorOrder = (format: 'fasta' | 'csv') => {
-        if (!dnaWeaverPlan?.order_ready) return;
+        if (!dnaWeaverPlan) return;
         const safeName = (saveName || sequenceData.name || 'dnaweaver-order').replace(/[^A-Za-z0-9._-]+/g, '_');
         const content = format === 'fasta'
             ? `${dnaWeaverPlan.ordered_fragments.map((fragment, index) => `>${fragment.name || `fragment_${index + 1}`}|length=${fragment.sequence.length}|sequence_sha256=${fragment.sequence_sha256}|plan_sha256=${dnaWeaverPlan.plan_checksum}\n${fragment.sequence}`).join('\n')}\n`
@@ -632,8 +750,8 @@ export function AssemblyPanel({
             setError('Add at least one fragment to the basket.');
             return;
         }
-        if (mode === 'gibson' && gibsonWorkflow === 'plan' && (!dnaWeaverPlan || !dnaWeaverPlan.order_ready)) {
-            setError('Create an order-ready DNA Weaver plan before saving. Resolve every blocker and re-plan.');
+        if (mode === 'gibson' && gibsonWorkflow === 'plan' && !dnaWeaverPlan) {
+            setError('Plan vendor fragments before saving.');
             return;
         }
         previewRef.current?.abort();
@@ -665,9 +783,10 @@ export function AssemblyPanel({
             if (mode === 'ligation') {
                 const payload = {
                     fragments,
-                    circular: sequenceData.circular,
+                    circular: ligationCircular ?? sequenceData.circular,
                     new_name: saveName || undefined,
                     save_description: saveDescription || undefined,
+                    observe_enzymes: observedEnzymes(fragments),
                 };
                 response = action === 'save'
                     ? await saveLigationAssembly(payload)
@@ -728,6 +847,23 @@ export function AssemblyPanel({
         }, savedSequence?.id || null);
     };
 
+    const suggestionPanel = (
+        <SuggestPlan
+            builder={mode === 'golden_gate' && targetBuilder}
+            goldenGateOptions={goldenGateOptions}
+            selection={selection}
+            sequenceData={sequenceData}
+            selectedSequenceId={selectedSequenceId}
+            onUseGibson={restoreGibsonDesign}
+            onUseGoldenGate={(request) => { setMode('golden_gate'); setTargetBuilder(false); setRawGoldenGate(true); setSuggestedGoldenGate({ request }); }}
+            onUseRestriction={(request) => {
+                setMode('ligation'); setRawGoldenGate(false); setFragments(request.fragments);
+                setLigationCircular(request.circular ?? true); setSaveName(request.new_name ?? '');
+                setDnaWeaverPlan(null); setResult(null);
+            }}
+        />
+    );
+
     return (
         <div className="space-y-4 p-3 text-sm">
             <div>
@@ -740,6 +876,8 @@ export function AssemblyPanel({
             <SavedGibsonWorkupLibrary onLoad={onLoadSavedWorkup} />
 
             <SavedGibsonWorkup operationParams={sequenceData.operationParams} />
+
+            {mode !== 'golden_gate' && suggestionPanel}
 
             <div className="flex flex-wrap gap-2">
                 {[
@@ -758,8 +896,13 @@ export function AssemblyPanel({
                 ))}
             </div>
 
-            {mode === 'golden_gate' && <div><button onClick={() => setRawGoldenGate(false)}>Manual / prepared fragments</button><button onClick={() => setRawGoldenGate(true)}>Raw design / evaluate / optimize / split</button></div>}
-            {mode === 'golden_gate' && rawGoldenGate ? <Suspense fallback={<p>Loading Golden Gate workflow…</p>}><GoldenGateWorkflowWorkspace sequenceData={sequenceData} options={goldenGateOptions} onLoadProduct={onLoadProduct} operationId={goldenGateOperationId} /></Suspense> : <>
+            {mode === 'golden_gate' && <div className="flex flex-wrap gap-2">
+                <button type="button" className={`rounded-full px-3 py-1.5 text-xs font-medium ${targetBuilder ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300'}`} onClick={() => setTargetBuilder(true)}>Build target</button>
+                <button type="button" className={`rounded-full px-3 py-1.5 text-xs font-medium ${!targetBuilder && !rawGoldenGate ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300'}`} onClick={() => { setTargetBuilder(false); setRawGoldenGate(false); }}>Manual / prepared fragments</button>
+                <button type="button" className={`rounded-full px-3 py-1.5 text-xs font-medium ${!targetBuilder && rawGoldenGate ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300'}`} onClick={() => { setTargetBuilder(false); setRawGoldenGate(true); }}>Raw design / evaluate / optimize / split</button>
+            </div>}
+            {mode === 'golden_gate' && targetBuilder && suggestionPanel}
+            {mode === 'golden_gate' && targetBuilder ? null : mode === 'golden_gate' && rawGoldenGate ? <Suspense fallback={<p>Loading Golden Gate workflow…</p>}><GoldenGateWorkflowWorkspace sequenceData={sequenceData} options={goldenGateOptions} onLoadProduct={onLoadProduct} operationId={goldenGateOperationId} suggested={suggestedGoldenGate} /></Suspense> : <>
             {mode === 'gibson' && (
                 <>
                     <div className="grid grid-cols-1 gap-2 rounded-xl border border-slate-700 bg-slate-900/50 p-1.5 sm:grid-cols-3">
@@ -803,16 +946,17 @@ export function AssemblyPanel({
                                 </button>
                             </div>
                             {dnaWeaverPlan && (
-                                <div className={`space-y-2 rounded border p-2 ${dnaWeaverPlan.order_ready ? 'border-emerald-800 bg-emerald-950/30' : 'border-red-800 bg-red-950/30'}`}>
-                                    <div className="font-medium">{dnaWeaverPlan.order_ready ? 'Order-ready under generic screening' : 'Blocked: do not order or save'} • {dnaWeaverPlan.ordered_fragments.length} fragments • {dnaWeaverPlan.pydna_exact_candidate_count} exact pydna candidate(s)</div>
+                                <div className="space-y-2 rounded border border-slate-700 bg-slate-950/40 p-2">
+                                    <div className="font-medium">{dnaWeaverPlan.ordered_fragments.length} fragments • {dnaWeaverPlan.pydna_exact_candidate_count} exact pydna candidate(s)</div>
                                     <div>DNA Weaver {dnaWeaverPlan.planner_version} → pydna {dnaWeaverPlan.validator_version} • price model {dnaWeaverPlan.estimated_price ?? 'unavailable'} • lead {dnaWeaverPlan.estimated_lead_time_days ?? 'unavailable'} days</div>
                                     <code className="block break-all text-[10px] text-cyan-200/60">Plan SHA-256: {dnaWeaverPlan.plan_checksum}</code>
                                     <div className="space-y-1">
-                                        {dnaWeaverPlan.quality_checks.filter((check) => check.status !== 'pass').map((check) => <div key={check.check_id} className={check.status === 'blocker' ? 'text-red-300' : 'text-amber-300'}>{check.status.toUpperCase()}: {check.detail}</div>)}
+                                        {dnaWeaverPlan.quality_checks.filter((check) => check.status !== 'pass').length > 0 && <div className="text-slate-400">Notes</div>}
+                                        {dnaWeaverPlan.quality_checks.filter((check) => check.status !== 'pass').map((check) => <div key={check.check_id} className="text-amber-300">{check.detail}</div>)}
                                     </div>
                                     <div className="flex gap-2">
-                                        <button type="button" disabled={!dnaWeaverPlan.order_ready} onClick={() => downloadVendorOrder('fasta')} className="rounded bg-slate-800 px-2 py-1 disabled:opacity-40">Export order FASTA</button>
-                                        <button type="button" disabled={!dnaWeaverPlan.order_ready} onClick={() => downloadVendorOrder('csv')} className="rounded bg-slate-800 px-2 py-1 disabled:opacity-40">Export order CSV</button>
+                                        <button type="button" onClick={() => downloadVendorOrder('fasta')} className="rounded bg-slate-800 px-2 py-1">Export order FASTA</button>
+                                        <button type="button" onClick={() => downloadVendorOrder('csv')} className="rounded bg-slate-800 px-2 py-1">Export order CSV</button>
                                     </div>
                                 </div>
                             )}
@@ -843,6 +987,16 @@ export function AssemblyPanel({
                     >
                         Add selection
                     </button>
+                    <FragmentChooser label="Add saved fragment" onPick={(item) => {
+                        // Preserve selection order even when an earlier revision read is slower.
+                        savedFragmentLoads.current = savedFragmentLoads.current.then(async () => {
+                            try {
+                                addSavedFragment(await loadChooserFragment(item));
+                            } catch (loadError) {
+                                setError(loadError instanceof Error ? loadError.message : 'Unable to load saved fragment');
+                            }
+                        });
+                    }} />
                 </div>
 
                 <div className="grid gap-2 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)_auto]">
@@ -1006,8 +1160,9 @@ export function AssemblyPanel({
                             </label>
                         )}
 
+                        {mode !== 'gibson' && <EndOperations fragment={fragment} onApplied={(child) => { setFragments((current) => [...current, child]); setDnaWeaverPlan(null); }} />}
                         {mode !== 'gibson' && <p className="text-xs text-slate-400">Physical ends: enter each protruding strand 5′→3′; fragment sequence is the original top strand 5′→3′. Reverse rotates the duplex. Historical notation retains legacy behavior.</p>}
-                        <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,260px),1fr))] gap-3">
                             <EndEditor
                                 label="Left end"
                                 value={fragment.left_end || undefined}
@@ -1054,7 +1209,7 @@ export function AssemblyPanel({
                     <button
                         type="button"
                         onClick={() => void execute('save')}
-                        disabled={loading !== null || (mode === 'gibson' && gibsonWorkflow === 'plan' && !dnaWeaverPlan?.order_ready)}
+                        disabled={loading !== null}
                         className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
                     >
                         {loading === 'save' ? 'Saving…' : mode === 'gibson' && gibsonWorkflow === 'plan' ? 'Save computed plan' : 'Validate + Save'}
@@ -1071,6 +1226,7 @@ export function AssemblyPanel({
                     saveDescription={saveDescription}
                     sequenceName={sequenceData.name}
                     initialCircular={sequenceData.circular}
+                    restored={restoredGibson?.request ?? null}
                     onSaved={() => void refreshSavedWorkups()}
                     onLoadProduct={onLoadProduct}
                 />
@@ -1083,7 +1239,7 @@ export function AssemblyPanel({
             )}
 
             {!(mode === 'gibson' && gibsonWorkflow === 'design') && result && (
-                <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+                <div ref={(el) => el?.scrollIntoView?.({ block: 'nearest' })} className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                             <div className="font-medium text-slate-100">{result.message}</div>
@@ -1122,6 +1278,8 @@ export function AssemblyPanel({
                                     <div className="font-medium text-slate-200">
                                         {junction.left_fragment_name} → {junction.right_fragment_name}
                                     </div>
+                                    {mode === 'ligation' && <div className="mt-1 text-xs text-slate-300" data-junction-sealed={junction.sealed ?? 'unknown'}>{sealedLabel(junction.sealed)}</div>}
+                                    {mode === 'ligation' && result.junction_sites?.find((site) => site.left_fragment_id === junction.left_fragment_id && site.right_fragment_id === junction.right_fragment_id) && <div className="mt-1 text-xs text-slate-300" data-junction-site>{result.junction_sites.find((site) => site.left_fragment_id === junction.left_fragment_id && site.right_fragment_id === junction.right_fragment_id)?.note}</div>}
                                     <div className="mt-1 text-xs text-slate-400">
                                         {junction.overlap_sequence
                                             ? `${junction.overlap_length} nt overlap`

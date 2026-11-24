@@ -17,11 +17,14 @@ from sqlalchemy.orm import sessionmaker
 from component_runtime import SourceIdentity
 from database import Base, Job, MdRun
 from routers import jobs
+from services import job_submission
+from services import job_requests
 from schemas import JobCreate
 from services import gpu_orchestrator as gpu, nextflow
 from services.md import lifecycle
 from services.remote_execution.targets import ExecutionTargetError, selected_plan_target_resources
 from test_md_job_v2_contract import _catalog, _v2_spec
+from test_molecular_dynamics_orchestration import _AcceptingRegistry
 
 
 @pytest_asyncio.fixture
@@ -48,7 +51,7 @@ def plan(params):
         metadata_settings=nextflow._native_plan_metadata_settings('molecular_dynamics', params))
 
 
-@pytest.mark.parametrize('engine', ['gromacs', 'openmm'])
+@pytest.mark.parametrize('engine', ['gromacs'])
 @pytest.mark.parametrize('target', ['local', 'worker:fixture'])
 def test_selected_descendant_projection_requires_one_shared_gpu(engine, target):
     request = spec()
@@ -71,12 +74,16 @@ def test_selected_descendant_projection_requires_one_shared_gpu(engine, target):
 async def test_real_create_job_v2_reserves_descendants_and_initializes(store, tmp_path, monkeypatch):
     from services.md.launch_contract import normalize_md_job_spec, materialize_md_job_spec
     catalog = _catalog()
-    monkeypatch.setattr(jobs, 'require_molecular_dynamics_feature', lambda _: None)
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda _: None)
-    monkeypatch.setattr(jobs, 'get_registry', lambda: SimpleNamespace(reload=lambda: None, validate_job_params=lambda *a: []))
-    monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
-    monkeypatch.setattr(jobs, 'normalize_md_job_spec', lambda **kw: normalize_md_job_spec(**kw, chemistry_catalog=catalog))
-    monkeypatch.setattr(jobs, 'materialize_md_job_spec', lambda **kw: materialize_md_job_spec(**kw, chemistry_catalog=catalog))
+    from services.md import launch_contract
+    monkeypatch.setattr(launch_contract, '_bound_engine_runtime_identity',
+        lambda: {'image_name': 'gromacs.sif', 'sif_sha256': 'a' * 64})
+    monkeypatch.setattr(job_submission, 'require_molecular_dynamics_feature', lambda _: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda _: None)
+    monkeypatch.setattr(job_submission, 'get_registry', _AcceptingRegistry)
+    monkeypatch.setattr(job_requests, 'get_registry', _AcceptingRegistry)
+    monkeypatch.setattr(job_submission, 'get_results_dir', lambda: tmp_path / 'results')
+    monkeypatch.setattr(job_requests, 'normalize_md_job_spec', lambda **kw: normalize_md_job_spec(**kw, chemistry_catalog=catalog))
+    monkeypatch.setattr(job_submission, 'materialize_md_job_spec', lambda **kw: materialize_md_job_spec(**kw, chemistry_catalog=catalog))
     request = spec()
     async with store() as session:
         response = await jobs.create_job(JobCreate(name='md-resource-root', model_id='molecular_dynamics',
@@ -100,14 +107,15 @@ async def test_accepted_v1_caller_hands_unchanged_normalized_request_to_existing
     request = spec()
     request['schema'] = 'bms.md.job.v1'
     request.pop('chemistry')
-    monkeypatch.setattr(jobs, 'require_molecular_dynamics_feature', lambda _: None)
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda _: None)
-    monkeypatch.setattr(jobs, 'get_registry', lambda: SimpleNamespace(reload=lambda: None, validate_job_params=lambda *a: []))
-    monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
-    monkeypatch.setattr(jobs, 'normalize_md_job_spec', lambda **kw: kw['params']['md_job_spec'])
-    monkeypatch.setattr(jobs, 'materialize_md_job_spec', lambda **kw: dict(kw['params']))
+    monkeypatch.setattr(job_submission, 'require_molecular_dynamics_feature', lambda _: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda _: None)
+    monkeypatch.setattr(job_submission, 'get_registry', _AcceptingRegistry)
+    monkeypatch.setattr(job_requests, 'get_registry', _AcceptingRegistry)
+    monkeypatch.setattr(job_submission, 'get_results_dir', lambda: tmp_path / 'results')
+    monkeypatch.setattr(job_requests, 'normalize_md_job_spec', lambda **kw: kw['params']['md_job_spec'])
+    monkeypatch.setattr(job_submission, 'materialize_md_job_spec', lambda **kw: dict(kw['params']))
     initialize = AsyncMock()
-    monkeypatch.setattr(jobs, 'create_md_run', initialize)
+    monkeypatch.setattr(job_submission, 'create_md_run', initialize)
     async with store() as session:
         await jobs.create_job(JobCreate(name='accepted-legacy-caller', model_id='molecular_dynamics',
             mode='simulate', params={'md_job_spec': request}), BackgroundTasks(), session, experiment_session=None)

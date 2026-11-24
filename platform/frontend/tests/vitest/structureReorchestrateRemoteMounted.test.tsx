@@ -15,7 +15,7 @@ vi.mock('../../src/components/JobDetailsPanel', () => ({ JobDetailsPanel: () => 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
 const target = { id: 'vast:remote', name: 'worker50079775', provider: 'vast', state: 'ready', active: true,
     capabilities: { gpu_count: 1, gpu_name: 'RTX 5060 Ti' } };
-const summary = { id: 'source', name: 'Source structure', model_id: 'boltz2', mode: 'predict', status: 'failed', created_at: '2026-09-06T00:00:00Z', params: {} };
+const summary = { id: 'source', name: 'Source structure', model_id: 'boltz2', mode: 'predict', status: 'failed', created_at: '2026-09-06T00:00:00Z', design_count: 0, output_dir: null, params: {} };
 let jobPatch: Record<string, unknown>;
 let paramsPatch: Record<string, unknown>;
 let sourceTarget: string | null;
@@ -129,7 +129,7 @@ it('ESMFold2 retry reports Fast plus MSA validation instead of dispatching or si
     paramsPatch = { structure_launch_variant: undefined, pred_method: 'esmfold2', model_variant: 'fast', esmf_use_msa: true };
     await open(); await click('Re-orchestrate Job');
     expect(requests).toHaveLength(0);
-    expect(container.textContent).toContain('Choose Full to use MSA');
+    expect(container.textContent).toContain('Hosted MSA requires Full under BMS policy');
     expect(container.querySelector<HTMLSelectElement>('[aria-label="ESMFold2 Model Variant"]')!.value).toBe('fast');
 });
 it('resume API preserves omission for legacy callers and serializes explicit Local/remote', async () => {

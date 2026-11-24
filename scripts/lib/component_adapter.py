@@ -28,7 +28,10 @@ def runtime_from_environment(context_path: str | Path | None = None) -> Componen
     path = Path(context_path)
     if not context_path or not path.is_absolute():
         raise ValueError("BMS_COMPONENT_CONTEXT must be an absolute trusted context path")
-    context = json.loads(path.read_text())
+    return runtime_from_context(json.loads(path.read_text()))
+
+
+def runtime_from_context(context: dict) -> ComponentRuntime:
     required = {"ledger_path", "artifact_root", "attempt_id", "root_job_id", "target_id", "lease_id"}
     if not isinstance(context, dict) or not required <= context.keys():
         raise ValueError("incomplete component execution context")
@@ -141,10 +144,8 @@ def wf_clone_container_config(lock_path: str | Path, assembly_tool: str = "flye"
     """
     lock_path = Path(lock_path).resolve()
     lock = json.loads(lock_path.read_text())
-    from scripts.validate_wf_clone_runtime import selected_images
-    cache = Path(lock['containers']['cache_dir'])
-    if not cache.is_absolute():
-        cache = lock_path.parent / cache
+    from scripts.validate_wf_clone_runtime import resolve_lock_path, selected_images
+    cache = resolve_lock_path(lock_path, lock['containers']['cache_dir'])
     def groovy(value):
         return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
     lines = [task_container_config(shell_options=('-euo', 'pipefail')), 'process {']

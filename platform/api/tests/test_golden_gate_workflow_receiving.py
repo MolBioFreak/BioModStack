@@ -70,7 +70,7 @@ def test_real_target_split_exact_reconstruction(enzyme, spacer, width, topology)
     req = REQUEST_ADAPTER.validate_python(dict(task='split_target', target=dict(id='target', source=dict(kind='inline', sequence=sequence, topology=topology)),
         enzyme=binding(enzyme), windows=[dict(start=20, end=21), dict(start=80, end=81)],
         fixed_positions=[20,80], preparation=dict(kind='synthesis', clamp='TT', spacer=spacer),
-        terminal_right_fusion='TGAC' if width == 4 else 'TGA', search=dict(ranking_mode='lexicographic', unique_classes=False, exclude_palindromes=False)))
+        terminal_right_fusion='TGAC' if width == 4 else 'TGA', search=dict(ranking_mode='lexicographic', exclude_palindromes=False)))
     result = run_workflow(req)
     assert result.solutions, result.diagnostics
     assert result.solutions[0].design.solutions[0].sequence == sequence
@@ -154,10 +154,14 @@ async def test_registered_revision_contract_and_project_adapters(tmp_path):
         assert 'operation_id=' in operation_receipt['reopen_uri']
 
 
+# The native primer owner counts the full tailed PCR product (payload + both tails), not the payload.
+TAILED_INSERT_LENGTH = 86
+
+
 def test_native_automatic_primer_selection_preserves_requested_and_effective():
     data = request().model_dump(mode='json')
     data['automatic_primers'] = [dict(part_id='insert', settings=dict(primer_min_length=20, primer_max_length=20,
-        product_min_length=len(B), product_max_length=len(B), flank_search_span=20,
+        product_min_length=TAILED_INSERT_LENGTH, product_max_length=TAILED_INSERT_LENGTH, flank_search_span=20,
         gc_min_percent=0, gc_max_percent=100, gc_clamp_min=0, max_poly_x=100, tm_max_delta_c=100))]
     result = run_workflow(REQUEST_ADAPTER.validate_python(data))
     assert not result.diagnostics
@@ -236,7 +240,7 @@ async def test_split_save_freezes_candidate_and_origin_features(tmp_path, monkey
     data = dict(task='split_target', target=dict(id='target',source=dict(kind='inline',sequence=sequence,topology='circular',
         features=[dict(id='junction-cds',type='CDS',name='crosses cut',segments=[dict(start=10,end=90)],strand=1,codon_start=2)])),
         enzyme=binding('BsaI'), windows=[dict(start=20,end=21),dict(start=80,end=81)],display_origin=9,
-        preparation=dict(clamp='TT',spacer='A'),search=dict(ranking_mode='lexicographic',unique_classes=False,exclude_palindromes=False,seed=17))
+        preparation=dict(clamp='TT',spacer='A'),search=dict(ranking_mode='lexicographic',exclude_palindromes=False,seed=17))
     result = run_workflow(REQUEST_ADAPTER.validate_python(data))
     expected = result.solutions[0].design.solutions[0]
     def forbidden(*a, **k): raise AssertionError('Save reran optimizer')

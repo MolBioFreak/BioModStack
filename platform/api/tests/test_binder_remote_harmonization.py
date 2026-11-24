@@ -218,11 +218,12 @@ def test_bc2_action_assets_exclude_unselected_predictor_weights(mode):
     assert assets == expected
 
 
-def test_selected_gromacs_closure_does_not_select_openmm_or_binder_engines():
+def test_selected_gromacs_closure_does_not_select_binder_engines():
     from model_registry import selected_execution_metadata
     metadata = selected_execution_metadata('molecular_dynamics', 'simulate',
         {'md_engine': 'gromacs', 'md_config': {'engine': 'gromacs', 'replicas': 1}},
         'workflows/experimental/molecular_dynamics/orchestrator.nf')
     assets = {row.logical_id for row in metadata.dependencies if row.kind in {'image', 'weights'}}
-    assert assets == {'image:md-preparation-v1.sif', 'image:gromacs-md-2025.3.sif',
+    # No Amber preparation is selected without a structure/Amber chemistry input.
+    assert assets == {'image:gromacs-md-2025.3.sif',
                       'image:md-analysis-1.0.0.sif'}

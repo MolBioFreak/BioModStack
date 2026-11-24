@@ -41,8 +41,8 @@ def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) 
 
 
 def resolve(lock_path: Path, value: str) -> Path:
-    path = Path(value)
-    return path if path.is_absolute() else (lock_path.parent / path).resolve()
+    from validate_wf_clone_runtime import resolve_lock_path
+    return resolve_lock_path(lock_path, value)
 
 
 def source_is_exact(source: Path, expected_commit: str, expected_tree: str) -> bool:
@@ -108,9 +108,9 @@ def provision_images(lock_path: Path, lock: dict[str, Any], apptainer: str, asse
     for image in selected_images(lock, assembly_tool):
         destination = cache_dir / image["cache_file"]
         if destination.exists():
-            if destination.is_file() and not destination.is_symlink() and sha256_file(destination) == image["sha256"]:
-                continue
-            raise RuntimeError(f"refusing to replace existing mismatched image: {destination}")
+            if destination.is_file() and not destination.is_symlink():
+                continue  # keep whatever image is already installed, including a local build
+            raise RuntimeError(f"existing image path is not a regular file: {destination}")
         file_descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=cache_dir)
         os.close(file_descriptor)
         temporary = Path(temporary_name)
@@ -126,12 +126,47 @@ def provision_images(lock_path: Path, lock: dict[str, Any], apptainer: str, asse
                 run(apptainer, "build", "--fakeroot", str(temporary), str(definition))
             else:
                 run(apptainer, "pull", "--disable-cache", str(temporary), image["uri"])
-            actual = sha256_file(temporary)
-            if actual != image["sha256"]:
-                raise RuntimeError(f"downloaded image {image['uri']} SHA-256 is {actual}, expected {image['sha256']}")
             os.replace(temporary, destination)
         finally:
             temporary.unlink(missing_ok=True)
+
+
+def _fetch(url: str, destination: Path, expected_sha256: str, *, executable: bool = False) -> None:
+    """Download one locked file next to its destination, check it, then move it into place."""
+    import urllib.request
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    file_descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(file_descriptor, "wb") as handle, urllib.request.urlopen(url, timeout=120) as response:
+            shutil.copyfileobj(response, handle)
+        found = sha256_file(temporary)
+        if found != expected_sha256:
+            raise RuntimeError(f"{url} has SHA-256 {found}, the lock expects {expected_sha256}")
+        temporary.chmod(0o755 if executable else 0o644)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def provision_nextflow(lock_path: Path, lock: dict[str, Any]) -> None:
+    """Install the locked launcher and its framework jar; the clone pipeline runs offline.
+
+    Files already in place are kept. A launcher named by BMS_NEXTFLOW_EXECUTABLE is the
+    operator's own and nothing is downloaded over it.
+    """
+    from validate_wf_clone_runtime import resolve_nextflow_home
+    runtime = lock["nextflow"]
+    launcher, framework = runtime.get("launcher"), runtime.get("framework")
+    if launcher and not os.environ.get("BMS_NEXTFLOW_EXECUTABLE", "").strip():
+        target = resolve(lock_path, runtime["executable"])
+        if not target.exists():
+            _fetch(launcher["url"], target, launcher["sha256"], executable=True)
+    if framework:
+        version = runtime["version"]
+        jar = resolve_nextflow_home() / "framework" / version / f"nextflow-{version}-one.jar"
+        if not jar.exists():
+            _fetch(framework["url"], jar, framework["sha256"])
 
 
 def main() -> int:
@@ -145,6 +180,7 @@ def main() -> int:
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     provision_images(lock_path, lock, args.apptainer, args.assembly_tool, args.image_source_dir)
     provision_source(lock_path, lock)
+    provision_nextflow(lock_path, lock)
     model = lock["models"]["default"]
     validator = Path(__file__).with_name("validate_wf_clone_runtime.py")
     run("python3", str(validator), "--lock", str(lock_path), "--model", model, "--assembly-tool", args.assembly_tool, "--output", "-")

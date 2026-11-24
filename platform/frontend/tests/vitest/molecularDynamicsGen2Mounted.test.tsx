@@ -372,10 +372,40 @@ const mountPredictionCandidateRace = async () => {
 };
 
 describe('mounted Molecular Dynamics Gen 2 launcher', () => {
+    it('sends the profile default only as an omission and preserves explicit guided-native box choices', async () => {
+        await mountAdmittedFixture();
+        const select = async (label: string, value: string) => {
+            const el = container.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+            await act(async () => { el.value = value; el.dispatchEvent(new Event('change', { bubbles: true })); });
+        };
+        await select('Protocol', 'guided');
+        await click('Add ordered stage');
+        apiMocks.post.mockImplementation(async (url, { intent }) => {
+            if (url !== '/api/molecular-dynamics/launch-preview') throw new Error(`unexpected POST ${url}`);
+            return response({ schema_version: 'bms.md.launch-preview.v2', source: null, input_identity: {},
+                effective_request: { stages: intent.stages }, warnings: [], blockers: [], preview_digest: hash('d'),
+                execution_target_id: intent.execution_target_id, execution_policy: intent.execution_policy });
+        });
+        const previewInput = async () => {
+            const before = apiMocks.post.mock.calls.length;
+            await click('Preview');
+            expect(apiMocks.post).toHaveBeenCalledTimes(before + 1);
+            const last = apiMocks.post.mock.calls.at(-1)!;
+            expect(last[0]).toBe('/api/molecular-dynamics/launch-preview');
+            expect(last[1].intent.input.chemistry_profile_id).toBe(profile.id);
+            return last[1].intent.input;
+        };
+        expect(await previewInput()).not.toHaveProperty('box_type');
+        const label = 'Preparation box_type';
+        for (const box of ['cubic', 'triclinic', 'dodecahedron', 'octahedron']) {
+            await select(label, box);
+            expect(await previewInput()).toHaveProperty('box_type', box);
+        }
+        await select(label, '');
+        expect(await previewInput()).not.toHaveProperty('box_type');
+    });
     it.each([
         ['structure', 'gromacs', 'GROMACS'],
-        ['structure', 'openmm', 'GROMACS'],
-        ['prepared', 'openmm', 'OpenMM'],
     ])('summary reflects the active %s lane, not the retained %s selector', async (inputMode, engine, label) => {
         await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><MolecularDynamicsTemplate onBack={() => undefined} initialValues={{ md_form: { inputMode, engine } }} /></MemoryRouter></QueryClientProvider>));
         await act(async () => { await vi.waitFor(() => expect(container.querySelector('[data-md-active-engine]')?.textContent).toBe(label)); });
@@ -1248,7 +1278,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         await click('Vast · Worker');
         const beforeProvision = apiMocks.post.mock.calls.length;
         await click('Preview artifact downloads');
-        await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Scientific launch restrictions remain separate.')); });
+        await act(async () => { await vi.waitFor(() => expect(container.querySelector('[aria-label="Unsaved workflow provisioning"] h4')?.getAttribute('title')).toContain('Scientific launch restrictions remain separate.')); });
         expect(apiMocks.post.mock.calls.length).toBe(beforeProvision + 1);
         const provisionCall = apiMocks.post.mock.calls.at(-1);
         await click('Local');

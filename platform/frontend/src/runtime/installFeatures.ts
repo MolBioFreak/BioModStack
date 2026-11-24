@@ -2,10 +2,13 @@ import { useQuery } from '@tanstack/react-query';
 
 export const DEFAULT_BMS_FEATURES = {
     bioxp: false,
+    // Legacy local MMseqs2 MSA server; the install profile turns it on.
+    local_msa: false,
 } as const;
 
 export const DEFAULT_BMS_DEV_FEATURES = {
     bioxp: true,
+    local_msa: false,
 } as const;
 
 export type BmsFeatureKey = keyof typeof DEFAULT_BMS_FEATURES;
@@ -50,6 +53,7 @@ export function normalizeBmsFeatures(payload: unknown): BmsFeatures {
 
     return {
         bioxp: coerceFeatureBool(rawFeatures.bioxp, defaults.bioxp),
+        local_msa: coerceFeatureBool(rawFeatures.local_msa, defaults.local_msa),
     };
 }
 
@@ -63,6 +67,7 @@ function normalizeBmsDevFeatures(payload: unknown): BmsFeatures {
 
     return {
         bioxp: coerceFeatureBool(rawFeatures.bioxp, defaults.bioxp),
+        local_msa: coerceFeatureBool(rawFeatures.local_msa, defaults.local_msa),
     };
 }
 

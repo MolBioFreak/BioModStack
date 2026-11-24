@@ -501,8 +501,11 @@ def _component_checkpoint_runtime(envelope: dict):
         raise RuntimeError("Checkpoint source must match launch-bound source")
     sys.path.insert(0, str(source))
     sys.path.insert(0, str(source / "platform" / "api"))
-    from scripts.lib.component_adapter import runtime_from_environment
-    return runtime_from_environment(path)
+    from scripts.lib import component_adapter
+    if hasattr(component_adapter, "runtime_from_context"):
+        return component_adapter.runtime_from_context(context)
+    # The launch-bound adapter may predate parsed-context support.
+    return component_adapter.runtime_from_environment(path)
 
 
 def external_service_control(attempt_dir: Path, *, attempt_id: str, expected_boot_id: str,
@@ -541,11 +544,11 @@ def checkpoint_control(attempt_dir: Path, *, attempt_id: str, expected_boot_id: 
         decision=decision, continuation_lease_id=continuation_lease_id, resource_admission=resource_admission)
     with (attempt_dir / "start.lock").open("a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        current = status(attempt_dir)
+        envelope = load_json(envelope_path(attempt_dir))
+        current = status(attempt_dir, envelope=envelope, include_activity=False)
         if (current.get("attempt_id") != attempt_id or current.get("boot_id") != expected_boot_id
                 or expected_boot_id != boot_id()):
             raise RuntimeError("Checkpoint attempt/boot authority conflicts")
-        envelope = load_json(envelope_path(attempt_dir))
         runtime = _component_checkpoint_runtime(envelope)
         if runtime is None or runtime.lease_id != lease_id:
             raise RuntimeError("Checkpoint lease authority conflicts")
@@ -695,11 +698,11 @@ def md_production_control(attempt_dir: Path, *, attempt_id: str, expected_boot_i
     """Existing attempt command receiver for production stop and continuation."""
     with (attempt_dir / 'start.lock').open('a+b') as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        current = status(attempt_dir)
+        envelope = load_json(envelope_path(attempt_dir))
+        current = status(attempt_dir, envelope=envelope, include_activity=False)
         if (current['attempt_id'] != attempt_id or current['boot_id'] != expected_boot_id
                 or expected_boot_id != boot_id()):
             raise RuntimeError('MD control attempt/boot conflicts')
-        envelope = load_json(envelope_path(attempt_dir))
         runtime = _component_checkpoint_runtime(envelope)
         if runtime is None or runtime.lease_id != lease_id:
             raise RuntimeError('MD control original lease conflicts')
@@ -1254,7 +1257,7 @@ def _recover_terminal_manifest(attempt_dir: Path, envelope: dict, value: dict) -
         value.update(exit_code=exit_code, result_manifest_sha256=sha256_file(manifest_path))
 
 
-def status(attempt_dir: Path) -> dict[str, Any]:
+def status(attempt_dir: Path, *, include_activity: bool = True, envelope: dict | None = None) -> dict[str, Any]:
     # The start command can die after claiming but before spawning. If neither
     # the command nor a supervisor owns its kernel lock, no future spawn can
     # arrive: fail the attempt instead of retaining its lease indefinitely.
@@ -1288,7 +1291,8 @@ def status(attempt_dir: Path) -> dict[str, Any]:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         value = load_json(status_path(attempt_dir))
         previous = dict(value)
-        envelope = load_json(envelope_path(attempt_dir))
+        if envelope is None:
+            envelope = load_json(envelope_path(attempt_dir))
         if any(value.get(key) != envelope.get(key) for key in ("job_id", "attempt_id")):
             raise RuntimeError("Attempt status identity mismatch")
         if value.get("boot_id") is not None and (not isinstance(value["boot_id"], str) or not value["boot_id"]):
@@ -1354,7 +1358,7 @@ def status(attempt_dir: Path) -> dict[str, Any]:
         if supervisor_alive:
             value["quiescent"] = False
         value.pop('activity', None)
-        if value.get('state') in {'running', 'cancelling'}:
+        if include_activity and value.get('state') in {'running', 'cancelling'}:
             activity = workflow_activity(attempt_dir, value, envelope=envelope)
             if activity is not None:
                 value['activity'] = activity
@@ -1435,7 +1439,7 @@ def main() -> int:
     elif args.command == "run":
         result = start(attempt_dir)
     elif args.command == "status":
-        result = status(attempt_dir)
+        result = status(attempt_dir, include_activity="bms_no_activity" not in sys._xoptions)
     elif args.command == "cancel":
         result = cancel(attempt_dir, args.timeout_seconds)
     elif args.command in {'md-pause', 'md-resume'}:

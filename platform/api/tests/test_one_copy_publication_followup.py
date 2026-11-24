@@ -131,7 +131,7 @@ def test_existing_nextflow_stub_with_cached_distribution(tmp_path, monkeypatch):
 
 
 ROOT = Path(__file__).resolve().parents[3]
-JAR = Path('/home/dalab/.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar')
+JAR = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR', str(Path.home() / '.nextflow' / 'framework' / '25.10.1' / 'nextflow-25.10.1-one.jar')))
 
 
 @pytest.mark.parametrize('kind', ['root', 'leaf', 'hardlink'])

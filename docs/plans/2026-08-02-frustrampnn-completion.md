@@ -57,7 +57,7 @@ The following are already implemented and are not to be rewritten unless a focus
 
 Existing runtime identity remains authoritative unless live preflight proves drift:
 
-- image: `/mnt/BioModStack/apptainer/frustrampnn.sif`;
+- image: `$BMS_CONTAINER_DIR/frustrampnn.sif` (`$BMS_CONTAINER_DIR` is the configured container directory);
 - checkpoint: `/opt/frustrampnn_weights/megascale.ckpt`;
 - canonical CLI inside the image;
 - scheduler-selected physical GPU through task isolation and task-visible CUDA index `0`.

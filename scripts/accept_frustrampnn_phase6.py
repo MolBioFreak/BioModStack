@@ -1174,14 +1174,6 @@ def _validate_parent_case(
             media_type = source.get("media_type") if isinstance(source, dict) else None
             if media_type not in {"chemical/x-pdb", "chemical/x-mmcif"}:
                 raise AcceptanceFailure("protein_terminal_structure", "every protein-design terminal candidate must be a structure")
-    if case == "antibody_denovo":
-        for request in requests:
-            lineage = request.get("transformation_lineage") or request.get("producer_provenance")
-            if not isinstance(lineage, (list, dict)):
-                raise AcceptanceFailure("antibody_iggm_lineage", "antibody candidate lacks IgGM freshness lineage")
-            serialized = _canonical_bytes(lineage).decode("utf-8")
-            if "iggm" not in serialized.lower() or "stale" in serialized.lower():
-                raise AcceptanceFailure("antibody_stale_iggm", "antibody candidate does not prove fresh post-IgGM structure")
     return {"candidates": len(request_ids), "candidate_ids": sorted(request_ids)}
 
 

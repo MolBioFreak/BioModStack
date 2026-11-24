@@ -3,6 +3,7 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import { fetchOntFastqQcResult, type OntResultCollection } from '../../lib/ontFastqQcResult';
 
 import type { OntSiteReview, OntSiteReviewSite } from '../../lib/ontFastqQcResult';
+import { PileupChromatogram } from './PileupChromatogram';
 import type {
     OntFastqQcCheck,
     OntFastqQcJsonValue,
@@ -58,6 +59,60 @@ const CHECKS: Array<{
     { key: 'topology', label: 'Topology' },
 ];
 
+const LIBRARY_PREP_NOTE: Record<string, string> = {
+    rapid: 'Rapid prep cuts every molecule, so few reads span both ends. Not reported as damage.',
+    ligation: 'Ligation prep keeps molecules whole, so this is the full-length share of the library.',
+    unknown: 'The library prep is not named for these reads, so the share spanning both ends is not interpreted.',
+};
+/** Where reads start and stop on a linear construct. Shown only for a linear reference. */
+function LinearReadEnds({ check }: { check: OntFastqQcCheck }) {
+    const raw = check.metrics.linear_ends;
+    if (check.metrics.expected_topology !== 'linear' || !raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const number = (key: string) => (typeof raw[key] === 'number' ? (raw[key] as number) : null);
+    const prep = typeof raw.library_prep === 'string' && raw.library_prep in LIBRARY_PREP_NOTE ? raw.library_prep : 'unknown';
+    const spanning = number('reads_spanning_both_ends');
+    const fraction = number('spanning_fraction');
+    const aligned = number('aligned_reads');
+    const histogram = raw.read_end_histogram;
+    const table = histogram && typeof histogram === 'object' && !Array.isArray(histogram) ? histogram : null;
+    const width = table && typeof table.bin_width_bp === 'number' ? table.bin_width_bp : 1;
+    const bins = table && Array.isArray(table.bins) ? (table.bins as unknown as Array<Record<string, number>>) : [];
+    const shown = (value: number | null, suffix = '') => (value === null ? '—' : `${value.toLocaleString()}${suffix}`);
+    const tiles: Array<[string, string, string]> = [
+        ['Library prep', prep.replace(/^./, (letter) => letter.toUpperCase()), prep === 'unknown' ? 'not named in the input' : 'from the raw data'],
+        ['Reads spanning both ends', `${shown(spanning)}${fraction === null ? '' : ` · ${percent(fraction)}`}`, `of ${shown(aligned)} aligned reads`],
+        ['Depth at the ends', `${shown(number('mean_depth_first_window'), '×')} / ${shown(number('mean_depth_last_window'), '×')}`, `first and last ${shown(number('end_window_bp'))} bp`],
+    ];
+    return (
+        <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" aria-label="Read ends on a linear construct" data-testid="linear-read-ends">
+            <h4 className="text-sm font-semibold text-[var(--text-primary)]">Read ends on a linear construct</h4>
+            <p className="text-xs text-[var(--text-secondary)]">Where reads start and stop along the construct.</p>
+            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                {tiles.map(([label, value, detail]) => (
+                    <div key={label} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
+                        <div className="text-[11px] text-[var(--text-secondary)]">{label}</div>
+                        <div className="font-mono text-sm text-[var(--text-primary)]">{value}</div>
+                        <div className="mt-1 text-[9px] leading-tight text-[var(--text-secondary)]">{detail}</div>
+                    </div>
+                ))}
+            </div>
+            {bins.length > 0 && (
+                <Plot
+                    data={[{ type: 'bar', name: 'Read ends', x: bins.map((bin) => bin.start_bp + width / 2), y: bins.map((bin) => bin.read_starts + bin.read_ends), width, marker: { color: '#55a7ff' } }]}
+                    layout={{
+                        xaxis: { title: { text: 'Position on construct (bp)' } }, yaxis: { title: { text: 'Read ends' } },
+                        margin: { l: 62, r: 20, t: 16, b: 56 }, height: 260, showlegend: false,
+                        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#b8c4d8' },
+                    }}
+                    config={{ responsive: true, displaylogo: false }}
+                    useResizeHandler
+                    style={{ width: '100%', height: '260px' }}
+                />
+            )}
+            <p className="mt-2 text-[11px] text-[var(--text-secondary)]">{LIBRARY_PREP_NOTE[prep]}</p>
+        </section>
+    );
+}
 function CheckCard({
     label,
     limitation,
@@ -74,7 +129,8 @@ function CheckCard({
             : check.status === 'review'
                 ? 'text-[var(--warning)] border-[color-mix(in_srgb,var(--warning)_35%,transparent)]'
                 : 'text-[var(--text-secondary)] border-[var(--border-primary)]';
-    const checkMetrics = Object.entries(check.metrics);
+    // Read-end measurements have their own block below.
+    const checkMetrics = Object.entries(check.metrics).filter(([key]) => key !== 'linear_ends');
     return (
         <div className={`rounded border bg-[var(--bg-tertiary)] p-3 ${statusClass}`}>
             <div className="flex items-center justify-between gap-2">
@@ -88,7 +144,9 @@ function CheckCard({
                     {checkMetrics.map(([key, value]) => (
                         <div key={key} className="flex justify-between gap-3">
                             <dt className="text-[var(--text-secondary)]">
-                                {label === 'Topology' && key === 'state' ? 'Topology state' : metricLabel(key)}
+                                {label === 'Topology' && key === 'state' ? 'Topology state'
+                                    : label === 'Topology' && key === 'origin_spanning_reads' && check.metrics.expected_topology === 'linear' ? 'End-to-end junction reads'
+                                        : metricLabel(key)}
                             </dt>
                             <dd className="text-right font-mono text-[var(--text-primary)]">
                                 {displayJsonValue(value)}
@@ -139,7 +197,8 @@ function SampleSummary({ result }: { result: OntFastqQcResult }) {
     const reads = Number(result.summary.reads_considered) || 0;
     const dimer = Number(result.summary.dimer_like_reads) || 0;
     const trimer = Number(result.summary.trimer_plus_reads) || 0;
-    const monomer = Math.max(0, reads - dimer - trimer);
+    // Everything under 1.5x the expected size, short fragments included, so it is not called monomer.
+    const belowDimer = Math.max(0, reads - dimer - trimer);
     const identity = result.verification.summary.sequence_identity_fraction;
     const rows: Array<[string, string]> = [
         ['Reference', `${result.verification.summary.reference_name} · ${Number(result.verification.summary.reference_length).toLocaleString()} bp · ${result.verification.summary.reference_topology}`],
@@ -149,6 +208,11 @@ function SampleSummary({ result }: { result: OntFastqQcResult }) {
         ['Mean depth', display(result.summary.mean_coverage_depth as number, '×')],
         ['Read N50', display(result.summary.n50_read_length_bp as number, ' bp')],
     ];
+    // The standalone IGV page is an optional export; say so when this run could not make it.
+    const igvExport = result.summary.igv_report_status;
+    if (typeof igvExport === 'string' && igvExport.startsWith('unavailable')) {
+        rows.push(['Standalone IGV page', 'not made for this run; the built-in IGV view is unaffected']);
+    }
     return (
         <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" aria-label="Sample summary">
             <h4 className="text-sm font-semibold text-[var(--text-primary)]">Sample summary</h4>
@@ -160,17 +224,17 @@ function SampleSummary({ result }: { result: OntFastqQcResult }) {
                     <div className="mb-1 text-[var(--text-secondary)]">Population by read length (reads)</div>
                     {reads > 0 ? (
                         <>
-                            <div className="flex h-3 w-full overflow-hidden rounded" role="img" aria-label="Monomer, dimer and trimer-plus read fractions">
-                                <div style={{ width: `${(monomer / reads) * 100}%`, background: '#63d39b' }} />
+                            <div className="flex h-3 w-full overflow-hidden rounded" role="img" aria-label="Read fractions below 1.5x, dimer and trimer-plus">
+                                <div style={{ width: `${(belowDimer / reads) * 100}%`, background: '#63d39b' }} />
                                 <div style={{ width: `${(dimer / reads) * 100}%`, background: '#f59e0b' }} />
                                 <div style={{ width: `${(trimer / reads) * 100}%`, background: '#ef4444' }} />
                             </div>
                             <div className="mt-1 grid grid-cols-3 gap-2 font-mono">
-                                <span>Monomer {percent(monomer / reads)}</span>
+                                <span>Below 1.5x expected size {percent(belowDimer / reads)}</span>
                                 <span>Dimer {percent(dimer / reads)}</span>
                                 <span>Trimer+ {percent(trimer / reads)}</span>
                             </div>
-                            <p className="mt-1 text-[10px] text-[var(--text-secondary)]">Read counts from the length screen ({reads.toLocaleString()} reads). Shaded histogram bands mark 1×, 2× and 3× the reference length ±10%.</p>
+                            <p className="mt-1 text-[10px] text-[var(--text-secondary)]">Read counts from the length screen ({reads.toLocaleString()} reads). Dimer is 1.5 to 2.5 times the expected size and Trimer+ is above that. Shaded histogram bands mark 1×, 2× and 3× the reference length ±10%.</p>
                         </>
                     ) : <span className="text-[var(--text-secondary)]">No reads were considered.</span>}
                 </div>
@@ -361,6 +425,9 @@ export function OntFastqQcResultPanel({
         return groups;
     }, []);
     const logArtifacts = orderedArtifacts.filter((artifact) => artifact.scientific_role === 'audit_log');
+    // The strip and the AB1 file come from the same per-base read counts.
+    const perBaseTable = orderedArtifacts.find((artifact) => artifact.kind === 'per_base_support' && artifact.state === 'present' && artifact.url);
+    const pileupAb1 = orderedArtifacts.find((artifact) => artifact.kind === 'pileup_chromatogram' && artifact.state === 'present' && artifact.url);
     const histogramX = result.read_length_histogram.bins.map((bin) => (bin.start_bp + bin.end_bp_exclusive) / 2);
     const histogramY = result.read_length_histogram.bins.map((bin) => bin.read_count);
     const coverageX = result.coverage.points.map((point) => point.position_1based);
@@ -421,6 +488,13 @@ export function OntFastqQcResultPanel({
                 />
             )}
 
+            {perBaseTable?.url && (
+                <PileupChromatogram
+                    tableUrl={perBaseTable.url}
+                    ab1Url={pileupAb1?.url ?? null}
+                    initialPosition={result.site_review?.sites[0]?.position_1based}
+                />
+            )}
             <section>
                 <h4 className="mb-2 text-xs uppercase tracking-wide text-[var(--text-secondary)]">Decision checks</h4>
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
@@ -429,6 +503,7 @@ export function OntFastqQcResultPanel({
                     ))}
                 </div>
             </section>
+            <LinearReadEnds check={verification.checks.topology} />
 
             <section className="grid grid-cols-1 gap-3 xl:grid-cols-2">
                 <div className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">

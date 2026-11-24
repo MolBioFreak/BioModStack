@@ -15,6 +15,9 @@ from sqlalchemy import select
 from database import Design, Job, JobArtifact
 from schemas import JobCreate
 from routers import jobs, binder_continuation, models
+from services import job_submission
+from services import binder_continuation as binder_continuation_service
+from services import job_requests
 from scripts.lib import protonpottsmpnn_contract as contract
 from services import protonpottsmpnn_design as native
 from services import protonpottsmpnn_publication as publication
@@ -66,7 +69,7 @@ def test_closed_full_inventory_and_exact_editable_example_defaults():
     {'criteria': [{'selective_source': 'decoder'}]}, {'criteria': []}])
 def test_unknown_and_native_invalid_combinations_reject_at_normalizer(changes):
     with pytest.raises(HTTPException) as exc:
-        jobs.normalize_job_request(JobCreate(name='invalid', model_id='protonpottsmpnn', mode='redesign',
+        job_requests.normalize_job_request(JobCreate(name='invalid', model_id='protonpottsmpnn', mode='redesign',
             params={'target_pdb': 'source.pdb', 'binder_chain': 'A', **changes}))
     assert exc.value.status_code == 422
 
@@ -82,7 +85,8 @@ async def test_discovery_returns_canonical_nested_schema():
 
 @pytest.mark.asyncio
 async def test_selected_non_antibody_route_actual_child_insertion_explicit_local(admission, target, monkeypatch):
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: target.parent)
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: target.parent)
+    monkeypatch.setattr(binder_continuation_service, 'get_inputs_dir', lambda: target.parent)
     parent = Job(id='generic-source', name='generic source', model_id='proteinmpnn', mode='design', status='completed',
         execution_target_id='archived-worker', params={}, provenance={})
     design = Design(id='selected-design', job_id=parent.id, name='retained candidate',
@@ -109,7 +113,7 @@ def test_real_portable_bundle_uses_owned_source_and_offline_bindings(roots, tmp_
     monkeypatch.setattr(nextflow, 'get_data_root', lambda: roots['data'])
     source = roots['inputs']/'source.pdb'
     source.write_bytes(b'REMARK original source bytes\n')
-    normalized = jobs.normalize_job_request(request(source))
+    normalized = job_requests.normalize_job_request(request(source))
     normalized.params.update(native.prepare_for_job('redesign', normalized.params, roots['inputs']/'prepared', allowed_roots=roots.values()))
     source.unlink()
     invocation = compile_nextflow_invocation('protonpottsmpnn', 'redesign', normalized.params, str(roots['results']/'job'))
@@ -205,7 +209,7 @@ def test_actual_pinned_stage_is_the_complete_remote_image_dependency(tmp_path, m
     monkeypatch.setattr(bundle, 'get_container_dir', lambda: containers)
     monkeypatch.delenv('BMS_PROTONPOTTSMPNN_CONTAINER_PATH', raising=False)
     monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(tmp_path/'isolated-image-store'))
-    params = jobs.normalize_job_request(request(tmp_path/'source.pdb', 'worker')).params
+    params = job_requests.normalize_job_request(request(tmp_path/'source.pdb', 'worker')).params
     plan = compile_nextflow_invocation('protonpottsmpnn', 'redesign', params, str(tmp_path/'preview'), _preview_only=True)
     assets = bundle._runtime_assets('protonpottsmpnn', 'redesign', params,
         selected_plan=plan.execution_plan, only_kinds=frozenset({'image'}))
@@ -219,7 +223,7 @@ def test_actual_pinned_stage_is_the_complete_remote_image_dependency(tmp_path, m
 
 @pytest.mark.asyncio
 async def test_native_publication_real_artifact_rows_exact_endpoint_shape_no_fake_design(admission, target):
-    response = await jobs._create_job(request(target), BackgroundTasks(), admission)
+    response = await job_submission._create_job(request(target), BackgroundTasks(), admission)
     job = await admission.get(Job, response.id)
     folder = Path(job.output_dir)/native.DIRECTORY
     folder.mkdir(parents=True)

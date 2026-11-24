@@ -16,11 +16,15 @@ from database import Job, ExecutionTarget
 from component_runtime import SourceIdentity
 
 import routers.jobs as jobs
+from services import job_submission
+from services import binder_continuation
+from services import job_requests
 from schemas import JobCreate
 from services.nextflow import compile_job_nextflow_invocation
 from services.remote_execution import bundle
 from test_boltzgen_generation_launch import admission, target  # noqa: F401
 from test_remote_bundle_runtime_gaps import bundle_assignment_fixture
+from test_remote_support_packaging import receipt_payload
 
 
 @pytest.mark.asyncio
@@ -33,10 +37,12 @@ from test_remote_bundle_runtime_gaps import bundle_assignment_fixture
     ('boltzgen', 'nanobody_binder', 'boltzgen_yaml_config'),
 ])
 async def test_approved_prepared_directory_reaches_real_bundle(
-        model, mode, path_key, target, admission, tmp_path, monkeypatch):
+        model, mode, path_key, target, admission, receipt_payload, tmp_path, monkeypatch):
+    monkeypatch.setattr("services.remote_execution.critical_runtime.selected_support_root", lambda: receipt_payload)
     session, tasks = admission, BackgroundTasks()
     roots = {'inputs': target.parent, 'results': tmp_path / 'results'}
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: roots['inputs'])
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: roots['inputs'])
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: roots['inputs'])
     capabilities = {
         'critical_runtime_binding': {'paths': {'python': '/fixture/runtime/python/bin/python',
             'nextflow': '/fixture/runtime/bin/nextflow'}, 'environment': {}},
@@ -81,7 +87,7 @@ async def test_approved_prepared_directory_reaches_real_bundle(
     raw = JobCreate(name='transport fixture', model_id=model, mode=mode,
                     params=params, execution_target_id=selected_target.id)
     with pytest.raises(HTTPException) as review:
-        await jobs._create_job(raw, tasks, session)
+        await job_submission._create_job(raw, tasks, session)
     assert review.value.status_code == 409
     assert review.value.detail['code'] == 'remote_prepared_job_review_required'
     assert not list(await session.scalars(select(Job.id)))
@@ -94,12 +100,12 @@ async def test_approved_prepared_directory_reaches_real_bundle(
     target.unlink()  # Launch must never reopen an original after preparation.
     framework.unlink()
 
-    preview = jobs._execution_plan_preview(request)
+    preview = job_requests._execution_plan_preview(request)
     assert preview['admissible'], preview['blockers']
     approved = JobCreate.model_validate(prepared_body | {
         'execution_plan_approval': preview['approval_digest'],
     })
-    response = await jobs._create_job(approved, tasks, session)
+    response = await job_submission._create_job(approved, tasks, session)
     job = await session.get(Job, response.id)
     job.provenance = {**job.provenance, **bundle_assignment_fixture()}
     assert job.params[path_key] == str(reviewed_directory)

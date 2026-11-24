@@ -49,6 +49,7 @@ import { GovernedRawSignalWaveform } from './RawReadInspector';
 import { OntSignalIdealComparison } from './OntSignalIdealComparison';
 
 const TERMINAL_STATES = new Set(['ready', 'failed', 'cancelled']);
+const VIEW_WORDS: Record<string, string> = { requested: 'Waiting to start', running: 'Drawing…', publishing: 'Drawing…', ready: 'Ready', failed: 'Failed', cancelled: 'Cancelled' };
 type WorkbenchViewMode = OntSignalViewMode | 'raw_waveform' | 'ideal_comparison';
 
 interface ReadAndSignalWorkbenchProps {
@@ -400,18 +401,49 @@ export function ReadAndSignalWorkbench({
         if (current) URL.revokeObjectURL(current);
     }, []);
 
+    // A session opens on its saved region; after that only an IGV move changes the region.
+    // Saving must not pull the region back to wherever IGV happens to be (often the whole contig).
+    const currentLocusKey = currentLocus ? `${currentLocus.contig}:${currentLocus.start}:${currentLocus.end}` : '';
+    const lastIgvLocusRef = useRef<string | null>(null);
     useEffect(() => {
-        const locus = currentLocus || (viewerSession?.contig && viewerSession.locus_start && viewerSession.locus_end ? {
+        const saved = viewerSession?.contig && viewerSession.locus_start && viewerSession.locus_end ? {
             contig: viewerSession.contig,
             start: viewerSession.locus_start,
             end: viewerSession.locus_end,
-        } : null);
+        } : null;
+        const locus = saved || currentLocus;
         if (locus) {
             setContig(locus.contig);
             setStart(String(locus.start));
             setEnd(String(locus.end));
         }
-    }, [currentLocus, identityKey, viewerSession?.contig, viewerSession?.locus_end, viewerSession?.locus_start]);
+        lastIgvLocusRef.current = saved ? (currentLocusKey || 'pending') : currentLocusKey;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [identityKey]);
+    const ownIgvMoveRef = useRef<{ contig: string; start: number; end: number } | null>(null);
+    const igvOpenedForRef = useRef('');
+    useEffect(() => {
+        const saved = viewerSession?.contig && viewerSession.locus_start && viewerSession.locus_end ? viewerSession : null;
+        if (!saved || !alignmentSession?.ready || igvOpenedForRef.current === identityKey) return;
+        igvOpenedForRef.current = identityKey;
+        ownIgvMoveRef.current = { contig: saved.contig!, start: saved.locus_start!, end: saved.locus_end! };
+        onNavigateIgv(saved.contig!, saved.locus_start!, saved.locus_end!, 'saved signal region');
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [identityKey, alignmentSession?.ready]);
+    useEffect(() => {
+        if (!currentLocus) return;
+        const previous = lastIgvLocusRef.current;
+        lastIgvLocusRef.current = currentLocusKey;
+        const own = ownIgvMoveRef.current;
+        ownIgvMoveRef.current = null;
+        // IGV reporting back the region we sent it (possibly padded) is not a user move.
+        if (own && currentLocus.contig === own.contig && currentLocus.start <= own.start && currentLocus.end >= own.end) return;
+        if (previous === currentLocusKey || previous === 'pending') return;
+        setContig(currentLocus.contig);
+        setStart(String(currentLocus.start));
+        setEnd(String(currentLocus.end));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentLocusKey]);
 
     useEffect(() => {
         if (!viewerSession) return;
@@ -787,6 +819,44 @@ export function ReadAndSignalWorkbench({
         }
     };
 
+    // One plain button walks the preparation: calibration, then (after the operator accepts it)
+    // signal-to-read, then signal-to-reference against this result's alignment.
+    const chainReferenceRef = useRef(false);
+    const canPrepareReference = Boolean(referenceRevisionId && alignmentSession?.ready);
+    const running = (job: { state: string } | null) => Boolean(job && !TERMINAL_STATES.has(job.state));
+    const squiggleStep: { text: string; action: OntSignalMappingMode | null; button?: string } | null = (() => {
+        if (!activeRawRepresentationId || !compatibleSource) {
+            return capabilities ? { text: 'Squiggle views need this file as indexed BLOW5 and its basecalls with move tables.', action: null } : null;
+        }
+        if (running(calibration)) return { text: `Measuring signal timing on ${calibration!.sample_count} reads…`, action: null };
+        if (running(readMapping)) return { text: 'Lining the signal up with each read…', action: null };
+        if (running(referenceMapping)) return { text: 'Lining the signal up with the reference…', action: null };
+        if (readMapping?.state !== 'ready') {
+            if (!compatibleProfile && calibration?.state === 'ready' && calibration.artifact) {
+                return {
+                    text: `Signal timing measured on ${calibration.artifact.sample_selection.selected_count.toLocaleString()} reads (k-mer ${calibration.artifact.recommended_kmer_length}, offset ${calibration.artifact.recommended_signal_move_offset}).`,
+                    action: 'signal_to_read', button: 'Use it and prepare squiggle views',
+                };
+            }
+            return { text: 'Squiggle views are not prepared for this file yet.', action: 'signal_to_read', button: 'Prepare squiggle views' };
+        }
+        if (referenceMapping?.state !== 'ready' && canPrepareReference) {
+            return { text: 'Read views are ready. Reference and pileup views need one more step.', action: 'signal_to_reference', button: 'Prepare reference views' };
+        }
+        return null;
+    })();
+    const startSquiggleStep = (action: OntSignalMappingMode) => {
+        chainReferenceRef.current = action === 'signal_to_read';
+        void prepareMapping(action);
+    };
+    useEffect(() => {
+        if (!chainReferenceRef.current || readMapping?.state !== 'ready' || referenceMapping || !canPrepareReference || busy) return;
+        chainReferenceRef.current = false;
+        void prepareMapping('signal_to_reference');
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [readMapping?.state, referenceMapping, canPrepareReference, busy]);
+    useEffect(() => { chainReferenceRef.current = false; }, [identityKey]);
+
     const mappingForMode = mode === 'raw_waveform' ? null : mode === 'read' ? readMapping : referenceMapping;
     const mappingArtifact = mappingForMode?.artifacts.find((item) => (
         mode === 'read' ? item.kind === 'reform_paf' : item.kind === 'realign_paf'
@@ -1016,7 +1086,7 @@ export function ReadAndSignalWorkbench({
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
                     <div className="flex items-center justify-between gap-2">
                         <h3 className="text-xs font-semibold">Read and locus</h3>
-                        <button type="button" onClick={() => void loadLocusReads()} disabled={busy || !alignmentSession?.ready} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Reads in locus</button>
+                        <button type="button" onClick={() => void loadLocusReads()} disabled={busy || !alignmentSession?.ready} className="rounded border border-[var(--border-primary)] px-2 py-1 text-xs disabled:opacity-40">Reads in locus</button>
                     </div>
                     <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_1fr]">
                         <select aria-label="Read filter preset" value={readFilterPreset} onChange={(event) => setReadFilterPreset(event.target.value as AlignmentReadFilterPreset)} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs">
@@ -1028,206 +1098,55 @@ export function ReadAndSignalWorkbench({
                         </select>
                         <input aria-label="Search eligible reads" value={readSearch} onChange={(event) => setReadSearch(event.target.value)} placeholder="Search loaded reads" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs" />
                     </div>
-                    <div className="grid grid-cols-[1fr_76px_76px] gap-1">
-                        <input value={contig} onChange={(event) => setContig(event.target.value)} placeholder="Reference contig" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs" />
-                        <input value={start} onChange={(event) => setStart(event.target.value)} inputMode="numeric" placeholder="Start" className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs" />
-                        <input value={end} onChange={(event) => setEnd(event.target.value)} inputMode="numeric" placeholder="End" className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs" />
+                    <div className="grid grid-cols-[minmax(0,1fr)_88px_88px] gap-2">
+                        <label className="flex min-w-0 flex-col gap-0.5 text-[11px] text-[var(--text-secondary)]">Contig
+                            <input value={contig} onChange={(event) => setContig(event.target.value)} placeholder="Reference contig" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs text-[var(--text-primary)]" /></label>
+                        <label className="flex flex-col gap-0.5 text-[11px] text-[var(--text-secondary)]">Start
+                            <input value={start} onChange={(event) => setStart(event.target.value)} inputMode="numeric" placeholder="Start" className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs text-[var(--text-primary)]" /></label>
+                        <label className="flex flex-col gap-0.5 text-[11px] text-[var(--text-secondary)]">End
+                            <input value={end} onChange={(event) => setEnd(event.target.value)} inputMode="numeric" placeholder="End" className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs text-[var(--text-primary)]" /></label>
                     </div>
                     <div className="flex flex-wrap gap-1">
-                        <button type="button" onClick={() => moveRead(-1)} disabled={filteredEligibleReads.length === 0} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Previous eligible read</button>
-                        <button type="button" onClick={() => moveRead(1)} disabled={filteredEligibleReads.length === 0} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Next eligible read</button>
-                        <button type="button" onClick={locateRead} disabled={!selectedRead} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Locate read in IGV</button>
-                        <button type="button" onClick={openMappedLocus} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px]">Open mapped locus in IGV</button>
+                        <button type="button" onClick={() => moveRead(-1)} disabled={filteredEligibleReads.length === 0} className="rounded border border-[var(--border-primary)] px-2 py-1 text-xs disabled:opacity-40">Previous eligible read</button>
+                        <button type="button" onClick={() => moveRead(1)} disabled={filteredEligibleReads.length === 0} className="rounded border border-[var(--border-primary)] px-2 py-1 text-xs disabled:opacity-40">Next eligible read</button>
+                        <button type="button" onClick={locateRead} disabled={!selectedRead} className="rounded border border-[var(--border-primary)] px-2 py-1 text-xs disabled:opacity-40">Locate read in IGV</button>
+                        <button type="button" onClick={openMappedLocus} className="rounded border border-[var(--border-primary)] px-2 py-1 text-xs">Show region in IGV</button>
                     </div>
                     <div role="listbox" aria-label="Eligible reads" className="max-h-48 space-y-1 overflow-y-auto rounded border border-[var(--border-primary)] p-1">
                         {filteredEligibleReads.map((read) => (
-                            <button key={read.read_id} type="button" role="option" aria-selected={read.read_id === readId.trim()} onClick={() => { setReadId(read.read_id); setSelectedRead(read); }} className={`block w-full rounded px-2 py-1 text-left text-[10px] ${read.read_id === readId.trim() ? 'bg-[color-mix(in_srgb,var(--accent-primary)_20%,transparent)] text-[var(--accent-primary)]' : 'hover:bg-[var(--bg-secondary)]'}`}>
+                            <button key={read.read_id} type="button" role="option" aria-selected={read.read_id === readId.trim()} onClick={() => { setReadId(read.read_id); setSelectedRead(read); }} className={`block w-full rounded px-2 py-1 text-left text-xs ${read.read_id === readId.trim() ? 'bg-[color-mix(in_srgb,var(--accent-primary)_20%,transparent)] text-[var(--accent-primary)]' : 'hover:bg-[var(--bg-secondary)]'}`}>
                                 <span className="block font-medium">{formatAlignmentReadSummary(read)}</span>
                                 <span className="block truncate text-[var(--text-muted)]">{read.contig}:{read.start_1based} · {read.strand}</span>
                             </button>
                         ))}
-                        {eligibleReads.length > 0 && filteredEligibleReads.length === 0 && <div className="px-2 py-3 text-center text-[10px] text-[var(--text-muted)]">No loaded reads match this filter.</div>}
-                        {eligibleReads.length === 0 && <div className="px-2 py-3 text-center text-[10px] text-[var(--text-muted)]">Click a read in IGV or load reads in the current locus.</div>}
+                        {eligibleReads.length > 0 && filteredEligibleReads.length === 0 && <div className="px-2 py-3 text-center text-xs text-[var(--text-muted)]">No loaded reads match this filter.</div>}
+                        {eligibleReads.length === 0 && <div className="px-2 py-3 text-center text-xs text-[var(--text-muted)]">Click a read in IGV or load reads in the current locus.</div>}
                     </div>
                     <details>
-                        <summary className="cursor-pointer text-[10px] text-[var(--text-secondary)]">Exact read ID recovery</summary>
+                        <summary className="cursor-pointer text-xs text-[var(--text-secondary)]">Find a read by ID</summary>
                         <div className="mt-1 grid grid-cols-[1fr_auto] gap-1">
                             <input value={readId} onChange={(event) => setReadId(event.target.value)} placeholder="Exact read ID" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs font-mono" />
-                            <button type="button" onClick={() => void inspectExactRead()} disabled={busy || !alignmentSession?.ready || !readId.trim()} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Resolve</button>
+                            <button type="button" onClick={() => void inspectExactRead()} disabled={busy || !alignmentSession?.ready || !readId.trim()} className="rounded border border-[var(--border-primary)] px-2 py-1 text-xs disabled:opacity-40">Resolve</button>
                         </div>
                     </details>
                     {selectedRead && (
-                        <div className="rounded bg-[var(--bg-secondary)] px-2 py-1 text-[10px] text-[var(--text-secondary)]">
+                        <div className="rounded bg-[var(--bg-secondary)] px-2 py-1 text-xs text-[var(--text-secondary)]">
                             <code className="text-[var(--text-primary)]">{selectedRead.read_id}</code> · {selectedRead.contig || 'unmapped'}:{selectedRead.start_1based ?? 'n/a'} · {selectedRead.strand} · MAPQ {selectedRead.mapq ?? 'n/a'}
                         </div>
                     )}
                 </section>
 
-                <details data-signal-diagnostics className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 text-[10px]">
-                    <summary className="cursor-pointer font-semibold text-[var(--text-secondary)]">Diagnostics</summary>
-                    <div className="mt-2 space-y-2">
-                        <div className="grid grid-cols-2 md:grid-cols-5 gap-1">
-                            {(['igv', 'raw_waveform', 'signal_to_read', 'signal_to_reference', 'signal_pileup'] as const).map((name) => {
-                                const capability = capabilities?.modes[name];
-                                return (
-                                    <div key={name} title={capability?.reason_code || 'loading'} className="rounded border border-[var(--border-primary)] px-1.5 py-1">
-                                        <div className="truncate text-[var(--text-secondary)]">{name.replaceAll('_', ' ')}</div>
-                                        <span className={`inline-block rounded px-1 ${stateBadge(capability?.state || 'loading')}`}>{capability?.state || 'loading'}</span>
-                                    </div>
-                                );
-                            })}
-                        </div>
 
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                        <h3 className="text-xs font-semibold">External move BAM</h3>
-                        <span className="text-[10px] text-[var(--text-secondary)]">Server candidates</span>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-[1fr_80px_auto] gap-1 text-[10px]">
-                        <select
-                            aria-label="External move BAM candidate"
-                            value={externalMoveBamCandidateId}
-                            onChange={(event) => setExternalMoveBamCandidateId(event.target.value)}
-                            disabled={busy || externalMoveBamCandidates.length === 0}
-                            className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 disabled:opacity-40"
-                        >
-                            {externalMoveBamCandidates.length === 0 && <option value="">No candidates</option>}
-                            {externalMoveBamCandidates.map((candidate) => (
-                                <option key={candidate.candidate_id} value={candidate.candidate_id}>
-                                    {candidate.display_name} ({candidate.size_bytes} bytes)
-                                </option>
-                            ))}
-                        </select>
-                        <select
-                            aria-label="External move BAM molecule type"
-                            value={externalMoveBamMoleculeType}
-                            onChange={(event) => setExternalMoveBamMoleculeType(event.target.value as 'dna' | 'rna')}
-                            disabled={busy}
-                            className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 disabled:opacity-40"
-                        >
-                            <option value="dna">DNA</option>
-                            <option value="rna">RNA</option>
-                        </select>
-                        <button
-                            type="button"
-                            onClick={() => void registerExternalMoveBam()}
-                            disabled={busy || !activeRawRepresentationId || !externalMoveBamCandidateId}
-                            className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40"
-                        >
-                            Register external move BAM
-                        </button>
-                    </div>
-                    <div className="text-[10px] text-[var(--text-secondary)]">
-                        {externalMoveBamAvailability || 'Selection binds immutable bytes to this exact run, generation, and raw representation before independent move-tag validation.'}
-                    </div>
-                    {displayedActiveExternalMoveSource && (
-                        <div data-active-external-move-source className="flex flex-wrap items-center gap-1 break-all text-[10px] text-[var(--text-secondary)]">
-                            <span>Active external source <code>{displayedActiveExternalMoveSource.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(displayedActiveExternalMoveSource.state)}`}>{displayedActiveExternalMoveSource.state}</span> · {displayedActiveExternalMoveSource.reason_code}</span>
+                    {squiggleStep ? (
+                        <div data-testid="ont-squiggle-prepare" className="flex flex-wrap items-center justify-between gap-2 rounded border border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] px-2 py-1.5 text-xs">
+                            <span className="text-[var(--text-secondary)]">{squiggleStep.text}</span>
+                            {squiggleStep.action ? (
+                                <button type="button" disabled={busy} onClick={() => startSquiggleStep(squiggleStep.action!)}
+                                    className="rounded bg-[var(--accent-primary)] px-3 py-1 text-xs text-[var(--text-on-accent)] disabled:opacity-40">{squiggleStep.button}</button>
+                            ) : null}
                         </div>
-                    )}
-                    {externalMoveSourceHistory.length > 0 && (
-                        <details className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] text-[var(--text-secondary)]">
-                            <summary className="cursor-pointer">Attempt history ({externalMoveSourceHistory.length})</summary>
-                            <div className="mt-1 space-y-1">
-                                {externalMoveSourceHistory.map((item) => (
-                                    <div key={item.move_source_id} className="flex flex-wrap items-center gap-1 break-all">
-                                        <span>External source <code>{item.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(item.state)}`}>{item.state}</span> · {item.reason_code}</span>
-                                        {item.state === 'failed'
-                                            && item.attempt_number < 3
-                                            && !moveSources.some((candidate) => candidate.predecessor_move_source_id === item.move_source_id)
-                                            && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void createFreshExternalMoveSourceAttempt(item.move_source_id)}
-                                                    disabled={busy}
-                                                    className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40"
-                                                >
-                                                    Create fresh attempt
-                                                </button>
-                                            )}
-                                    </div>
-                                ))}
-                            </div>
-                        </details>
-                    )}
-                    {retryableJobMoveSources.map((item) => (
-                        <div key={item.move_source_id} data-retryable-job-move-source className="flex flex-wrap items-center gap-1 break-all text-[10px] text-[var(--text-secondary)]">
-                            <span>Basecall move table <code>{item.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(item.state)}`}>{item.state}</span> · {item.reason_code}</span>
-                            <button
-                                type="button"
-                                onClick={() => void createFreshExternalMoveSourceAttempt(item.move_source_id)}
-                                disabled={busy}
-                                className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40"
-                            >
-                                Re-validate
-                            </button>
-                        </div>
-                    ))}
-                </section>
-
-                <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                        <h3 className="text-xs font-semibold">Signal mappings</h3>
-                        <span className="text-[10px] text-[var(--text-secondary)]">Reusable across bounded views</span>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[10px]">
-                        <div className="rounded border border-[var(--border-primary)] p-2">
-                            <div className="flex items-center justify-between"><span>Signal to read</span><span className={`rounded px-1 ${stateBadge(readMapping?.state || capabilities?.modes.signal_to_read.state || 'loading')}`}>{readMapping?.state || capabilities?.modes.signal_to_read.state || 'loading'}</span></div>
-                            <div className="mt-1 break-all text-[var(--text-secondary)]">{readMapping?.reason_code || capabilities?.modes.signal_to_read.reason_code}</div>
-                            {readMapping && !TERMINAL_STATES.has(readMapping.state) && <button type="button" onClick={() => void cancelMappingForIdentity(readMapping, 'read')} className="mt-2 rounded border border-[var(--border-primary)] px-2 py-1">Cancel</button>}
-                        </div>
-                        <div className="rounded border border-[var(--border-primary)] p-2">
-                            <div className="flex items-center justify-between"><span>Signal to reference</span><span className={`rounded px-1 ${stateBadge(referenceMapping?.state || capabilities?.modes.signal_to_reference.state || 'loading')}`}>{referenceMapping?.state || capabilities?.modes.signal_to_reference.state || 'loading'}</span></div>
-                            <div className="mt-1 break-all text-[var(--text-secondary)]">{referenceMapping?.reason_code || capabilities?.modes.signal_to_reference.reason_code}</div>
-                            {referenceMapping && !TERMINAL_STATES.has(referenceMapping.state) && <button type="button" onClick={() => void cancelMappingForIdentity(referenceMapping, 'reference')} className="mt-2 rounded border border-[var(--border-primary)] px-2 py-1">Cancel</button>}
-                        </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 text-[10px]">
-                        <select value={preparationMode} onChange={(event) => setPreparationMode(event.target.value as OntSignalMappingMode)} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1">
-                            <option value="signal_to_read">signal to read</option>
-                            <option value="signal_to_reference">signal to reference</option>
-                        </select>
-                        <label>profile base shift<input aria-label="Mapping profile base shift" type="number" min={-64} max={64} disabled={compatibleProfile !== null} value={compatibleProfile?.base_shift_value ?? profileBaseShiftValue} onChange={(event) => setProfileBaseShiftValue(Number(event.target.value))} className="ml-1 w-16 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] disabled:opacity-40" /></label>
-                        <button type="button" onClick={() => void prepareMapping(preparationMode)} disabled={busy || (!!calibration && !TERMINAL_STATES.has(calibration.state)) || (preparationMode === 'signal_to_reference' && (!referenceRevisionId || !alignmentSession?.ready || readMapping?.state !== 'ready'))} className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40">Prepare aligned signal</button>
-                        {calibration && !TERMINAL_STATES.has(calibration.state) && <button type="button" onClick={() => void cancelCalibrationForIdentity(calibration)} className="rounded border border-[var(--border-primary)] px-2 py-1">Cancel calibration</button>}
-                    </div>
-                    <div className="rounded border border-[var(--border-primary)] p-2 text-[10px] space-y-1">
-                        <div>Calibration <span className={`rounded px-1 ${stateBadge(calibration?.state || (compatibleProfile ? 'ready' : 'unavailable'))}`}>{calibration?.state || (compatibleProfile ? 'approved profile ready' : 'not requested')}</span></div>
-                        <div className="break-all text-[var(--text-secondary)]">{calibration?.reason_code || (compatibleProfile ? 'exact approved profile available' : 'fresh click will request deterministic calibration')}</div>
-                        {calibration?.failure_message && <div className="text-[var(--error)]">{calibration.failure_code}: {calibration.failure_message}</div>}
-                        {calibration?.artifact && <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-all rounded bg-[var(--bg-secondary)] p-1 text-[9px]">{JSON.stringify({
-                            artifact_id: calibration.artifact.calibration_artifact_id,
-                            artifact_sha256: calibration.artifact.artifact_sha256,
-                            selection: calibration.artifact.sample_selection,
-                            recommendation: { kmer_length: calibration.artifact.recommended_kmer_length, signal_move_offset: calibration.artifact.recommended_signal_move_offset },
-                            score_evidence: calibration.artifact.score_evidence,
-                            parent_sha256s: calibration.artifact.parent_sha256s,
-                            runtime_identity: calibration.artifact.runtime_identity,
-                        }, null, 2)}</pre>}
-                    </div>
-                    <div className="text-[10px] text-[var(--text-secondary)] break-all">BLOW5 {activeRawRepresentationId || 'unresolved'} · move source {compatibleSource?.move_source_id || 'unresolved'} · profile {compatibleProfile?.mapping_profile_id || 'unresolved'} ({compatibleProfile?.name || 'no exact approved profile'}) · profile base shift {compatibleProfile?.base_shift_value ?? profileBaseShiftValue} · reference {referenceRevisionId || 'not bound'} · alignment {alignmentSession?.session_id || 'not bound'}</div>
-                </section>
-
-                        <details className="rounded border border-[var(--border-primary)] px-2 py-1">
-                            <summary className="cursor-pointer">Technical details</summary>
-                            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-[var(--bg-primary)] p-2 text-[9px] text-[var(--text-secondary)]">{JSON.stringify({
-                                viewer_session_id: viewerSession?.viewer_session_id || null,
-                                dataset_id: datasetId,
-                                run_id: runId,
-                                observed_generation: observedGeneration,
-                                alignment_session_id: alignmentSession?.session_id || null,
-                                reference_revision_id: referenceRevisionId,
-                                raw_representation_id: activeRawRepresentationId,
-                                move_source: compatibleSource,
-                                mapping_profile: compatibleProfile,
-                                mapping: mappingForMode,
-                                render: viewJob,
-                            }, null, 2)}</pre>
-                        </details>
-                    </div>
-                </details>
-
-                <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
+                    ) : null}
                     <div className="flex flex-wrap items-center gap-1">
                         {([
                             { value: 'raw_waveform', label: 'Raw waveform', disabled: capabilities?.modes.raw_waveform.state !== 'ready' },
@@ -1241,9 +1160,9 @@ export function ReadAndSignalWorkbench({
                                 if (candidate.value === 'pileup') {
                                     setRenderParams((current) => ({ ...current, loose_bound: false }));
                                 }
-                            }} disabled={candidate.disabled} className={`rounded border px-2 py-1 text-[10px] disabled:opacity-40 ${mode === candidate.value ? 'border-[var(--accent-secondary)] text-[var(--text-action)]' : 'border-[var(--border-primary)]'}`}>{candidate.label}</button>
+                            }} disabled={candidate.disabled} className={`rounded border px-2 py-1 text-xs disabled:opacity-40 ${mode === candidate.value ? 'border-[var(--accent-secondary)] text-[var(--text-action)]' : 'border-[var(--border-primary)]'}`}>{candidate.label}</button>
                         ))}
-                        {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && <button type="button" onClick={() => setAdvancedOpen((value) => !value)} className="ml-auto rounded border border-[var(--border-primary)] px-2 py-1 text-[10px]">{advancedOpen ? 'Hide' : 'Render settings'}</button>}
+                        {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && <button type="button" onClick={() => setAdvancedOpen((value) => !value)} className="ml-auto rounded border border-[var(--border-primary)] px-2 py-1 text-xs">{advancedOpen ? 'Hide' : 'Render settings'}</button>}
                     </div>
                     {mode === 'raw_waveform' && activeRawRepresentationId ? (
                         <GovernedRawSignalWaveform
@@ -1269,36 +1188,36 @@ export function ReadAndSignalWorkbench({
                         />
                     ) : null}
                     {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && advancedOpen && (
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-1 text-[10px]">
-                            <select value={renderParams.strand} onChange={(event) => setRenderParams((current) => ({ ...current, strand: event.target.value as OntSignalRenderParams['strand'] }))} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-1"><option value="forward">forward</option><option value="reverse">reverse</option></select>
-                            <select value={renderParams.signal_units} onChange={(event) => setRenderParams((current) => ({ ...current, signal_units: event.target.value as OntSignalRenderParams['signal_units'] }))} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-1"><option value="pA">pA</option><option value="raw_adc">raw ADC</option></select>
-                            <select value={renderParams.scale} onChange={(event) => setRenderParams((current) => ({ ...current, scale: event.target.value as OntSignalRenderParams['scale'] }))} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-1"><option value="none">no scaling</option><option value="medmad">medmad</option><option value="znorm">znorm</option><option value="scaledpA">scaledpA</option></select>
-                            <label>base shift source<select aria-label="Base shift source" value={renderParams.base_shift_source} onChange={(event) => setRenderParams((current) => ({ ...current, base_shift_source: event.target.value as OntSignalRenderParams['base_shift_source'] }))} className="ml-1 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-1"><option value="profile">profile</option><option value="explicit">explicit</option></select></label>
-                            <label>base shift<input aria-label="Base shift value" type="number" min={-64} max={64} disabled={renderParams.base_shift_source !== 'explicit'} value={renderParams.base_shift_source === 'profile' ? compatibleProfile?.base_shift_value ?? profileBaseShiftValue : renderParams.base_shift_value} onChange={(event) => setRenderParams((current) => ({ ...current, base_shift_value: Number(event.target.value) }))} className="ml-1 w-16 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] disabled:opacity-40" /></label>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[11px]">
+                            <label className="flex items-center gap-1">Strand<select value={renderParams.strand} onChange={(event) => setRenderParams((current) => ({ ...current, strand: event.target.value as OntSignalRenderParams['strand'] }))} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-1"><option value="forward">forward</option><option value="reverse">reverse</option></select></label>
+                            <label className="flex items-center gap-1">Units<select value={renderParams.signal_units} onChange={(event) => setRenderParams((current) => ({ ...current, signal_units: event.target.value as OntSignalRenderParams['signal_units'] }))} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-1"><option value="pA">pA</option><option value="raw_adc">raw ADC</option></select></label>
+                            <label className="flex items-center gap-1">Scale<select value={renderParams.scale} onChange={(event) => setRenderParams((current) => ({ ...current, scale: event.target.value as OntSignalRenderParams['scale'] }))} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-1"><option value="none">no scaling</option><option value="medmad">medmad</option><option value="znorm">znorm</option><option value="scaledpA">scaledpA</option></select></label>
+                            <label className="flex items-center gap-1">base shift source<select aria-label="Base shift source" value={renderParams.base_shift_source} onChange={(event) => setRenderParams((current) => ({ ...current, base_shift_source: event.target.value as OntSignalRenderParams['base_shift_source'] }))} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-1"><option value="profile">profile</option><option value="explicit">explicit</option></select></label>
+                            <label className="flex items-center gap-1">base shift<input aria-label="Base shift value" type="number" min={-64} max={64} disabled={renderParams.base_shift_source !== 'explicit'} value={renderParams.base_shift_source === 'profile' ? compatibleProfile?.base_shift_value ?? profileBaseShiftValue : renderParams.base_shift_value} onChange={(event) => setRenderParams((current) => ({ ...current, base_shift_value: Number(event.target.value) }))} className="w-16 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] disabled:opacity-40" /></label>
                             <label className="flex items-center gap-1"><input type="checkbox" checked={renderParams.fixed_width} onChange={(event) => setRenderParams((current) => ({ ...current, fixed_width: event.target.checked }))} /> fixed width</label>
-                            <label>base width<input type="number" min={1} max={100} disabled={!renderParams.fixed_width} value={renderParams.base_width} onChange={(event) => setRenderParams((current) => ({ ...current, base_width: Number(event.target.value) }))} className="ml-1 w-16 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] disabled:opacity-40" /></label>
-                            <label>point size<input aria-label="Point size" type="number" min={0.5} max={10} step={0.5} value={renderParams.point_size} onChange={(event) => {
+                            <label className="flex items-center gap-1">base width<input type="number" min={1} max={100} disabled={!renderParams.fixed_width} value={renderParams.base_width} onChange={(event) => setRenderParams((current) => ({ ...current, base_width: Number(event.target.value) }))} className="w-16 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] disabled:opacity-40" /></label>
+                            <label className="flex items-center gap-1">point size<input aria-label="Point size" type="number" min={0.5} max={10} step={0.5} value={renderParams.point_size} onChange={(event) => {
                                 const value = Number(event.target.value);
                                 if (value === 0.5 || (Number.isInteger(value) && value >= 1 && value <= 10)) {
                                     setRenderParams((current) => ({ ...current, point_size: value }));
                                 }
-                            }} className="ml-1 w-16 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]" /></label>
-                            <label>base limit<input type="number" min={1} max={100000} value={renderParams.base_limit} onChange={(event) => setRenderParams((current) => ({ ...current, base_limit: Number(event.target.value) }))} className="ml-1 w-20 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]" /></label>
-                            <label>samples<input type="number" min={1} max={2000000} value={renderParams.signal_sample_limit} onChange={(event) => setRenderParams((current) => ({ ...current, signal_sample_limit: Number(event.target.value) }))} className="ml-1 w-24 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]" /></label>
-                            {mode === 'pileup' && <label>pileup reads<input type="number" min={1} max={100} value={renderParams.pileup_read_limit} onChange={(event) => setRenderParams((current) => ({ ...current, pileup_read_limit: Number(event.target.value) }))} className="ml-1 w-14 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]" /></label>}
+                            }} className="w-16 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]" /></label>
+                            <label className="flex items-center gap-1">base limit<input type="number" min={1} max={100000} value={renderParams.base_limit} onChange={(event) => setRenderParams((current) => ({ ...current, base_limit: Number(event.target.value) }))} className="w-20 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]" /></label>
+                            <label className="flex items-center gap-1">samples<input type="number" min={1} max={2000000} value={renderParams.signal_sample_limit} onChange={(event) => setRenderParams((current) => ({ ...current, signal_sample_limit: Number(event.target.value) }))} className="w-24 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]" /></label>
+                            {mode === 'pileup' && <label className="flex items-center gap-1">pileup reads<input type="number" min={1} max={100} value={renderParams.pileup_read_limit} onChange={(event) => setRenderParams((current) => ({ ...current, pileup_read_limit: Number(event.target.value) }))} className="w-14 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]" /></label>}
                             <label className="flex items-center gap-1"><input type="checkbox" checked={renderParams.show_samples} onChange={(event) => setRenderParams((current) => ({ ...current, show_samples: event.target.checked }))} /> samples</label>
                             <label className="flex items-center gap-1"><input type="checkbox" checked={renderParams.show_base_colours} onChange={(event) => setRenderParams((current) => ({ ...current, show_base_colours: event.target.checked }))} /> base colours</label>
                             {mode !== 'pileup' && <label className="flex items-center gap-1"><input aria-label="Loose bound" type="checkbox" checked={renderParams.loose_bound} onChange={(event) => setRenderParams((current) => ({ ...current, loose_bound: event.target.checked }))} /> loose bound</label>}
                             <label className="flex items-center gap-1"><input type="checkbox" checked={renderParams.remove_signal_outliers} onChange={(event) => setRenderParams((current) => ({ ...current, remove_signal_outliers: event.target.checked }))} /> remove outliers</label>
-                            {(mode === 'reference' || mode === 'pileup') && <label className="col-span-2">managed BED artifact<input aria-label="Managed BED artifact ID" type="text" value={renderParams.managed_bed_artifact_id || ''} onChange={(event) => setRenderParams((current) => ({ ...current, managed_bed_artifact_id: event.target.value.trim() || null }))} placeholder="Opaque managed artifact ID" className="ml-1 min-w-56 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-1 font-mono" /></label>}
+                            {(mode === 'reference' || mode === 'pileup') && <label className="col-span-2 flex items-center gap-1">managed BED artifact<input aria-label="Managed BED artifact ID" type="text" value={renderParams.managed_bed_artifact_id || ''} onChange={(event) => setRenderParams((current) => ({ ...current, managed_bed_artifact_id: event.target.value.trim() || null }))} placeholder="Opaque managed artifact ID" className="min-w-56 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-1 font-mono" /></label>}
                         </div>
                     )}
                     {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && <div className="flex items-center gap-2">
                         <button type="button" onClick={() => void render()} disabled={busy || !mappingArtifact} className="rounded bg-[var(--accent-primary)] px-3 py-1.5 text-xs text-[var(--text-on-accent)] disabled:opacity-40">{busy ? 'Working…' : `Render ${mode}`}</button>
-                        {viewJob && <span className={`rounded px-1.5 py-0.5 text-[10px] ${stateBadge(viewJob.state)}`}>{viewJob.state}: {viewJob.reason_code}</span>}
-                        {viewJob && !TERMINAL_STATES.has(viewJob.state) && <button type="button" onClick={() => void cancelViewForIdentity(viewJob)} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px]">Cancel render</button>}
+                        {viewJob && <span data-view-state={viewJob.state} title={viewJob.reason_code} className={`rounded px-1.5 py-0.5 text-xs ${stateBadge(viewJob.state)}`}>{VIEW_WORDS[viewJob.state] ?? viewJob.state}</span>}
+                        {viewJob && !TERMINAL_STATES.has(viewJob.state) && <button type="button" onClick={() => void cancelViewForIdentity(viewJob)} className="rounded border border-[var(--border-primary)] px-2 py-1 text-xs">Cancel render</button>}
                     </div>}
-                    {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && viewJob?.failure_message && <div className="text-[10px] text-[var(--error)]">{viewJob.failure_code}: {viewJob.failure_message}</div>}
+                    {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && viewJob?.failure_message && <div className="text-xs text-[var(--error)]">{viewJob.failure_message}</div>}
                     {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && (artifactUrl ? (
                         <iframe
                             title="Bounded Squigualiser artifact"
@@ -1308,9 +1227,181 @@ export function ReadAndSignalWorkbench({
                             className="h-[360px] w-full rounded border border-[var(--border-primary)] bg-white"
                         />
                     ) : (
-                        <div className="flex h-40 items-center justify-center rounded border border-dashed border-[var(--border-primary)] text-xs text-[var(--text-secondary)]">Open Diagnostics to prepare an aligned signal view.</div>
+                        <div className="flex h-40 items-center justify-center rounded border border-dashed border-[var(--border-primary)] text-xs text-[var(--text-secondary)]">{mappingArtifact ? `Pick a read, then press Render ${mode}.` : 'Prepare squiggle views above to draw this view.'}</div>
                     ))}
                 </section>
+
+                <details data-signal-diagnostics className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 text-xs">
+                    <summary className="cursor-pointer font-semibold text-[var(--text-secondary)]">Technical details</summary>
+                    <div className="mt-2 space-y-2">
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-1">
+                            {(['igv', 'raw_waveform', 'signal_to_read', 'signal_to_reference', 'signal_pileup'] as const).map((name) => {
+                                const capability = capabilities?.modes[name];
+                                return (
+                                    <div key={name} title={capability?.reason_code || 'loading'} className="rounded border border-[var(--border-primary)] px-1.5 py-1">
+                                        <div className="truncate text-[var(--text-secondary)]">{name.replaceAll('_', ' ')}</div>
+                                        <span className={`inline-block rounded px-1 ${stateBadge(capability?.state || 'loading')}`}>{capability?.state || 'loading'}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-xs font-semibold">External move BAM</h3>
+                        <span className="text-xs text-[var(--text-secondary)]">Server candidates</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-[1fr_80px_auto] gap-1 text-xs">
+                        <select
+                            aria-label="External move BAM candidate"
+                            value={externalMoveBamCandidateId}
+                            onChange={(event) => setExternalMoveBamCandidateId(event.target.value)}
+                            disabled={busy || externalMoveBamCandidates.length === 0}
+                            className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 disabled:opacity-40"
+                        >
+                            {externalMoveBamCandidates.length === 0 && <option value="">No candidates</option>}
+                            {externalMoveBamCandidates.map((candidate) => (
+                                <option key={candidate.candidate_id} value={candidate.candidate_id}>
+                                    {candidate.display_name} ({(candidate.size_bytes / 1e6).toFixed(1)} MB)
+                                </option>
+                            ))}
+                        </select>
+                        <select
+                            aria-label="External move BAM molecule type"
+                            value={externalMoveBamMoleculeType}
+                            onChange={(event) => setExternalMoveBamMoleculeType(event.target.value as 'dna' | 'rna')}
+                            disabled={busy}
+                            className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 disabled:opacity-40"
+                        >
+                            <option value="dna">DNA</option>
+                            <option value="rna">RNA</option>
+                        </select>
+                        <button
+                            type="button"
+                            onClick={() => void registerExternalMoveBam()}
+                            disabled={busy || !activeRawRepresentationId || !externalMoveBamCandidateId}
+                            className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40"
+                        >
+                            Register external move BAM
+                        </button>
+                    </div>
+                    <div className="text-xs text-[var(--text-secondary)]">
+                        {externalMoveBamAvailability || 'Selection binds immutable bytes to this exact run, generation, and raw representation before independent move-tag validation.'}
+                    </div>
+                    {displayedActiveExternalMoveSource && (
+                        <div data-active-external-move-source className="flex flex-wrap items-center gap-1 break-all text-xs text-[var(--text-secondary)]">
+                            <span>Active external source <code>{displayedActiveExternalMoveSource.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(displayedActiveExternalMoveSource.state)}`}>{displayedActiveExternalMoveSource.state}</span> · {displayedActiveExternalMoveSource.reason_code}</span>
+                        </div>
+                    )}
+                    {externalMoveSourceHistory.length > 0 && (
+                        <details className="rounded border border-[var(--border-primary)] px-2 py-1 text-xs text-[var(--text-secondary)]">
+                            <summary className="cursor-pointer">Attempt history ({externalMoveSourceHistory.length})</summary>
+                            <div className="mt-1 space-y-1">
+                                {externalMoveSourceHistory.map((item) => (
+                                    <div key={item.move_source_id} className="flex flex-wrap items-center gap-1 break-all">
+                                        <span>External source <code>{item.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(item.state)}`}>{item.state}</span> · {item.reason_code}</span>
+                                        {item.state === 'failed'
+                                            && item.attempt_number < 3
+                                            && !moveSources.some((candidate) => candidate.predecessor_move_source_id === item.move_source_id)
+                                            && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void createFreshExternalMoveSourceAttempt(item.move_source_id)}
+                                                    disabled={busy}
+                                                    className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40"
+                                                >
+                                                    Create fresh attempt
+                                                </button>
+                                            )}
+                                    </div>
+                                ))}
+                            </div>
+                        </details>
+                    )}
+                    {retryableJobMoveSources.map((item) => (
+                        <div key={item.move_source_id} data-retryable-job-move-source className="flex flex-wrap items-center gap-1 break-all text-xs text-[var(--text-secondary)]">
+                            <span>Basecall move table <code>{item.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(item.state)}`}>{item.state}</span> · {item.reason_code}</span>
+                            <button
+                                type="button"
+                                onClick={() => void createFreshExternalMoveSourceAttempt(item.move_source_id)}
+                                disabled={busy}
+                                className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40"
+                            >
+                                Re-validate
+                            </button>
+                        </div>
+                    ))}
+                </section>
+
+                <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-xs font-semibold">Signal mappings</h3>
+                        <span className="text-xs text-[var(--text-secondary)]">Reusable across bounded views</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                        <div className="rounded border border-[var(--border-primary)] p-2">
+                            <div className="flex items-center justify-between"><span>Signal to read</span><span className={`rounded px-1 ${stateBadge(readMapping?.state || capabilities?.modes.signal_to_read.state || 'loading')}`}>{readMapping?.state || capabilities?.modes.signal_to_read.state || 'loading'}</span></div>
+                            <div className="mt-1 break-all text-[var(--text-secondary)]">{readMapping?.reason_code || capabilities?.modes.signal_to_read.reason_code}</div>
+                            {readMapping && !TERMINAL_STATES.has(readMapping.state) && <button type="button" onClick={() => void cancelMappingForIdentity(readMapping, 'read')} className="mt-2 rounded border border-[var(--border-primary)] px-2 py-1">Cancel</button>}
+                        </div>
+                        <div className="rounded border border-[var(--border-primary)] p-2">
+                            <div className="flex items-center justify-between"><span>Signal to reference</span><span className={`rounded px-1 ${stateBadge(referenceMapping?.state || capabilities?.modes.signal_to_reference.state || 'loading')}`}>{referenceMapping?.state || capabilities?.modes.signal_to_reference.state || 'loading'}</span></div>
+                            <div className="mt-1 break-all text-[var(--text-secondary)]">{referenceMapping?.reason_code || capabilities?.modes.signal_to_reference.reason_code}</div>
+                            {referenceMapping && !TERMINAL_STATES.has(referenceMapping.state) && <button type="button" onClick={() => void cancelMappingForIdentity(referenceMapping, 'reference')} className="mt-2 rounded border border-[var(--border-primary)] px-2 py-1">Cancel</button>}
+                        </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <select value={preparationMode} onChange={(event) => setPreparationMode(event.target.value as OntSignalMappingMode)} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1">
+                            <option value="signal_to_read">signal to read</option>
+                            <option value="signal_to_reference">signal to reference</option>
+                        </select>
+                        <label className="flex items-center gap-1">profile base shift<input aria-label="Mapping profile base shift" type="number" min={-64} max={64} disabled={compatibleProfile !== null} value={compatibleProfile?.base_shift_value ?? profileBaseShiftValue} onChange={(event) => setProfileBaseShiftValue(Number(event.target.value))} className="w-16 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] disabled:opacity-40" /></label>
+                        <button type="button" onClick={() => void prepareMapping(preparationMode)} disabled={busy || (!!calibration && !TERMINAL_STATES.has(calibration.state)) || (preparationMode === 'signal_to_reference' && (!referenceRevisionId || !alignmentSession?.ready || readMapping?.state !== 'ready'))} className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40">Prepare aligned signal</button>
+                        {calibration && !TERMINAL_STATES.has(calibration.state) && <button type="button" onClick={() => void cancelCalibrationForIdentity(calibration)} className="rounded border border-[var(--border-primary)] px-2 py-1">Cancel calibration</button>}
+                    </div>
+                    <div className="rounded border border-[var(--border-primary)] p-2 text-xs space-y-1">
+                        <div>Calibration <span className={`rounded px-1 ${stateBadge(calibration?.state || (compatibleProfile ? 'ready' : 'unavailable'))}`}>{calibration?.state || (compatibleProfile ? 'approved profile ready' : 'not requested')}</span></div>
+                        <div className="break-all text-[var(--text-secondary)]">{calibration?.reason_code || (compatibleProfile ? 'exact approved profile available' : 'fresh click will request deterministic calibration')}</div>
+                        {calibration?.failure_message && <div className="text-[var(--error)]">{calibration.failure_code}: {calibration.failure_message}</div>}
+                        {calibration?.artifact && (
+                            <div data-testid="ont-signal-calibration-read-count">
+                                Calibrated on {calibration.artifact.sample_selection.selected_count.toLocaleString()} read{calibration.artifact.sample_selection.selected_count === 1 ? '' : 's'}
+                                {calibration.artifact.sample_selection.selected_count < calibration.artifact.sample_selection.requested_count
+                                    ? ` (${calibration.artifact.sample_selection.requested_count.toLocaleString()} requested; the run has ${calibration.artifact.sample_selection.intersection_count.toLocaleString()} with signal and moves)`
+                                    : ''}.
+                            </div>
+                        )}
+                        {calibration?.artifact && <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-all rounded bg-[var(--bg-secondary)] p-1 text-[11px]">{JSON.stringify({
+                            artifact_id: calibration.artifact.calibration_artifact_id,
+                            artifact_sha256: calibration.artifact.artifact_sha256,
+                            selection: calibration.artifact.sample_selection,
+                            recommendation: { kmer_length: calibration.artifact.recommended_kmer_length, signal_move_offset: calibration.artifact.recommended_signal_move_offset },
+                            score_evidence: calibration.artifact.score_evidence,
+                            parent_sha256s: calibration.artifact.parent_sha256s,
+                            runtime_identity: calibration.artifact.runtime_identity,
+                        }, null, 2)}</pre>}
+                    </div>
+                    <div className="text-xs text-[var(--text-secondary)] break-all">BLOW5 {activeRawRepresentationId || 'unresolved'} · move source {compatibleSource?.move_source_id || 'unresolved'} · profile {compatibleProfile?.mapping_profile_id || 'unresolved'} ({compatibleProfile?.name || 'no exact approved profile'}) · profile base shift {compatibleProfile?.base_shift_value ?? profileBaseShiftValue} · reference {referenceRevisionId || 'not bound'} · alignment {alignmentSession?.session_id || 'not bound'}</div>
+                </section>
+
+                        <details className="rounded border border-[var(--border-primary)] px-2 py-1">
+                            <summary className="cursor-pointer">Raw records</summary>
+                            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-[var(--bg-primary)] p-2 text-[11px] text-[var(--text-secondary)]">{JSON.stringify({
+                                viewer_session_id: viewerSession?.viewer_session_id || null,
+                                dataset_id: datasetId,
+                                run_id: runId,
+                                observed_generation: observedGeneration,
+                                alignment_session_id: alignmentSession?.session_id || null,
+                                reference_revision_id: referenceRevisionId,
+                                raw_representation_id: activeRawRepresentationId,
+                                move_source: compatibleSource,
+                                mapping_profile: compatibleProfile,
+                                mapping: mappingForMode,
+                                render: viewJob,
+                            }, null, 2)}</pre>
+                        </details>
+                    </div>
+                </details>
 
             </div>
         </aside>

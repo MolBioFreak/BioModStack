@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from routers import frustrampnn as frustrampnn_router
 from routers import jobs as jobs_router
+from services import binder_continuation
 from services.frustrampnn import jobs as frustrampnn_jobs
 from services.frustrampnn.settings import (
     FrustraMPNNRequestedSettings,
@@ -138,6 +139,7 @@ async def test_antibody_iteration_frustrampnn_passes_validated_requested_setting
         return {"id": job_id}
 
     monkeypatch.setattr(jobs_router, "_resolve_antibody_root_job", fake_root)
+    monkeypatch.setattr(binder_continuation, "_resolve_antibody_root_job", fake_root)
     monkeypatch.setattr(jobs_router, "_resolve_saved_review_filter_set", lambda *_args: None)
     monkeypatch.setattr(jobs_router, "_resolve_launch_design_ids", lambda *_args: ["design-1"])
     monkeypatch.setattr(jobs_router, "get_job", fake_get_job)
@@ -244,7 +246,8 @@ def test_governed_multipart_openapi_declares_every_accepted_form_field() -> None
     upload, upload_required = _multipart_properties(
         app, "/api/frustrampnn/jobs/uploads/analyze"
     )
-    assert set(upload) == {"pdb_file", "frustrampnn_settings"}
+    assert set(upload) == {"pdb_file", "frustrampnn_settings",
+                           "execution_target_id", "launch_context_id", "idempotency_key"}
     assert upload_required == {"pdb_file"}
     assert upload["pdb_file"]["contentMediaType"] == "application/octet-stream"
     assert "64 MiB" in upload["pdb_file"]["description"]

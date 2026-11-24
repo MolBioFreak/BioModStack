@@ -123,7 +123,7 @@ async def selection_refs(session, source, request):
         if request.selection.candidate_refs is not None:
             refs = [wire(r) for r in request.selection.candidate_refs]
         else:
-            from routers.jobs import _saved_review_filter_entries
+            from services.job_readback import _saved_review_filter_entries
             entry = next((r for r in _saved_review_filter_entries(source)
                           if r['id'] == request.selection.saved_set_id
                           and r.get('revision', 1) == request.selection.revision), None)
@@ -678,7 +678,7 @@ def structural_selection(row, root_id):
             selected = Path(item['selection_pdb_path'])
             if hashlib.sha256(selected.read_bytes()).hexdigest() != item['selection_structure_sha256']:
                 raise ValueError('Retained selected-model bytes changed')
-            from routers.jobs import _cif_selection_pdb
+            from services.binder_source_materialization import _cif_selection_pdb
             consumed = _cif_selection_pdb(selected, destination / 'derived.pdb')
             item['native_source_structure_path'] = str(original)
             item['native_source_structure_sha256'] = expected
@@ -714,7 +714,7 @@ async def md_request(session, root, row, params, placement, request, step_id):
     No prediction requirement, alternate runner, or scientific defaults live here.
     The parent-owned router hunk exposes its existing request builder verbatim.
     """
-    from routers.molecular_dynamics import _compile_native_preview, _native_md_job_request
+    from services.md.native_launch import _compile_native_preview, _native_md_job_request
     from services.md.starting_structures import MdNativeLaunchIntent, MdLaunchRequest, StartingStructureSourceRef, resolve_source, read_resolved_structure
     if not isinstance(params.get('intent'), dict):
         raise ValueError('MD operation requires its existing native launch intent')
@@ -761,7 +761,7 @@ async def md_request(session, root, row, params, placement, request, step_id):
 
 
 async def plan(session, root, retained):
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from services.binder_continuation import model_request, individual_model_requests
     request = SelectedRoundRequest.model_validate(retained['request'])
     steps = retained['steps']
@@ -1001,11 +1001,17 @@ async def reconcile(session, experiments, root_id, round_id, *, retry=False):
 
 
 async def response(session, retained):
-    from routers.jobs import get_job
+    from services.job_readback import read_job
+
+    async def launched(job_id):
+        job = await read_job(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return job
     refs = retained['selection']['candidate_refs']
     return {'operation': 'round', 'source_job_id': retained['source_job_id'], 'root_job_id': retained['root_job_id'],
         'round_id': retained['round_id'], 'state': retained['state'],
         'selected_design_count': sum(r['kind'] == 'design' for r in refs),
         'selected_native_count': sum(r['kind'] in {'native_document', 'native_observation'} for r in refs),
         'selected_sequence_count': sum(r['kind'] == 'native_sequence' for r in refs),
-        'launched_jobs': [await get_job(s['job_id'], session) for s in retained['steps'] if s['job_id']], 'round': retained}
+        'launched_jobs': [await launched(s['job_id']) for s in retained['steps'] if s['job_id']], 'round': retained}

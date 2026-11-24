@@ -32,7 +32,7 @@ class ApkUpdatePolicyTest {
         assertNull(
             ApkUpdatePolicy.validationError(
                 manifest(),
-                "https://compute-node.taileb3a90.ts.net",
+                "https://node.example.ts.net",
                 installedVersionCode = 100,
                 deviceSdk = 35,
             )
@@ -40,7 +40,7 @@ class ApkUpdatePolicyTest {
         assertNotNull(
             ApkUpdatePolicy.validationError(
                 manifest(channel = "beta"),
-                "https://compute-node.taileb3a90.ts.net",
+                "https://node.example.ts.net",
                 installedVersionCode = 100,
                 deviceSdk = 35,
             )
@@ -48,7 +48,7 @@ class ApkUpdatePolicyTest {
         assertNotNull(
             ApkUpdatePolicy.validationError(
                 manifest(downloadUrl = "https://evil.example/api/mobile-apk/channels/stable/files/biomodstack.apk"),
-                "https://compute-node.taileb3a90.ts.net",
+                "https://node.example.ts.net",
                 installedVersionCode = 100,
                 deviceSdk = 35,
             )
@@ -56,7 +56,7 @@ class ApkUpdatePolicyTest {
         assertNotNull(
             ApkUpdatePolicy.validationError(
                 manifest(),
-                "https://compute-node.taileb3a90.ts.net",
+                "https://node.example.ts.net",
                 installedVersionCode = 200,
                 deviceSdk = 35,
             )

@@ -32,7 +32,7 @@ This spec freezes the fix contract for these deficiencies, aligned to the source
 
 | Identity | Frozen value |
 |---|---|
-| Worktree | `/home/dalab/worktrees/bms-x-oem-terminal-20260817` (frozen 2026-08-18; implementation proceeds in a fresh worktree) |
+| Worktree | `<worktree>` (`bms-x-oem-terminal-20260817`) (frozen 2026-08-18; implementation proceeds in a fresh worktree) |
 | Base HEAD (freeze) | `aa5d4580e6ebf0f8713c4838da1f54f97f8416b5` |
 | Base HEAD tree (freeze) | `d9de7c69755729ec61b8c831648638669f4bd226` |
 | `origin/test` at freeze | `aa5d4580e6ebf0f8713c4838da1f54f97f8416b5`; exact match |

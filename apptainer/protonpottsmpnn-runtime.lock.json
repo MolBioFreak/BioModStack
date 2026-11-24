@@ -24,7 +24,7 @@
   },
   "owned_sources_sha256": {
     "apptainer/protonpottsmpnn-cuda.def": "ba8bdb2c352a81567ba2c7995756e3d6a7689cc0874495fdb35cae71cb0651b8",
-    "apptainer/protonpottsmpnn-cuda-requirements.lock": "136a76de77e3d51b88018278cf646398fbf633a9b174560971b81cd4a079f52e",
+    "apptainer/protonpottsmpnn-cuda-requirements.lock": "7887b1fccba15c4547bf130ad6b0585851fb703d0b4c20b685198b4583859124",
     "scripts/run_protonpottsmpnn_design.py": "d6699c6a1d8337f270ef288d37442384a90308e6b73d414cdb11dd716e926462"
   }
 }

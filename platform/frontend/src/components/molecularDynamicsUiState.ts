@@ -1,7 +1,7 @@
 import type { ExecutionPolicy } from '../lib/executionPolicy';
 import type { CandidateRef } from '../lib/binderSelectedRound';
 
-export type MolecularDynamicsEngine = 'gromacs' | 'openmm';
+export type MolecularDynamicsEngine = 'gromacs';
 
 export type NativeMdp = Record<string, string | number>;
 export interface MolecularDynamicsNativeStage { name: string; mdp: NativeMdp; checkpoint_interval_minutes?: number }
@@ -133,7 +133,7 @@ export {
     parseMolecularDynamicsHandoffUserSequencePage,
     storeMolecularDynamicsDraft,
 } from './gen2StartingStructureState.js';
-export type MolecularDynamicsInputMode = 'structure' | 'prepared';
+export type MolecularDynamicsInputMode = 'structure';
 
 export interface MolecularDynamicsLaunchConstraints {
     input_mode: 'structure';
@@ -468,15 +468,6 @@ export const validateMolecularDynamicsForm = (
     if (form.inputMode === 'structure' && !form.structurePath.trim()) {
         errors.push('A starting PDB structure is required.');
     }
-    if (form.inputMode === 'prepared' && (!form.coordinatesPath.trim() || !form.topologyPath.trim())) {
-        errors.push('Prepared coordinates and topology are both required.');
-    }
-    if (form.inputMode === 'prepared' && form.engine !== 'openmm') {
-        errors.push('Prepared coordinates and topology are supported only by OpenMM.');
-    }
-    if (form.engine === 'openmm' && form.inputMode !== 'prepared') {
-        errors.push('The OpenMM alpha adapter requires prepared coordinates and topology.');
-    }
     if (!Number.isInteger(form.replicas) || form.replicas < 1 || form.replicas > 16) {
         errors.push('Replica count must be an integer from 1 to 16.');
     }
@@ -689,7 +680,7 @@ export const parseMolecularDynamicsChemistryProfileInventory = (value: unknown):
         ['id', 'version', 'display_name', 'family', 'assurance', 'availability_explanation'].forEach((key) => wireString(profile[key], contract));
         if (!SHA256_RE.test(String(profile.profile_sha256)) || typeof profile.legacy !== 'boolean' || typeof profile.automatic_preparation !== 'boolean'
             || !['selectable', 'candidate'].includes(String(profile.inventory_class))) throw new Error(`Invalid ${contract} response.`);
-        if (!Array.isArray(profile.supported_engines) || !profile.supported_engines.every((engine) => ['gromacs', 'openmm'].includes(String(engine)))) throw new Error(`Invalid ${contract} response.`);
+        if (!Array.isArray(profile.supported_engines) || !profile.supported_engines.every((engine) => String(engine) === 'gromacs')) throw new Error(`Invalid ${contract} response.`);
         const v1 = wireRecord(profile.v1_preparation, contract);
         exactWireKeys(v1, ['force_field', 'water_model'], contract);
         wireString(v1.force_field, contract);
@@ -702,7 +693,7 @@ export const parseMolecularDynamicsChemistryProfileInventory = (value: unknown):
                 'max_nvt_steps', 'max_npt_steps',
             ], contract);
             if (constraints.input_mode !== 'structure' || !SHA256_RE.test(String(constraints.structure_sha256))
-                || !['gromacs', 'openmm'].includes(String(constraints.engine))) throw new Error(`Invalid ${contract} response.`);
+                || constraints.engine !== 'gromacs') throw new Error(`Invalid ${contract} response.`);
             ['force_field', 'water_model'].forEach((key) => wireString(constraints[key], contract));
             ['replicas', 'timestep_fs', 'temperature_k', 'pressure_bar', 'salt_molar', 'padding_nm', 'max_production_steps', 'max_minimization_steps', 'max_nvt_steps', 'max_npt_steps']
                 .forEach((key) => wireFinite(constraints[key], contract));
@@ -1059,16 +1050,13 @@ export const buildMolecularDynamicsJobSpec = (
     chemistryProfile?: MolecularDynamicsChemistryProfile,
     catalogDigest?: string,
 ): MolecularDynamicsJobSpecV1 | MolecularDynamicsJobSpecV2 => {
-    const automaticPreparation = form.inputMode === 'structure';
     const errors = [
-        ...validateMolecularDynamicsForm(form, automaticPreparation ? chemistryProfile : undefined),
-        ...(automaticPreparation
-            ? validateMolecularDynamicsChemistryProfile(chemistryProfile, form.engine, true)
-            : []),
+        ...validateMolecularDynamicsForm(form, chemistryProfile),
+        ...validateMolecularDynamicsChemistryProfile(chemistryProfile, form.engine, true),
     ];
     if (errors.length) throw new Error(errors.join(' '));
-    if (automaticPreparation && !chemistryProfile) throw new Error('A chemistry profile is required for automatic preparation.');
-    if (automaticPreparation && !chemistryProfile!.legacy && !/^[0-9a-f]{64}$/.test(catalogDigest || '')) {
+    if (!chemistryProfile) throw new Error('A chemistry profile is required for automatic preparation.');
+    if (!chemistryProfile.legacy && !/^[0-9a-f]{64}$/.test(catalogDigest || '')) {
         throw new Error('A valid deployed chemistry catalog digest is required for automatic preparation.');
     }
     const stages: MolecularDynamicsJobSpecV1['stages'] = {
@@ -1086,7 +1074,7 @@ export const buildMolecularDynamicsJobSpec = (
             energy_interval_steps: stepsFromPs(form.energyIntervalPs, form.timestepFs),
         },
     };
-    if (automaticPreparation && chemistryProfile!.legacy) {
+    if (chemistryProfile.legacy) {
         return {
             schema: 'bms.md.job.v1',
             job_id: 'assigned-by-bms',
@@ -1109,43 +1097,25 @@ export const buildMolecularDynamicsJobSpec = (
             execution: { gpu_id: '0', ntmpi: 1, ntomp: form.ntomp, gpu_offload: 'full', pin: 'on' },
         };
     }
-    if (automaticPreparation) {
-        return {
-            schema: 'bms.md.job.v2',
-            job_id: 'assigned-by-bms',
-            engine: 'gromacs',
-            replicas: form.replicas,
-            random_seed: form.randomSeed,
-            input: { structure: form.structurePath.trim() },
-            chemistry: {
-                profile_id: chemistryProfile!.id,
-                profile_sha256: chemistryProfile!.profile_sha256,
-                catalog_digest: catalogDigest!,
-                requested_scope: chemistryProfile!.scientific_validation.scope.launch_scope,
-            },
-            preparation: {
-                box_type: 'dodecahedron', padding_nm: form.paddingNm,
-                salt_molar: form.saltMolar, neutralize: true,
-            },
-            stages,
-            execution: { gpu_id: '0', ntmpi: 1, ntomp: form.ntomp, gpu_offload: 'full_forces', pin: 'on' },
-        };
-    }
     return {
-        schema: 'bms.md.job.v1',
+        schema: 'bms.md.job.v2',
         job_id: 'assigned-by-bms',
-        engine: form.engine,
+        engine: 'gromacs',
         replicas: form.replicas,
         random_seed: form.randomSeed,
-        input: { coordinates: form.coordinatesPath.trim(), topology: form.topologyPath.trim() },
+        input: { structure: form.structurePath.trim() },
+        chemistry: {
+            profile_id: chemistryProfile!.id,
+            profile_sha256: chemistryProfile!.profile_sha256,
+            catalog_digest: catalogDigest!,
+            requested_scope: chemistryProfile!.scientific_validation.scope.launch_scope,
+        },
         preparation: {
-            chemistry_assurance: 'external_unreviewed', force_field: 'external', water_model: 'external',
-            box_type: 'dodecahedron', padding_nm: form.paddingNm, salt_molar: form.saltMolar,
-            positive_ion: 'NA', negative_ion: 'CL', solvent_group: 'SOL',
-            solvent_coordinates: 'spc216.gro', neutralize: true,
+            box_type: 'dodecahedron', padding_nm: form.paddingNm,
+            salt_molar: form.saltMolar, neutralize: true,
         },
         stages,
-        execution: { gpu_id: '0', ntmpi: 1, ntomp: form.ntomp, gpu_offload: 'full', pin: 'on' },
+        execution: { gpu_id: '0', ntmpi: 1, ntomp: form.ntomp, gpu_offload: 'full_forces', pin: 'on' },
     };
 };
 

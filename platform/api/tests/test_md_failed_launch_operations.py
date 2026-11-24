@@ -15,8 +15,10 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
+from services import job_submission
 from database import Base, Job, JobArtifact, MdEvent, MdReplicaRun, MdRun
 from routers import jobs, molecular_dynamics
+from routers import job_results
 from routers.molecular_dynamics import FailedLaunchDeleteCommand, LifecycleCommand
 from services.md.read_model import md_run_snapshot
 from services.md.state import create_md_run, create_replica_attempt
@@ -73,13 +75,13 @@ def test_sanitize_materialized_v2_contract_is_deep_non_mutating() -> None:
 @pytest.mark.asyncio
 async def test_md_logs_are_job_owned_and_never_fall_back_to_global(session, tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "code"; root.mkdir(); (root / ".nextflow.log").write_text("global secret")
-    monkeypatch.setattr(jobs, "CODE_ROOT", root)
+    monkeypatch.setattr(job_results, "CODE_ROOT", root)
     no_log = Job(id="md-no-log", name="MD", status="failed", model_id="molecular_dynamics", mode="simulate", params={})
     owned_dir = tmp_path / "owned"; owned_dir.mkdir(); (owned_dir / "nextflow.log").write_text("owned launch log")
     owned = Job(id="md-owned-log", name="MD", status="failed", model_id="molecular_dynamics", mode="simulate", params={}, output_dir=str(owned_dir))
     session.add_all([no_log, owned]); await session.commit()
-    assert (await jobs.get_job_logs(no_log.id, session=session))["nextflow_log"] is None
-    payload = await jobs.get_job_logs(owned.id, session=session)
+    assert (await job_results.get_job_logs(no_log.id, session=session))["nextflow_log"] is None
+    payload = await job_results.get_job_logs(owned.id, session=session)
     assert payload["nextflow_log"] == "owned launch log"
     assert payload["nextflow_log_source"] == "job_output"
 
@@ -93,7 +95,7 @@ async def test_remote_logs_never_fall_back_to_local_nextflow_diagnostics(session
     local_task = local_work / "aa" / "bbbbbb"
     local_task.mkdir(parents=True)
     (local_task / ".command.log").write_text("host-task-sentinel", encoding="utf-8")
-    monkeypatch.setattr(jobs, "CODE_ROOT", code_root)
+    monkeypatch.setattr(job_results, "CODE_ROOT", code_root)
     monkeypatch.setattr(jobs, "get_work_dir", lambda: local_work)
 
     output = tmp_path / "remote-output"
@@ -126,7 +128,7 @@ async def test_remote_logs_never_fall_back_to_local_nextflow_diagnostics(session
     session.add_all([remote, pending])
     await session.commit()
 
-    payload = await jobs.get_job_logs(remote.id, session=session)
+    payload = await job_results.get_job_logs(remote.id, session=session)
     # Unbound legacy files are not a verified remote archive. Positive sealed
     # diagnostics/current-generation reads live in test_remote_rectify_return.
     assert payload["nextflow_log_source"] == "remote_pending"
@@ -135,7 +137,7 @@ async def test_remote_logs_never_fall_back_to_local_nextflow_diagnostics(session
     assert payload['remote_read_error']
     assert "host-global-sentinel" not in str(payload)
     assert "host-task-sentinel" not in str(payload)
-    pending_payload = await jobs.get_job_logs(pending.id, session=session)
+    pending_payload = await job_results.get_job_logs(pending.id, session=session)
     assert pending_payload["nextflow_log_source"] == "remote_pending"
     assert pending_payload["nextflow_log"] is None
     assert pending_payload["command_log"] is None
@@ -184,7 +186,7 @@ async def test_reorchestrate_is_versioned_idempotent_and_preserves_lineage(sessi
         db.add(created); await db.flush()
         await create_md_run(db, job=created, normalized_request=contract)
         return SimpleNamespace(id=created.id)
-    monkeypatch.setattr(jobs, "create_job", fake_create_job)
+    monkeypatch.setattr(job_submission, "submit_job", fake_create_job)
     command = LifecycleCommand(expected_state_version=run.state_version, idempotency_key="replay-key")
     first = await molecular_dynamics.reorchestrate_failed_md_run(parent.id, command, session)
     expected = str(molecular_dynamics.uuid.uuid5(molecular_dynamics.uuid.NAMESPACE_URL, f"bms-md-reorchestrate:{parent.id}:replay-key"))

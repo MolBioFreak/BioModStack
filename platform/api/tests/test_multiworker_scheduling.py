@@ -885,3 +885,26 @@ async def test_attributed_vram_preserves_staging_and_unrelated_usage(workers, mo
         assert await scheduler._claim_remote_job(s, third, gpu_id=0, vram_estimate_mb=8000)
         fourth = await s.get(Job, 'job-4')
         assert await scheduler._claim_remote_job(s, fourth, gpu_id=0, vram_estimate_mb=8000) is None
+
+
+@pytest.mark.asyncio
+async def test_multigpu_claim_projects_cm_peer_once_per_reservation_read(workers, monkeypatch):
+    import native_components
+    await gpu_competitors(workers, monkeypatch, gpu_count=2, capacity=64000)
+    reads = []
+    project = native_components.job_gpu_capacity_requirements
+    def counted(model_id, params):
+        if model_id == 'conformational_mapping':
+            reads.append(model_id)
+        return project(model_id, params)
+    monkeypatch.setattr(native_components, 'job_gpu_capacity_requirements', counted)
+    async with workers() as session:
+        peer = await session.get(Job, 'job-1')
+        peer.model_id = 'conformational_mapping'
+        peer.params = {'backend': 'confornets', 'confornets': {'confornet_count': 5}}
+        await session.commit()
+        assert await scheduler._claim_remote_job(session, peer, gpu_id=0, gpu_ids=[0, 1], vram_estimate_mb=24000)
+        reads.clear()
+        candidate = await session.get(Job, 'job-2')
+        assert await scheduler._claim_remote_job(session, candidate, gpu_id=0, vram_estimate_mb=8000)
+        assert reads == ['conformational_mapping']

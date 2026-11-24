@@ -3,6 +3,7 @@ import { BioXpPipetteResults, PipetteValue } from './BioXpPipetteResults';
 import type { MethodCompile, MethodValue } from '../lib/bioxpMethods';
 import { BioXpWorkflowDeck } from './BioXpWorkflowDeck';
 import { previewActionDestination } from '../lib/bioxpWorkflowPlan';
+import { occurrenceSteps } from './BioXpMethodPlanSummary';
 import { object } from './BioXpMethodFields';
 import { methodStateAfter, methodVessels } from '../lib/bioxpMethodSimulation';
 import { deckResources } from '../lib/bioxpWorkflowDeck';
@@ -65,7 +66,48 @@ export function BioXpMethodApplicationFields({ value }: { value: unknown }) {
     const display = (v: unknown) => v === undefined ? 'not reported / unspecified' : v === null ? 'explicit null' : typeof v === 'object' ? JSON.stringify(v) : String(v);
     return <section aria-label="Field application records"><h4>Per-field application records</h4><table><thead><tr><th>Field / context</th><th>Requested (including absence)</th><th>Resolved / source revision</th><th>Applicability / adapter / options</th><th>Emitted</th><th>Reported applied</th></tr></thead><tbody>{fields.map(({ path, data }) => <tr key={path}><td>{path}</td><td>{display(data.requested)}</td><td>{display(data.resolved)} · {display(data.source ?? data.ref ?? object(data.resolved).reference)}</td><td>{display(data.applicability ?? data.applicable)} · {display(data.adapter)} · {display(data.options)}</td><td>{display(data.emitted)}</td><td>{display(data.applied ?? data.reported_applied)}</td></tr>)}</tbody></table><p>Unknown, unsupported and not-emitted are not applied. Applicability and adapter/options evidence are not inferred from a number.</p></section>;
 }
-export function BioXpMethodProgress({ report }: { report: MethodValue }) {
+export function methodOccurrence(workflow: MethodValue, context?: MethodValue) {
+    const occurrence = workflow.source_occurrence_id;
+    const provenance = Array.isArray(context?.provenance) ? context.provenance as MethodValue[] : [];
+    const exact = provenance.filter(row => row.occurrence_id === occurrence);
+    const matches = exact.length ? exact : provenance.filter(row => occurrence != null && Array.isArray(row.native_action_ids) && row.native_action_ids.includes(occurrence));
+    const current = matches.length === 1 ? matches[0] : undefined;
+    const label = current && occurrenceSteps({ provenance } as MethodCompile, object(context?.method)).get(String(current.occurrence_id))?.label;
+
+    return { occurrence, current, label };
+}
+function AttemptEvidence({ actions }: { actions: unknown }) {
+    if (!Array.isArray(actions)) return null;
+    return <>{actions.map((value, index) => {
+        const child = object(value);
+        if (!Array.isArray(child.attempts)) return null;
+        return <ul key={index} aria-label={`Attempts for ${child.action_id}`}>{child.attempts.map((value, i) => {
+            const attempt = object(value);
+            return <li key={i}>{String(child.action_id)} · Attempt {String(attempt.attempt)}: {String(attempt.status ?? 'not reported')}
+                {attempt.resolution != null && ` · Operator decision: ${String(attempt.resolution).replaceAll('_', ' ')} (not machine verification)`}</li>;
+        })}</ul>;
+    })}</>;
+}
+export function BioXpMethodProgress({ report, context }: { report: MethodValue; context?: MethodValue }) {
+    const workflow = object(report.workflow);
+    const { occurrence, current, label } = methodOccurrence(workflow, context);
+    const provenance = Array.isArray(context?.provenance) ? context.provenance as MethodValue[] : [];
+    const index = current ? provenance.indexOf(current) : -1;
+    const id = workflow.native_action_id ?? (current && Array.isArray(current.native_action_ids) && current.native_action_ids.length === 1 ? current.native_action_ids[0] : undefined);
+    const raw = object(context?.action_targets)[String(id)];
+    const targets = (Array.isArray(raw) ? raw : []).map(p => previewActionDestination({ kind: '', params: object(p), station: null, well: null })).filter(t => t.station);
+    const [focus, setFocus] = useState(0);
+    const target = targets[focus] ?? targets[0];
     const rows = Array.isArray(report.occurrences) && report.occurrences.length ? report.occurrences : Array.isArray(report.occurrence_outcomes) && report.occurrence_outcomes.length ? report.occurrence_outcomes : Array.isArray(report.action_results) ? report.action_results : [];
-    return <section aria-label="Occurrence outcomes"><h4>Exact occurrence progress and partial effects</h4><table><thead><tr><th>Authored occurrence</th><th>Call / loop path</th><th>Reported status</th><th>Generated native actions / partial effects</th></tr></thead><tbody>{rows.map((value, i) => { const row = object(value); const source = object(object(row.metadata).bms_method); return <tr key={String(row.occurrence_id ?? i)}><td>{String(row.occurrence_id ?? row.source_occurrence_id ?? object(row.metadata).occurrence_id ?? row.step_id ?? 'unknown')}</td><td>{JSON.stringify({ path: row.path ?? source.path, call_path: row.call_path ?? source.call_path, loop_path: row.loop_path ?? source.loop_path })}</td><td>{String(row.status ?? 'unknown')}</td><td>{JSON.stringify(row.children ?? row.native_actions ?? row.effects ?? row.child_outcomes ?? row.native_action_ids ?? null)}</td></tr>; })}</tbody></table>{(Array.isArray(report.action_results) ? report.action_results : []).map((action, index) => <BioXpPipetteResults key={index} value={action} />)}{rows.length === 0 && <p>No occurrence outcomes reported. An absent ACK or HTTP error does not establish that nothing started.</p>}</section>;
+    return <section aria-label="Occurrence outcomes"><h4>Exact occurrence progress and partial effects</h4>{context && <div className="bxw-preview">
+        <p>{index >= 0 ? `Current step ${index + 1} of ${provenance.length}: ${label ?? current?.step_id}` : 'Current authored step not reported'}</p>
+        {index >= 0 && <progress aria-label="Current step in original plan" max={provenance.length} value={index + 1} />}
+        <details open><summary>Run deck · planned targets, not measured position</summary>
+            {targets.length > 1 && <label>Show target <select value={targets[focus] ? focus : 0} onChange={e => setFocus(Number(e.target.value))}>{targets.map((t,i) => <option key={i} value={i}>{t.station} {t.well}</option>)}</select></label>}
+            {!target && <p>No deck target reported for this action.</p>}
+            <BioXpWorkflowDeck readOnly selection={{ station: target?.station ?? '', wells: target?.well ? [target.well] : [] }} onChange={() => {}} />
+        </details></div>}{occurrence != null && <p role="status">Current occurrence: {label ?? String(occurrence)} · {String(current?.occurrence_id ?? occurrence)} · {String(workflow.phase ?? 'unknown')}{current && ` · ${JSON.stringify({ call_path: current.call_path, loop_path: current.loop_path })}`}</p>}{(Array.isArray(report.events) ? report.events : []).filter(e => object(e).event === 'recovery_decision').map((event, i) => {
+        const detail = object(object(event).detail);
+        return <p key={i}>Operator decision: {String(detail.decision ?? 'not reported').replaceAll('_', ' ')} · {String(detail.source_occurrence_id ?? '')} · {String(detail.native_action_id ?? '')} · attempt {String(detail.expected_attempt ?? 'not reported')}. Decision recorded, not physical verification.</p>;
+    })}<table><thead><tr><th>Authored occurrence</th><th>Call / loop path</th><th>Reported status</th><th>Generated native actions / partial effects</th></tr></thead><tbody>{rows.map((value, i) => { const row = object(value); const source = object(object(row.metadata).bms_method); return <tr key={String(row.occurrence_id ?? i)}><td>{String(row.occurrence_id ?? row.source_occurrence_id ?? object(row.metadata).occurrence_id ?? row.step_id ?? 'unknown')}</td><td>{JSON.stringify({ path: row.path ?? source.path, call_path: row.call_path ?? source.call_path, loop_path: row.loop_path ?? source.loop_path })}</td><td>{String(row.status ?? 'unknown')}</td><td><AttemptEvidence actions={row.children} />{JSON.stringify(row.children ?? row.native_actions ?? row.effects ?? row.child_outcomes ?? row.native_action_ids ?? null)}</td></tr>; })}</tbody></table>{(Array.isArray(report.action_results) ? report.action_results : []).map((action, index) => <BioXpPipetteResults key={index} value={action} />)}{rows.length === 0 && <p>No occurrence outcomes reported. An absent ACK or HTTP error does not establish that nothing started.</p>}</section>;
 }

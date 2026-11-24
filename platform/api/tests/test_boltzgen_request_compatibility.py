@@ -7,11 +7,12 @@ from test_core_protein_scientific_admission import admission
 async def test_admission_rejects_native_plddt_before_queue(admission, monkeypatch):
     from fastapi import BackgroundTasks, HTTPException
     from routers import jobs
+    from services import job_submission
     from schemas import JobCreate
     from sqlalchemy import select
     from database import Job
     with pytest.raises(HTTPException, match='native pLDDT'):
-        await jobs._create_job(JobCreate(name='synthetic-admission', model_id='boltzgen', mode='ntp_binder',
+        await job_submission._create_job(JobCreate(name='synthetic-admission', model_id='boltzgen', mode='ntp_binder',
                               params={'ntp_type': 'ATP', 'min_plddt': 0}), BackgroundTasks(), admission)
     assert list((await admission.execute(select(Job))).scalars()) == []
 
@@ -20,9 +21,10 @@ async def test_admission_rejects_native_plddt_before_queue(admission, monkeypatc
 async def test_admission_persists_effective_native_rank(admission, monkeypatch):
     from fastapi import BackgroundTasks
     from routers import jobs
+    from services import job_submission
     from schemas import JobCreate
     from database import Job
-    response = await jobs._create_job(JobCreate(name='synthetic-admission', model_id='boltzgen', mode='ntp_binder',
+    response = await job_submission._create_job(JobCreate(name='synthetic-admission', model_id='boltzgen', mode='ntp_binder',
                               params={'ntp_type': 'ATP', 'boltzgen_rank_design_ptm_weight': 2}), BackgroundTasks(), admission)
     job = await admission.get(Job, response.id)
     assert job.params['boltzgen_effective_rank'][0] == {'name': 'design_ptm', 'weight': 2., 'higher_is_better': True, 'unit': 'fraction'}

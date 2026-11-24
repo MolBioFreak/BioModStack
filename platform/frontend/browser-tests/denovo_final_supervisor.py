@@ -16,7 +16,7 @@ subprocess.run(['ip','link','set','lo','up'],check=True)
 routes = subprocess.check_output(['ip','route'],text=True)
 assert not routes.strip()
 (ROOT/'namespace.json').write_text(json.dumps({'pid':os.getpid(),'netns':os.readlink('/proc/self/ns/net'),'routes':routes,'argv':sys.argv},indent=2))
-python = '/home/dalab/biomodstack/dev-test-canonical/platform/api/.venv/bin/python'
+python = os.environ.get('BMS_QA_API_PYTHON') or sys.executable
 attempt = str(time.time_ns())
 server_log = (ROOT/('server-'+attempt+'.log')).open('w')
 chrome_log = (ROOT/('chrome-'+attempt+'.log')).open('w')

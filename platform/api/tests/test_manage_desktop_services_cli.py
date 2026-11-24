@@ -11,6 +11,15 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+@pytest.fixture(autouse=True)
+def isolated_prerequisites(monkeypatch, tmp_path):
+    # Lifecycle tests exercise their mocked service owner, never host selectors
+    # or an installed managed environment. Dispatch has separate real-exec tests.
+    import biomodstack_runtime_profile
+    monkeypatch.setattr(biomodstack_runtime_profile, "apply_host_selectors", lambda: None)
+    monkeypatch.setenv("BMS_PYTHON_ROOT", str(tmp_path / "uninstalled-python"))
+
+
 def load_module():
     script_path = REPO_ROOT / "scripts" / "manage_desktop_services.py"
     spec = importlib.util.spec_from_file_location("manage_desktop_services", script_path)

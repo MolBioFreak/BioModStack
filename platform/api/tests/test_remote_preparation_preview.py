@@ -74,7 +74,7 @@ async def test_scoped_image_catalog_is_not_composed_model_closure(assets, monkey
     monkeypatch.setenv('BMS_FEATURE_MOLECULAR_DYNAMICS', '1')
     catalog = [r.model_dump() for r in await provision_catalog()]
     target = SimpleNamespace(id='one', host='worker', port=22, username='root', remote_root='/worker', host_key_sha256='c'*64)
-    for model, image in [('boltzgen', 'boltzgen.sif'), ('protein_local_redesign', 'foundry.sif'),
+    for model, image in [('boltzgen', 'boltzgen.sif'),
                          ('molecular_dynamics', 'gromacs-md-2025.3.sif'),
                          ('confornets_experimental', 'confornets.sif')]:
         assert {'kind': 'image', 'model_id': model} in catalog
@@ -85,9 +85,19 @@ async def test_scoped_image_catalog_is_not_composed_model_closure(assets, monkey
         assert entries[0].remote_destination == 'containers/' + image
         blocked, entries = cache.independent_preview(ProvisionSelection(kind='model', model_id=model), target)
         assert blocked.blockers[0].startswith('binding_unavailable:') and not entries
+    model = 'protein_modification_experimental'
+    assert {'kind': 'image', 'model_id': model} in catalog
+    assert {'kind': 'model', 'model_id': model} in catalog
+    selection = ProvisionSelection(kind='image', model_id=model)
+    blocked, entries = cache.independent_preview(selection, target)
+    assert blocked.blockers and not entries
+    (assets[0] / 'foundry.sif').write_bytes(b'controlled image')
+    ready, entries = cache.independent_preview(selection, target)
+    assert not ready.blockers and len(entries) == 1
+    assert entries[0].remote_destination == 'containers/foundry.sif'
     assert {'kind': 'image', 'model_id': 'boltz_cp_experimental'} in catalog
     assert {'kind': 'model', 'model_id': 'boltz_cp_experimental'} in catalog
-    assert not any(r.get('model_id') in {'diffdock', 'oligo_design', 'antibody_child'} for r in catalog)
+    assert not any(r.get('model_id') in {'oligo_design', 'antibody_child'} for r in catalog)
 
 
 @pytest.mark.asyncio
@@ -181,7 +191,8 @@ async def test_hf_weight_aliases_prepare_without_duplicate_objects(store, assets
                 assert row.provider_metadata['preload']['phase'] == 'source_download_ready', row.provider_metadata['preload']
             installed = list((tmp_path / 'worker/cache/artifacts/v1/weights').rglob('snapshots/revision/model.pt'))
             assert len(installed) == 1
-            assert installed[0].is_symlink() and installed[0].readlink().as_posix() == '../../model.pt'
+            assert not installed[0].is_symlink()
+            assert not installed[0].stat().st_mode & 0o222
             assert installed[0].read_bytes() == (root / 'model.pt').read_bytes()
             calls, uploads = local_transport
             assert len(uploads) == 2  # image + batch of source/weight; never dereference aliases
@@ -200,10 +211,18 @@ async def test_hf_weight_aliases_prepare_without_duplicate_objects(store, assets
             from services.remote_execution.managed_inventory import manifest_for
             from tools import bms_managed_runtime as managed, bms_artifact_cache as artifacts
             manifest = manifest_for(selected, entries, (source.revision, source.tree))
-            link = next(r for r in manifest['artifacts'] if r.get('kind') == 'runtime_link')
+            assert not any(r.get('kind') == 'runtime_link' for r in manifest['artifacts'])
             import copy, hashlib
+            # Retained manifests can still contain links; validate that receiving
+            # boundary separately from today's concrete-name producer.
+            legacy = copy.deepcopy(manifest)
+            link = next(r for r in legacy['artifacts'] if r['name'].endswith('snapshots/revision/model.pt'))
+            target = '../../model.pt'
+            link.update(kind='runtime_link', mode=0o777, target=target,
+                        sha256=hashlib.sha256(target.encode()).hexdigest(), size_bytes=len(target))
+            managed.validate_manifest(legacy, artifacts)
             for bad_target in ('/etc/passwd', '../../../outside', '../../absent', 'model.pt'):
-                bad = copy.deepcopy(manifest)
+                bad = copy.deepcopy(legacy)
                 bad_link = next(r for r in bad['artifacts'] if r.get('kind') == 'runtime_link')
                 bad_link.update(target=bad_target, sha256=hashlib.sha256(bad_target.encode()).hexdigest(), size_bytes=len(bad_target))
                 with pytest.raises(ValueError):

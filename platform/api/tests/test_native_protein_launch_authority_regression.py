@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from experiment_models import ExperimentWorkflowPreparation, ExperimentLaunchContext
 from experiment_services import validate_preparation_authority, ValidationFailure
 from routers import project_manager as pm
+from services.global_experiments import launch_contexts
 from services.global_experiments.launch_contexts import validate_bound_job_request
 from test_project_workflow_setups import setup_store, _project_payload
 
@@ -245,7 +246,7 @@ async def test_native_plan_draft_publish_prepare_routes(native_http, setup_store
         json={'input_dataset_revision_ids': []}, headers={'Idempotency-Key': 'plan-prepare'})
     assert response.status_code == 201, response.text
     assert response.json()['normalized_request']['launch_authority']['schema'] == 'bms.protein-setup-launch-authority.v1'
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from schemas import JobCreate
     scheduler = payload['scheduler']
     expected_params = normalize_job_request(JobCreate(name=scheduler['name'], model_id=scheduler['model_id'],
@@ -358,7 +359,7 @@ async def test_native_terminal_state_is_not_gated_on_missing_accounting(
         context, binding = await consume_launch_context(session,
             launch_context_id=context.launch_context_id, claim_token=token,
             canonical_job_id=job.id, canonical_batch_id=None)
-        await pm._project_bound_job(session, core, context, job, binding)
+        await launch_contexts._project_bound_job(session, core, context, job, binding)
         group = await reconcile_run_group(session, core, project_id, group_doc['run_group_id'])
         attempt = await session.get(ExperimentRunAttempt, attempt_doc['attempt_id'])
         assert group.state == attempt.state == status
@@ -376,3 +377,65 @@ async def test_native_terminal_state_is_not_gated_on_missing_accounting(
         generation = group.generation
         again = await reconcile_run_group(session, core, project_id, group.resource_id)
         assert again.state == status and again.generation == generation
+
+@pytest.mark.asyncio
+async def test_edited_setup_launch_keeps_both_job_settings(native_http, native_core_store, setup_store, monkeypatch):
+    from fastapi import BackgroundTasks
+    from sqlalchemy import select
+    from database import Job, current_launch_context_id
+    from schemas import JobCreate
+    from services.job_submission import submit_job
+
+    from biomodstack_local_resources import LocalCapacity
+    from services import ngs_molbio_n5
+    # Both offline Jobs remain reserved; give the fixture room for both.
+    monkeypatch.setattr(ngs_molbio_n5, 'applied_local_policy', lambda: LocalCapacity(8, 32 * 1024**3))
+    client = native_http
+    project, setup, prepared, domain_path = await prepared_setup(client, 'esmfold2')
+    path = f"/api/projects/{project}/workflow-setups/{setup['setup_context_id']}"
+    ids = []
+    for generation, sequence in enumerate(('MQIFVK', 'MQIFV'), 1):
+        if generation == 2:
+            reopened = (await client.get(path)).json()
+            assert reopened['state'] == 'submitted'
+            saved = await client.put(path + '/draft', json={'expected_generation': reopened['generation'],
+                'draft': {'sequence': sequence}}, headers={'Idempotency-Key': 'edit'})
+            assert saved.status_code == 200, saved.text
+            result = await client.post(path + '/prepare-launch', json={'expected_generation': saved.json()['generation']},
+                headers={'Idempotency-Key': 'prepare-edit'})
+            assert result.status_code == 200, result.text
+            prepared = result.json()
+        context_id = prepared['launch_context_id']
+        group = await client.post(domain_path + '/run-groups', json={'preparation_launches': [
+            {'preparation_id': prepared['preparation_id'], 'launch_context_id': context_id}]},
+            headers={'Idempotency-Key': f'run-{generation}'})
+        assert group.status_code == 201, group.text
+        handoff = (await client.get(f'/api/launch-contexts/{context_id}')).json()['pinned_scheduler']
+        token = current_launch_context_id.set(context_id)
+        try:
+            if generation == 1:
+                from fastapi import HTTPException
+                from services import job_submission
+                from services.global_experiments.launch_contexts import LaunchContextError
+                async def interrupt_binding(*args, **kwargs):
+                    raise LaunchContextError('fixture_binding_interruption', 'Interrupted binding', status_code=409)
+                with monkeypatch.context() as fault:
+                    fault.setattr(job_submission, 'consume_launch_context', interrupt_binding)
+                    async with native_core_store() as core, setup_store() as db:
+                        with pytest.raises(HTTPException) as failed:
+                            await submit_job(JobCreate.model_validate({**handoff, 'launch_context_id': context_id}),
+                                             BackgroundTasks(), core, experiment_session=db)
+                        assert failed.value.detail['code'] == 'fixture_binding_interruption'
+                async with native_core_store() as core:
+                    assert list(await core.scalars(select(Job.id))) == [group.json()['runs'][0]['attempts'][0]['canonical_job_id']]
+            for _ in range(2):  # Replay the exact submitted request, not an edited retry.
+                async with native_core_store() as core, setup_store() as db:
+                    response = await submit_job(JobCreate.model_validate({**handoff, 'launch_context_id': context_id}),
+                                                BackgroundTasks(), core, experiment_session=db)
+                    assert response.id == group.json()['runs'][0]['attempts'][0]['canonical_job_id']
+            ids.append(response.id)
+        finally:
+            current_launch_context_id.reset(token)
+    assert ids[0] != ids[1]
+    async with native_core_store() as core:
+        assert {job.id: job.params['sequence'] for job in await core.scalars(select(Job))} == dict(zip(ids, ('MQIFVK','MQIFV'), strict=True))

@@ -16,13 +16,12 @@ import time
 
 logger = logging.getLogger(__name__)
 
-from paths import get_code_root, to_allowed_relative
+from paths import get_analysis_cache_dir, to_allowed_relative
 
 router = APIRouter()
 
 # Cache directory for RCSB downloads
-RCSB_CACHE_DIR = get_code_root() / "rcsb"
-RCSB_CACHE_DIR.mkdir(exist_ok=True)
+RCSB_CACHE_DIR = get_analysis_cache_dir() / "rcsb"
 
 RCSB_BASE_URL = "https://files.rcsb.org/download"
 RCSB_SEARCH_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
@@ -286,7 +285,8 @@ async def fetch_pdb(pdb_id: str, force: bool = False):
             
             response.raise_for_status()
             
-            # Save to cache
+            # Importing the router never mutates source or data.
+            RCSB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
             cache_path.write_bytes(response.content)
             now_iso = _isoformat_timestamp(time.time())
             _write_cache_metadata(cache_path, cached_at=now_iso, last_used_at=now_iso)

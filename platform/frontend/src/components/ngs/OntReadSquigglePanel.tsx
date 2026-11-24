@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../lib/api';
+import { themeFont } from '../../lib/themeFont';
 import { describeNgsError, withAlignmentAccessRecovery } from '../../lib/ngsAlignmentSession';
 
 export interface OntSquiggleReadSummary {
@@ -22,15 +23,15 @@ function get<T>(jobId: string, path: string, params?: Record<string, unknown>): 
 }
 
 /** Signal behind each called base, read straight from the run's POD5 and move table. */
-export function OntReadSquigglePanel({ jobId }: { jobId: string }) {
-    const [readId, setReadId] = useState('');
+export function OntReadSquigglePanel({ jobId, requestedReadId }: { jobId: string; requestedReadId?: string }) {
+    const [readId, setReadId] = useState(requestedReadId ?? '');
     const [startBase, setStartBase] = useState(0);
     const reads = useQuery({
         queryKey: ['ngs-squiggle-reads', jobId],
         queryFn: () => get<{ reads: OntSquiggleReadSummary[]; total_primary_reads: number }>(jobId, 'ngs-squiggle/reads', { limit: 100 }),
-        retry: false, staleTime: 60_000,
+        enabled: !requestedReadId, retry: false, staleTime: 60_000,
     });
-    const activeRead = readId || reads.data?.reads[0]?.read_id || '';
+    const activeRead = readId || (requestedReadId === undefined ? reads.data?.reads[0]?.read_id : '') || '';
     const squiggle = useQuery({
         queryKey: ['ngs-squiggle', jobId, activeRead, startBase],
         queryFn: () => get<OntReadSquiggle>(jobId, `ngs-squiggle/reads/${encodeURIComponent(activeRead)}`, { start_base: startBase, bases: WINDOW }),
@@ -53,7 +54,7 @@ export function OntReadSquigglePanel({ jobId }: { jobId: string }) {
                 line: { color: 'rgba(148,163,184,0.5)', width: 1 } });
             const mods = Object.entries(base.modifications).map(([code, p]) => `${code} ${(p * 100).toFixed(0)}%`).join('<br>');
             annotations.push({ x: (base.sample_start + base.sample_end) / 2, y: 1.02, xref: 'x', yref: 'paper', text: base.base, showarrow: false,
-                font: { size: 10, color: BASE_COLOURS[base.base] ?? '#e2e8f0', family: 'monospace' },
+                font: { size: 10, color: BASE_COLOURS[base.base] ?? '#e2e8f0', family: themeFont('mono') },
                 hovertext: `base ${base.index + 1} ${base.base}${mods ? `<br>${mods}` : ''}` });
         }
         return { x, data, shapes, annotations };
@@ -61,7 +62,7 @@ export function OntReadSquigglePanel({ jobId }: { jobId: string }) {
 
     if (reads.isLoading) return <p className="text-sm text-[var(--text-secondary)]">Loading reads with signal…</p>;
     if (reads.isError) return <p role="alert" className="text-sm text-[var(--warning)]">Squiggles unavailable: {describeNgsError(reads.error, 'this run has no POD5 signal with move tables.')}</p>;
-    const list = reads.data!.reads;
+    const list = reads.data?.reads ?? [];
     const length = squiggle.data?.read_length ?? selected?.length ?? 0;
     return (
         <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" aria-label="Squiggle viewer">
@@ -73,7 +74,9 @@ export function OntReadSquigglePanel({ jobId }: { jobId: string }) {
                 <label className="ml-auto text-xs text-[var(--text-secondary)]">Read
                     <select aria-label="Squiggle read" value={activeRead} onChange={event => { setReadId(event.target.value); setStartBase(0); }}
                         className="ml-1 max-w-[28rem] rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-xs">
-                        {list.map(read => (
+                        {requestedReadId && <option value={requestedReadId}>{requestedReadId}</option>}
+                        {requestedReadId === '' && <option value="">Choose a barcode read</option>}
+                        {!requestedReadId && list.map(read => (
                             <option key={read.read_id} value={read.read_id} disabled={!read.has_moves}>
                                 {read.read_id.slice(0, 8)} · {read.length.toLocaleString()} bp{read.qscore != null ? ` · Q${read.qscore.toFixed(1)}` : ''}
                                 {Object.entries(read.modified_calls).map(([code, count]) => ` · ${code} ${count}`).join('')}

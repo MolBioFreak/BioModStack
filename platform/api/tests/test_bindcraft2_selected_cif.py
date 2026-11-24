@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Design, Job
 from routers import jobs
+from services import binder_continuation
+from services import binder_source_materialization
 from services.result_state_integrity import finalize_successful_job
 from test_bindcraft2_publication import campaign
 
@@ -70,20 +72,20 @@ async def test_projected_cif_design_is_verified_without_forcing_antibody_route(t
             # A generic BC2 binder is not automatically antibody-compatible.
             with pytest.raises(HTTPException, match='not part of an antibody or nanobody'):
                 await jobs.launch_antibody_iteration_from_designs(request, BackgroundTasks(), session)
-            derivative = jobs._cif_selection_pdb(Path(design.pdb_path), tmp_path / 'seed.pdb')
+            derivative = binder_source_materialization._cif_selection_pdb(Path(design.pdb_path), tmp_path / 'seed.pdb')
             assert derivative.read_text().startswith('ATOM')
             assert jobs._extract_chain_records_from_structure(Path(design.pdb_path))['B'][0] == {
                 'resseq': 12, 'icode': '', 'aa': 'A'}
             assert jobs._extract_chain_records_from_structure(derivative)['B'][0]['resseq'] == 12
-            await jobs._validate_selected_design_owners(session, job, None, [design])
+            await binder_continuation._validate_selected_design_owners(session, job, None, [design])
             unrepresentable = tmp_path / 'long_chain.cif'
             unrepresentable.write_text(Path(design.pdb_path).read_text().replace(
                 'ALA B 1 1 ?', 'ALA LONG 1 1 ?').replace('12 ALA B CA', '12 ALA LONG CA'))
             with pytest.raises(ValueError, match='cannot be represented'):
-                jobs._cif_selection_pdb(unrepresentable, tmp_path / 'invalid.pdb')
+                binder_source_materialization._cif_selection_pdb(unrepresentable, tmp_path / 'invalid.pdb')
             # Selection readback detects source mutation, not a guessed derivative.
             (root / '3_Ranked/t_seq0_stateA.cif').write_text('data_corrupt\n')
             with pytest.raises(Exception, match='bytes'):
-                await jobs._validate_selected_design_owners(session, job, None, [design])
+                await binder_continuation._validate_selected_design_owners(session, job, None, [design])
     finally:
         await engine.dispose()

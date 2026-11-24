@@ -42,7 +42,6 @@ from services.ont_raw_signal import (
     renew_derivation_lease,
     renew_waveform_lookup_lease,
     waveform_spawn_admission_lost,
-    assert_local_raw_runtime_image,
     source_lease_break_requested,
     SourceLeaseUnavailable,
     transition_derivation,
@@ -187,7 +186,6 @@ class OntRawSignalWorker:
         if len(command) < 3 or command[1] != "run":
             raise RuntimeError("waveform command is not a container run")
         identity = raw_signal_runtime_identity()
-        assert_local_raw_runtime_image(command[0], identity["image"])
         if [arg for arg in command if arg.startswith("--pull=")] != ["--pull=never"]:
             raise RuntimeError("waveform command must disable image pulls")
         if [arg for arg in command if arg.startswith("--network=")] != ["--network=none"]:

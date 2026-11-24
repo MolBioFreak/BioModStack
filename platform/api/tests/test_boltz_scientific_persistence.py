@@ -435,7 +435,7 @@ async def test_publication_owner_rolls_back_after_native_rows_flushed(tmp_path, 
     from database import Job
     from services import result_ingester
     from services.result_state_integrity import finalize_successful_job
-    from routers.jobs import reingest_job_results
+    from routers.job_results import reingest_job_results
 
     publication(tmp_path, count=2)
     factory, engine = await setup(tmp_path)

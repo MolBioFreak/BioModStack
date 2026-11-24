@@ -16,11 +16,13 @@ export interface BioXpWorkflowMaterialsProps {
     contextual?: boolean;
     selectedLabwareId?: string;
     displayStations?: Record<string, string>;
+    /** The plate sheet carries its own importer; hide this one beside it. */
+    showImport?: boolean;
 }
 const id = () => crypto.randomUUID();
 const stationLabel = (station: string) => deckStations.find(s => s.id === station)?.label || station || 'No station';
 
-export function BioXpWorkflowMaterials({ plan, onChange, selection, methodAuthoring = false, profiles = [], contextual = false, selectedLabwareId = '', displayStations, custodyObjects }: BioXpWorkflowMaterialsProps) {
+export function BioXpWorkflowMaterials({ plan, onChange, selection, methodAuthoring = false, profiles = [], contextual = false, selectedLabwareId = '', displayStations, custodyObjects, showImport = true }: BioXpWorkflowMaterialsProps) {
     const library = useContext(BioXpWorkflowProfilesContext);
     const choices = [...profiles, ...(library?.profiles ?? []).filter(p => !profiles.some(retained => retained?.id === p.id))].filter(p => p && typeof p.id === 'string');
     const nativeObjects = (custodyObjects ?? library?.custodyObjects ?? []).filter(p => p.kind === 'plate' && typeof p.token === 'string');
@@ -70,7 +72,7 @@ export function BioXpWorkflowMaterials({ plan, onChange, selection, methodAuthor
                 <button type="button" onClick={() => onChange({ ...plan, labware: plan.labware.filter(l => l.id !== item.id), assignments: plan.assignments.filter(a => a.labware_id !== item.id) })}>Remove labware {index + 1} and its assignments</button>
             </div>)}
         </fieldset>
-        <BioXpSampleSheetImport plan={plan} onChange={onChange} selection={selection} />
+        {showImport && <BioXpSampleSheetImport plan={plan} onChange={onChange} selection={selection} />}
         <fieldset><legend>Samples & reagents</legend>
             <div className="bioxp-plan-actions"><button type="button" onClick={() => addMaterial('sample')}>Add sample</button><button type="button" onClick={() => addMaterial('reagent')}>Add reagent</button></div>
             {plan.materials.map((material, index) => contextual && material.id !== materialId && !plan.assignments.some(a => a.material_id === material.id && (!selectedLabwareId || a.labware_id === selectedLabwareId) && available.some(l => l.id === a.labware_id) && (!selection.wells.length || selection.wells.includes(a.well))) ? null : <div className="bioxp-plan-row" key={material.id}>

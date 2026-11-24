@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job
 from routers import jobs
-from routers.jobs import (
+from routers import job_stages
+from services.job_readback import (
     _infer_nanopore_stage_outputs,
     _planned_nanopore_stages,
     _resolve_nanopore_fastq_qc_mode,
@@ -122,6 +123,9 @@ def test_construct_screening_stage_route_keeps_outputs_without_inventing_complet
         async def execute(self, _statement):
             return FakeResult()
 
+        async def scalar(self, _statement):
+            return None  # the route's hidden-Job lookup finds nothing
+
     app = FastAPI()
     app.include_router(jobs.router, prefix="/api/jobs")
     app.dependency_overrides[jobs.get_session] = FakeSession
@@ -173,7 +177,7 @@ async def test_legacy_clone_stage_callback_persists_canonical_stage_id(tmp_path:
                 }
             )
 
-            await jobs.report_stage_complete(
+            await job_stages.report_stage_complete(
                 job.id,
                 request,
                 "clone_validation",

@@ -105,9 +105,10 @@ def test_compose_core_runtime_contract() -> None:
     assert api["group_add"] == ["${BMS_MK1D_RECOVERY_GID:-65534}"]
     assert api["volumes"][-1] == {
         "type": "bind",
-        "source": "${BMS_MK1D_RECOVERY_SOCKET_DIR:-/run/biomodstack}",
+        "source": "/run/biomodstack",
         "target": "/run/biomodstack",
         "read_only": True,
+        "bind": {"create_host_path": False},
     }
     assert "ports" not in api
     assert "extra_hosts" not in api
@@ -575,7 +576,7 @@ def test_workflow_adapter_script_uses_durable_nextflow_home_not_tmp_cache() -> N
     ).read_text(encoding="utf-8")
 
     assert (
-        'BMS_NEXTFLOW_HOME="${BMS_NEXTFLOW_HOME:-${BMS_DATA:-/mnt/BioModStack}/nextflow}"'
+        'BMS_NEXTFLOW_HOME="${BMS_NEXTFLOW_HOME:-${BMS_DATA:-$HOME/.biomodstack}/nextflow}"'
         in adapter_script
     )
     assert 'export NXF_HOME="${NXF_HOME:-$BMS_NEXTFLOW_HOME}"' in adapter_script

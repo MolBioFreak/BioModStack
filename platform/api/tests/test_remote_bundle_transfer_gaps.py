@@ -20,7 +20,8 @@ def test_package_binds_executable_mode(tmp_path):
     executable.write_bytes(b'executable')
     executable.chmod(0o755)
     record = bundle._record_file(executable, 'runtime/python', 'runtime')
-    assert record.model_dump()['mode'] == 0o755
+    assert record.model_dump()['mode'] == 0o555
+    assert executable.stat().st_mode & 0o777 == 0o755  # Packaging never mutates the donor.
 
 
 @pytest.mark.parametrize('mode', [0o4755, 0o2755, 0o1755])

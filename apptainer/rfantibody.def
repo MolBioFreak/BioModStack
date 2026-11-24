@@ -2,7 +2,7 @@ Bootstrap: docker
 From: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
 
 # RFantibody container for NVIDIA Blackwell/Ada/Ampere
-# Deterministic build with pinned RFantibody commit + pinned torch nightly date.
+# Deterministic build with pinned RFantibody commit + pinned torch release.
 # DGL is built from source against the pinned torch/cuda stack.
 
 %labels
@@ -10,9 +10,9 @@ From: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
     Version 2.1
     Description RFantibody - antibody design with RFdiffusion (pinned runtime)
     RFantibodyCommit 8d9d402a99fd63052ad538b3d670e467b800123c
-    TorchSpec torch==2.11.0.dev20260204+cu128
-    TorchvisionSpec torchvision==0.25.0.dev20260204+cu128
-    TorchaudioSpec torchaudio==2.11.0.dev20260204+cu128
+    TorchSpec torch==2.11.0+cu128
+    TorchvisionSpec torchvision==0.26.0+cu128
+    TorchaudioSpec torchaudio==2.11.0+cu128
     DGLVersion 2.5.0-source
     CUDA 12.8.0
 
@@ -21,9 +21,9 @@ From: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
     export DEBIAN_FRONTEND=noninteractive
     export RFANTIBODY_REPO_URL="https://github.com/RosettaCommons/RFantibody.git"
     export RFANTIBODY_COMMIT="8d9d402a99fd63052ad538b3d670e467b800123c"
-    export TORCH_SPEC="torch==2.11.0.dev20260204+cu128"
-    export TORCHVISION_SPEC="torchvision==0.25.0.dev20260204+cu128"
-    export TORCHAUDIO_SPEC="torchaudio==2.11.0.dev20260204+cu128"
+    export TORCH_SPEC="torch==2.11.0+cu128"
+    export TORCHVISION_SPEC="torchvision==0.26.0+cu128"
+    export TORCHAUDIO_SPEC="torchaudio==2.11.0+cu128"
     export DGL_VERSION="2.5.0"
 
     # Install system dependencies
@@ -60,9 +60,9 @@ From: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
     export CC=gcc-11
     export CXX=g++-11
 
-    # Install pinned torch nightly build (date-pinned, not floating).
+    # Install the pinned torch release.
     uv pip install --compile --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/nightly/cu128 \
+        --index-url https://download.pytorch.org/whl/cu128 \
         "${TORCH_SPEC}" "${TORCHVISION_SPEC}" "${TORCHAUDIO_SPEC}"
 
     # Install pinned Python dependencies used by RFantibody.
@@ -175,7 +175,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
     RFantibody container for antibody design with RFdiffusion.
     Deterministic runtime:
       - RFantibody commit: 8d9d402a99fd63052ad538b3d670e467b800123c
-      - torch: 2.11.0.dev20260204+cu128
+      - torch: 2.11.0+cu128
       - dgl: source build from v2.5.0
     
     Usage:

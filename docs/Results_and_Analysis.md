@@ -74,8 +74,7 @@ Resolved via [platform/api/paths.py](../platform/api/paths.py):
 - inputs root:
   `inputs`
 
-These are usually placed under `BMS_DATA`, which on the current workstation is
-typically `/mnt/BioModStack`.
+These are usually placed under `BMS_DATA`, the configured data root.
 
 ## Global model-result rule
 
@@ -169,10 +168,6 @@ Retained MD analysis records its generating implementation, rather than requirin
 its source hash to match today's code. Analysis failure does not suppress valid
 independent dynamics, and chart/frame/playback selection uses one active intent.
 
-Docking rows expose an exact Job-relative `artifact_path` and native `format`.
-The read route preserves engine and complex identity and forwards SDF as SDF.
-A legacy basename is accepted only when unique; ambiguity returns 409 rather than
-selecting a different complex's first match.
 
 ## Practical Reading Order
 

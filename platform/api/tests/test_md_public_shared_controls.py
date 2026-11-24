@@ -243,9 +243,16 @@ async def test_public_remote_first_projection_pause_resume_http(store,retained,m
     worker.atomic_json(worker.envelope_path(attempt),envelope)
     worker.atomic_json(worker.status_path(attempt),dict(attempt_id='attempt',job_id='parent',boot_id=boot,
         state='paused',quiescent=True,generation=0))
-    monkeypatch.setattr(worker,'status',lambda path:worker.load_json(worker.status_path(path)))
+    monkeypatch.setattr(worker,'status',lambda path, **kwargs:worker.load_json(worker.status_path(path)))
+    # Cold scheduler import probes metadata; keep it separate from supervisor launches.
+    with monkeypatch.context() as metadata:
+        metadata.setattr(worker.subprocess, 'run', lambda *a, **kw: SimpleNamespace(returncode=0, stdout=''))
+        from services import gpu_orchestrator
     spawns=[]
-    monkeypatch.setattr(worker.subprocess,'Popen',lambda *args,**kwargs:spawns.append(args[0]))
+    def spawn(command, **kwargs):
+        assert command[2:] == ['supervise', '--attempt-dir', str(attempt)]
+        spawns.append(command)
+    monkeypatch.setattr(worker.subprocess,'Popen',spawn)
     target=ExecutionTarget(id='vast:fixture',provider='vast',provider_instance_id='fixture',
         state='ready',active=True,host='inert.invalid',port=22,username='inert',remote_root=str(attempt),
         host_key_sha256='d'*64,leased_job_id='parent',lease_acquired_at=epoch,

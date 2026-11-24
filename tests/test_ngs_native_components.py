@@ -139,6 +139,24 @@ def test_real_native_graph_matches_plasmid_routes(native, workflow, assembly, in
             assert 'ComparePlasmidConsensus:output:verification_input' in source_ids
 
 
+@pytest.mark.parametrize('input_mode', ['fastq', 'pod5', 'bam'])
+def test_assembly_without_expected_sequence_aligns_reads_to_the_assembly(native, input_mode):
+    settings = {
+        {'fastq': 'fastq_path', 'bam': 'bam_path', 'pod5': 'pod5_dir'}[input_mode]: '/input/reads',
+        'run_assembly': True, 'run_fastq_qc': True,
+    }
+    graph, _, _, blockers = metadata(native, 'wf_clone_validation', settings)
+    assert not blockers
+    source = {'fastq': ('FastqToUnalignedBam',), 'pod5': ('DoradoBasecall',), 'bam': ()}[input_mode]
+    assert set(graph['RunCloneValidation'].depends_on) == set(source)
+    assert set(graph['DoradoAlign'].depends_on) == {'RunCloneValidation', *source}
+    assert set(graph['CloneValidationAdapter'].depends_on) == {'RunCloneValidation', 'DoradoAlign'}
+    # Nothing that needs an expected sequence is planned.
+    for absent in ('FastqAlign', 'PrepareBamForAnalysis', 'ValidateMappedBam', 'ConstructVerify',
+                   'ComparePlasmidConsensus', 'FastqPlasmidQC', 'FastqDimerAnalysis'):
+        assert absent not in graph, absent
+
+
 @pytest.mark.parametrize('reference', [None, '/input/reference.fasta'])
 def test_barcoded_native_selection_does_not_schedule_unused_alignment(native, reference):
     graph, deps, _, blockers = metadata(native, 'ont_basecall_dna', {

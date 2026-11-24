@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from lib.native_diagnostics import redact_text
 from lib.ont_minknow_host import discover_status as discover_ont_status
 from lib.ont_minknow_host import observe_run as observe_ont_run
+from lib.ont_minknow_host import run_live_stats as ont_run_live_stats
 from lib.ont_minknow_host import protocol_options as discover_ont_protocol_options
 from lib.ont_minknow_host import begin_hardware_check as begin_ont_hardware_check
 from lib.ont_minknow_host import refresh_position as refresh_ont_position
@@ -313,6 +314,8 @@ def ont_route_payload(path: str) -> dict[str, Any] | None:
             return read_start_receipt(unquote(position), unquote(request_id))
         except ValueError:
             return None
+    if route_path.startswith("/ont/runs/") and route_path.endswith("/live"):
+        return ont_run_live_stats(unquote(route_path.removeprefix("/ont/runs/").removesuffix("/live")).strip().rstrip("/"))
     if route_path.startswith("/ont/runs/"):
         minknow_run_id = unquote(route_path.removeprefix("/ont/runs/")).strip()
         return observe_ont_run(minknow_run_id)

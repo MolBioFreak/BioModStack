@@ -784,6 +784,14 @@ def remove_calibration_fasta_index(sequence_fasta: Path) -> None:
     index.unlink()
 
 
+def select_calibration_reads(read_ids: list[str], requested_count: int) -> list[str]:
+    """The reads to calibrate on: up to the requested number, in a fixed order, from those that are available."""
+    ranked = sorted(read_ids, key=lambda read_id: (hashlib.sha256(read_id.encode()).hexdigest(), read_id))
+    if not ranked:
+        raise ValueError("no read has both raw signal and a move table, so there is nothing to calibrate on")
+    return ranked[:requested_count]
+
+
 def cmd_calibrate(args: argparse.Namespace) -> None:
     if not 1 <= args.sample_count <= 100:
         raise ValueError("calibration sample count is outside bounded policy")
@@ -812,10 +820,8 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
         or sha(args.original_bam) != args.move_artifact_sha256
     ):
         raise ValueError("exact signal/move intersection digest diverges from the governed inventory")
-    ranked = sorted(raw_ids, key=lambda read_id: (hashlib.sha256(read_id.encode()).hexdigest(), read_id))
-    if len(ranked) < args.sample_count:
-        raise ValueError("exact signal/move intersection is smaller than requested calibration sample")
-    selected = ranked[:args.sample_count]
+    # A small genuine set is calibrated on what it has; the report records both counts.
+    selected = select_calibration_reads(raw_ids, args.sample_count)
     selection_digest = hashlib.sha256(canonical(selected)).hexdigest()
     sample_bam = args.output_dir / "sample.bam"
     sequence_fasta = args.output_dir / "sample.fasta"
@@ -890,7 +896,7 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
             baseline,
             sequence_fasta,
             bounded_output,
-            args.sample_count,
+            len(selected),
             args.molecule_type,
         ))
     finally:
@@ -1413,17 +1419,37 @@ def cmd_reform(args: argparse.Namespace) -> None:
     })
 
 
+def reform_authority_from_paf(path: Path) -> dict[str, dict[str, Any]]:
+    """Per-read signal coordinates and durations as a reform PAF states them."""
+    authority: dict[str, dict[str, Any]] = {}
+    with path.open("rb") as handle:
+        for line in bounded_binary_lines(handle):
+            fields = line.rstrip(b"\n").split(b"\t")
+            ss_values = [field[5:] for field in fields[12:] if field.startswith(b"ss:Z:")]
+            if len(fields) < 12 or len(ss_values) != 1:
+                raise ValueError("Squigualiser output PAF structure or required tags are invalid")
+            try:
+                authority[fields[0].decode("utf-8")] = {
+                    "signal_length": int(fields[1]),
+                    "signal_start": int(fields[2]),
+                    "signal_end": int(fields[3]),
+                    "sequence_length": int(fields[6]),
+                    "ss": ss_values[0].decode("ascii", "strict"),
+                }
+            except (UnicodeDecodeError, ValueError) as exc:
+                raise ValueError("Squigualiser output PAF contains non-numeric core fields") from exc
+    return authority
+
+
 def cmd_realign(args: argparse.Namespace) -> None:
     inventory_ids = args.inventory.read_text().splitlines()
     inventory = set(inventory_ids)
     if not inventory or len(inventory) != len(inventory_ids) or inventory_ids != sorted(inventory_ids):
         raise ValueError("move inventory must be non-empty, unique, and canonically sorted")
-    reform_authority = reform_parent_authority(
-        args.filtered_bam,
-        args.blow5,
-        kmer_length=args.kmer_length,
-        signal_move_offset=args.signal_move_offset,
-    )
+    # The parent reform PAF was checked against the move table and raw signal when it
+    # was made, and is pinned here by its hash. Its coordinates are read from it; the
+    # raw signal of every read is not decoded again to derive them a second time.
+    reform_authority = reform_authority_from_paf(args.reform_paf)
     reform_validation = validate_paf(
         args.reform_paf, (b"ss:Z:",), inventory,
         molecule_type=args.molecule_type, paf_kind="reform",

@@ -220,6 +220,12 @@ export function ProjectInspector({
                                 <span className="rounded-full border border-border-primary px-2 py-1 text-content-secondary">Scientific: {displayLabel(surface.scientific_acceptance.state)}</span>
                             </div>
                             {surface.scientific_acceptance.reason && <p className="mt-2 text-content-secondary">{surface.scientific_acceptance.reason}</p>}
+                            {surface.entity_kind === 'ngs_evidence_assessment' && (
+                                <div className="mt-2 space-y-1 text-content-secondary" data-testid="ngs-verdict-versus-release">
+                                    <p>The result page verdict says whether the configured checks passed. It is not release approval.</p>
+                                    <p>This Project assessment is separate: a result that passes its checks is stored here as Review when its threshold profile is not calibrated, and a Fail stays Fail.</p>
+                                </div>
+                            )}
                             {!surface.route && <p className="mt-2 font-medium text-warning">The server did not issue a canonical route for this surface.</p>}
                         </div>
                     </section>

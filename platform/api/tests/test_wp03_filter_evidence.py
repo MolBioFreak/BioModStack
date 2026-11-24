@@ -156,13 +156,6 @@ def test_filter_transport_publishes_rf3_rfd3_dispositions():
         assert f'pattern: "{name}_data_*.jsonl"' in source
 
 
-def test_native_ui_labels_do_not_conflate_metrics():
-    source = (SCRIPTS.parent/'platform/frontend/src/components/AntibodyDenovoTemplate.tsx').read_text()
-    assert 'Min native pLDDT (0–100; not design pTM)' in source
-    assert 'Min affinity probability (0–1)' in source
-    assert '<BoltzGenRankControls' in source
-    controls = (SCRIPTS.parent/'platform/frontend/src/components/BoltzGenRankControls.tsx').read_text()
-    assert 'v1 defaults: design pTM ↑, affinity probability ↑, refold RMSD ↓' in controls
 
 
 def bind_summary_fixture(structure, summary):

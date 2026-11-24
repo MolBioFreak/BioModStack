@@ -23,7 +23,7 @@ def test_completed_workflow_preview_publication_and_actual_receiving(tmp_path):
     from test_local_gate_review_rows import PDB
     from test_shape_result_ingestion import _session_factory
     from services import nextflow as compiler
-    from routers.jobs import _execution_plan_preview
+    from services.job_requests import _execution_plan_preview
     from schemas import JobCreate
     from services.result_ingester import ingest_loose_files
     from database import Job, Design

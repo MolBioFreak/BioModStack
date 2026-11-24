@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job
 from routers import jobs as jobs_router
+from services import job_submission
+from services import job_requests
 from schemas import JobCreate
 from services.frustrampnn.settings import FrustraMPNNRequestedSettings, default_settings
 from template_registry import TemplateRegistry
@@ -31,7 +33,7 @@ async def job_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     results = tmp_path / "results"
     results.mkdir()
     monkeypatch.setattr(jobs_router, "get_results_dir", lambda: results)
-    monkeypatch.setattr(jobs_router, "workflow_launches_allowed", lambda: True)
+    monkeypatch.setattr(job_submission, "workflow_launches_allowed", lambda: True)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -255,7 +257,7 @@ def test_every_enabled_parent_normalizes_complete_settings_and_durable_origin(
     model_id: str,
     mode: str,
 ) -> None:
-    normalized = jobs_router._normalize_frustrampnn_settings(
+    normalized = job_requests._normalize_frustrampnn_settings(
         model_id,
         mode,
         {"run_frustrampnn": True, "frustrampnn_settings": _custom_settings()},
@@ -281,7 +283,7 @@ def test_every_non_structure_enabled_parent_rejects_partial_settings_before_queu
     mode: str,
 ) -> None:
     with pytest.raises(HTTPException) as error:
-        jobs_router._normalize_frustrampnn_settings(
+        job_requests._normalize_frustrampnn_settings(
             model_id,
             mode,
             {

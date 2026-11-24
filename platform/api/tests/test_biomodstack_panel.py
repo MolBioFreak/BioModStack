@@ -264,10 +264,11 @@ def test_panel_periodic_refresh_calls_read_only_bioxp_refresh_without_obsolete_a
         _update_db_info=lambda: calls.append("db"),
         _update_bioxp_row=lambda: calls.append("bioxp"),
         _update_dev_updates_control=lambda: calls.append("updates"),
+        _update_dev_autostart_row=lambda: calls.append("boot"),
     )
 
     assert module.BioModStackPanel._refresh_status(panel) is True
-    assert calls == ["status", "jobs", "db", "bioxp", "updates"]
+    assert calls == ["status", "jobs", "db", "bioxp", "updates", "boot"]
 
 
 def test_panel_open_browser_uses_explicit_runtime_frontend_url(monkeypatch) -> None:
@@ -626,3 +627,85 @@ def test_panel_preserves_installation_selectors_when_starting_after_reboot(monke
     assert {key: env[key] for key in selectors} == selectors
     assert "BMS_DB_PATH" not in env
     assert "BMS_SUDO_PASSWORD" not in env
+
+
+# ---- Development start-at-boot toggle -------------------------------------------------------------------------------
+class _Row:
+    def __init__(self, active=False):
+        self.active, self.sensitive, self.subtitle = active, True, ""
+
+    def get_active(self):
+        return self.active
+
+    def set_active(self, value):
+        self.active = value
+
+    def set_sensitive(self, value):
+        self.sensitive = value
+
+    def set_subtitle(self, value):
+        self.subtitle = value
+
+
+def _boot_panel(module, row=None):
+    row = row or _Row()
+    panel = SimpleNamespace(dev_autostart_row=row, dev_autostart_row_widget=row, action_status_row=_Row())
+    panel._update_dev_autostart_row = lambda: module.BioModStackPanel._update_dev_autostart_row(panel)
+    return panel, row
+
+
+def test_panel_boot_row_shows_each_real_state(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    cases = [
+        (True, True, True, "starts at boot, before anyone logs in"),
+        (True, False, True, "starts when this account logs in"),
+        (False, False, True, "Off."),
+        (None, False, False, "not installed"),
+    ]
+    for enabled, linger, active_expected, text in cases:
+        panel, row = _boot_panel(module)
+        monkeypatch.setattr(module, "dev_autostart_enabled", lambda project_root=None, _e=enabled: _e)
+        monkeypatch.setattr(module, "user_linger_enabled", lambda _l=linger: _l)
+        module.BioModStackPanel._update_dev_autostart_row(panel)
+        assert row.active is bool(enabled) and row.sensitive is (enabled is not None)
+        assert text in row.subtitle
+
+
+def test_panel_boot_toggle_calls_the_service_and_does_not_loop(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    calls = []
+    state = {"on": False}
+    monkeypatch.setattr(module, "set_dev_autostart", lambda wanted, project_root=None: calls.append(wanted) or state.__setitem__("on", wanted))
+    monkeypatch.setattr(module, "dev_autostart_enabled", lambda project_root=None: state["on"])
+    monkeypatch.setattr(module, "user_linger_enabled", lambda: False)
+    panel, row = _boot_panel(module)
+    panel._dev_autostart_syncing = False
+    row.active = True
+    module.BioModStackPanel._on_dev_autostart_toggle(panel, row, None)
+    row.active = False
+    module.BioModStackPanel._on_dev_autostart_toggle(panel, row, None)
+    assert calls == [True, False]
+    # a refresh that sets the switch must not call the service again
+    state["on"] = True
+    module.BioModStackPanel._update_dev_autostart_row(panel)
+    assert calls == [True, False] and row.active is True
+
+
+def test_panel_boot_toggle_failure_reverts_the_switch_and_says_why(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    notes = []
+
+    def refuse(wanted, project_root=None):
+        raise module.ServiceManagerError("Access denied")
+
+    monkeypatch.setattr(module, "set_dev_autostart", refuse)
+    monkeypatch.setattr(module, "dev_autostart_enabled", lambda project_root=None: False)
+    monkeypatch.setattr(module, "user_linger_enabled", lambda: False)
+    monkeypatch.setattr(module, "show_notification", lambda title, message: notes.append((title, message)))
+    panel, row = _boot_panel(module)
+    panel._dev_autostart_syncing = False
+    row.active = True
+    module.BioModStackPanel._on_dev_autostart_toggle(panel, row, None)
+    assert row.active is False  # back in step with systemd
+    assert "Access denied" in panel.action_status_row.subtitle
+    assert notes == [("Boot start not changed", "Access denied")]

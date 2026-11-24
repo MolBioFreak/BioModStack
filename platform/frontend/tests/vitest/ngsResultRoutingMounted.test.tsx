@@ -1,3 +1,4 @@
+import { prepareReadPreview } from '../../src/lib/ngsAlignmentSession';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseOntFastqQcResult } from '../../src/lib/ontFastqQcResult';
@@ -23,6 +24,8 @@ const alignmentMocks = vi.hoisted(() => ({
     rotateAlignmentAccess: vi.fn(),
 }));
 const igvMocks = vi.hoisted(() => ({ createBrowser: vi.fn(), removeBrowser: vi.fn() }));
+vi.mock('react-plotly.js', () => ({ default: () => null }));
+vi.mock('../../src/components/MolBioToolkit/SequenceViewer', () => ({ SequenceViewer: () => null }));
 vi.mock('igv', () => ({ default: { ...igvMocks, version: () => '3.7.3' } }));
 
 const contextMocks = vi.hoisted(() => ({
@@ -223,6 +226,73 @@ describe('NGS authoritative stage presentation', () => {
         await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Show advanced controls')!.click());
         expect([...container.querySelectorAll('select')].find(select => select.querySelector('option[value="canu"]'))?.value).toBe('canu');
     });
+    it.each([
+        ['a FASTQ run that published aligned reads', { fastq_path: '/in/reads.fastq', ont_workflow_id: 'ont_clone_validation' }, 'align', 'aligned.bam', true],
+        ['a BAM run that published no reads', { bam_path: '/in/reads.bam', ont_workflow_id: 'ont_align_bam' }, 'assembly', 'report.html', false],
+    ])('offers the read report by what the run published: %s', async (_name, params, source, filename, expected) => {
+        Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+        const job = { id: 'job-123', name: 'Published reads', model_id: 'nanopore', mode: 'clone_validation', status: 'completed', params, created_at: '2026-09-01T00:00:00Z', stage_outputs: {} };
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [job], total: 1 } });
+        ngsApiMocks.fetchFullJob.mockResolvedValue(job);
+        ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { job_id: job.id, stage_outputs: {} } });
+        const url = '/api/jobs/job-123/ngs-artifacts/' + 'a'.repeat(64);
+        vi.mocked(api.get).mockImplementation(async (path: string) => {
+            if (path === '/api/jobs/job-123/ngs-artifacts') return { data: { job_id: job.id, artifacts: [{ artifact_id: 'a'.repeat(64), kind: 'native', source, state: 'present', url, size_bytes: 500, filename }] } } as never;
+            throw Object.assign(new Error('not found'), { response: { status: 404 } });
+        });
+        await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/ngs?section=analyses&job_id=job-123']}><NGSToolkit /></MemoryRouter></QueryClientProvider>));
+        await waitUntil(() => expect(container.querySelector(`a[href="${url}"]`)).not.toBeNull());
+        await flush();
+        const asked = vi.mocked(api.get).mock.calls.some(call => call[0] === '/api/jobs/job-123/ngs-read-report');
+        expect(asked).toBe(expected);
+        // No construct-QC manifest here, so the run is added to a Project from its published files.
+        expect(container.querySelector('[data-testid="native-result-add-to-project"]')).not.toBeNull();
+    });
+    it.each(['report', 'IGV'] as const)('opens barcode-child signal from %s without guessing a read', async path => {
+        Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+        const job = { id: 'child', name: 'Barcode assembly', model_id: 'nanopore', mode: 'clone_validation',
+            status: 'completed', params: { ont_workflow_id: 'wf_clone_validation', source_barcode_unit: 'barcode83', source_ont_job_id: 'parent' } };
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [job], total: 1 } });
+        ngsApiMocks.fetchFullJob.mockResolvedValue(job);
+        ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { stages: [] } });
+        const on = vi.fn();
+        igvMocks.createBrowser.mockResolvedValue({ on, off: vi.fn(), trackViews: [] });
+        vi.stubGlobal('fetch', vi.fn(async () => new Response('>plasmid\nACGT\n')));
+        const base = '/api/jobs/child/ngs-squiggle/reads';
+        const readId = path === 'report' ? 'listed-read' : 'outside-first-page';
+        vi.mocked(api.get).mockImplementation(async (url: string) => {
+            if (url === '/api/jobs/child/ngs-artifacts') return { data: { artifacts: [], igv: [{ name: 'native',
+                reference: { fastaURL: '/ref.fa', indexURL: '/ref.fai' }, tracks: [{ type: 'alignment', url: '/align.bam', indexURL: '/align.bai' }] }] } } as never;
+            if (url === '/api/jobs/child/ngs-plasmid-summary') return { data: { schema: 'bms.ngs.plasmid-summary-response.v1',
+                summary: { consensus: { sequence: 'A', length_bp: 1 }, reads: {}, alignment: {}, coverage: { points: [] },
+                    read_length_histogram: { bins: [] }, features: [] }, files: [], download_all: { left_out: [] } } } as never;
+            if (url === base) return { data: { reads: [{ read_id: 'listed-read', length: 4, has_moves: true, modified_calls: {} }] } } as never;
+            if (url === `${base}/${readId}`) return { data: { read_id: readId, read_length: 1, start_base: 0, end_base: 1, signal_pa: [42],
+                bases: [{ index: 0, base: 'G', sample_start: 0, sample_end: 1, modifications: {} }] } } as never;
+            throw new Error(`Unavailable fixture: ${url}`);
+        });
+        await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/ngs?section=analyses&job_id=child']}><NGSToolkit /></MemoryRouter></QueryClientProvider>));
+        const button = (name: string) => [...container.querySelectorAll('button')].find(b => b.textContent === name);
+        const select = () => container.querySelector<HTMLSelectElement>('[aria-label="Squiggle read"]');
+        const requests = () => vi.mocked(api.get).mock.calls.map(call => call[0]).filter(url => url.includes('ngs-squiggle'));
+        const label = path === 'report' ? 'Open squiggles' : 'View in IGV';
+        await waitUntil(() => expect(button(label)?.disabled).toBe(false));
+        await act(async () => button(label)!.click());
+        if (path === 'IGV') {
+            await waitUntil(() => expect(on.mock.calls.some(([event]) => event === 'trackclick')).toBe(true));
+            const trackClick = on.mock.calls.find(([event]) => event === 'trackclick')![1];
+            await act(async () => trackClick({ type: 'alignment' }, [{ name: 'Read Name', value: readId }]));
+            await act(async () => button(`Open squiggles for ${readId}`)!.click());
+            expect(requests()).toEqual([`${base}/${readId}`]);
+        } else {
+            await waitUntil(() => expect(select()?.value).toBe(''));
+            expect(requests()).toEqual([base]);
+            await act(async () => { select()!.value = readId; select()!.dispatchEvent(new Event('change', { bubbles: true })); });
+        }
+        await waitUntil(() => expect(container.querySelector('[aria-label="Called bases"]')?.textContent).toBe('G'));
+        expect(select()?.value).toBe(readId);
+        expect(requests().at(-1)).toBe(`${base}/${readId}`);
+    });
     it('opens native clone downloads and recovers the catalog in the actual toolkit cache', async () => {
         Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
         const job = { id: 'job-123', name: 'Native clone outputs', model_id: 'nanopore', mode: 'clone_validation', status: 'completed', params: {}, created_at: '2026-09-01T00:00:00Z', stage_outputs: { wf_clone_validation: ['bms_results/job-123/assembly/wf-clone-validation-report.html'] } };
@@ -270,7 +340,7 @@ describe('NGS authoritative stage presentation', () => {
 
 describe('preview-independent mounted locus loading', () => {
 
-    it.each(['rejected', 'pending'] as const)('loads a detailed locus when the oversized BAM preview is %s', async (previewState) => {
+    it.each(['rejected', 'pending', 'pending across a stale IGV timeout'] as const)('loads a detailed locus when the oversized BAM preview is %s', async (previewState) => {
         Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
         const hash = 'a'.repeat(64);
         const artifact = (role: string, size = 1024) => ({
@@ -318,6 +388,14 @@ describe('preview-independent mounted locus loading', () => {
         };
         igvMocks.createBrowser.mockReset();
         igvMocks.createBrowser.mockResolvedValue(browser);
+        const staleTimeout = previewState === 'pending across a stale IGV timeout';
+        const staleBrowser = { on: vi.fn() };
+        let finishStaleCreation!: (value: typeof staleBrowser) => void;
+        if (staleTimeout) {
+            vi.useFakeTimers();
+            igvMocks.removeBrowser.mockClear();
+            igvMocks.createBrowser.mockImplementationOnce(() => new Promise(resolve => { finishStaleCreation = resolve; }));
+        }
         vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
             if (String(input) === session.artifacts.reference.url) return new Response(`>plasmid\n${'A'.repeat(1000)}\n`);
             throw new Error(`Unexpected mounted-test network request: ${String(input)}`);
@@ -333,6 +411,13 @@ describe('preview-independent mounted locus loading', () => {
         await waitUntil(() => expect(button('Open local IGV')?.disabled).toBe(false));
         await act(async () => button('Open local IGV')!.click());
         await waitUntil(() => expect(igvMocks.createBrowser).toHaveBeenCalledTimes(1));
+        const closeViewer = () => document.querySelector<HTMLButtonElement>('[aria-label="Close IGV"]')!.click();
+        if (staleTimeout) {
+            await act(async () => closeViewer());
+            alignmentMocks.fetchAlignmentPresentation.mockClear();
+            await act(async () => button('Open local IGV')!.click());
+            await waitUntil(() => expect(igvMocks.createBrowser).toHaveBeenCalledTimes(2));
+        }
         await waitUntil(() => expect(alignmentMocks.fetchAlignmentPresentation).toHaveBeenCalled());
         for (let index = 0; index < 5; index += 1) await flush();
         expect(alignmentMocks.fetchAlignmentPresentation).toHaveBeenCalledTimes(1);
@@ -371,6 +456,13 @@ describe('preview-independent mounted locus loading', () => {
             for (let index = 0; index < 5; index += 1) await flush();
             expect(browser.loadTrack).not.toHaveBeenCalled();
         }
+        if (staleTimeout) {
+            // A times out while B owns the viewer and is waiting on its locus slice.
+            await act(async () => { await vi.advanceTimersByTimeAsync(20_001); });
+            await act(async () => finishStaleCreation(staleBrowser));
+            expect(igvMocks.removeBrowser.mock.calls).toEqual([[staleBrowser]]);
+            expect(container.textContent).not.toContain('Failed to initialize IGV viewer');
+        }
         await act(async () => resolveSlice(slice));
         await waitUntil(() => expect(tracks.some((track) => track.url === slice.bam.url)).toBe(true));
         await waitUntil(() => expect(document.querySelector('.ngs-alignment-presentation-status')?.textContent).toBe('Locus reads · 5,000 of 7,000 reads'));
@@ -379,6 +471,10 @@ describe('preview-independent mounted locus loading', () => {
         expect(tracks.filter((track) => track.type === 'alignment').map((track) => track.url)).toEqual([slice.bam.url]);
         expect(browser.loadTrack.mock.calls.every(([config]) => config.url === slice.bam.url)).toBe(true);
         expect(document.querySelector('.ngs-alignment-presentation-status')?.textContent).toBe('Locus reads · 5,000 of 7,000 reads');
+        if (staleTimeout) {
+            await act(async () => closeViewer());
+            expect(igvMocks.removeBrowser.mock.calls).toEqual([[staleBrowser], [browser]]);
+        }
     });
 });
 
@@ -784,5 +880,79 @@ describe('bounded NGS jobs receiving owner', () => {
         } else {
             expect(ngsApiMocks.fetchFullJob).not.toHaveBeenCalled();
         }
+    });
+});
+
+describe('bounded read preview preparation', () => {
+    const busy = { response: { status: 503, data: { schema: 'bms.ngs.error.v1', code: 'NGS_PRESENTATION_BUSY',
+        job_id: 'job-a', resource: 'artifact', retryable: true, message: 'Producer busy.' } } };
+    const controller = () => new AbortController();
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('waits after a typed busy response and returns the next receipt', async () => {
+        const load = vi.fn().mockRejectedValueOnce(busy).mockResolvedValue('receipt');
+        const waiting = vi.fn();
+        const result = prepareReadPreview('job-a', controller().signal, load, waiting);
+        await vi.advanceTimersByTimeAsync(999);
+        expect(waiting).toHaveBeenCalledTimes(1);
+        expect(load).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await result).toBe('receipt');
+        expect(load).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+        { ...busy.response, status: 409 },
+        { ...busy.response, data: { ...busy.response.data, code: 'NGS_AUTHORITY_CONFLICT' } },
+        { ...busy.response, data: { ...busy.response.data, job_id: 'other' } },
+        { ...busy.response, data: { ...busy.response.data, resource: 'rotation' } },
+        { ...busy.response, data: { ...busy.response.data, retryable: false } },
+        { status: 503, data: { code: 'NGS_PRESENTATION_BUSY' } },
+    ])('passes through nonmatching errors immediately', async (response) => {
+        const error = { response };
+        const load = vi.fn().mockRejectedValue(error);
+        const waiting = vi.fn();
+        await expect(prepareReadPreview('job-a', controller().signal, load, waiting)).rejects.toBe(error);
+        expect(load).toHaveBeenCalledTimes(1);
+        expect(waiting).not.toHaveBeenCalled();
+    });
+
+    it('waits for a cold producer still busy after 45 seconds', async () => {
+        const start = Date.now();
+        const load = vi.fn(async () => { if (Date.now() - start < 45_000) throw busy; return 'ready'; });
+        const result = expect(prepareReadPreview('job-a', controller().signal, load, vi.fn())).resolves.toBe('ready');
+        await vi.advanceTimersByTimeAsync(55_000);
+        await result;
+    });
+
+    it('stops at the deadline when the producer stays busy', async () => {
+        const load = vi.fn().mockRejectedValue(busy);
+        const result = expect(prepareReadPreview('job-a', controller().signal, load, vi.fn())).rejects.toThrow('still busy');
+        await vi.advanceTimersByTimeAsync(135_000);
+        await result;
+        const attempts = load.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(load).toHaveBeenCalledTimes(attempts);
+    });
+
+    it('aborts a retry in flight at the deadline', async () => {
+        const load = vi.fn().mockRejectedValueOnce(busy).mockImplementation((signal: AbortSignal) =>
+            new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))));
+        const result = expect(prepareReadPreview('job-a', controller().signal, load, vi.fn())).rejects.toThrow('still busy');
+        await vi.advanceTimersByTimeAsync(135_000);
+        await result;
+        expect(load).toHaveBeenCalledTimes(2);
+    });
+
+    it('cancels a pending wait without fetching again', async () => {
+        const owner = controller();
+        const load = vi.fn().mockRejectedValue(busy);
+        const result = expect(prepareReadPreview('job-a', owner.signal, load, vi.fn())).rejects.toMatchObject({ name: 'AbortError' });
+        await vi.advanceTimersByTimeAsync(500);
+        owner.abort();
+        await vi.advanceTimersByTimeAsync(60_000);
+        await result;
+        expect(load).toHaveBeenCalledTimes(1);
     });
 });

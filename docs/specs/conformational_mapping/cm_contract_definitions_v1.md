@@ -108,19 +108,19 @@ The vector registry contains exactly 53 named vectors. Every vector has one fami
 The exact planned runtime probe command is the Phase 0 plan command below. The validator records and validates it but never executes it:
 
 ```bash
-python scripts/probes/conformational_mapping/probe_phase0_runtime.py --vectors docs/specs/conformational_mapping/cm_contract_test_vectors_v1.json --output /mnt/BioModStack/bms_results/conformational_mapping_phase0/<approved_run_id>
+python scripts/probes/conformational_mapping/probe_phase0_runtime.py --vectors docs/specs/conformational_mapping/cm_contract_test_vectors_v1.json --output $BMS_RESULTS_DIR/conformational_mapping_phase0/<approved_run_id>
 ```
 
 Each vector's `probe_vector_id` and `evidence_subdirectory` are its exact vector ID under that approved run root. Required per-vector evidence filenames are `command.json`, `input_hashes.json`, `output_hashes.json`, `artifact_tree.json`, `runtime_identity.json`, `resources.json`, `exit_status.json`, and `disposition.json`. `[BP]`
 
-Runtime evidence, when separately authorized, must reside under `/mnt/BioModStack/bms_results/conformational_mapping_phase0/<approved_run_id>/`, with `runtime_evidence.json`, a hash ledger, and one per-vector directory containing exact command, input/output hashes, artifact tree/counts, runtime identities, resources, and exit status. Only authenticated evidence may change a runtime status to a measured state; docs, fixtures, validator success, or synthetic outputs are not live success.
+Runtime evidence, when separately authorized, must reside under `$BMS_RESULTS_DIR/conformational_mapping_phase0/<approved_run_id>/`, with `runtime_evidence.json`, a hash ledger, and one per-vector directory containing exact command, input/output hashes, artifact tree/counts, runtime identities, resources, and exit status. Only authenticated evidence may change a runtime status to a measured state; docs, fixtures, validator success, or synthetic outputs are not live success.
 
 For deterministic future evidence verification, `runtime_evidence_hashes.json` has exactly `schema_name="cm_phase0_runtime_evidence_hashes"`, `schema_version=1`, the frozen registry and definitions hashes, and a complete `files` array of contained relative path/lowercase SHA-256 pairs. It inventories every evidence file except itself. `runtime_evidence.json` has exactly `schema_name="cm_phase0_runtime_evidence"`, `schema_version=1`, nonempty `run_id`, the same frozen hashes, and 53 ordered vector results. Each result has its `id`, `runtime_status="measured"`, same-name evidence subdirectory, and an observed disposition of `accept_contract`, `reject_contract`, `runtime_error`, or `unsupported`; measured does not mean successful. Evidence paths and path components may not be symlinks. `[BP]`
 
 The exact future evidence-verification command is:
 
 ```bash
-python scripts/probes/conformational_mapping/validate_phase0_vectors.py verify-evidence --vectors docs/specs/conformational_mapping/cm_contract_test_vectors_v1.json --evidence-root /mnt/BioModStack/bms_results/conformational_mapping_phase0/<approved_run_id> --hash-ledger /mnt/BioModStack/bms_results/conformational_mapping_phase0/<approved_run_id>/runtime_evidence_hashes.json
+python scripts/probes/conformational_mapping/validate_phase0_vectors.py verify-evidence --vectors docs/specs/conformational_mapping/cm_contract_test_vectors_v1.json --evidence-root $BMS_RESULTS_DIR/conformational_mapping_phase0/<approved_run_id> --hash-ledger $BMS_RESULTS_DIR/conformational_mapping_phase0/<approved_run_id>/runtime_evidence_hashes.json
 ```
 
 The exact validation command is:

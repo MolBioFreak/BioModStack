@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job
 from routers import jobs
+from routers import job_stages
 from routers import ont_runs
 from schemas import JobStatus
 from services import alignment_access, ont_ngs_contract, stage_reporting
@@ -434,7 +435,7 @@ def test_terminal_dorado_product_anchor_binds_demux_preflight_and_runtime(tmp_pa
         output_dir=str(output),
         status=JobStatus.RUNNING.value,
     )
-    anchor = jobs._anchor_dorado_demux_products(source)
+    anchor = job_stages._anchor_dorado_demux_products(source)
     assert anchor["schema"] == "biomodstack.ont_dorado_terminal_products.v1"
     assert anchor["products"]["demux_manifest"]["sha256"] == hashlib.sha256(
         (output / "demux" / "demux_manifest.json").read_bytes()
@@ -471,7 +472,7 @@ def test_terminal_anchor_rejects_cross_product_identity_contradictions(
     control = Job(id=f"control-{field}", name="valid product control", model_id="nanopore",
                   mode="basecall_dna", params=params, output_dir=str(output),
                   status=JobStatus.RUNNING.value)
-    assert jobs._anchor_dorado_demux_products(control)["schema"] == "biomodstack.ont_dorado_terminal_products.v1"
+    assert job_stages._anchor_dorado_demux_products(control)["schema"] == "biomodstack.ont_dorado_terminal_products.v1"
     path = output / target
     if field == "bam_bytes":
         path.write_bytes(b"substituted-unit")
@@ -527,7 +528,7 @@ def test_terminal_anchor_rejects_cross_product_identity_contradictions(
         status=JobStatus.RUNNING.value,
     )
     with pytest.raises(HTTPException) as rejected:
-        jobs._anchor_dorado_demux_products(source)
+        job_stages._anchor_dorado_demux_products(source)
     assert rejected.value.status_code == 409
 
 
@@ -552,15 +553,15 @@ async def test_stage_completion_persists_immutable_dorado_anchor(tmp_path: Path)
             await session.commit()
             request = _request("/stage-complete", stage_token)
             with pytest.raises(HTTPException) as unauthenticated:
-                await jobs.report_stage_complete(source.id, _request("/stage-complete"), "dorado_demux", [str(manifest)], session)
+                await job_stages.report_stage_complete(source.id, _request("/stage-complete"), "dorado_demux", [str(manifest)], session)
             assert unauthenticated.value.status_code == 403
-            await jobs.report_stage_complete(source.id, request, "dorado_demux", [str(manifest)], session)
+            await job_stages.report_stage_complete(source.id, request, "dorado_demux", [str(manifest)], session)
             await session.refresh(source)
             anchored = source.provenance["ont_dorado_terminal_products"]
             assert anchored["products"]["demux_manifest"]["sha256"] == hashlib.sha256(manifest.read_bytes()).hexdigest()
             assert "workflow_stage_report_token_sha256" not in source.provenance
             with pytest.raises(HTTPException) as replayed:
-                await jobs.report_stage_complete(source.id, request, "dorado_demux", [str(manifest)], session)
+                await job_stages.report_stage_complete(source.id, request, "dorado_demux", [str(manifest)], session)
             assert replayed.value.status_code == 403
             replacement_token = "replacement-stage-token-0123456789ab"
             replacement_provenance = dict(source.provenance)
@@ -574,7 +575,7 @@ async def test_stage_completion_persists_immutable_dorado_anchor(tmp_path: Path)
             substituted["substituted"] = True
             manifest.write_text(json.dumps(substituted), encoding="utf-8")
             with pytest.raises(HTTPException, match="immutable"):
-                await jobs.report_stage_complete(
+                await job_stages.report_stage_complete(
                     source.id,
                     _request("/stage-complete", replacement_token),
                     "dorado_demux",

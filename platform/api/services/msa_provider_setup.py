@@ -9,7 +9,12 @@ import os
 import stat
 from pathlib import Path
 
-PROVIDERS = ("colabfold_api", "neurosnap_api")
+from services.msa_provider_credentials import (
+    PROVIDER_DESCRIPTORS, PROVIDER_IDS, credential_state,
+    credential_file as _provider_credential_file,
+)
+
+PROVIDERS = PROVIDER_IDS
 NEUROSNAP_FIELDS = frozenset({
     "msa_neurosnap_coverage_percent", "msa_neurosnap_identity_percent",
     "msa_neurosnap_max_sequences", "msa_neurosnap_force_uppercase",
@@ -27,6 +32,14 @@ def selected_provider(params: dict) -> str:
     if backend not in (None, "auto", "none", "esm") and resolve_search_backend(backend) != provider:
         raise ValueError("MSA provider and model backend selections disagree")
     return provider
+
+
+def boltz_provider_params(params: dict) -> dict:
+    # The native CSV writer needs both roles. Adapt its provider operation,
+    # not the authored settings or other consumers of the shared cache.
+    if params.get('colabfold_pairing_mode') == 'paired' and selected_provider(params) == 'colabfold_api':
+        return {**params, 'colabfold_pairing_mode': 'unpaired_paired'}
+    return params
 
 
 def provider_settings(params: dict) -> dict:
@@ -71,33 +84,36 @@ def cache_root() -> Path:
 
 
 def credential_file() -> Path | None:
-    value = os.environ.get("BMS_NEUROSNAP_API_KEY_FILE")
-    if not value:
-        return None
-    path = Path(value)
-    if not path.is_absolute():
-        raise ValueError("BMS_NEUROSNAP_API_KEY_FILE must be an absolute protected credential path")
-    return path
+    """Neurosnap key file: BMS_NEUROSNAP_API_KEY_FILE first, then the key saved from the MSA hub."""
+    return _provider_credential_file("neurosnap_api")
 
 
 def controller_config_path() -> Path:
+    """BMS_MSA_CONTROLLER_CONFIG when the deployment sets it, else the file the MSA hub writes."""
     value = os.environ.get('BMS_MSA_CONTROLLER_CONFIG')
-    if not value or not Path(value).is_absolute():
-        raise ValueError('Configure BMS_MSA_CONTROLLER_CONFIG as an absolute qualified controller configuration path')
-    return Path(value)
+    if value:
+        if not Path(value).is_absolute():
+            raise ValueError('BMS_MSA_CONTROLLER_CONFIG must be an absolute path')
+        return Path(value)
+    from biomodstack_msa_controller import default_controller_config_path
+    return default_controller_config_path()
+
+
+COLABFOLD_NOT_ENABLED = ('ColabFold searches are not enabled on this computer. Enable them in the MSA hub, '
+                         'or run scripts/manage_msa_providers.py --enable-colabfold')
+
+
+def controller_enabled() -> bool:
+    from biomodstack_msa_controller import validate_controller_config
+    try:
+        validate_controller_config(controller_config_path())
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+        return False
+    return True
 
 
 def _credential_configured() -> bool:
-    path = credential_file()
-    if path is None:
-        return False
-    try:
-        info = path.lstat()
-    except OSError:
-        return False
-    return (stat.S_ISREG(info.st_mode) and 1 <= info.st_size <= 4096
-            and info.st_uid == os.getuid()
-            and not info.st_mode & 0o077 and os.access(path, os.R_OK))
+    return bool(credential_state("neurosnap_api")["configured"])
 
 
 def _directory_blockers(label: str, root: Path, blockers: list[str]) -> None:
@@ -142,14 +158,14 @@ def provider_readiness() -> dict:
                 config = validate_controller_config(controller_config_path())
                 _directory_blockers('ColabFold controller state', Path(config['state_dir']), errors)
             except (OSError, ValueError, RuntimeError, KeyError, TypeError):
-                errors.append('Configure BMS_MSA_CONTROLLER_CONFIG with qualified single-egress controller settings')
+                errors.append(COLABFOLD_NOT_ENABLED)
         if provider == "neurosnap_api":
             try:
                 configured = _credential_configured()
             except ValueError:
                 configured = False
             if not configured:
-                errors.append("Configure BMS_NEUROSNAP_API_KEY_FILE as a readable private nonempty credential file")
+                errors.append("Save a Neurosnap API key in the MSA hub, or configure BMS_NEUROSNAP_API_KEY_FILE as a readable private nonempty credential file")
         result[provider] = {
             "configured": not errors,
             "credential_configured": configured,
@@ -160,6 +176,28 @@ def provider_readiness() -> dict:
     return {"default_provider": "colabfold_api", "local_search_enabled": False,
             "submission_location": "controller", "cache_identity": "provider-query-effective-settings",
             "providers": result}
+
+
+def provider_hub_items(readiness: dict | None = None) -> list[dict]:
+    """One row per descriptor for the MSA hub. Never contains a key."""
+    readiness = readiness if readiness is not None else provider_readiness()
+    items = []
+    for descriptor in PROVIDER_DESCRIPTORS:
+        state = credential_state(descriptor.id)
+        blockers = list(readiness["providers"].get(descriptor.id, {}).get("blockers") or [])
+        items.append({
+            "id": descriptor.id,
+            "label": descriptor.label,
+            "needs_key": descriptor.needs_key,
+            "configured": bool(state["configured"]),
+            "source": state["source"],
+            "endpoint_configurable": descriptor.endpoint_env is not None,
+            "needs_controller": descriptor.needs_controller,
+            "controller_enabled": controller_enabled() if descriptor.needs_controller else False,
+            "ready": not blockers,
+            "message": "Ready" if not blockers else "; ".join(blockers),
+        })
+    return items
 
 
 def preflight_msa_provider(model_id: str, params: dict) -> None:
@@ -191,7 +229,7 @@ def inspect_msa_cache(model_id: str, params: dict) -> dict:
         return {'state': 'disabled'}
     from biomodstack_msa_api import MSACacheMiss, validate_settings
     from services.model_msa_handoff import (
-        _boltz_roster, _boltz_task_proteins, fold_cp_config_proteins,
+        _boltz_roster, _boltz_task_proteins, fold_cp_config_files, fold_cp_config_proteins,
     )
     from services.msa_preparation import replay_model_msa
     import json
@@ -206,8 +244,8 @@ def inspect_msa_cache(model_id: str, params: dict) -> dict:
     native_roster = False
     if model_id == 'boltz_cp_experimental' and params.get('bcp_input_format', 'config_files') == 'config_files' and (params.get('bcp_input_path') or params.get('input_path')):
         native_roster = True
-        _, _, proteins = fold_cp_config_proteins(Path(params.get('bcp_input_path') or params['input_path']))
-        groups = [[p['sequence'] for p in proteins if p.get('msa') not in ('empty',) and not p.get('msa')]]
+        files = fold_cp_config_files(Path(params.get('bcp_input_path') or params['input_path']), params)
+        groups = [[p['sequence'] for p in fold_cp_config_proteins(path)[2] if not p.get('msa')] for path in files]
     elif model_id == 'boltz2':
         native_roster = True
         groups = [[p['sequence'] for p in _boltz_task_proteins(task, params)
@@ -244,9 +282,10 @@ def inspect_msa_cache(model_id: str, params: dict) -> dict:
                 or native_roster) else 'unresolved'}
     if any(not isinstance(s, str) or not re.fullmatch('[A-Z]+', s) for group in groups for s in group):
         return {'state': 'unresolved'}
+    request_params = boltz_provider_params(params) if model_id in {'boltz2', 'boltz_cp_experimental'} else params
     for group in groups:
         try:
-            replay_model_msa(sequences=group, params=params)
+            replay_model_msa(sequences=group, params=request_params)
         except MSACacheMiss:
             return {'state': 'miss'}
     return {'state': 'ready'}

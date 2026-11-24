@@ -18,6 +18,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from phase0_roots import container_dir
+
 AA_ORDER = "ACDEFGHIKLMNPQRSTVWY"
 ENTITY_FIELDS = {
     "protein": {"entity_type", "source_entity_id", "count", "ordered_instance_ids", "sequence", "modifications", "source_order"},
@@ -301,7 +303,7 @@ def run() -> int:
     aa_complete = all("".join(row["mutation"] for row in grouped[position]) == AA_ORDER for position in positions)
     chains = sorted({row["chain"] for row in rows})
     meta_text = (frustra_dir / "run.meta").read_text(encoding="utf-8")
-    image = Path("/mnt/BioModStack/apptainer/frustrampnn.sif")
+    image = container_dir() / "frustrampnn.sif"
     checkpoint_result = subprocess.run(
         ["apptainer", "exec", "--containall", str(image), "sha256sum", "/opt/frustrampnn_weights/megascale.ckpt"],
         text=True, capture_output=True, check=False,

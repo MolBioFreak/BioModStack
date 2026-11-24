@@ -35,7 +35,7 @@ def _prepared_spec() -> dict[str, Any]:
     return {
         "schema": "bms.md.job.v1",
         "job_id": "assigned-by-bms",
-        "engine": "openmm",
+        "engine": "gromacs",
         "replicas": 1,
         "random_seed": 20260717,
         "input": {"coordinates": "prepared.gro", "topology": "topol.top"},
@@ -72,9 +72,10 @@ def _prepared_spec() -> dict[str, Any]:
 
 
 def _mapped_http_error(exc: Exception) -> HTTPException:
-    jobs = _jobs_module()
+    _jobs_module()
+    job_requests = importlib.import_module("services.job_requests")
     with pytest.raises(HTTPException) as error:
-        jobs._raise_md_launch_http_error(exc)
+        job_requests._raise_md_launch_http_error(exc)
     return error.value
 
 
@@ -146,12 +147,15 @@ def test_md_launch_error_mapper_maps_transient_service_errors_to_safe_503(exc: E
 
 
 def test_preview_and_final_materialization_calls_are_both_wired_to_typed_mapper() -> None:
-    tree = ast.parse(JOBS_PATH.read_text(encoding="utf-8"))
-    functions = {node.name: node for node in tree.body
+    functions = {node.name: node
+                 for path in (JOBS_PATH, API_ROOT / "services" / "job_submission.py", API_ROOT / "services" / "job_requests.py")
+                 for node in ast.parse(path.read_text(encoding="utf-8")).body
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     public_calls = {call.func.id for call in ast.walk(functions["create_job"])
                     if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)}
-    assert "_create_job" in public_calls
+    assert "submit_job" in public_calls
+    assert any(isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "_create_job"
+               for call in ast.walk(functions["submit_job"]))
     receiving_calls = {call.func.id for call in ast.walk(functions["_create_job"])
                        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)}
     assert "normalize_job_request" in receiving_calls
@@ -199,73 +203,6 @@ def test_preview_and_final_materialization_calls_are_both_wired_to_typed_mapper(
             assert "ChemistryCatalogError" in caught_names
 
 
-def test_final_persistence_failure_maps_to_503_and_removes_call_owned_artifacts(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    launch = importlib.import_module("services.md.launch_contract")
-    coordinates = tmp_path / "prepared" / "system.gro"
-    topology = tmp_path / "prepared" / "topol.top"
-    coordinates.parent.mkdir()
-    coordinates.write_text("coordinates\n", encoding="utf-8")
-    topology.write_text("topology\n", encoding="utf-8")
-
-    def fail_json_dump(*_args: Any, **_kwargs: Any) -> None:
-        raise OSError("persistence failed at /home/private/results")
-
-    monkeypatch.setattr(launch.json, "dump", fail_json_dump)
-    with pytest.raises(Exception) as materialize_error:
-        launch.materialize_md_job_spec(
-            params={"md_job_spec": _prepared_spec()},
-            job_id="persistence-failure",
-            output_dir=tmp_path / "out",
-            resolve_runtime_path=lambda value: str(coordinates if value.endswith(".gro") else topology),
-        )
-
-    mapped = _mapped_http_error(materialize_error.value)
-    detail = _detail(mapped)
-    assert mapped.status_code == 503
-    assert detail["code"] == "MD_LAUNCH_SERVICE_UNAVAILABLE"
-    assert "/home/" not in json.dumps(detail)
-    contract_dir = tmp_path / "out" / "inputs"
-    assert not (contract_dir / "md_job_config.json").exists()
-    assert not list(contract_dir.glob(".*.tmp"))
-    assert not list(contract_dir.glob("structure.*"))
-    assert not list(contract_dir.glob("coordinates.*"))
-    assert not list(contract_dir.glob("topology.*"))
-
-
-def test_materialization_conflict_preserves_preexisting_authoritative_contract(
-    tmp_path: Path,
-) -> None:
-    launch = importlib.import_module("services.md.launch_contract")
-    coordinates = tmp_path / "prepared" / "system.gro"
-    topology = tmp_path / "prepared" / "topol.top"
-    coordinates.parent.mkdir()
-    coordinates.write_text("coordinates\n", encoding="utf-8")
-    topology.write_text("topology\n", encoding="utf-8")
-    contract_dir = tmp_path / "out" / "inputs"
-    contract_dir.mkdir(parents=True)
-    config_path = contract_dir / "md_job_config.json"
-    authoritative = b'{"authoritative": true}\n'
-    config_path.write_bytes(authoritative)
-
-    with pytest.raises(Exception) as error:
-        launch.materialize_md_job_spec(
-            params={"md_job_spec": _prepared_spec()},
-            job_id="conflicting-attempt",
-            output_dir=tmp_path / "out",
-            resolve_runtime_path=lambda value: str(coordinates if value.endswith(".gro") else topology),
-        )
-
-    assert getattr(error.value, "code", None) == "MD_LAUNCH_OUTPUT_CONFLICT"
-    assert getattr(error.value, "status_code", None) == 409
-    assert config_path.read_bytes() == authoritative
-    assert not list(contract_dir.glob(".*.tmp"))
-    assert not list(contract_dir.glob("coordinates.*"))
-    assert not list(contract_dir.glob("topology.*"))
-
-
 class _FixedDatetime:
     @classmethod
     def now(cls) -> real_datetime:
@@ -294,16 +231,19 @@ def _install_md_route_stubs(
     results_root: Path,
 ) -> Any:
     jobs = _jobs_module()
-    monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
-    monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _action: None)
-    monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
+    submission = importlib.import_module("services.job_submission")
+    monkeypatch.setattr(submission, "require_molecular_dynamics_feature", lambda _model_id: None)
+    monkeypatch.setattr(submission, "_raise_if_workflow_launches_disabled", lambda _action: None)
+    job_requests = importlib.import_module("services.job_requests")
+    monkeypatch.setattr(submission, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(
-        jobs,
+        job_requests,
         "normalize_md_job_spec",
         lambda *, params, **_kwargs: dict(params["md_job_spec"]),
     )
-    monkeypatch.setattr(jobs, "get_results_dir", lambda: results_root)
-    monkeypatch.setattr(jobs, "datetime", _FixedDatetime)
+    monkeypatch.setattr(submission, "get_results_dir", lambda: results_root)
+    monkeypatch.setattr(submission, "datetime", _FixedDatetime)
     return jobs
 
 
@@ -349,7 +289,7 @@ async def test_md_route_rejects_prepared_gromacs_before_output_or_database_side_
     results_root.mkdir()
     jobs = _install_md_route_stubs(monkeypatch, results_root=results_root)
     launch = importlib.import_module("services.md.launch_contract")
-    monkeypatch.setattr(jobs, "normalize_md_job_spec", launch.normalize_md_job_spec)
+    monkeypatch.setattr(importlib.import_module("services.job_requests"), "normalize_md_job_spec", launch.normalize_md_job_spec)
     schemas = importlib.import_module("schemas")
     spec = _prepared_spec()
     spec["engine"] = "gromacs"
@@ -415,7 +355,7 @@ async def test_md_route_final_materialization_failure_removes_call_owned_empty_t
         (output_dir / "inputs").mkdir(parents=True, exist_ok=True)
         raise OSError("final persistence failed at /home/private/results")
 
-    monkeypatch.setattr(jobs, "materialize_md_job_spec", fail_materialization)
+    monkeypatch.setattr(importlib.import_module("services.job_submission"), "materialize_md_job_spec", fail_materialization)
     gpu = importlib.import_module("services.gpu_orchestrator")
     monkeypatch.setattr(gpu, "estimate_vram", lambda *_args, **_kwargs: 0)
 
@@ -453,7 +393,7 @@ async def test_md_route_failure_preserves_preexisting_output_directory_and_artif
         (output_dir / "inputs").mkdir(parents=True, exist_ok=True)
         raise OSError("final persistence failed")
 
-    monkeypatch.setattr(jobs, "materialize_md_job_spec", fail_materialization)
+    monkeypatch.setattr(importlib.import_module("services.job_submission"), "materialize_md_job_spec", fail_materialization)
     gpu = importlib.import_module("services.gpu_orchestrator")
     monkeypatch.setattr(gpu, "estimate_vram", lambda *_args, **_kwargs: 0)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,6 +33,22 @@ def owned_listener_preflight(runtime_mode: str) -> dict[str, Any]:
             for spec in specs
         },
     }
+
+
+@pytest.fixture(autouse=True)
+def _no_recorded_host_installation(tmp_path, monkeypatch):
+    """Keep this machine's own BMS configuration out of the tests.
+
+    Rendering units fills unset selectors from the host selectors file. On a provisioned
+    machine that put the real BMS_PYTHON_ROOT into os.environ, and the temp project (which
+    has no uv.lock) then failed against that managed environment. The config folder also
+    holds optional service descriptors that add units.
+    """
+    import biomodstack_runtime_profile as runtime_profile
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "host-config"))
+    monkeypatch.setattr(runtime_profile, "load_host_selectors", lambda: {})
+    for key in runtime_profile.HOST_SELECTOR_KEYS:
+        monkeypatch.delenv(key, raising=False)
 
 
 def test_launch_preferences_default_to_browser_and_auto_open(tmp_path: Path, monkeypatch) -> None:
@@ -167,9 +184,9 @@ def test_runtime_descriptor_for_container_mode(tmp_path: Path, monkeypatch) -> N
         services,
         "install_profile_snapshot",
         lambda profile=None, project_root=None: {
-            "profile_path": "/home/christian/.config/biomodstack/install_profile.json",
-            "compat_env_path": "/home/christian/.biomodstack/env.sh",
-            "core_runtime_env_path": "/home/christian/.config/biomodstack/core-runtime.env",
+            "profile_path": "/home/example/.config/biomodstack/install_profile.json",
+            "compat_env_path": "/home/example/.biomodstack/env.sh",
+            "core_runtime_env_path": "/home/example/.config/biomodstack/core-runtime.env",
             "profile": {"data_root": "/srv/biomodstack"},
             "resolved": {
                 "data_root": "/srv/biomodstack",
@@ -406,7 +423,6 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
         )
         # A service refresh uses the release policy, not stale caller selectors.
         monkeypatch.setenv(f"BMS_ONT_{key}_IMAGE", f"sha256:{'e' * 64}")
-        monkeypatch.setenv(f"BMS_ONT_{key}_IMAGE_DIGEST", "e" * 64)
     monkeypatch.setattr(
         services,
         "install_profile_snapshot",
@@ -457,7 +473,6 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
         assert "Environment=BMS_ONT_CONTAINER_RUNTIME=podman" in units[owner]
         for key, (_, digest) in policies.items():
             assert f"Environment=BMS_ONT_{key}_IMAGE=sha256:{digest}" in units[owner]
-            assert f"Environment=BMS_ONT_{key}_IMAGE_DIGEST={digest}" in units[owner]
     assert "ExecStartPre=/usr/bin/mkdir -p /srv/biomodstack-dev" in units[services.API_SERVICE]
     assert "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18279" in units[services.FRONTEND_SERVICE]
     assert "Environment=BMS_DEV_WEB_HOST_PORT=18278" in units[services.FRONTEND_SERVICE]
@@ -754,8 +769,8 @@ def test_mobile_update_publisher_unit_is_outside_both_runtime_targets(tmp_path: 
         "install_profile_snapshot",
         lambda project_root=None: {
             "resolved": {
-                "data_root": "/mnt/BioModStack",
-                "db_path": "/mnt/BioModStack/biomodstack.db",
+                "data_root": "/data/bms",
+                "db_path": "/data/bms/biomodstack.db",
             }
         },
     )
@@ -787,8 +802,8 @@ def test_mobile_update_publisher_unit_is_outside_both_runtime_targets(tmp_path: 
     assert f"Before={services.TAILNET_GLOBAL_SERVICE}" in unit
     assert f"PartOf={services.DEV_TARGET_UNIT}" not in unit
     assert f"PartOf={services.TARGET_UNIT}" not in unit
-    assert "Environment=BMS_MOBILE_UI_UPDATES_DIR=/mnt/BioModStack/mobile-ui-updates" in unit
-    assert "Environment=BMS_MOBILE_APK_UPDATES_DIR=/mnt/BioModStack/mobile-apk-updates" in unit
+    assert "Environment=BMS_MOBILE_UI_UPDATES_DIR=/data/bms/mobile-ui-updates" in unit
+    assert "Environment=BMS_MOBILE_APK_UPDATES_DIR=/data/bms/mobile-apk-updates" in unit
     assert "Environment=BMS_MOBILE_UPDATE_PUBLISHER_PORT=18003" in unit
     assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_mobile_update_publisher.sh'}" in unit
     assert service_name not in development_units[services.DEV_TARGET_UNIT]
@@ -1057,7 +1072,7 @@ def test_biomodstack_api_process_detection_uses_cmdline_or_cwd(tmp_path: Path) -
     expected_dev_port = services.runtime_api_port("dev", project_root=project_root)
 
     assert services.is_biomodstack_api_process(
-        cmdline=f"/usr/bin/python3 /home/dalab/.local/bin/uvicorn main:app --port {expected_dev_port} --host 127.0.0.1",
+        cmdline=f"/usr/bin/python3 /home/example/.local/bin/uvicorn main:app --port {expected_dev_port} --host 127.0.0.1",
         cwd=str(api_dir),
         project_root=project_root,
     )
@@ -1271,7 +1286,7 @@ def test_cleanup_legacy_listener_kills_matching_ancestor_chain(monkeypatch, tmp_
 
     cmdlines = {
         9100: "python -c 'from multiprocessing.spawn import spawn_main'",
-        9101: f"/usr/bin/python3 /home/dalab/.local/bin/uvicorn main:app --port {services.API_PORT} --host 127.0.0.1 --reload-dir {api_dir}",
+        9101: f"/usr/bin/python3 /home/example/.local/bin/uvicorn main:app --port {services.API_PORT} --host 127.0.0.1 --reload-dir {api_dir}",
         9102: f"uv run uvicorn main:app --port {services.API_PORT} --host 127.0.0.1 --reload-dir {api_dir}",
     }
     cwd = {9100: None, 9101: None, 9102: None}
@@ -2054,3 +2069,72 @@ def test_ensure_user_units_skips_reload_when_systemd_is_current(monkeypatch, tmp
     monkeypatch.setattr(services, "units_need_daemon_reload", lambda names, project_root=None: True)
     services.ensure_user_units(tmp_path)
     assert reloads == [tmp_path]
+
+
+# ---- Development start-at-boot toggle -------------------------------------------------------------------------------
+def _fake_systemctl(monkeypatch, states, calls, fail=None):
+    def run(*args, check=True, capture_output=True, project_root=None):
+        calls.append(args)
+        if args[0] == "is-enabled":
+            return subprocess.CompletedProcess(args, 0 if states["state"] == "enabled" else 1, stdout=states["state"] + "\n", stderr="")
+        if fail and args[0] in fail:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="Failed to enable unit: Access denied\n")
+        if args[0] == "enable":
+            states["state"] = "enabled"
+        if args[0] == "disable":
+            states["state"] = "disabled"
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(services, "run_systemctl", run)
+
+
+def test_dev_autostart_reads_the_real_unit_state(monkeypatch) -> None:
+    calls: list = []
+    for state, expected in (("enabled", True), ("disabled", False), ("not-found", None), ("static", None)):
+        _fake_systemctl(monkeypatch, {"state": state}, calls)
+        assert services.dev_autostart_enabled() is expected
+    assert all(c == ("is-enabled", services.DEV_TARGET_UNIT) for c in calls)
+
+
+def test_dev_autostart_is_unknown_when_systemctl_is_missing(monkeypatch) -> None:
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("systemctl")
+
+    monkeypatch.setattr(services, "run_systemctl", missing)
+    assert services.dev_autostart_enabled() is None
+
+
+def test_set_dev_autostart_enables_and_disables_only_the_dev_target(monkeypatch) -> None:
+    calls: list = []
+    states = {"state": "disabled"}
+    _fake_systemctl(monkeypatch, states, calls)
+    assert services.set_dev_autostart(True) is True
+    assert services.set_dev_autostart(False) is False
+    verbs = [c for c in calls if c[0] in {"enable", "disable"}]
+    assert verbs == [("enable", services.DEV_TARGET_UNIT), ("disable", services.DEV_TARGET_UNIT)]
+    # nothing is started, stopped or restarted by the toggle
+    assert not [c for c in calls if c[0] in {"start", "stop", "restart", "daemon-reload", "kill"}]
+
+
+def test_set_dev_autostart_reports_systemctl_failure_and_missing_install(monkeypatch) -> None:
+    calls: list = []
+    _fake_systemctl(monkeypatch, {"state": "disabled"}, calls, fail={"enable"})
+    with pytest.raises(services.ServiceManagerError, match="Access denied"):
+        services.set_dev_autostart(True)
+    calls.clear()
+    _fake_systemctl(monkeypatch, {"state": "not-found"}, calls)
+    with pytest.raises(services.ServiceManagerError, match="not installed"):
+        services.set_dev_autostart(True)
+    assert not [c for c in calls if c[0] in {"enable", "disable"}]
+
+
+def test_user_linger_reads_loginctl(monkeypatch) -> None:
+    for out, expected in (("yes\n", True), ("no\n", False), ("", None)):
+        monkeypatch.setattr(services.subprocess, "run", lambda *a, _o=out, **k: subprocess.CompletedProcess(a, 0, stdout=_o, stderr=""))
+        assert services.user_linger_enabled() is expected
+
+    def missing(*a, **k):
+        raise FileNotFoundError("loginctl")
+
+    monkeypatch.setattr(services.subprocess, "run", missing)
+    assert services.user_linger_enabled() is None

@@ -1,4 +1,9 @@
-"""Offline presence reconciliation: provider fixtures and isolated SQLite only."""
+"""Offline presence reconciliation: provider fixtures and isolated SQLite only.
+
+Full managed-runtime activation needs native task witnesses, not version stubs.
+Probe races stop before that boundary. Final publication races mock runtime
+qualification explicitly; neither qualifies a native runtime.
+"""
 import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -44,12 +49,12 @@ def inventory(monkeypatch, ids=(), *, available=True, host='203.0.113.10', state
 
 
 @pytest.mark.asyncio
-async def test_complete_empty_hides_all_history_without_touching_jobs_or_lease(store, monkeypatch):
+async def test_complete_empty_retains_leased_history_without_touching_jobs_or_lease(store, monkeypatch):
     session, _ = store
     before = (await session.execute(select(Job.__table__))).all()
     inventory(monkeypatch)
     await targets.refresh_vast_targets(session)
-    assert await targets.list_targets(session) == []
+    assert [t.id for t in await targets.list_targets(session)] == ['vast:49684651']
     rows = (await session.scalars(select(ExecutionTarget))).all()
     assert len(rows) == 3
     assert all(not row.active and row.provider_metadata['inventory']['present'] is False for row in rows)
@@ -93,8 +98,7 @@ async def test_failed_inventory_preserves_presence_but_denies_current_reads_and_
         pass
     with pytest.raises(targets.ExecutionTargetError):
         await targets.get_ready_target(session, row.id)
-    with pytest.raises(targets.ExecutionTargetError):
-        await targets.list_targets(session)
+    assert [t.id for t in await targets.list_targets(session)] == [row.id]
     assert row.provider_metadata['inventory']['present'] is True
     assert row.last_seen_at == seen
     async def forbidden(*args, **kwargs):
@@ -143,7 +147,7 @@ async def test_owned_lifecycle_invalidates_startup_and_refreshes_every_sixty_sec
     await targets.run_vast_inventory_refresh(factory, stop, wait=wait)
     assert delays == [60, 60]
     async with factory() as check:
-        assert await targets.list_targets(check) == []
+        assert [t.id for t in await targets.list_targets(check)] == ['vast:49684651']
 
 
 @pytest.mark.asyncio
@@ -151,7 +155,9 @@ async def test_new_present_resource_is_discovered_not_failed(store, monkeypatch)
     session, _ = store
     inventory(monkeypatch, ['new'])
     await targets.refresh_vast_targets(session)
-    assert (await targets.list_targets(session))[0].state == 'discovered'
+    rows = {t.id: t for t in await targets.list_targets(session)}
+    assert rows['vast:new'].state == 'discovered'
+    assert 'vast:49684651' in rows
 
 
 @pytest.mark.asyncio
@@ -169,22 +175,19 @@ async def test_cached_session_cannot_place_after_another_session_invalidates(sto
 
 
 @pytest.mark.asyncio
-async def test_current_gets_are_read_only_and_map_unknown_to_503(store, monkeypatch):
-    from fastapi import HTTPException
+async def test_current_gets_are_read_only_and_retain_owned_history(store, monkeypatch):
     from routers.execution_targets import execution_targets
     session, _ = store
     before = (await session.execute(select(ExecutionTarget.__table__))).all()
     async def forbidden():
         pytest.fail('GET attempted provider refresh')
     monkeypatch.setattr(targets, 'list_owned_instances', forbidden)
-    with pytest.raises(HTTPException) as error:
-        await execution_targets(session)
-    assert error.value.status_code == 503
+    assert [t.id for t in await execution_targets(session)] == ['vast:49684651']
     assert (await session.execute(select(ExecutionTarget.__table__))).all() == before
     inventory(monkeypatch)
     await targets.refresh_vast_targets(session)
     monkeypatch.setattr(targets, 'list_owned_instances', forbidden)
-    assert await execution_targets(session) == []
+    assert [t.id for t in await execution_targets(session)] == ['vast:49684651']
 
 
 @pytest.mark.asyncio
@@ -212,12 +215,13 @@ async def test_scheduler_claim_rechecks_inventory_in_atomic_update(store, monkey
 async def test_submission_rejects_legacy_ready_before_source_or_transport(store, monkeypatch):
     from fastapi import BackgroundTasks, HTTPException
     from routers import jobs
+    from services import job_submission
     session, _ = store
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *args: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda *args: None)
     before = (await session.execute(select(Job.__table__))).all()
     request = jobs.JobCreate(name='new placement', model_id='boltz2', mode='monomer', params={}, execution_target_id='vast:49684651')
     with pytest.raises(HTTPException) as error:
-        await jobs._create_job(request, BackgroundTasks(), session)
+        await job_submission._create_job(request, BackgroundTasks(), session)
     assert error.value.status_code == 422
     assert 'active ready' in error.value.detail
     assert (await session.execute(select(Job.__table__))).all() == before
@@ -253,18 +257,15 @@ async def test_discover_serializes_complete_fetch_through_reconciliation(store, 
     await asyncio.gather(first, second)
     assert overlap == 1
     async with factory() as session:
-        assert await targets.list_targets(session) == []
+        assert [t.id for t in await targets.list_targets(session)] == ['vast:49684651']
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('outcome', ['stopped', 'stopped_final', 'absent', 'unknown', 'present'])
-async def test_activation_cannot_publish_ready_after_provider_stops_during_probe(store, monkeypatch, tmp_path, outcome):
+@pytest.mark.parametrize('outcome', ['stopped', 'absent', 'unknown'])
+async def test_activation_cannot_publish_ready_after_provider_stops_during_probe(store, monkeypatch, outcome):
+    # This stops at the current-inventory fence, before native qualification.
     session, factory = store
     inventory(monkeypatch, ['49674511'])
-    launcher = tmp_path / 'nextflow'
-    launcher.write_text('fixture')
-    from services import nextflow
-    monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: str(launcher))
     async def capture(*args): return ('fixture host key', 'a' * 64)
     async def noop(*args, **kwargs): pass
     calls = []
@@ -272,8 +273,7 @@ async def test_activation_cannot_publish_ready_after_provider_stops_during_probe
         async def stopped():
             return ExecutionTargetInventoryResponse(provider='vast', available=True, credential_configured=True,
                 message='stopped', instances=[vast._normalize({'id': '49674511', 'actual_status': 'stopped', 'ssh_host': '203.0.113.10', 'ssh_port': 22})])
-        if outcome in {'present', 'stopped_final'}:
-            return {'ok': True}
+
         monkeypatch.setattr(targets, 'list_owned_instances', stopped)
         async with factory() as other:
             if outcome == 'unknown':
@@ -285,39 +285,107 @@ async def test_activation_cannot_publish_ready_after_provider_stops_during_probe
         return {'ok': True}
     async def run(connection, command, **kwargs):
         calls.append('ssh')
-        if outcome == 'stopped_final' and command[0] == 'sha256sum':
-            inventory(monkeypatch, ['49674511'], state='stopped')
-            async with factory() as other:
-                await targets.refresh_vast_targets(other)
         if command[:3] == ['sh', '-s', '--']:
             assert command[3] == connection.remote_root
             assert b'BMS_ATTACHED' in kwargs['input_bytes']
             return SimpleNamespace(stdout='BMS_ATTACHED\nBMS_TELEMETRY\n')
-        if command[0] == 'env': return SimpleNamespace(stdout='nextflow version 25.10.1\n')
-        if command[0] == 'apptainer': return SimpleNamespace(stdout='BMS_CUDA_OK\n')
-        return SimpleNamespace(stdout='fixturehash worker\nfixturehash nextflow\n')
+        assert command[:3] == ['bash', '-s', '--']
+        assert command[3] in {'check', 'install'}
+        return SimpleNamespace(stdout='')
     monkeypatch.setattr(targets, 'capture_host_key', capture)
     monkeypatch.setattr(targets, 'persist_host_key', noop)
     monkeypatch.setattr(targets, 'probe_readiness', probe)
-    monkeypatch.setattr(targets, 'rsync_to_remote', noop)
     monkeypatch.setattr(targets, 'run_remote', run)
-    monkeypatch.setattr(targets, '_sha256_file', lambda *args: 'fixturehash')
-    if outcome == 'present':
-        result = await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
-        assert result.active and result.state == 'ready'
-        assert len(calls) == 7  # One verified promotion replaces two chmod calls.
-        return
+
     with pytest.raises(targets.ExecutionTargetError):
         await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
     await session.rollback()
     async with factory() as check:
         assert not (await check.get(ExecutionTarget, 'vast:49674511')).active
     # Authenticated attachment now precedes the two bootstrap calls.
-    assert len(calls) == (5 if outcome == 'stopped_final' else 3)
+    assert len(calls) == 3
 
 
 @pytest.mark.asyncio
-async def test_existing_attempt_unknown_inventory_does_not_probe_or_rewrite_history(store, monkeypatch):
+@pytest.mark.parametrize('state', ['stopped', 'running'])
+async def test_activation_final_publication_rechecks_inventory(store, monkeypatch, state):
+    # Controller/SQLite regression only: remote qualification is a mocked leaf,
+    # not a version-only substitute for native task witnesses.
+    from services.remote_execution import cache, critical_runtime, managed_inventory
+    session, factory = store
+    identifier = 'vast:49674511'
+    inventory(monkeypatch, ['49674511'])
+    async def capture(*args): return ('fixture host key', 'a' * 64)
+    async def noop(*args, **kwargs): pass
+    async def probe(*args): return {'ok': True}
+    async def remote(connection, command, **kwargs):
+        if command[:3] == ['sh', '-s', '--']:
+            return SimpleNamespace(stdout='BMS_ATTACHED\nBMS_TELEMETRY\n')
+        assert command[:3] == ['bash', '-s', '--'] and command[3] in {'check', 'install'}
+        return SimpleNamespace(stdout='')
+    manifest = {'selection': 'controller-unit-fixture'}
+    async def helper(connection, request, fence):
+        await fence()
+        return {'boot_id': 'fixture-boot'}
+    async def qualify(*args):
+        return SimpleNamespace(critical=SimpleNamespace(observed={'backend': 'apptainer'}),
+                               model_dump=lambda **kwargs: {})
+    refreshed = []
+    async def observe(*args):
+        # Last remote readback: a second session commits before final publication.
+        inventory(monkeypatch, ['49674511'], state=state)
+        async with factory() as other:
+            before = await other.get(ExecutionTarget, identifier)
+            assert before.state == 'probing' and before.active
+            attachment = dict(before.provider_metadata['attachment'])
+            await targets.refresh_vast_targets(other)
+            await other.refresh(before)
+            refreshed.append((attachment, dict(before.provider_metadata['inventory'])))
+        return SimpleNamespace(boot_id='fixture-boot', critical_runtime_ready=True,
+                               model_dump=lambda **kwargs: {'boot_id': 'fixture-boot'})
+    monkeypatch.setattr(targets, 'capture_host_key', capture)
+    monkeypatch.setattr(targets, 'persist_host_key', noop)
+    monkeypatch.setattr(targets, 'run_remote', remote)
+    monkeypatch.setattr(targets, 'probe_readiness', probe)
+    monkeypatch.setattr(critical_runtime, 'project_runtime', lambda *args: (manifest, []))
+    monkeypatch.setattr(critical_runtime, 'runtime_binding', lambda *args: {})
+    monkeypatch.setattr(cache, '_cache_artifacts', noop)
+    monkeypatch.setattr(managed_inventory, 'helper_call', helper)
+    monkeypatch.setattr(managed_inventory, 'activate_release', qualify)
+    monkeypatch.setattr(managed_inventory, 'observe_releases', observe)
+    published = []
+    execute = session.execute
+    async def record_publication(statement, *args, **kwargs):
+        result = await execute(statement, *args, **kwargs)
+        if getattr(statement, 'is_update', False) and statement.compile().params.get('state') == 'ready':
+            published.append(result.rowcount)
+        return result
+    monkeypatch.setattr(session, 'execute', record_publication)
+    request = ExecutionTargetActivateRequest(provider_instance_id='49674511',
+        username='fixture-user', remote_root='/fixture-worker')
+    if state == 'stopped':
+        with pytest.raises(targets.ExecutionTargetError, match='changed during attachment'):
+            await targets.activate_target(session, request)
+    else:
+        result = await targets.activate_target(session, request)
+        assert result.active and result.state == 'ready'
+    assert published == [0 if state == 'stopped' else 1]
+    assert len(refreshed) == 1
+    async with factory() as check:
+        current = await check.get(ExecutionTarget, identifier)
+        assert current.provider_metadata['inventory'] == refreshed[0][1]
+        assert current.active is (state == 'running')
+        if state == 'running':
+            assert current.state == 'ready'
+            assert current.provider_metadata['attachment'] == refreshed[0][0]
+            assert (current.username, current.remote_root) == ('fixture-user', '/fixture-worker')
+            assert current.host_key_sha256 == 'a' * 64
+        else:
+            assert current.state != 'ready'
+
+
+@pytest.mark.asyncio
+async def test_existing_attempt_unknown_inventory_retains_control_without_rewriting_history(store, monkeypatch):
     from services.remote_execution import executor
     session, _ = store
     job = await session.get(Job, 'cancelled-1')
@@ -329,49 +397,10 @@ async def test_existing_attempt_unknown_inventory_does_not_probe_or_rewrite_hist
     monkeypatch.setattr(executor, 'run_remote', remote)
     with pytest.raises(executor.RemoteExecutionError):
         await executor.remote_status(session, job)
-    assert calls == []
+    assert calls == ['ssh']
     assert (await session.execute(select(Job.__table__))).all() == before
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize('refresh_at', ['probe', 'final'])
-@pytest.mark.parametrize('username', ['root', 'worker-user'])
-async def test_inventory_healthy_refresh_preserves_attachment(store, monkeypatch, tmp_path, refresh_at, username):
-    session, factory = store
-    inventory(monkeypatch, ['49674511'])
-    launcher = tmp_path / 'nextflow'
-    launcher.write_text('fixture')
-    from services import nextflow
-    monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: str(launcher))
-    async def refresh():
-        async with factory() as other:
-            await targets.refresh_vast_targets(other)
-    async def capture(*args): return ('fixture host key', 'a' * 64)
-    async def noop(*args, **kwargs): pass
-    async def probe(*args):
-        if refresh_at == 'probe':
-            await refresh()
-        return {'ok': True}
-    async def run(connection, command, **kwargs):
-        if refresh_at == 'final' and command[0] == 'sha256sum':
-            await refresh()
-        if command[:3] == ['sh', '-s', '--']:
-            assert command[3] == connection.remote_root
-            assert b'BMS_ATTACHED' in kwargs['input_bytes']
-            return SimpleNamespace(stdout='BMS_ATTACHED\nBMS_TELEMETRY\n')
-        if command[0] == 'env': return SimpleNamespace(stdout='nextflow version 25.10.1\n')
-        if command[0] == 'apptainer': return SimpleNamespace(stdout='BMS_CUDA_OK\n')
-        return SimpleNamespace(stdout='fixturehash worker\nfixturehash nextflow\n')
-    monkeypatch.setattr(targets, 'capture_host_key', capture)
-    monkeypatch.setattr(targets, 'persist_host_key', noop)
-    monkeypatch.setattr(targets, 'probe_readiness', probe)
-    monkeypatch.setattr(targets, 'rsync_to_remote', noop)
-    monkeypatch.setattr(targets, 'run_remote', run)
-    monkeypatch.setattr(targets, '_sha256_file', lambda *args: 'fixturehash')
-    result = await targets.activate_target(session, ExecutionTargetActivateRequest(
-        provider_instance_id='49674511', username=username))
-    assert result.active and result.state == 'ready'
-    assert result.username == username
 
 
 @pytest.mark.asyncio

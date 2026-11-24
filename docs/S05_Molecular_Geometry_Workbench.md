@@ -72,7 +72,7 @@ Environment reused without installations:
 `$TMPDIR/s05-molecular-venv/bin/python`,
 `BMS_MOLECULAR_GEOMETRY_BUNDLE=$TMPDIR/s05-geometry-bundle-qualified`, and existing
 locked frontend node_modules through a worktree symlink. Here `$TMPDIR` is
-`/home/dalab/.hermes/profiles/fresh/cache/scratch`.
+a scratch directory.
 
 Reproduce from worktree frontend:
 

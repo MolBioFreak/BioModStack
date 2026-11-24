@@ -183,6 +183,17 @@ def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def hierarchy_dependency_graph_json(payload: dict[str, Any], references: list[dict[str, Any]]) -> str:
+    """Canonical dependency graph whose digest identifies a hierarchy revision."""
+    return canonical_json(
+        {
+            "nodes": payload.get("nodes", []),
+            "edges": payload.get("edges", []),
+            "references": references,
+        }
+    )
+
+
 def _capability_model_modes(capability: dict[str, Any]) -> list[dict[str, str]]:
     """Normalize the installed capability's exact permitted scheduler pairs."""
     raw_pairs = capability.get("allowed_model_modes")
@@ -1685,13 +1696,7 @@ async def _save_revision(
                     "Domain Experiment parent Global revision authority is invalid"
                 )
     payload_json = canonical_json(payload)
-    graph_json = canonical_json(
-        {
-            "nodes": payload.get("nodes", []),
-            "edges": payload.get("edges", []),
-            "references": hierarchy_bindings,
-        }
-    )
+    graph_json = hierarchy_dependency_graph_json(payload, hierarchy_bindings)
     if aggregate_kind in {"workspace", "experiment", "domain_experiment"}:
         # Parent Global authority is part of a Domain revision's identity, even
         # when its user-authored metadata has not changed. Older revisions used
@@ -1705,11 +1710,7 @@ async def _save_revision(
                 "ordinal": 0,
                 "expected_sha256": parent_global_revision.payload_sha256,
             })
-            graph_json = canonical_json({
-                "nodes": payload.get("nodes", []),
-                "edges": payload.get("edges", []),
-                "references": revision_bindings,
-            })
+            graph_json = hierarchy_dependency_graph_json(payload, revision_bindings)
         candidates = (await session.execute(
             select(ExperimentRevision).where(
                 ExperimentRevision.subject_id == aggregate_id,
@@ -2396,7 +2397,7 @@ async def protein_setup_launch_authority(
 
 def _normalize_native_scheduler(scheduler: dict[str, Any]) -> dict[str, Any]:
     from schemas import JobCreate
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     resources = scheduler.get("resources") or {}
     request = normalize_job_request(JobCreate(
         name=scheduler["name"], model_id=scheduler["model_id"], mode=scheduler["mode"],
@@ -5565,7 +5566,12 @@ class ExistingJobMaterializer:
             pinned_gpu: int | None = handoff["gpu_index"]
             existing_job = await self.core_session.get(Job, scheduler_job_id)
             if existing_job is not None:
-                params_match = dict(existing_job.params or {}) == authoritative_params
+                existing_params = dict(existing_job.params or {})
+                # Replay binds the submitted payload, not server-enriched Job params.
+                params_match = (
+                    existing_params.get(GLOBAL_RESOURCE_ADMISSION_PARAM) == handoff
+                    and existing_params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM) == dispatch_authority
+                )
                 if (
                     existing_job.model_id != expected_model_id
                     or existing_job.mode != expected_mode
@@ -5576,7 +5582,7 @@ class ExistingJobMaterializer:
                 job = existing_job
             else:
                 from fastapi import BackgroundTasks
-                from routers.jobs import _create_job
+                from services.job_submission import _create_job
                 from schemas import JobCreate
 
                 request = JobCreate(

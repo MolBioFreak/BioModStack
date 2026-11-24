@@ -57,5 +57,16 @@ associations = [{'id': item.id, 'sequence': getattr(item, 'sequence', None),
 (out / 'capture.json').write_text(json.dumps({'argv': sys.argv[1:], 'parsed': parsed,
     'msa_sha256': hashlib.sha256(Path(msa_path).read_bytes()).hexdigest() if msa_path else None,
     'associations': associations, 'manifest_components': manifest, 'parser_calls': parser_calls}))
-for name in ['fixture.cif', 'fixture.metrics.json', 'manifest.json', 'summary.tsv']:
+import os
+if os.getenv('BMS_TEST_ROW_PUBLICATION') == '1':
+    import shutil
+    sample = args.sequence_name + '_000'
+    row = dict(sample_id=sample, cif=sample + '.cif', metrics=sample + '.metrics.json')
+    shutil.copyfile(root / 'platform/api/tests/fixtures/conformational_mapping/normalization/authority/input.cif', out / row['cif'])
+    (out / row['metrics']).write_text(json.dumps(dict(row, sequence_name=args.sequence_name)))
+    (out / 'manifest.json').write_text(json.dumps(dict(workflow='esmfold2', schema_version=2, sample_count=1, samples=[row])))
+    files = ['summary.tsv']
+else:
+    files = ['fixture.cif', 'fixture.metrics.json', 'manifest.json', 'summary.tsv']
+for name in files:
     (out / name).write_text('NON_MODEL_FIXTURE_ONLY\n')

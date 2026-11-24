@@ -4,7 +4,7 @@ This is the default publication contract for new supported BoltzGen jobs.
 
 ## Source authority
 
-Static source was read from `/mnt/BioModStack/apptainer/boltzgen.sif`
+Static source was read from `$BMS_CONTAINER_DIR/boltzgen.sif` (`$BMS_CONTAINER_DIR` is the configured container directory)
 (SquashFS offset `53248`). The image was not executed, mounted, changed, built,
 or tested. No model, weights, hardware, service, or deployment was used.
 

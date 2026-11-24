@@ -421,3 +421,23 @@ def test_shared_native_adapter_context_never_falls_back(tmp_path, monkeypatch):
     assert adapter.submit_child(request.payload, parent_job_id="root", stage=request.stage, child_key="0") == identity
     assert adapter.child_status(identity)["status"] == "queued"
     assert adapter.runtime_from_environment().plan_sha256 == "plan"
+
+
+def test_existing_runtime_rechecks_authority_and_repairs_partial_schema(tmp_path, monkeypatch):
+    from component_runtime import ComponentRuntime
+    path = tmp_path / 'ledger.sqlite'
+    binding = dict(attempt_id='a', root_job_id='j', target_id='t', lease_id='l', artifact_root=tmp_path)
+    runtime = ComponentRuntime(path, **binding)
+    runtime.request_cancel()
+    with monkeypatch.context() as guard:
+        guard.setattr(ComponentRuntime, '_initialize_authority', lambda *_: pytest.fail('redundant init'))
+        with pytest.raises(RuntimeError, match='cancellation requested'):
+            ComponentRuntime(path, **binding).check_active()
+        with pytest.raises(ValueError, match='conflicts'):
+            ComponentRuntime(path, **dict(binding, lease_id='foreign'))
+    with runtime._connect() as db:
+        db.execute('DROP TABLE checkpoint_operations')
+    reopened = ComponentRuntime(path, **binding)
+    assert reopened.checkpoint_operation('unknown') is None
+    with pytest.raises(RuntimeError, match='cancellation requested'):
+        reopened.check_active()

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 import routers.conformational_mapping as cm_router
+from services.conformational_mapping import submission
 from services.conformational_mapping import global_adapter as cm_global_adapter
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
@@ -18,14 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base, ConformationalMappingRecord, ConformationalMappingRequest, ConformationalMappingSource, Job
-from routers.conformational_mapping import (
-    SubmitRequest,
-    _mutation_principal,
-    _principal,
-    _registered_source_format,
-    request_status,
-    retry_request,
-)
+from routers.conformational_mapping import SubmitRequest, _registered_source_format, request_status, retry_request
+from services.conformational_mapping.submission import _mutation_principal, _principal
 from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
     capability_matches,
@@ -114,8 +109,8 @@ async def test_landscape_terminal_full_page_uses_one_row_lookahead(
 def test_cm_authorization_is_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BMS_CM_AUTHORIZATION_ENABLED", raising=False)
     monkeypatch.delenv("BMS_CM_TRUSTED_PROXY_SECRET", raising=False)
-    assert _principal(_http_request(client_host="127.0.0.1")) == cm_router._PERSONAL_WORKFLOW_PRINCIPAL
-    assert _mutation_principal(_http_request(client_host="127.0.0.1")) == cm_router._PERSONAL_WORKFLOW_PRINCIPAL
+    assert _principal(_http_request(client_host="127.0.0.1")) == submission._PERSONAL_WORKFLOW_PRINCIPAL
+    assert _mutation_principal(_http_request(client_host="127.0.0.1")) == submission._PERSONAL_WORKFLOW_PRINCIPAL
 
 
 def test_cm_authorization_flag_restores_principal_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -630,27 +625,27 @@ def test_cm_run_selection_rejects_client_owned_authority() -> None:
         SubmitRequest.model_validate({**_body(), "selected_model_id": "1"})
     with pytest.raises(ValidationError):
         SubmitRequest.model_validate({**_body(), "selected_chain_ids": ["A"]})
-    assert cm_router._confornets_submission_policy() == {
+    assert submission._confornets_submission_policy() == {
         "chain_id": "A",
         "test_case_id": "bms-canonical-monomer",
         "benchmark_name": "biomodstack",
     }
-    assert cm_router._bind_confornets_submission_policy({"task": "diversity"}) == {
+    assert submission._bind_confornets_submission_policy({"task": "diversity"}) == {
         "task": "diversity",
-        **cm_router._confornets_submission_policy(),
+        **submission._confornets_submission_policy(),
     }
     for field in ("chain_id", "test_case_id", "benchmark_name"):
         with pytest.raises(HTTPException, match="server-owned ConforNets fields"):
-            cm_router._bind_confornets_submission_policy({field: "caller-value"})
-    assert cm_router._bind_runtime_policy(
+            submission._bind_confornets_submission_policy({field: "caller-value"})
+    assert submission._bind_runtime_policy(
         "protenix_v2_ensemble", {"use_default_params": False, "n_cycle": 12, "n_step": 240}
     ) == {"use_default_params": False, "n_cycle": 12, "n_step": 240}
     for backend in ("confornets", "external_import"):
-        assert cm_router._bind_runtime_policy(backend, {"use_default_params": True}) == {
+        assert submission._bind_runtime_policy(backend, {"use_default_params": True}) == {
             "use_default_params": True
         }
         with pytest.raises(HTTPException, match="supported only by Protenix"):
-            cm_router._bind_runtime_policy(
+            submission._bind_runtime_policy(
                 backend, {"use_default_params": False, "n_cycle": 12, "n_step": 240}
             )
 
@@ -664,11 +659,11 @@ def test_global_cm_adapter_uses_canonical_server_policy_binders() -> None:
 
 
 def test_cm_analysis_policy_is_server_owned() -> None:
-    canonical = cm_router._canonical_analysis_policy()
-    assert cm_router._bind_analysis_policy(canonical) == canonical
+    canonical = submission._canonical_analysis_policy()
+    assert submission._bind_analysis_policy(canonical) == canonical
     caller_override = {**canonical, "inner_support_minimum": 0.7}
     with pytest.raises(HTTPException, match="server-owned analysis policy"):
-        cm_router._bind_analysis_policy(caller_override)
+        submission._bind_analysis_policy(caller_override)
 
 
 def test_cm_source_registration_reserves_server_receipt_metadata() -> None:
@@ -696,6 +691,7 @@ async def test_cm_submission_accepts_only_the_installed_managed_checkpoint(
     checkpoint.parent.mkdir(parents=True)
     checkpoint.write_bytes(b"offline-checkpoint-fixture")
     monkeypatch.setattr(cm_router, "get_weights_root", lambda: weights)
+    monkeypatch.setattr(submission, "get_weights_root", lambda: weights)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'checkpoint.db'}")
     try:
         async with engine.begin() as connection:
@@ -706,20 +702,20 @@ async def test_cm_submission_accepts_only_the_installed_managed_checkpoint(
             assert managed is not None
             await session.commit()
         async with factory() as session:
-            selected = await cm_router._managed_checkpoint_for_submission(session, managed.source_id)
+            selected = await submission._managed_checkpoint_for_submission(session, managed.source_id)
             assert selected.content_sha256 == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
             assert selected.source_id == managed.source_id
             with pytest.raises(HTTPException, match="installed managed checkpoint") as wrong:
-                await cm_router._managed_checkpoint_for_submission(session, "cm_src_caller_checkpoint")
+                await submission._managed_checkpoint_for_submission(session, "cm_src_caller_checkpoint")
             assert wrong.value.status_code == 422
             selected.content_sha256 = "0" * 64
             await session.commit()
             with pytest.raises(HTTPException, match="identity conflicts") as conflict:
-                await cm_router._managed_checkpoint_for_submission(session, managed.source_id)
+                await submission._managed_checkpoint_for_submission(session, managed.source_id)
             assert conflict.value.status_code == 503
             checkpoint.unlink()
             with pytest.raises(HTTPException, match="unavailable") as missing:
-                await cm_router._managed_checkpoint_for_submission(session, managed.source_id)
+                await submission._managed_checkpoint_for_submission(session, managed.source_id)
             assert missing.value.status_code == 503
     finally:
         await engine.dispose()
@@ -730,6 +726,7 @@ def test_cm_run_record_trusts_only_content_bound_provider_receipts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path)
+    monkeypatch.setattr(submission, "get_data_root", lambda: tmp_path)
     source = SimpleNamespace(
         source_id="cm_src_safe_authority",
         source_kind="structure_upload",
@@ -744,7 +741,7 @@ def test_cm_run_record_trusts_only_content_bound_provider_receipts(
             },
         },
     )
-    selected = cm_router._run_record_selected_input(source, model_id=None, sample_id=None, chain_ids=[])  # type: ignore[arg-type]
+    selected = submission._run_record_selected_input(source, model_id=None, sample_id=None, chain_ids=[])  # type: ignore[arg-type]
     assert selected["source_label"] == source.source_id
     assert "ATTACKER SELECTED INPUT LABEL" not in json.dumps(selected)
     assert "attacker-target-id" not in json.dumps(selected)
@@ -769,15 +766,15 @@ def test_cm_run_record_trusts_only_content_bound_provider_receipts(
             "materialization": "selected_asymmetric_unit_context_v1",
         },
     )
-    selected = cm_router._run_record_selected_input(source, model_id=None, sample_id=None, chain_ids=[])  # type: ignore[arg-type]
+    selected = submission._run_record_selected_input(source, model_id=None, sample_id=None, chain_ids=[])  # type: ignore[arg-type]
     assert selected["source_label"] == source.source_id
     assert selected["provider"] == "RCSB"
     assert selected["accession"] == "1UBQ"
 
-    receipt_path = cm_router._source_authority_path(source.source_id)
+    receipt_path = submission._source_authority_path(source.source_id)
     tampered = {**receipt, "payload": {"provider": "RCSB", "accession": "2XYZ"}}
     receipt_path.write_text(json.dumps(tampered), encoding="utf-8")
-    selected = cm_router._run_record_selected_input(source, model_id=None, sample_id=None, chain_ids=[])  # type: ignore[arg-type]
+    selected = submission._run_record_selected_input(source, model_id=None, sample_id=None, chain_ids=[])  # type: ignore[arg-type]
     assert "provider" not in selected
     assert "accession" not in selected
 
@@ -796,7 +793,7 @@ async def test_cm_source_lookup_rejects_cross_principal_source() -> None:
 
     session.get = get
     with pytest.raises(HTTPException, match="registered source is unavailable"):
-        await cm_router._source(session, "foreign", "owner", {"structure_upload"})
+        await submission._source(session, "foreign", "owner", {"structure_upload"})
 
 
 @pytest.mark.asyncio
@@ -808,7 +805,7 @@ async def test_cm_frustrampnn_source_inspection_reads_registered_sequence_bytes_
     source_path.write_bytes(payload)
     source = SimpleNamespace(
         source_id="sequence-source",
-        principal_id=cm_router._PERSONAL_WORKFLOW_PRINCIPAL,
+        principal_id=submission._PERSONAL_WORKFLOW_PRINCIPAL,
         source_kind="protein_sequence",
         immutable=True,
         storage_root=str(tmp_path),
@@ -864,7 +861,7 @@ async def test_cm_frustrampnn_source_inspection_projects_one_registered_snapshot
     source_path.write_bytes(payload)
     source = SimpleNamespace(
         source_id="snapshot-source",
-        principal_id=cm_router._PERSONAL_WORKFLOW_PRINCIPAL,
+        principal_id=submission._PERSONAL_WORKFLOW_PRINCIPAL,
         source_kind="complex_snapshot",
         immutable=True,
         storage_root=str(tmp_path),
@@ -900,7 +897,7 @@ async def test_cm_frustrampnn_source_inspection_accepts_registered_external_impo
     source_path.write_bytes(MMCIF)
     source = SimpleNamespace(
         source_id="external-source",
-        principal_id=cm_router._PERSONAL_WORKFLOW_PRINCIPAL,
+        principal_id=submission._PERSONAL_WORKFLOW_PRINCIPAL,
         source_kind="structure_upload",
         immutable=True,
         storage_root=str(tmp_path),
@@ -937,7 +934,7 @@ async def test_cm_source_preview_returns_verified_registered_bytes(tmp_path: Pat
     source_path.write_bytes(payload)
     source = SimpleNamespace(
         source_id="preview-source",
-        principal_id=cm_router._PERSONAL_WORKFLOW_PRINCIPAL,
+        principal_id=submission._PERSONAL_WORKFLOW_PRINCIPAL,
         source_kind="structure_upload",
         immutable=True,
         storage_root=str(tmp_path),
@@ -956,7 +953,7 @@ async def test_cm_source_preview_returns_verified_registered_bytes(tmp_path: Pat
         source.source_id,
         _http_request(
             client_host="127.0.0.1",
-            principal=cm_router._PERSONAL_WORKFLOW_PRINCIPAL,
+            principal=submission._PERSONAL_WORKFLOW_PRINCIPAL,
         ),
         SourceSession(),  # type: ignore[arg-type]
     )
@@ -982,7 +979,9 @@ async def test_cm_request_lookup_rejects_cross_principal_record(monkeypatch) -> 
 @pytest.mark.asyncio
 async def test_cm_source_listing_is_principal_scoped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path)
+    monkeypatch.setattr(submission, "get_data_root", lambda: tmp_path)
     monkeypatch.setattr(cm_router, "get_weights_root", lambda: tmp_path / "missing-weights")
+    monkeypatch.setattr(submission, "get_weights_root", lambda: tmp_path / "missing-weights")
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'sources.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -1025,7 +1024,9 @@ async def test_cm_source_listing_provisions_installed_managed_checkpoint(
     checkpoint.parent.mkdir(parents=True)
     checkpoint.write_bytes(b"managed-checkpoint")
     monkeypatch.setattr(cm_router, "get_weights_root", lambda: weights_root)
+    monkeypatch.setattr(submission, "get_weights_root", lambda: weights_root)
     monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path / "data")
+    monkeypatch.setattr(submission, "get_data_root", lambda: tmp_path / "data")
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'managed.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)

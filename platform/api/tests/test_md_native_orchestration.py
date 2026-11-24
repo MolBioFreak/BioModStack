@@ -37,7 +37,7 @@ def _native(roots, monkeypatch):
     import model_registry
     monkeypatch.setattr(model_registry, 'molecular_dynamics_feature_enabled', lambda: True)
     monkeypatch.setattr(launch_contract, '_bound_engine_runtime_identity',
-                        lambda engine: {'image_name': 'gromacs.sif', 'sif_sha256': 'a'*64})
+                        lambda: {'image_name': 'gromacs.sif', 'sif_sha256': 'a'*64})
     source = _files(roots['inputs'] / 'system')
     second = source / 'second.gro'
     second.write_bytes(b'inert second window start\n')

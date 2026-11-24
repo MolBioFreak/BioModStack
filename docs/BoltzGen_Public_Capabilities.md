@@ -2,7 +2,7 @@
 
 ## Authorities
 
-Installed `/mnt/BioModStack/apptainer/boltzgen.sif`, `/app/boltzgen` Git revision:
+Installed `$BMS_CONTAINER_DIR/boltzgen.sif` (`$BMS_CONTAINER_DIR` is the configured container directory), `/app/boltzgen` Git revision:
 `617e549edf70787d899f47bc39e3746d8f10ffff` (clean checkout).
 Actual parser/CLI inspected under `/opt/venv/lib/python3.11/site-packages/boltzgen`.
 
@@ -58,7 +58,7 @@ The earlier combined API run passed 10 tests (`api-third.log`). Later combined/t
 ### Earlier input transport qualification
 
 Evidence root:
-`/home/dalab/.local/state/biomodstack/task-evidence/structure-workflow-fidelity-repair/integration/closeout/boltzgen-capabilities/`
+`<task-evidence directory>/structure-workflow-fidelity-repair/integration/closeout/boltzgen-capabilities/`
 
 - `native-parser-fifth.log`: all eight mode schemas parsed by the actual installed native parser and all eight corresponding native CLI argv parsed. Synthetic RDKit ALA/GLY and ethanol molecular fixtures, real ATP SMILES and Mg2+ parsing; no checkpoints or GPU. Includes cyclic peptide, explicit antibody design mask, ligand file chain inclusion and backbone zero-design mask.
 - `final-api.log`: **36 passed**, typed defaults/discovery/alias/idempotence and real compiler native settings payloads for all eight modes. Compiler source identity is an explicit unit-test fixture, not a runtime provenance claim.

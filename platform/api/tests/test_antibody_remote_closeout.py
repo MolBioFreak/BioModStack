@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 from component_runtime import SourceIdentity
 from model_registry import get_registry
-from routers.jobs import normalize_job_request
+from services.job_requests import normalize_job_request
 from schemas import JobCreate
 from services.nextflow import compile_nextflow_invocation, resolve_nextflow_entrypoint
 
@@ -27,7 +27,6 @@ CASES = [
         'boltzgen_binding_site_residues': 'T12,T15',
         'boltzgen_filter_biased': False, 'boltzgen_parallel_mode': False,
         'stage_family': 'boltzgen', 'stage_mode': 'nanobody_binder',
-        'run_docking': False, 'run_diffdock': False, 'run_unidock': False,
         'run_frustrampnn': False, 'interactive_gating': False,
     }),
     ('generator_backbone_refine', 'ppiflow_generator_design', 'RunPartialFlow', {
@@ -202,8 +201,9 @@ async def test_real_job_creation_persists_supported_parent_without_science_launc
     from fastapi import BackgroundTasks
     from database import Job
     from routers import jobs
+    from services import job_submission
     tasks = BackgroundTasks()
-    response = await jobs._create_job(JobCreate(name='offline generator', model_id='antibody_denovo',
+    response = await job_submission._create_job(JobCreate(name='offline generator', model_id='antibody_denovo',
         mode=mode, params=deepcopy(settings), execution_target_id=None,
         execution_policy={'remote_result_policy': 'manual'}), tasks, admission)
     admission.expire_all()
@@ -350,7 +350,7 @@ def test_actual_native_spawn_child_and_global_collection(tmp_path, monkeypatch, 
     from scripts.lib.component_adapter import runtime_from_environment
     from services.nextflow import compile_component_nextflow_invocation
     root = Path(__file__).resolve().parents[3]
-    jar = Path.home() / '.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar'
+    jar = Path(os.environ['BMS_TEST_NEXTFLOW_JAR'])
     assert jar.is_file(), 'runner must supply the existing offline jar'
     target = tmp_path / 'target.pdb'
     target.write_text('ATOM      1  CA  GLY T   1       0.000   0.000   0.000  1.00 90.00           C  \nEND\n')
@@ -415,6 +415,15 @@ else:
 ''')
     python.chmod(0o755)
     (shim/'python').symlink_to(python)
+    if not shutil.which('pigz'):
+        # Offline transport needs genuine gzip bytes, not parallel compression.
+        compressor = shim/'pigz'
+        compressor.write_text('#!' + sys.executable + '\n' + '''import gzip, shutil, sys
+assert sys.argv[1:3] == ['-p', '1'] and len(sys.argv) == 3
+with gzip.GzipFile(fileobj=sys.stdout.buffer, mode='wb', mtime=0) as output:
+    shutil.copyfileobj(sys.stdin.buffer, output)
+''')
+        compressor.chmod(0o755)
     deny = tmp_path/'deny'
     deny.mkdir()
     (deny/'sitecustomize.py').write_text("import socket\ndef denied(*a,**k): raise RuntimeError('OUTBOUND_DENIED')\nsocket.socket.connect=denied\nsocket.socket.connect_ex=denied\nsocket.create_connection=denied\n")
@@ -435,8 +444,9 @@ else:
         parameter_file = directory/'params.json'
         parameter_file.write_text(json.dumps(params))
         command = ['java','-jar',str(jar),'-C',str(config),'run',str(entrypoint),
-                   '-params-file',str(parameter_file),'-ansi-log','false']
-        result = subprocess.run(command,cwd=directory,env=env,capture_output=True,text=True,timeout=100)
+                   '-params-file',str(parameter_file),'-work-dir',str(directory/'work'),'-ansi-log','false']
+        run_env = dict(env, NXF_WORK=str(directory/'work'), NXF_CACHE_DIR=str(directory/'.nextflow'))
+        result = subprocess.run(command,cwd=directory,env=run_env,capture_output=True,text=True,timeout=100)
         (directory/'stdout.log').write_text(result.stdout+result.stderr)
         assert result.returncode == 0, result.stdout+result.stderr
         return directory
@@ -525,6 +535,10 @@ else:
         assert len({row['candidate_id'] for row in published}) == 2
         assert (final/'success_metrics.json').is_file()
         assert (final/'best_designs.tar.gz').is_file()
+        import tarfile
+        with tarfile.open(final/'best_designs.tar.gz', 'r:gz') as archive:
+            assert sum(member.isfile() and member.name.endswith('.pdb')
+                       for member in archive.getmembers()) == len(published)
         # Exercise the actual native consumer's byte guard on copied test data.
         publication_work = next((collected/'work').rglob('best_designs.tar.gz')).parent
         tampered = tmp_path/'tampered-terminal'

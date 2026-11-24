@@ -556,10 +556,27 @@ def support_relocated_bytes(relative: str, data: bytes, venv: Path, runtime: Pat
 
 def dispatch_setup(project_root: Path) -> None:
     """Re-exec through the offline-validated environment, never downgrade."""
+    # Select the retained interpreter before comparing its ABI-sensitive receipt.
+    # The re-executed process still performs all source, policy and inventory
+    # validation below; a changed shell Python must not invalidate that receipt.
+    root = location(project_root)
+    managed = root / "environment/bin/python"
+    # This is interpreter selection only; the receipt is validated after exec.
+    state_path = root / "state.json"
+    if state_path.is_file():
+        state = json.loads(state_path.read_text())
+        support = state.get("support_payload") if isinstance(state, dict) else None
+        if isinstance(support, dict) and support.get("python") and Path(support["python"]).is_file():
+            managed = Path(support["python"])
+    if managed.is_file() and Path(sys.prefix).resolve() != managed.parent.parent.resolve():
+        os.execve(str(managed), [str(managed), "-B", *sys.argv], subprocess_env(root))
+        return
     resolved = resolve_python_environment(project_root)
     if resolved is None:
         return
     python = resolved["python"]
     if Path(sys.prefix).resolve() == Path(python).parent.parent.resolve():
+        os.environ.clear()
+        os.environ.update(resolved["env"])
         return
     os.execve(python, [python, "-B", *sys.argv], resolved["env"])

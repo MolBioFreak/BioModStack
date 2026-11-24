@@ -17,7 +17,12 @@ B = "TGACCGATGCTAGCATCGATGGTACCTAGCTGACTACGATGCGTATCGAGCTAGTTCGAC"
 # Independently specified recognition/spacer/width, not read from implementation.
 ENZYMES = [("BsaI", "GGTCTC", "A", 4), ("BsmBI", "CGTCTC", "A", 4),
            ("Esp3I", "CGTCTC", "A", 4), ("BbsI", "GAAGAC", "AC", 4),
-           ("SapI", "GCTCTTC", "A", 3)]
+           ("SapI", "GCTCTTC", "A", 3),
+           # REBASE: PaqCI CACCTGC(4/8) -> 4-nt spacer; BtgZI GCGATG(10/14) -> 10-nt spacer.
+           ("PaqCI", "CACCTGC", "ACGT", 4), ("BtgZI", "GCGATG", "ACGTTCAGCA", 4),
+           # Isoschizomers: same REBASE geometry as BbsI / BsaI / SapI / ACCTGC(4/8).
+           ("BpiI", "GAAGAC", "AC", 4), ("Eco31I", "GGTCTC", "A", 4), ("Bso31I", "GGTCTC", "A", 4),
+           ("LguI", "GCTCTTC", "A", 3), ("BspQI", "GCTCTTC", "A", 3), ("BfuAI", "ACCTGC", "ACGT", 4)]
 
 
 def rc(s):
@@ -268,7 +273,7 @@ def test_json_roundtrip_references_and_closed_contract():
     req = request("BbsI")
     result = design_golden_gate(req)
     restored = GoldenGateDesignResult.model_validate_json(result.model_dump_json())
-    assert restored == result
+    assert restored.model_dump() == result.model_dump()
     for material_id in restored.solutions[0].part_material_ids:
         assert design_material(restored, material_id).sequence
     jsonschema.validate(req.model_dump(mode="json"), GoldenGateDesignRequest.model_json_schema())
@@ -276,5 +281,15 @@ def test_json_roundtrip_references_and_closed_contract():
 
 
 def test_schema_matches_the_typed_authority():
-    schema = Path(__file__).resolve().parents[3] / "schemas/ngs_molbio/molbio-assembly-golden_gate-design-v1.schema.json"
-    assert json.loads(schema.read_text()) == GoldenGateDesignRequest.model_json_schema()
+    from pydantic import TypeAdapter
+    from services.assembly.golden_gate_workflow_types import SaveDesignRequest, WorkflowRequest
+    root = Path(__file__).resolve().parents[3] / "schemas/ngs_molbio"
+    schemas = {
+        "molbio-assembly-golden_gate-design-v1.schema.json": GoldenGateDesignRequest.model_json_schema(),
+        "molbio-golden-gate-workflow-request-v1.schema.json": TypeAdapter(WorkflowRequest).json_schema(),
+        "molbio-golden-gate-workflow-save-v1.schema.json": SaveDesignRequest.model_json_schema(),
+    }
+    for name, expected in schemas.items():
+        stored = json.loads((root / name).read_text())
+        expected.update({key: stored[key] for key in ("$schema", "$id") if key in stored})
+        assert stored == expected, name

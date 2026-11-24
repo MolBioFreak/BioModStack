@@ -13,7 +13,19 @@ def digest(data: bytes) -> str:
 
 def validate_a3m(path: Path, sequence: str) -> bytes:
     """Require an exact query identity; never repair/replace a mismatched query."""
-    data = gzip.decompress(path.read_bytes()) if str(path).endswith('.gz') else path.read_bytes()
+    return _validate_a3m(path, path.read_bytes(), sequence)
+
+
+def verified_provider_a3m(artifact: dict, sequence: str) -> bytes:
+    path = Path(artifact['path'])
+    raw = path.read_bytes()
+    if digest(raw) != artifact['sha256']:
+        raise ValueError('Shared MSA cache artifact digest mismatch')
+    return _validate_a3m(path, raw, sequence)
+
+
+def _validate_a3m(path: Path, raw: bytes, sequence: str) -> bytes:
+    data = gzip.decompress(raw) if path.suffix == '.gz' else raw
     rows = []
     current = None
     for line in data.decode('utf-8').splitlines():

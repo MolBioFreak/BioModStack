@@ -41,7 +41,7 @@ const fixture = { pred_method: 'protenix', sequence: peptide.sequence, primary_c
 async function mount(initialValues: any = fixture, cloneParent = false) {
     drafts = []; templates = []; posts = [];
     api.defaults.adapter = async config => {
-        if (config.method === 'post' && config.url !== '/api/msa/provider-cache/inspect') { posts.push(JSON.parse(config.data)); throw new Error('Captured offline, no launch'); }
+        if (config.method === 'post' && config.url === '/api/jobs') { posts.push(JSON.parse(config.data)); throw new Error('Captured offline, no launch'); }
         const data = config.url === '/api/execution-targets' || config.url === '/api/templates' || config.url === '/api/models' ? [] : config.url === '/api/models/boltz2' ? { params: [], modes: [{ id: 'complex', name: 'Complex', params: [] }] } : { providers: {}, state: 'ready' };
         return { data, status: 200, statusText: 'OK', headers: {}, config };
     };
@@ -267,4 +267,59 @@ it('Boltz native controls retain independent task chemistry and zero seed throug
     expect(posts[0].params).toMatchObject({ boltz_seed: 0, constraints: saved.constraints, properties });
     expect(posts[0].params).not.toHaveProperty('esmfold2_editor_settings');
     expect(posts[0].params).not.toHaveProperty('sequence_annotation_origins');
+});
+
+const launchButton = () => renderer.root.findAllByType('button').find(n => text(n).trim() === 'Launch Prediction')!;
+const primaryInput = () => renderer.root.findByProps({ placeholder: 'Enter amino acid sequence (A-Z)...' });
+const basePrediction = { pred_method: 'boltz', boltz_use_msa: false };
+
+it.each([false, true])('named FASTA rows survive draft reopen and Launch (with primary: %s)', async withPrimary => {
+    const raw = '>first variant\r\nac\r\nd\r\n>second|variant\r\nGGH';
+    await mount({ ...basePrediction, sequence_batch_input: raw });
+    if (withPrimary) await act(async () => primaryInput().props.onChange({ target: { value: '>primary label\nMQLK' } }));
+    const draft = JSON.parse(JSON.stringify(drafts.at(-1)));
+    expect(draft.editor_state.sequence_batch_input).toBe(raw);
+    await close(); await mount(draft.editor_state);
+    expect(launchButton().props.disabled).toBe(false);
+    const params = JSON.parse(JSON.stringify(preview()));
+    expect(params).toEqual(draft.native_job_request.params);
+    expect(params.sequence).toBe(withPrimary ? 'MQLK' : '');
+    if (withPrimary) expect(params.sequence_name).toBe('primary label');
+    expect(params.sequence_batch_entries).toEqual([{ name: 'first variant', sequence: 'ACD' }, { name: 'second|variant', sequence: 'GGH' }]);
+    await click('Launch Prediction');
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject(draft.native_job_request);
+    expect(posts[0].params).toEqual(params);
+});
+
+it.each([
+    ['sequence_batch_input', '>valid\nACD\n>bad\nGG*'], ['sequence_batch_input', '>empty\n>next\nACD'],
+    ['sequence_batch_input', 'good: ACD\nbad: 123'], ['sequence', '>one\nACD\n>two\nGGH'], ['sequence', 'AC*D'],
+])('keeps invalid %s draft editable without a partial request: %s', async (field, raw) => {
+    await mount({ ...basePrediction, sequence: 'ACD' });
+    const input = field === 'sequence' ? primaryInput() : renderer.root.findByProps({ rows: 7 });
+    await act(async () => input.props.onChange({ target: { value: raw } }));
+    const draft = JSON.parse(JSON.stringify(drafts.at(-1)));
+    expect(draft.editor_state[field]).toBe(raw);
+    expect(draft.native_job_request).toBeUndefined();
+    await close(); await mount(draft.editor_state);
+    expect(renderer.root.findByType(ExecutionTargetPicker).props.workflowRequest).toBeNull();
+    expect(launchButton().props.disabled).toBe(true);
+    expect(renderer.root.findAllByProps({ role: 'alert' }).length).toBeGreaterThan(0);
+    vi.spyOn(window, 'alert').mockImplementation(() => {});
+    await click('Launch Prediction'); expect(posts).toEqual([]);
+});
+
+it('follows the selected replacement protein on rename and blocks a stale saved selector', async () => {
+    const input = { pred_method: 'protenix', protenix_use_msa: false, sequence: 'ACD', primary_chain_id: 'A',
+        complex_components: [{ id: 'A', type: 'protein', sequence: 'ACD' }, { id: 'B', type: 'protein', sequence: 'GGG' }],
+        sequence_batch_input: '>one\nAAA', sequence_batch_component_id: 'B' };
+    await mount(input); await change('Entity 2 ID', 'C');
+    const saved = JSON.parse(JSON.stringify(drafts.at(-1).editor_state));
+    await close(); await mount(saved); await click('Launch Prediction');
+    expect(posts[0].params.sequence_batch_component_id).toBe('C');
+    expect(posts[0].params.complex_components.map((c: any) => c.id)).toEqual(['A', 'C']);
+    await close(); await mount({ ...input, sequence_batch_component_id: 'X' });
+    expect(launchButton().props.disabled).toBe(true);
+    expect(drafts.at(-1).native_job_request).toBeUndefined();
 });

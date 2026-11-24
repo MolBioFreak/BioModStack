@@ -49,6 +49,7 @@ export interface PooledAssignmentReviewPanelProps {
     jobStatus: Job['status'];
     mode?: string | null;
     ontWorkflowId?: unknown;
+    barcodeSource?: unknown;
     stageOutputs?: Record<string, string[]> | null;
     files?: unknown;
     results?: unknown;
@@ -208,6 +209,7 @@ export function PooledAssignmentReviewPanel({
     jobStatus,
     mode,
     ontWorkflowId,
+    barcodeSource,
     stageOutputs,
     files,
     results,
@@ -216,7 +218,10 @@ export function PooledAssignmentReviewPanel({
     const pooledAssignmentJob = isPooledAssignmentJob(mode, ontWorkflowId);
     const executionComplete = jobStatus === 'completed';
     const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
-    const [targetWorkflow, setTargetWorkflow] = useState<PooledAssignmentTargetWorkflow>('ont_plasmid_qc');
+    const [targetWorkflow, setTargetWorkflow] = useState<PooledAssignmentTargetWorkflow>(() => {
+        const saved = isRecord(barcodeSource) && barcodeSource.target_workflow;
+        return saved === 'wf_clone_validation' || saved === 'ont_construct_screening' ? saved : 'ont_plasmid_qc';
+    });
     const [namePrefix, setNamePrefix] = useState('');
     const [pinnedGpu, setPinnedGpu] = useState('');
     const [releaseResponse, setReleaseResponse] = useState<PooledAssignmentReleaseResponse | null>(null);
@@ -447,6 +452,7 @@ export function PooledAssignmentReviewPanel({
                             >
                                 <option value="ont_plasmid_qc">ont_plasmid_qc</option>
                                 <option value="ont_construct_screening">ont_construct_screening</option>
+                                <option value="wf_clone_validation">Full plasmid assembly</option>
                             </select>
                         </label>
                         <label className="space-y-1 text-xs text-[var(--text-secondary)]">

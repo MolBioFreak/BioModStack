@@ -59,7 +59,7 @@ def _publish_alignment(target: Path, data: bytes, *, retained_source: Path | Non
 
 from biomodstack_msa_handoff import digest
 from biomodstack_boltz_msa import a3m_rows, validate_boltz_msa, write_paired_csv
-from biomodstack_msa_handoff import validate_a3m
+from biomodstack_msa_handoff import verified_provider_a3m
 
 
 def generated_msa_service_supported(service) -> bool:
@@ -209,10 +209,7 @@ def native_alignments(result: dict, sequences: list[str], destination: Path, *, 
             raise ValueError('Provider artifact chain index is invalid')
         if (index, role) in paths or role not in {'paired', 'unpaired'}:
             raise ValueError('Duplicate or invalid provider artifact role')
-        source = Path(artifact['path'])
-        if digest(source.read_bytes()) != artifact['sha256']:
-            raise ValueError('Shared MSA cache artifact digest mismatch')
-        data = validate_a3m(source, sequences[index])
+        data = verified_provider_a3m(artifact, sequences[index])
         destination.mkdir(parents=True, exist_ok=True)
         target = destination / f'chain-{index}-{role}.a3m'
         _publish_alignment(target, data)
@@ -286,7 +283,8 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path, *, native
     if (model_id == 'boltz_cp_experimental'
             and effective.get('bcp_input_format', 'config_files') == 'config_files'
             and (effective.get('bcp_input_path') or effective.get('input_path'))):
-        fold_cp_config_proteins(Path(effective.get('bcp_input_path') or effective['input_path']))
+        for config in fold_cp_config_files(Path(effective.get('bcp_input_path') or effective['input_path']), effective):
+            fold_cp_config_proteins(config)
     if is_boltz and not enabled(params.get('boltz_use_msa')):
         return effective
     if not is_boltz:
@@ -320,8 +318,7 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path, *, native
         sequences = [str(c['sequence']).strip() for c in missing]
         if any(not s or ':' in s for s in sequences):
             raise ValueError('MSA preparation requires explicit per-chain protein sequences')
-        from services.msa_preparation import prepare_model_msa
-        result = prepare_model_msa(sequences=sequences, params=effective)
+        result = _prepare_boltz_msa(sequences, effective)
         paths = native_alignments(result, sequences, destination, model_id=model_id)
         for component, path in zip(missing, paths):
             component['msa_path'] = str(path)
@@ -426,6 +423,12 @@ def prepare_esmfold2_msa(params: dict, destination: Path) -> dict:
     return effective
 
 
+def _prepare_boltz_msa(sequences, params):
+    from services.msa_preparation import prepare_model_msa
+    from services.msa_provider_setup import boltz_provider_params
+    return prepare_model_msa(sequences=sequences, params=boltz_provider_params(params))
+
+
 def _validate_partial_group(proteins: list, missing: list, params: dict) -> None:
     if not proteins or not missing or len(missing) == len(proteins):
         return
@@ -449,11 +452,10 @@ def _prepare_proteins(proteins, params, destination, *, model_id, base):
             protein['msa'] = str(source.resolve())
     receipt = {'backend': 'supplied'}
     if missing:
-        from services.msa_preparation import prepare_model_msa
         sequences = [p['sequence'] for p in missing]
         if any(not s or ':' in s for s in sequences):
             raise ValueError('MSA preparation requires explicit per-chain protein sequences')
-        result = prepare_model_msa(sequences=sequences, params=params)
+        result = _prepare_boltz_msa(sequences, params)
         paths = native_alignments(result, sequences, destination, model_id=model_id)
         for protein, path in zip(missing, paths):
             protein['msa'] = str(path)
@@ -592,6 +594,18 @@ def _fold_cp_native_config(source: Path) -> tuple[Path, Path]:
         raise ValueError('Boltz-CP config_files requires a native YAML config')
     return source, source.parent
 
+def fold_cp_config_files(source: Path, params: dict) -> list[Path]:
+    roster = params.get('sequence_batch_json_path')
+    if not roster:
+        return [_fold_cp_native_config(source)[0]]
+    names = [row['name'] + '.yaml' for row in json.loads(Path(roster).read_bytes())]
+    actual = {p.relative_to(source).as_posix() for p in source.rglob('*') if p.suffix in {'.yaml', '.yml'}}
+    if (not names or len(set(names)) != len(names) or set(names) != actual
+            or any(Path(name).name != name for name in names)):
+        raise ValueError('Fold-CP batch config roster mismatch')
+    return [source / name for name in names]
+
+
 def fold_cp_config_proteins(source: Path) -> tuple[Path, dict, list[dict]]:
     """Inspect the one executable native config before any provider operation."""
     import yaml
@@ -654,13 +668,11 @@ def bind_prepared_fold_cp_plan(invocation, supplied):
     records = manifest.get('configs', [])
     names = [r['path'] for r in records]
     actual = sorted(str(p.relative_to(root)) for p in root.rglob('*') if p.suffix in {'.yaml', '.yml'})
-    if (len(names) != 1 or Path(names[0]).parent != Path('.')
-            or sorted(names) != actual):
+    source = Path(native['bcp_input_path'])
+    files = fold_cp_config_files(source, native)
+    if names != [p.name for p in files] or sorted(names) != actual:
         raise ValueError('Prepared Fold-CP native config roster mismatch')
     if services[0].operation_identity is None:
-        source = Path(native['bcp_input_path'])
-        file, _ = _fold_cp_native_config(source)
-        files = [file]
         expected = {str(p.relative_to(source)) if source.is_dir() else p.name: digest(p.read_bytes()) for p in files}
         if {r['path']: r['source_sha256'] for r in records} != expected:
             raise ValueError('Prepared Fold-CP native source identity mismatch')
@@ -689,14 +701,14 @@ def bind_prepared_fold_cp_plan(invocation, supplied):
 
 
 def prepare_boltz_cp_bundle(params: dict, destination: Path) -> dict:
-    """Package the single executable config, retaining file and chain identity."""
+    """Package each executable config, retaining file and chain identity."""
     import yaml
     if params.get('bcp_input_format', 'config_files') != 'config_files':
         return copy.deepcopy(params)
     source = Path(params.get('bcp_input_path') or params['input_path']).resolve()
     # Validate the complete roster before requesting even the first MSA.
-    file, base = _fold_cp_native_config(source)
-    files = [file]
+    files = fold_cp_config_files(source, params)
+    base = source if source.is_dir() else source.parent
     configs = []
     # Validate every declared config before any provider operation.
     for path in files:

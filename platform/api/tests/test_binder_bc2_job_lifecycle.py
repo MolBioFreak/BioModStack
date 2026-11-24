@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job
 from routers import jobs
+from services import job_requests
 from schemas import JobCreate
 from services import bindcraft2_launch as launch
 from services.bindcraft2_runtime import NATIVE_ACTIONS, native_command
@@ -20,7 +21,7 @@ from test_bindcraft2_lifecycle import setup
 
 @pytest.mark.asyncio
 async def test_actual_lifecycle_creation_materializes_and_compiles_every_mode(tmp_path, monkeypatch):
-    if not Path('/mnt/BioModStack/apptainer/bindcraft2.sif').is_file():
+    if not (launch.get_container_dir() / 'bindcraft2.sif').is_file():
         pytest.skip('installed pinned BC2 settings compiler image unavailable')
     setup(tmp_path, monkeypatch, launch._native_compile)
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path)
@@ -67,6 +68,6 @@ async def test_actual_lifecycle_creation_materializes_and_compiles_every_mode(tm
 
 def test_lifecycle_native_options_fail_at_existing_request_boundary():
     with pytest.raises(HTTPException) as failure:
-        jobs.normalize_job_request(JobCreate(name='bad native options', model_id='bindcraft2', mode='rank',
+        job_requests.normalize_job_request(JobCreate(name='bad native options', model_id='bindcraft2', mode='rank',
             params={'bc2_source_job_id': 'source', 'bc2_action_options': {'not_native': True}}))
     assert failure.value.status_code == 422

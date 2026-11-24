@@ -10,8 +10,8 @@ import { ResultsViewer } from '../../src/components/ResultsViewer';
 import { api } from '../../src/lib/api';
 const text = (node: ReactTestInstance): string => node.children.map(child => typeof child === 'string' ? child : text(child)).join('');
 const flush = async () => { for (let i = 0; i < 15; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); };
-const job = { id: 'parent', name: 'TEST summaries', model_id: 'protenix', mode: 'structure_prediction', status: 'completed', params: {}, design_count: 1, created_at: '2026-08-09T00:00:00Z' };
-const design = { id: 'exact-candidate', job_id: 'parent', name: 'exact-candidate', pdb_path: 'exact.pdb', provenance: { model_id: 'protenix', producer_model_id: 'protenix' }, created_at: job.created_at,
+const job = { id: 'parent', name: 'TEST summaries', model_id: 'rfdiffusion', mode: 'structure_prediction', status: 'completed', params: {}, design_count: 1, created_at: '2026-08-09T00:00:00Z' };
+const design = { id: 'exact-candidate', job_id: 'parent', name: 'exact-candidate', pdb_path: 'exact.pdb', provenance: { model_id: 'rfdiffusion', producer_model_id: 'rfdiffusion' }, created_at: job.created_at,
     supported_analyzers: ['chain_metrics', 'structure_summary', 'contact_map', 'ipsae_interface', 'pae_matrix', 'antibody_annotation_pack'], viewer_capabilities: ['structure_viewer'], result_contract_source: 'persisted', analysis_contract_id: 'test_structure', artifact_class: 'validated_complex',
     review_artifact_manifest: { schema: 'bms.review-artifacts.v1', artifacts: { aligned_error: { state: 'ready', path: 'exact.pae.json' }, structure: { state: 'ready', path: 'exact.pdb', sha256: 'a'.repeat(64) } } } };
 const detail: Record<string, any> = {
@@ -40,7 +40,7 @@ const setup = async (status = 'completed', historical = false, failFull = false,
         } else if (url === '/api/jobs') data = { jobs: [job], total: 1 };
         else if (url === '/api/jobs/parent') data = job;
         else if (url === '/api/models/frustrampnn/integration') data = { model_id: 'frustrampnn', enabled: false };
-        else if (url === '/api/designs') data = { designs: [design], total: 1, model_counts: { protenix: 1 } };
+        else if (url === '/api/designs') data = { designs: [design], total: 1, model_counts: { rfdiffusion: 1 } };
         else if (url === `/api/designs/${design.id}`) data = design;
         else if (url.includes('/backbones')) data = { backbones: [] };
         else throw new Error(`Unexpected TEST request ${url}`);
@@ -50,6 +50,7 @@ const setup = async (status = 'completed', historical = false, failFull = false,
     await act(async () => { renderer = create(<MemoryRouter initialEntries={['/designs/parent']}><QueryClientProvider client={client}><ThemeProvider><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></ThemeProvider></QueryClientProvider></MemoryRouter>); });
     await vi.waitFor(async () => { await flush(); expect(calls.some(call => call.url.includes('/analyses/'))).toBe(true); }, { timeout: 10000 });
     await flush();
+    await vi.waitFor(async () => { await flush(); expect(button('Analyses')).toBeDefined(); }, { timeout: 10000 });
     await act(async () => button('Analyses').props.onClick());
     return (nextStatus: string) => { status = nextStatus; };
 };

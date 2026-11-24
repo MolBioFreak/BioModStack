@@ -1,0 +1,25 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "antibody-tools",
+  "name": "Antibody tools (ANARCII, AntiFold)",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/oxpig/AntiFold",
+    "also": [
+      "https://github.com/oxpig/ANARCII"
+    ]
+  },
+  "notes": "AntiFold fetches its own model on first use unless you place it under <weights>/antifold. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "antibody_tools.sif",
+      "def": "apptainer/antibody_tools.def",
+      "approx_size_gb": 8,
+      "run_definition_test": false
+    }
+  ],
+  "weights": []
+}

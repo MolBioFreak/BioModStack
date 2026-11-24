@@ -189,6 +189,14 @@ fi
 # Cordova identifies a project only after its local web root exists.
 node ./scripts/prepare-bms-assets.mjs --config "$CONFIG_PATH"
 
+# The tracked config.xml carries a placeholder origin. Stamp the operator's own
+# HTTPS origin (the runtime config's apiBaseUrl) for this build only and put the
+# tracked file back when the script exits.
+CONFIG_XML_BACKUP="$(mktemp)"
+cp "$PROJECT_DIR/config.xml" "$CONFIG_XML_BACKUP"
+trap 'cp "$CONFIG_XML_BACKUP" "$PROJECT_DIR/config.xml"; rm -f "$CONFIG_XML_BACKUP"' EXIT
+node ./scripts/apply-runtime-origin.mjs --config "$CONFIG_PATH"
+
 if [[ ! -d platforms/android ]]; then
   npx cordova platform add "android@$ANDROID_PLATFORM_VERSION"
 fi

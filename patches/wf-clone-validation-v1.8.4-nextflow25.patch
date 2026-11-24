@@ -1,7 +1,10 @@
 diff --git a/main.nf b/main.nf
-index 8801749..8958176 100644
+index 8801749..54757d8 100644
 --- a/main.nf
 +++ b/main.nf
+@@ -45 +45 @@ process filterHostReads {
+-        bedtools intersect -a mapped.bam -b $regs -wa \
++        bedtools intersect -a ${name}.host.bam -b $regs -wa \
 @@ -552 +552 @@ process report {
 -        String metadata = metadata_obj.toPrettyString()
 +        String metadata_json = metadata_obj.toPrettyString()

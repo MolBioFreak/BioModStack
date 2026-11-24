@@ -462,7 +462,7 @@ async def submit_operation(request: Request, project_id: str, payload: Operation
     import uuid
     from fastapi import BackgroundTasks
     from schemas import JobCreate
-    from routers.jobs import _create_job
+    from services.job_submission import _create_job
     from services.family_msa.operations import status
     await _require_mutation_owner(request, session, resource_id=project_id)
     for key in ('receipt_id', 'left_receipt_id', 'right_receipt_id'):

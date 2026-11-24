@@ -15,17 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import ConformationalMappingRequest, ConformationalMappingSource, Job
 from paths import get_results_dir
-from routers.conformational_mapping import (
-    _PERSONAL_WORKFLOW_PRINCIPAL,
-    _bind_analysis_policy,
-    _bind_confornets_submission_policy,
-    _bind_runtime_policy,
-    _cm_job_admission,
-    _build_retry_authority,
-    _managed_checkpoint_for_submission,
-    _runtime_registry,
-    _server_confornets_identity,
-)
+from routers.conformational_mapping import _cm_job_admission, _build_retry_authority, _runtime_registry
+from services.conformational_mapping.submission import _PERSONAL_WORKFLOW_PRINCIPAL, _bind_analysis_policy, _bind_confornets_submission_policy, _bind_runtime_policy, _managed_checkpoint_for_submission, _server_confornets_identity
 from services.conformational_mapping.contracts import (
     canonical_json_loads,
     canonical_sha256,

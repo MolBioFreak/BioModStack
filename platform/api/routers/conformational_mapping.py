@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from services.conformational_mapping import submission as cm_submission
+
+
 from services.scientific_artifacts.query import artifact_query
 
 import hashlib
@@ -23,13 +26,6 @@ from pathlib import Path
 from typing import Annotated, Any, BinaryIO, Literal, Mapping, Sequence, cast
 from urllib.parse import urlsplit
 
-# Use the publisher's existing release authority and no-follow CAS verifier.
-_SCRIPTS_ROOT = Path(__file__).resolve().parents[3] / "scripts"
-if str(_SCRIPTS_ROOT) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_ROOT))
-from lib.runtime_image_lifecycle import load_state, object_path
-from lib.shared_runtime_images import verify_image
-
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator, model_validator
@@ -45,6 +41,7 @@ from database import (
     get_session,
 )
 from paths import (
+    _candidate_data_roots,
     get_data_root,
     get_results_dir,
     get_container_dir,
@@ -119,12 +116,7 @@ from services.workflow_request_types import NativeWorkflowDependencyRequest, Sub
 
 
 router = APIRouter(prefix="/api/conformational-mapping", tags=["conformational-mapping"])
-_PERSONAL_WORKFLOW_PRINCIPAL = "local-personal-workflow"
-_APPLICATION_PROXY_HEADER = "X-BMS-CM-Proxy-Secret"
 _COOKIE_PREFIX = "bms_cm_access_"
-_CONFORNETS_CHAIN_ID = "A"
-_CONFORNETS_TEST_CASE_ID = "bms-canonical-monomer"
-_CONFORNETS_BENCHMARK_NAME = "biomodstack"
 _CM_RESULT_INLINE_MAX_BYTES = 256 * 1024
 _CM_RESULT_INLINE_MAX_ROWS = 4096
 _CM_RESULT_INITIAL_PAGE_SIZE = 10
@@ -155,93 +147,6 @@ _CM_RESULT_SUMMARY_FIELDS: dict[str, tuple[str, ...]] = {
         "selected_source_model", "altloc_policy", "normalizer_version",
     ),
 }
-
-
-def _authorization_enabled() -> bool:
-    """Return whether the retained CM principal boundary is active."""
-    return os.getenv("BMS_CM_AUTHORIZATION_ENABLED", "0").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
-def _confornets_submission_policy() -> dict[str, str]:
-    return {
-        "chain_id": _CONFORNETS_CHAIN_ID,
-        "test_case_id": _CONFORNETS_TEST_CASE_ID,
-        "benchmark_name": _CONFORNETS_BENCHMARK_NAME,
-    }
-
-
-def _bind_confornets_submission_policy(settings: Mapping[str, Any]) -> dict[str, Any]:
-    forbidden = {
-        "sequence", "chain_id", "test_case_id", "benchmark_name", "checkpoint", "config",
-        "references", "transfer_source", "backend_identity",
-    }.intersection(settings)
-    if forbidden:
-        raise HTTPException(status_code=422, detail="server-owned ConforNets fields may not be supplied")
-    return {**dict(settings), **_confornets_submission_policy()}
-
-
-def _bind_runtime_policy(backend: str, policy: Mapping[str, Any]) -> dict[str, Any]:
-    values = dict(policy)
-    if backend != "protenix_v2_ensemble" and values != {"use_default_params": True}:
-        raise HTTPException(
-            status_code=422,
-            detail="runtime cycle/step overrides are supported only by Protenix",
-        )
-    return values
-
-
-def _canonical_analysis_policy() -> dict[str, Any]:
-    return {
-        "sign_zero_epsilon": 0.000001,
-        "clash_detector_id": "bms_clash",
-        "clash_detector_version": "1",
-        "outer_support_minimum": 0.8,
-        "inner_support_minimum": 0.6,
-        "sign_consistency_minimum": 0.8,
-        "clash_free_minimum": 0.9,
-        "rank_stability_minimum": 0.6,
-        "minimum_common_ranked_universe_size": 3,
-    }
-
-
-def _bind_analysis_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
-    canonical = _canonical_analysis_policy()
-    try:
-        supplied = json.dumps(dict(policy), sort_keys=True, separators=(",", ":"))
-        expected = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail="analysis policy is invalid") from exc
-    if supplied != expected:
-        raise HTTPException(status_code=422, detail="server-owned analysis policy may not be overridden")
-    return canonical
-
-
-class RcsbSelection(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    accession: str | None = Field(default=None, min_length=4, max_length=4)
-    model_id: str | None = Field(default=None, min_length=1, max_length=64)
-    sample_id: str | None = Field(default=None, min_length=1, max_length=128)
-    chain_ids: list[str] = Field(default_factory=list, max_length=128)
-    entity_ids: list[str] = Field(default_factory=list, max_length=128)
-
-    @model_validator(mode="after")
-    def _validate_identity_lists(self) -> "RcsbSelection":
-        if len(set(self.chain_ids)) != len(self.chain_ids):
-            raise ValueError("RCSB chain selection must not contain duplicates")
-        if len(set(self.entity_ids)) != len(self.entity_ids):
-            raise ValueError("RCSB entity selection must not contain duplicates")
-        if self.accession is not None:
-            normalized = self.accession.strip().upper()
-            if not re.fullmatch(r"[A-Z0-9]{4}", normalized):
-                raise ValueError("RCSB accession must be exactly four letters or digits")
-            self.accession = normalized
-        return self
 
 
 class CmFrustraMPNNInspectableEntity(BaseModel):
@@ -322,15 +227,6 @@ _SOURCE_KINDS = frozenset({
     "complex_snapshot", "structure_upload", "structure_artifact", "protein_sequence",
     "confornets_checkpoint", "confornets_config", "confornets_state",
 })
-_SOURCE_MAX_BYTES = {
-    "complex_snapshot": 64 * 1024 * 1024,
-    "protein_sequence": 16 * 1024 * 1024,
-    "confornets_config": 16 * 1024 * 1024,
-    "structure_upload": MAX_IMPORT_MMCIF_BYTES,
-    "structure_artifact": MAX_IMPORT_MMCIF_BYTES,
-    "confornets_checkpoint": 2 * 1024 * 1024 * 1024,
-    "confornets_state": 2 * 1024 * 1024 * 1024,
-}
 _CM_VRAM_ESTIMATE_MB = {
     "external_import": 12_000,
     "confornets": 16_000,
@@ -418,80 +314,13 @@ def _reject_reserved_source_metadata(metadata: Mapping[str, Any]) -> None:
         raise HTTPException(status_code=422, detail="server source receipts are server-owned")
 
 
-def _source_authority_path(source_id: str) -> Path:
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", source_id):
-        raise ValueError("source authority ID is invalid")
-    return get_data_root() / "conformational_mapping" / "source_authority" / f"{source_id}.json"
-
-
-def _validate_source_authority_payload(
-    source: ConformationalMappingSource,
-    *,
-    authority_kind: str,
-    payload: Mapping[str, Any],
-) -> None:
-    """Validate the small server-owned receipt envelope before it is published."""
-
-    if not authority_kind or len(authority_kind) > 96:
-        raise ValueError("source authority kind is invalid")
-    expected_source_kind = {
-        "rcsb_download": "structure_upload",
-        "complex_snapshot_normalization": "complex_snapshot",
-        "completed_run_artifact": "structure_artifact",
-    }.get(authority_kind)
-    if expected_source_kind is None:
-        raise ValueError("source authority kind is not governed")
-    if source.source_kind != expected_source_kind:
-        raise ValueError("source authority kind does not match the registered source kind")
-    if authority_kind == "rcsb_download":
-        if payload.get("provider") != "RCSB":
-            raise ValueError("RCSB receipt provider is invalid")
-        accession = str(payload.get("accession") or "").upper()
-        if not re.fullmatch(r"[A-Z0-9]{4}", accession):
-            raise ValueError("RCSB receipt accession is invalid")
-        selection = payload.get("selection")
-        selected = RcsbSelection.model_validate(selection)
-        if selected.accession != accession:
-            raise ValueError("RCSB receipt selection accession does not match its source")
-        if (
-            selected.model_id is None
-            or selected.sample_id != "asymmetric-unit"
-            or len(selected.chain_ids) != 1
-            or len(selected.entity_ids) != 1
-        ):
-            raise ValueError("RCSB receipt selection is not fully resolved")
-        source_sha256 = str(payload.get("source_sha256") or "")
-        download_sha256 = str(payload.get("download_sha256") or "")
-        if source_sha256 != source.content_sha256:
-            raise ValueError("RCSB receipt source digest disagrees with registered bytes")
-        if not re.fullmatch(r"[0-9a-f]{64}", download_sha256):
-            raise ValueError("RCSB receipt download digest is invalid")
-        if payload.get("materialization") != "selected_asymmetric_unit_context_v1":
-            raise ValueError("RCSB receipt materialization identity is invalid")
-    elif authority_kind == "complex_snapshot_normalization":
-        chain_ids = payload.get("chain_ids")
-        if not isinstance(chain_ids, list) or any(
-            not isinstance(value, str) or not value for value in chain_ids
-        ) or len(set(chain_ids)) != len(chain_ids):
-            raise ValueError("complex snapshot receipt chain identity is invalid")
-    elif authority_kind == "completed_run_artifact":
-        required = {"request_id", "job_id", "artifact_id", "content_sha256"}
-        if required.difference(payload) or any(
-            not isinstance(payload.get(key), str) or not payload[key]
-            for key in required
-        ):
-            raise ValueError("completed-run artifact receipt identity is incomplete")
-        if payload["content_sha256"] != source.content_sha256:
-            raise ValueError("completed-run artifact receipt hash disagrees with source")
-
-
 def _publish_source_authority(
     source: ConformationalMappingSource,
     *,
     authority_kind: str,
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
-    _validate_source_authority_payload(
+    cm_submission._validate_source_authority_payload(
         source, authority_kind=authority_kind, payload=payload
     )
     unsigned = {
@@ -504,9 +333,9 @@ def _publish_source_authority(
         "payload": dict(payload),
     }
     receipt = {**unsigned, "receipt_sha256": canonical_sha256(unsigned)}
-    destination = _source_authority_path(source.source_id)
+    destination = cm_submission._source_authority_path(source.source_id)
     if destination.exists() or destination.is_symlink():
-        existing = _read_source_authority(source)
+        existing = cm_submission._read_source_authority(source)
         if existing is None:
             raise RuntimeError("source authority path exists but is not a valid receipt")
         existing_unsigned = {
@@ -537,62 +366,6 @@ def _publish_source_authority(
     return receipt
 
 
-def _read_source_authority(source: ConformationalMappingSource) -> dict[str, Any] | None:
-    try:
-        path = _source_authority_path(source.source_id)
-        file_stat = path.lstat()
-        if (
-            path.is_symlink()
-            or not stat.S_ISREG(file_stat.st_mode)
-            or file_stat.st_size > 64 * 1024
-            or file_stat.st_uid != os.geteuid()
-            or file_stat.st_mode & 0o077
-        ):
-            return None
-        receipt = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(receipt, dict) or set(receipt) != {
-            "schema_name", "schema_version", "source_id", "source_kind", "content_sha256",
-            "authority_kind", "payload", "receipt_sha256",
-        }:
-            return None
-        unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
-        if (
-            receipt["schema_name"] != "cm_source_authority_receipt"
-            or receipt["schema_version"] != 1
-            or receipt["source_id"] != source.source_id
-            or receipt["source_kind"] != source.source_kind
-            or receipt["content_sha256"] != source.content_sha256
-            or not isinstance(receipt["payload"], dict)
-            or receipt["receipt_sha256"] != canonical_sha256(unsigned)
-        ):
-            return None
-        _validate_source_authority_payload(
-            source,
-            authority_kind=str(receipt["authority_kind"]),
-            payload=receipt["payload"],
-        )
-        return receipt
-    except (FileNotFoundError, OSError, ValueError, TypeError, json.JSONDecodeError):
-        return None
-
-
-def _snapshot_chain_ids(snapshots: Sequence[Mapping[str, Any]]) -> list[str]:
-    values: list[str] = []
-    for snapshot in snapshots:
-        mappings = snapshot.get("instance_mappings")
-        if not isinstance(mappings, list):
-            continue
-        for mapping in mappings:
-            if not isinstance(mapping, Mapping):
-                continue
-            chain_id = str(
-                mapping.get("output_auth_asym_id") or mapping.get("output_label_asym_id") or ""
-            ).strip()
-            if chain_id and chain_id not in values:
-                values.append(chain_id)
-    return values
-
-
 def _snapshot_entity_ids(snapshots: Sequence[Mapping[str, Any]]) -> list[str]:
     values: list[str] = []
     for snapshot in snapshots:
@@ -608,77 +381,6 @@ def _snapshot_entity_ids(snapshots: Sequence[Mapping[str, Any]]) -> list[str]:
     return values
 
 
-def _source_rcsb_selection(source: ConformationalMappingSource) -> RcsbSelection | None:
-    receipt = _read_source_authority(source)
-    if not isinstance(receipt, Mapping) or receipt.get("authority_kind") != "rcsb_download":
-        return None
-    payload = receipt.get("payload")
-    if not isinstance(payload, Mapping):
-        return None
-    selection = payload.get("selection")
-    if selection is None:
-        return RcsbSelection(accession=str(payload.get("accession") or "").upper())
-    try:
-        parsed = RcsbSelection.model_validate(selection)
-    except (TypeError, ValueError):
-        return None
-    accession = str(payload.get("accession") or "").upper()
-    if parsed.accession is None:
-        parsed.accession = accession
-    return parsed
-
-
-def _run_record_selected_input(
-    source: ConformationalMappingSource,
-    *,
-    model_id: str | None,
-    sample_id: str | None,
-    chain_ids: list[str],
-    entity_ids: list[str] | None = None,
-) -> dict[str, Any]:
-    record: dict[str, Any] = {
-        "source_id": source.source_id,
-        "source_kind": source.source_kind,
-        "source_label": source.source_id,
-        "source_sha256": source.content_sha256,
-    }
-    receipt = _read_source_authority(source)
-    receipt_payload = receipt.get("payload") if isinstance(receipt, Mapping) else None
-    if (
-        isinstance(receipt, Mapping)
-        and isinstance(receipt_payload, Mapping)
-        and receipt.get("authority_kind") == "rcsb_download"
-        and receipt_payload.get("provider") == "RCSB"
-        and isinstance(receipt_payload.get("accession"), str)
-        and re.fullmatch(r"[A-Z0-9]{4}", str(receipt_payload["accession"]))
-    ):
-        record["provider"] = "RCSB"
-        record["accession"] = str(receipt_payload["accession"])
-        selection = _source_rcsb_selection(source)
-        if selection is not None:
-            model_id = model_id or selection.model_id
-            sample_id = sample_id or selection.sample_id
-            chain_ids = chain_ids or list(selection.chain_ids)
-            entity_ids = entity_ids or list(selection.entity_ids)
-    if model_id:
-        record["model_id"] = model_id
-    if sample_id:
-        record["sample_id"] = sample_id
-    if chain_ids:
-        record["chain_ids"] = chain_ids
-    if entity_ids:
-        record["entity_ids"] = entity_ids
-    return record
-
-
-def _sha256_path(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _write_all(descriptor: int, payload: bytes) -> None:
     view = memoryview(payload)
     while view:
@@ -688,163 +390,15 @@ def _write_all(descriptor: int, payload: bytes) -> None:
         view = view[written:]
 
 
-def _registered_image_digest(selector: str) -> str:
-    """Select approved release bytes, never promote an arbitrary path hash.
-
-    The existing shared-store release manifests (including their legacy env
-    projection) are the only installation authority. Explicit selectors may pin
-    a retained release; defaults select the current lane. This is read-only:
-    discovery neither publishes images nor upgrades historical references.
-    """
-    root = Path(os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip()
-                or get_container_dir() / ".image-store")
-    configured = os.environ.get(selector, "").strip()
-    try:
-        if not root.is_absolute():
-            raise ValueError("runtime image store must be absolute")
-        state = load_state(root)
-        if configured:
-            candidates = [release["images"][selector]
-                          for release in state["releases"].values()
-                          if selector in release["images"]
-                          and release["images"][selector]["path"] == configured]
-            if not candidates:
-                raise ValueError("configured image is not a retained managed reference")
-            image = candidates[0]
-        else:
-            lane = os.environ.get("BMS_RUNTIME_IMAGE_LANE", "production")
-            image = state["releases"][state["current"][lane]]["images"][selector]
-        path = object_path(root, image["sha256"])
-        if str(path) != image["path"]:
-            raise ValueError("managed image path differs from shared store")
-        return verify_image(path, image["sha256"])["sha256"]
-    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
-        raise HTTPException(status_code=503, detail=f"registered runtime image is unavailable: {selector}") from exc
-
-
-def _server_confornets_identity() -> dict[str, str]:
-    digest = _registered_image_digest("BMS_CM_CONFORNETS_CONTAINER_PATH")
-    return {
-        "backend_version": "canonical-4df561a",
-        "backend_commit": "4df561a1fbd0fd2b9c7a230fa62957a837d9f72d",
-        "runtime_identity": "confornets-canonical-write-ledger-v1",
-        "container_digest": f"sha256:{digest}",
-        "model_id": "confornets-canonical-v1",
-        "feature_identity_sha256": canonical_sha256({"coordinate_emission": "write_time_v1"}),
-        "repo_path": "/opt/confornets",
-    }
-
-
 # One observation only; browsing may reuse bytes, never an ORM identity row.
-_confornets_discovery_digest: tuple[tuple[str, int, int, int, int, int], str] | None = None
-
-
-def _confornets_checkpoint_observation(
-    checkpoint: Path,
-) -> tuple[str, int, int, int, int, int] | None:
-    try:
-        observed = checkpoint.lstat()
-        fields = (observed.st_dev, observed.st_ino, observed.st_size,
-                  observed.st_mtime_ns, observed.st_ctime_ns)
-        if not stat.S_ISREG(observed.st_mode) or any(type(value) is not int for value in fields):
-            return None
-        return (str(checkpoint), *fields)
-    except (OSError, AttributeError, TypeError, ValueError):
-        return None
-
-
-def _confornets_discovery_checksum(checkpoint: Path) -> tuple[str, int]:
-    global _confornets_discovery_digest
-    before = _confornets_checkpoint_observation(checkpoint)
-    if before is not None and _confornets_discovery_digest is not None:
-        observed, digest = _confornets_discovery_digest
-        if before == observed:
-            return digest, before[3]
-    _confornets_discovery_digest = None
-    digest = _sha256_path(checkpoint)
-    size = checkpoint.stat().st_size
-    after = _confornets_checkpoint_observation(checkpoint)
-    # Uncertainty disables reuse, not discovery: keep the existing single read.
-    if before is not None and before == after:
-        _confornets_discovery_digest = (before, digest)
-    return digest, size
-
-
-async def _read_managed_confornets_checkpoint(
-    session: AsyncSession,
-    *,
-    reuse_discovery_checksum: bool = False,
-) -> ConformationalMappingSource | None:
-    """Expose one server-owned checkpoint identity without accepting a host path."""
-    global _confornets_discovery_digest
-    checkpoint = get_weights_root() / "openfold3" / "of3-p2-155k.pt"
-    checkpoint = checkpoint.resolve(strict=False)
-    if not checkpoint.is_file() or not checkpoint.is_relative_to(get_weights_root().resolve()):
-        if reuse_discovery_checksum:
-            _confornets_discovery_digest = None
-        return None
-    if reuse_discovery_checksum:
-        digest, size = _confornets_discovery_checksum(checkpoint)
-    else:
-        digest = _sha256_path(checkpoint)
-        size = checkpoint.stat().st_size
-    source_id = f"cm_src_server_confornets_checkpoint_{digest[:32]}"
-    existing = await session.get(ConformationalMappingSource, source_id)
-    if existing is not None:
-        if (
-            existing.principal_id != _PERSONAL_WORKFLOW_PRINCIPAL
-            or existing.source_kind != "confornets_checkpoint"
-            or existing.content_sha256 != digest
-            or existing.size_bytes != size
-            or existing.storage_root != str(get_weights_root())
-            or existing.relative_path != "openfold3/of3-p2-155k.pt"
-            or existing.metadata_json.get("managed") is not True
-            or existing.metadata_json.get("asset_id") != "confornets.of3p2.checkpoint"
-            or not existing.immutable
-        ):
-            raise HTTPException(status_code=503, detail="managed ConforNets checkpoint identity conflicts")
-        return existing
-    managed = ConformationalMappingSource(
-        source_id=source_id,
-        principal_id=_PERSONAL_WORKFLOW_PRINCIPAL,
-        source_kind="confornets_checkpoint",
-        storage_root=str(get_weights_root()),
-        relative_path="openfold3/of3-p2-155k.pt",
-        content_sha256=digest,
-        size_bytes=size,
-        metadata_json={
-            "managed": True,
-            "asset_id": "confornets.of3p2.checkpoint",
-            "model_id": "of3-p2-155k",
-            "provenance": "server-owned immutable runtime asset",
-        },
-        immutable=True,
-        created_at=datetime.utcnow(),
-    )
-    return managed
 
 
 async def _ensure_managed_confornets_checkpoint(
     session: AsyncSession,
 ) -> ConformationalMappingSource | None:
-    managed = await _read_managed_confornets_checkpoint(session, reuse_discovery_checksum=True)
+    managed = await cm_submission._read_managed_confornets_checkpoint(session, reuse_discovery_checksum=True)
     if managed is not None:
         session.add(managed)
-    return managed
-
-
-async def _managed_checkpoint_for_submission(
-    session: AsyncSession,
-    requested_source_id: str | None,
-) -> ConformationalMappingSource:
-    managed = await _read_managed_confornets_checkpoint(session)
-    if managed is None:
-        raise HTTPException(status_code=503, detail="installed managed checkpoint is unavailable")
-    if requested_source_id != managed.source_id:
-        raise HTTPException(
-            status_code=422,
-            detail="ConforNets requires the installed managed checkpoint",
-        )
     return managed
 
 
@@ -860,10 +414,10 @@ def _runtime_registry(backend: str) -> dict[str, Any]:
     if backend == "confornets":
         return {
             "schema_name": "cm_runtime_registry", "schema_version": 1,
-            "analysis_runtime": analysis_runtime, **_server_confornets_identity(),
+            "analysis_runtime": analysis_runtime, **cm_submission._server_confornets_identity(),
         }
     if backend == "protenix_v2_ensemble":
-        digest = _registered_image_digest("BMS_PROTENIX_CONTAINER_PATH")
+        digest = cm_submission._registered_image_digest("BMS_PROTENIX_CONTAINER_PATH")
         checkpoint = get_weights_root() / "protenix" / "checkpoint" / "protenix-v2.pt"
         if not checkpoint.is_file() or checkpoint.is_symlink():
             raise HTTPException(status_code=503, detail="registered Protenix runtime is unavailable")
@@ -872,7 +426,7 @@ def _runtime_registry(backend: str) -> dict[str, Any]:
             "backend_version": "protenix-v2", "backend_commit": "c3bfc365b3e1341a11935eddfe7bfdc308092147",
             "runtime_identity": "installed-protenix-v2", "model_id": "protenix-v2",
             "container_digest": f"sha256:{digest}",
-            "checkpoint_sha256": _sha256_path(checkpoint),
+            "checkpoint_sha256": cm_submission._sha256_path(checkpoint),
             "checkpoint_relative_path": "checkpoint/protenix-v2.pt",
             "analysis_runtime": analysis_runtime,
         }
@@ -891,13 +445,13 @@ def _source_detail(row, managed_checkpoint_source_id):
             "sha256": row.content_sha256, "bytes": row.size_bytes,
             "metadata": row.metadata_json,
             "managed_checkpoint": row.source_id == managed_checkpoint_source_id,
-            "authority_receipt": _read_source_authority(row),
-            "submission_policy": _confornets_submission_policy() if row.source_kind == "protein_sequence" else None,
+            "authority_receipt": cm_submission._read_source_authority(row),
+            "submission_policy": cm_submission._confornets_submission_policy() if row.source_kind == "protein_sequence" else None,
             "created_at": row.created_at.isoformat() + "Z"}
 
 
 async def _picker_scope(request, session):
-    principal_id = _principal(request)
+    principal_id = cm_submission._principal(request)
     managed_checkpoint = await _ensure_managed_confornets_checkpoint(session)
     managed_id = managed_checkpoint.source_id if managed_checkpoint is not None else None
     if managed_checkpoint is not None and managed_checkpoint in session.new:
@@ -988,7 +542,7 @@ async def list_reusable_runs(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Discover only caller-owned completed runs with reusable verified mmCIF bytes."""
-    principal_id = _principal(request)
+    principal_id = cm_submission._principal(request)
     rows = (await session.execute(
         select(ConformationalMappingRequest, Job, ConformationalMappingArtifact)
         .join(Job, Job.id == ConformationalMappingRequest.job_id)
@@ -1054,7 +608,7 @@ async def register_reusable_run_artifact(
         or not _verified_reusable_artifact(job, artifact)
     ):
         raise HTTPException(status_code=409, detail="selected completed-run artifact is unavailable")
-    principal_id = _principal(request)
+    principal_id = cm_submission._principal(request)
     binding = canonical_sha256({
         "principal_id": principal_id,
         "request_id": request_id,
@@ -1064,7 +618,7 @@ async def register_reusable_run_artifact(
     source_id = f"cm_src_{binding[:48]}"
     existing = await session.get(ConformationalMappingSource, source_id)
     if existing is not None:
-        authority = _read_source_authority(existing)
+        authority = cm_submission._read_source_authority(existing)
         authority_payload = authority.get("payload") if isinstance(authority, Mapping) else None
         if (
             existing.principal_id != principal_id
@@ -1107,7 +661,7 @@ async def register_reusable_run_artifact(
         immutable=True,
         created_at=datetime.utcnow(),
     )
-    authority_path = _source_authority_path(source_id)
+    authority_path = cm_submission._source_authority_path(source_id)
     try:
         session.add(source)
         await session.flush()
@@ -1186,7 +740,7 @@ async def _register_source_impl(
     file: UploadFile,
     session: AsyncSession,
 ) -> dict[str, Any]:
-    principal_id = _mutation_principal(request)
+    principal_id = cm_submission._mutation_principal(request)
     if source_kind not in _SOURCE_KINDS:
         raise HTTPException(status_code=422, detail="unsupported conformational-mapping source kind")
     _validate_upload_source_kind(source_kind)
@@ -1216,7 +770,7 @@ async def _register_source_impl(
         try:
             while chunk := await file.read(1024 * 1024):
                 size += len(chunk)
-                if size > _SOURCE_MAX_BYTES[source_kind]:
+                if size > cm_submission._SOURCE_MAX_BYTES[source_kind]:
                     raise HTTPException(status_code=413, detail="registered source exceeds its server limit")
                 digest.update(chunk)
                 _write_all(descriptor, chunk)
@@ -1238,12 +792,12 @@ async def _register_source_impl(
                 raise HTTPException(status_code=409, detail="registered source identity is not available")
             try:
                 verify_registered_artifact(
-                    _registered(existing), principal_id=principal_id,
+                    cm_submission._registered(existing), principal_id=principal_id,
                     maximum_bytes=2 * 1024 * 1024 * 1024,
                 )
             except ImportStagingError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
-            authority_receipt = _read_source_authority(existing)
+            authority_receipt = cm_submission._read_source_authority(existing)
             if requested_authority is not None:
                 authority_kind, authority_payload = requested_authority
                 if authority_kind != "rcsb_download" or not _existing_rcsb_authority_matches(
@@ -1254,7 +808,7 @@ async def _register_source_impl(
                         detail="registered source bytes already have a different authority",
                     )
             elif source_kind == "complex_snapshot" and authority_receipt is None:
-                existing_snapshots = _read_registered_json(existing)
+                existing_snapshots = cm_submission._read_registered_json(existing)
                 if isinstance(existing_snapshots, Mapping):
                     existing_snapshots = [existing_snapshots]
                 if not isinstance(existing_snapshots, list) or not existing_snapshots:
@@ -1264,7 +818,7 @@ async def _register_source_impl(
                 authority_receipt = _publish_source_authority(
                     existing,
                     authority_kind="complex_snapshot_normalization",
-                    payload={"chain_ids": _snapshot_chain_ids(existing_snapshots)},
+                    payload={"chain_ids": cm_submission._snapshot_chain_ids(existing_snapshots)},
                 )
             return {
                 "source_id": source_id, "source_kind": source_kind,
@@ -1317,11 +871,11 @@ async def _register_source_impl(
         if authority_spec is None and source_kind == "complex_snapshot":
             authority_spec = (
                 "complex_snapshot_normalization",
-                {"chain_ids": _snapshot_chain_ids(snapshots)},
+                {"chain_ids": cm_submission._snapshot_chain_ids(snapshots)},
             )
         session.add(source_record)
         if authority_spec is not None:
-            authority_path = _source_authority_path(source_id)
+            authority_path = cm_submission._source_authority_path(source_id)
             authority_receipt = _publish_source_authority(
                 source_record,
                 authority_kind=authority_spec[0],
@@ -1372,7 +926,7 @@ def _rcsb_http_client() -> httpx.AsyncClient:
 async def _download_rcsb_mmcif(accession: str) -> bytes:
     """Download one deposited asymmetric-unit mmCIF under the CM source limit."""
 
-    maximum_bytes = _SOURCE_MAX_BYTES["structure_upload"]
+    maximum_bytes = cm_submission._SOURCE_MAX_BYTES["structure_upload"]
     spool = tempfile.SpooledTemporaryFile(
         max_size=min(maximum_bytes, 8 * 1024 * 1024), mode="w+b"
     )
@@ -1420,7 +974,7 @@ async def register_rcsb_mmcif_source(
     pdb_id: str,
     request: Request,
     session: AsyncSession = Depends(get_session),
-    selection: RcsbSelection | None = None,
+    selection: cm_submission.RcsbSelection | None = None,
 ):
     """Register exact server-resolved RCSB model/chain/entity mmCIF bytes."""
 
@@ -1428,7 +982,7 @@ async def register_rcsb_mmcif_source(
     if not re.fullmatch(r"[A-Z0-9]{4}", accession):
         raise HTTPException(status_code=422, detail="RCSB accession must be exactly four letters or digits")
     if selection is None:
-        selection = RcsbSelection(accession=accession)
+        selection = cm_submission.RcsbSelection(accession=accession)
     elif selection.accession and selection.accession != accession:
         raise HTTPException(status_code=422, detail="RCSB selection accession does not match the URL accession")
     else:
@@ -1489,7 +1043,7 @@ async def register_rcsb_mmcif_source(
         source = await session.get(ConformationalMappingSource, registration["source_id"])
         if source is None:
             raise HTTPException(status_code=500, detail="registered RCSB source authority is unavailable")
-        authority_receipt = registration.get("authority_receipt") or _read_source_authority(source)
+        authority_receipt = registration.get("authority_receipt") or cm_submission._read_source_authority(source)
         # Compatibility wrappers may bypass the normal transactional publisher.
         if authority_receipt is None:
             authority_receipt = _publish_source_authority(
@@ -1582,7 +1136,7 @@ async def _cached_rcsb_entries(
     )).scalars().all()
     entries: list[dict[str, Any]] = []
     for source in rows:
-        receipt = _read_source_authority(source)
+        receipt = cm_submission._read_source_authority(source)
         if not isinstance(receipt, Mapping) or receipt.get("authority_kind") != "rcsb_download":
             continue
         payload = receipt.get("payload")
@@ -1612,7 +1166,7 @@ async def list_cached_rcsb_sources(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    return {"entries": await _cached_rcsb_entries(_principal(request), session)}
+    return {"entries": await _cached_rcsb_entries(cm_submission._principal(request), session)}
 
 
 @router.get("/sources/rcsb/search")
@@ -1624,7 +1178,7 @@ async def search_rcsb_sources(
     limit: Annotated[int, Query(ge=1, le=20)] = 10,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    principal_id = _principal(request)
+    principal_id = cm_submission._principal(request)
     normalized_accession = accession.strip().upper() if accession else None
     if normalized_accession and not re.fullmatch(r"[A-Z0-9]{4}", normalized_accession):
         raise HTTPException(status_code=422, detail="RCSB accession must be exactly four letters or digits")
@@ -1698,39 +1252,6 @@ async def search_rcsb_sources(
     return {"query": normalized_keyword, "entries": entries, "cached": False}
 
 
-def _principal(request: Request) -> str:
-    """Resolve an authenticated caller or the configured trusted application proxy."""
-    if not _authorization_enabled():
-        return _PERSONAL_WORKFLOW_PRINCIPAL
-    principal = getattr(request.state, "authenticated_principal", None)
-    if principal is None:
-        configured = os.getenv("BMS_CM_TRUSTED_PROXY_SECRET", "")
-        supplied = request.headers.get(_APPLICATION_PROXY_HEADER, "")
-        if configured and supplied and secrets.compare_digest(configured, supplied):
-            return "local-application-operator"
-        raise HTTPException(
-            status_code=401,
-            detail="authenticated conformational-mapping principal required",
-        )
-    if isinstance(principal, Mapping):
-        actor = principal.get("id") or principal.get("subject")
-        roles = principal.get("roles") or []
-    else:
-        actor = getattr(principal, "id", None) or getattr(principal, "subject", None)
-        roles = getattr(principal, "roles", [])
-    normalized_roles = {str(role).strip().lower() for role in roles}
-    if not actor or not normalized_roles.intersection({"scientist", "operator", "admin"}):
-        raise HTTPException(
-            status_code=403,
-            detail="conformational-mapping scientist/operator role required",
-        )
-    return str(actor)
-
-
-def _mutation_principal(request: Request) -> str:
-    return _principal(request)
-
-
 def _capability_cookie_name(request_id: str) -> str:
     return f"{_COOKIE_PREFIX}{request_id.replace('-', '_')}"
 
@@ -1744,10 +1265,10 @@ async def _authorized_record(
 ):
     record = await get_request(session, request_id)
     if record is None:
-        _principal(request)
+        cm_submission._principal(request)
         raise HTTPException(status_code=404, detail="conformational-mapping request not found")
     if mutation:
-        principal_id = _principal(request)
+        principal_id = cm_submission._principal(request)
         if record.principal_id != principal_id:
             raise HTTPException(status_code=404, detail="conformational-mapping request not found")
         return record
@@ -1771,7 +1292,7 @@ async def _authorized_record(
             expected, hashlib.sha256(supplied.encode("utf-8")).hexdigest()
         )
     )
-    principal_id = record.principal_id if principal is None and capability_matches_record else _principal(request)
+    principal_id = record.principal_id if principal is None and capability_matches_record else cm_submission._principal(request)
     if record.principal_id != principal_id:
         if not capability_matches_record:
             raise HTTPException(status_code=404, detail="conformational-mapping request not found")
@@ -1788,33 +1309,6 @@ async def _authorized_state_analysis_summary_record(
     return await _authorized_record(request_id, request, session)
 
 
-async def _source(
-    session: AsyncSession,
-    source_id: str | None,
-    principal_id: str,
-    allowed_kinds: set[str],
-) -> ConformationalMappingSource:
-    if not source_id:
-        raise HTTPException(status_code=422, detail="registered source ID is required")
-    source = await session.get(ConformationalMappingSource, source_id)
-    if (
-        source is None
-        or source.principal_id != principal_id
-        or source.source_kind not in allowed_kinds
-        or not source.immutable
-    ):
-        raise HTTPException(status_code=403, detail="registered source is unavailable")
-    return source
-
-
-def _registered(source: ConformationalMappingSource) -> RegisteredArtifact:
-    return RegisteredArtifact(
-        artifact_id=source.source_id, principal_id=source.principal_id,
-        storage_root=Path(source.storage_root), relative_path=source.relative_path,
-        content_sha256=source.content_sha256, size_bytes=source.size_bytes,
-    )
-
-
 @router.get(
     "/sources/{source_id}/frustrampnn-inspection",
     response_model=CmFrustraMPNNSourceInspectionResponse,
@@ -1824,8 +1318,8 @@ async def source_frustrampnn_inspection(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    principal_id = _principal(request)
-    source = await _source(
+    principal_id = cm_submission._principal(request)
+    source = await cm_submission._source(
         session,
         source_id,
         principal_id,
@@ -1838,9 +1332,9 @@ async def source_frustrampnn_inspection(
     )
     try:
         payload = read_registered_artifact(
-            _registered(source),
+            cm_submission._registered(source),
             principal_id=principal_id,
-            maximum_bytes=_SOURCE_MAX_BYTES[source.source_kind],
+            maximum_bytes=cm_submission._SOURCE_MAX_BYTES[source.source_kind],
         )
     except ImportStagingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1859,13 +1353,13 @@ async def source_frustrampnn_inspection(
             snapshot = _confornets_snapshot(
                 target_id=target_id,
                 sequence=sequence,
-                chain_id=_CONFORNETS_CHAIN_ID,
+                chain_id=cm_submission._CONFORNETS_CHAIN_ID,
                 source_sha256=source.content_sha256,
                 coordinates=[{
                     "backend": "confornets",
                     "target_id": target_id,
                     "task": "source_inspection",
-                    "test_case_id": _CONFORNETS_TEST_CASE_ID,
+                    "test_case_id": cm_submission._CONFORNETS_TEST_CASE_ID,
                     "reference_id": None,
                     "run_index": 0,
                     "saved_step": 0,
@@ -1910,8 +1404,8 @@ async def source_content(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ):
-    principal_id = _principal(request)
-    source = await _source(
+    principal_id = cm_submission._principal(request)
+    source = await cm_submission._source(
         session,
         source_id,
         principal_id,
@@ -1921,7 +1415,7 @@ async def source_content(
         raise HTTPException(status_code=415, detail="browser preview requires registered mmCIF")
     try:
         payload = read_registered_artifact(
-            _registered(source),
+            cm_submission._registered(source),
             principal_id=principal_id,
             maximum_bytes=64 * 1024 * 1024,
         )
@@ -1938,50 +1432,11 @@ async def source_content(
     )
 
 
-def _external_import_target_ids(
-    sources: list[ConformationalMappingSource],
-    *,
-    registered_snapshot_id: str | None,
-) -> list[str]:
-    if registered_snapshot_id:
-        raise HTTPException(
-            status_code=422,
-            detail="external-import snapshots are derived automatically from staged mmCIF bytes",
-        )
-    if len(sources) != 1:
-        raise HTTPException(status_code=422, detail="external import currently requires exactly one mmCIF structure")
-    target_ids: list[str] = []
-    for source in sources:
-        if Path(source.relative_path).suffix.lower() not in {".cif", ".mmcif"}:
-            raise HTTPException(status_code=422, detail="external import accepts mmCIF structures only")
-        target_id = str((source.metadata_json or {}).get("target_id") or source.source_id).strip()
-        if not target_id:
-            raise HTTPException(status_code=422, detail="external import target identity is empty")
-        target_ids.append(target_id)
-    if len(set(target_ids)) != len(target_ids):
-        raise HTTPException(status_code=422, detail="external import target identities must be unique")
-    return target_ids
-
-
-def _read_registered_json(source: ConformationalMappingSource) -> Any:
-    try:
-        payload = read_registered_artifact(
-            _registered(source), principal_id=source.principal_id,
-            maximum_bytes=_SOURCE_MAX_BYTES["complex_snapshot"],
-        )
-    except ImportStagingError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    try:
-        return json.loads(payload)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=422, detail="registered source is not valid JSON") from exc
-
-
 def _validate_rcsb_selection_against_snapshots(
     source: ConformationalMappingSource,
     snapshots: Sequence[Mapping[str, Any]],
-) -> RcsbSelection | None:
-    selection = _source_rcsb_selection(source)
+) -> cm_submission.RcsbSelection | None:
+    selection = cm_submission._source_rcsb_selection(source)
     if selection is None:
         return None
     model_ids = {
@@ -1989,7 +1444,7 @@ def _validate_rcsb_selection_against_snapshots(
         for snapshot in snapshots
         if str(snapshot.get("source_model_id") or "").strip()
     }
-    chain_ids = set(_snapshot_chain_ids(snapshots))
+    chain_ids = set(cm_submission._snapshot_chain_ids(snapshots))
     entity_ids = set(_snapshot_entity_ids(snapshots))
     if selection.model_id and selection.model_id not in model_ids:
         raise HTTPException(status_code=422, detail="selected RCSB model is not present in the staged source")
@@ -2052,219 +1507,6 @@ def _confornets_snapshot(
     return snapshot
 
 
-@dataclass
-class _NormalizedCmSubmission:
-    params: dict[str, Any]
-    request_fields: dict[str, Any]
-    import_sources: list[ConformationalMappingSource]
-    confor_sources: list[ConformationalMappingSource]
-    snapshot_source: ConformationalMappingSource | None
-    sequence_source: ConformationalMappingSource | None
-    snapshots: list[Any]
-    checkpoint_source: ConformationalMappingSource | None
-    references: list[ConformationalMappingSource]
-    config_source: ConformationalMappingSource | None
-    transfer_source: ConformationalMappingSource | None
-
-
-async def _normalize_cm_submission(
-    body: SubmitRequest, principal_id: str, session: AsyncSession,
-) -> _NormalizedCmSubmission:
-    """Shared read-only controls/source ACL binding before submission writes."""
-    checkpoint_source = config_source = transfer_source = None
-    references: list[ConformationalMappingSource] = []
-    params: dict[str, Any] = {
-        "backend": body.backend,
-        "ordered_seeds": body.ordered_seeds,
-        "samples_per_seed": body.samples_per_seed,
-        "feature_policy": body.feature_policy,
-        "runtime_policy": _bind_runtime_policy(body.backend, body.runtime_policy),
-        "analysis_policy": _bind_analysis_policy(body.analysis_policy),
-    }
-    if "frustrampnn_settings" in body.model_fields_set:
-        params["frustrampnn_settings"] = body.frustrampnn_settings.model_dump(
-            mode="json", exclude_none=False
-        )
-    if body.state_landscape_comparison is not None:
-        params["state_landscape_comparison"] = body.state_landscape_comparison
-    import_sources: list[ConformationalMappingSource] = []
-    confor_sources: list[ConformationalMappingSource] = []
-    snapshot_source: ConformationalMappingSource | None = None
-    sequence_source: ConformationalMappingSource | None = None
-    snapshots: list[Any] = []
-    settings: dict[str, Any] = {}
-    if body.backend == "protenix_v2_ensemble":
-        if (
-            body.registered_artifact_ids or body.registered_sequence_id or body.confornets
-            or body.registered_reference_ids or body.registered_checkpoint_id
-            or body.registered_config_id or body.registered_transfer_id
-        ):
-            raise HTTPException(status_code=422, detail="inactive backend fields are forbidden")
-        snapshot_source = await _source(
-            session, body.registered_snapshot_id, principal_id,
-            {"complex_snapshot"},
-        )
-        snapshots = _read_registered_json(snapshot_source)
-        if isinstance(snapshots, dict):
-            snapshots = [snapshots]
-        if not isinstance(snapshots, list) or not snapshots:
-            raise HTTPException(status_code=422, detail="registered snapshot bundle is empty")
-        if (
-            [snapshot.get("target_order") for snapshot in snapshots] != list(range(len(snapshots)))
-            or len({snapshot.get("target_id") for snapshot in snapshots}) != len(snapshots)
-        ):
-            raise HTTPException(status_code=422, detail="registered snapshot order or target identity is invalid")
-        params["targets"] = [
-            {"target_id": snapshot["target_id"], "target_order": index}
-            for index, snapshot in enumerate(snapshots)
-        ]
-        params["protenix_snapshot_id"] = snapshot_source.source_id
-    elif body.backend == "external_import":
-        if (
-            body.registered_sequence_id or body.confornets or body.registered_reference_ids
-            or body.registered_checkpoint_id or body.registered_config_id
-            or body.registered_transfer_id
-        ):
-            raise HTTPException(status_code=422, detail="inactive backend fields are forbidden")
-        if not body.registered_artifact_ids:
-            raise HTTPException(status_code=422, detail="at least one registered structure is required")
-        import_sources = [
-            await _source(session, source_id, principal_id, {"structure_upload", "structure_artifact"})
-            for source_id in body.registered_artifact_ids
-        ]
-        target_ids = _external_import_target_ids(
-            import_sources,
-            registered_snapshot_id=body.registered_snapshot_id,
-        )
-        if body.ordered_seeds != [0] or body.samples_per_seed != 1:
-            raise HTTPException(status_code=422, detail="external import requires ordered_seeds [0] and samples_per_seed 1")
-        params["targets"] = [
-            {"target_id": target_id, "target_order": index}
-            for index, target_id in enumerate(target_ids)
-        ]
-        params["ordered_seeds"] = [0]
-        params["samples_per_seed"] = 1
-    else:
-        if body.registered_snapshot_id or body.registered_artifact_ids:
-            raise HTTPException(status_code=422, detail="inactive backend fields are forbidden")
-        sequence_source = await _source(session, body.registered_sequence_id, principal_id, {"protein_sequence"})
-        checkpoint_source = await _managed_checkpoint_for_submission(
-            session, body.registered_checkpoint_id
-        )
-        references = [
-            await _source(session, value, principal_id, {"structure_upload", "structure_artifact"})
-            for value in body.registered_reference_ids
-        ]
-        config_source = (
-            await _source(session, body.registered_config_id, principal_id, {"confornets_config"})
-            if body.registered_config_id else None
-        )
-        transfer_source = (
-            await _source(session, body.registered_transfer_id, principal_id, {"confornets_state"})
-            if body.registered_transfer_id else None
-        )
-        confor_sources = [sequence_source, checkpoint_source, *references]
-        if config_source is not None:
-            confor_sources.append(config_source)
-        if transfer_source is not None:
-            confor_sources.append(transfer_source)
-        settings = _bind_confornets_submission_policy(body.confornets or {})
-        sequence = str(sequence_source.metadata_json.get("sequence") or "")
-        target_id = str(sequence_source.metadata_json.get("target_id") or sequence_source.source_id)
-        settings.update(
-            {
-                "sequence": sequence,
-                "checkpoint": {"path": f"registered/{checkpoint_source.source_id}", "sha256": checkpoint_source.content_sha256},
-                "config": None if config_source is None else {"path": f"registered/{config_source.source_id}", "sha256": config_source.content_sha256},
-                "references": [
-                    {
-                        "reference_id": source.source_id,
-                        "staged_path": f"registered/{source.source_id}",
-                        "content_sha256": source.content_sha256,
-                        "state": str(source.metadata_json.get("state") or "reference"),
-                        "source": "registered_artifact",
-                    }
-                    for source in references
-                ],
-                "transfer_source": None if transfer_source is None else {
-                    "kind": str(transfer_source.metadata_json.get("kind") or "confornet_state"),
-                    "staged_path": f"registered/{transfer_source.source_id}",
-                    "content_sha256": transfer_source.content_sha256,
-                    "source_test_cases": str(transfer_source.metadata_json.get("source_test_cases") or ""),
-                },
-                "backend_identity": _server_confornets_identity(),
-            }
-        )
-        params["targets"] = [
-            {"target_id": target_id, "target_order": 0, "sequence": sequence, "molecule_type": "protein", "chain_count": 1}
-        ]
-        params["confornets"] = settings
-
-    if body.backend == "protenix_v2_ensemble":
-        if snapshot_source is None:
-            raise HTTPException(status_code=422, detail="registered snapshot authority is unavailable")
-        selected_source = snapshot_source
-        selected_chain_ids = _snapshot_chain_ids(
-            [snapshot for snapshot in snapshots if isinstance(snapshot, Mapping)]
-        )
-    elif body.backend == "external_import":
-        selected_source = import_sources[0]
-        selected_chain_ids = []
-    else:
-        if sequence_source is None:
-            raise HTTPException(status_code=422, detail="registered sequence authority is unavailable")
-        selected_source = sequence_source
-        selected_chain_ids = [_CONFORNETS_CHAIN_ID]
-    params["run_record"] = {
-        "name": body.name.strip(),
-        "notes": body.notes.strip(),
-        "selected_input": _run_record_selected_input(
-            selected_source,
-            model_id=None,
-            sample_id=None,
-            chain_ids=selected_chain_ids,
-        ),
-    }
-
-    try:
-        validated = validate_request_controls(params)
-    except ConformationalMappingRequestError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _NormalizedCmSubmission(
-        params, validated.request_fields, import_sources, confor_sources,
-        snapshot_source, sequence_source, snapshots, checkpoint_source, references,
-        config_source, transfer_source,
-    )
-
-
-async def normalize_cm_provision_request(
-    body: SubmitRequest, request: Request, session: AsyncSession,
-) -> NativeWorkflowDependencyRequest:
-    """Normalize the real unsaved CM submission without registering/staging it."""
-    principal_id = _mutation_principal(request)
-    with session.no_autoflush:
-        normalized = await _normalize_cm_submission(body, principal_id, session)
-    effective = normalized.request_fields
-    sources = [*normalized.import_sources, *normalized.confor_sources]
-    if normalized.snapshot_source is not None:
-        sources.append(normalized.snapshot_source)
-    bindings = tuple({
-        "role": source.source_kind,
-        "source_ref": {"kind": "cm_registered_source", "id": source.source_id},
-        "sha256": source.content_sha256,
-        "size_bytes": source.size_bytes,
-        "required": True,
-        "state": "declared",
-    } for source in sources)
-    return NativeWorkflowDependencyRequest(
-        model_id="conformational_mapping", mode="map",
-        requested_params=body.model_dump(mode="json"),
-        effective_params={"cm_request": copy.deepcopy(effective)},
-        entrypoint="workflows/conformational_mapping.nf",
-        input_bindings=bindings,
-    )
-
-
 @router.post("/requests", status_code=201)
 async def submit_request(
     body: SubmitRequest,
@@ -2272,8 +1514,8 @@ async def submit_request(
     response: Response,
     session: AsyncSession = Depends(get_session),
 ):
-    principal_id = _mutation_principal(request)
-    normalized = await _normalize_cm_submission(body, principal_id, session)
+    principal_id = cm_submission._mutation_principal(request)
+    normalized = await cm_submission._normalize_cm_submission(body, principal_id, session)
     if normalized.checkpoint_source is not None:
         session.add(normalized.checkpoint_source)
     params = normalized.params
@@ -2313,7 +1555,7 @@ async def submit_request(
     try:
         if snapshot_source is not None:
             staged_snapshot = stage_registered_assets(
-                [_registered(snapshot_source)], principal_id=principal_id,
+                [cm_submission._registered(snapshot_source)], principal_id=principal_id,
                 destination_root=root / "registered_snapshot",
             )[snapshot_source.source_id]
             snapshot_payload = snapshots if isinstance(snapshots, list) else [snapshots]
@@ -2324,7 +1566,7 @@ async def submit_request(
         if confor_sources:
             assert checkpoint_source is not None
             staged_assets = stage_registered_assets(
-                [_registered(source) for source in confor_sources if source is not checkpoint_source],
+                [cm_submission._registered(source) for source in confor_sources if source is not checkpoint_source],
                 principal_id=principal_id, destination_root=root / "registered",
             )
             settings = params["confornets"]
@@ -2337,7 +1579,7 @@ async def submit_request(
                 settings["transfer_source"]["staged_path"] = staged_assets[transfer_source.source_id].relative_to(root).as_posix()
         if import_sources:
             staged_import = stage_registered_artifacts(
-                [_registered(source) for source in import_sources], principal_id=principal_id,
+                [cm_submission._registered(source) for source in import_sources], principal_id=principal_id,
                 request_id=request_id, destination_root=root / "registered_import",
                 maximum_bytes=MAX_IMPORT_MMCIF_BYTES,
             )
@@ -2373,7 +1615,7 @@ async def submit_request(
             selected_chain_ids = (
                 list(rcsb_selection.chain_ids)
                 if rcsb_selection and rcsb_selection.chain_ids
-                else _snapshot_chain_ids(import_snapshots)
+                else cm_submission._snapshot_chain_ids(import_snapshots)
             )
             selected_entity_ids = (
                 list(rcsb_selection.entity_ids)
@@ -2383,7 +1625,7 @@ async def submit_request(
             request_payload, coordinate_plan = bind_materialized_source_snapshot(
                 materialized,
                 source_snapshot_sha256=canonical_sha256(normalized_snapshot),
-                selected_input=_run_record_selected_input(
+                selected_input=cm_submission._run_record_selected_input(
                     import_sources[0],
                     model_id=selected_model_id,
                     sample_id=selected_sample_id,
@@ -3712,7 +2954,7 @@ def _resolve_artifact_runtime_alias(path: str | Path) -> Path:
         configured_root = os.getenv(variable, "").strip()
         if configured_root:
             alias_roots.append(Path(configured_root))
-    alias_roots.extend((Path("/mnt/BioModStack"), Path.home() / ".biomodstack"))
+    alias_roots.extend(_candidate_data_roots())
 
     seen: set[str] = set()
     for raw_root in alias_roots:

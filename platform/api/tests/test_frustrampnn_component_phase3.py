@@ -26,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 MODULE_PATH = REPO_ROOT / "modules" / "frustrampnn.nf"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "run_frustrampnn_component.py"
 CONFIG_PATH = REPO_ROOT / "nextflow.config"
-API_PYTHON = Path("/home/dalab/.biomodstack-dev/runtime/cm-api-python/current/venv/bin/python")
+API_PYTHON = Path.home() / ".biomodstack-dev" / "runtime" / "cm-api-python" / "current" / "venv" / "bin" / "python"
 
 
 def _component():
@@ -1202,7 +1202,8 @@ def test_nextflow_stub_smoke_preserves_candidate_identity(tmp_path: Path) -> Non
 
 
 def test_preflight_uses_provisioned_api_python_without_model_inference() -> None:
-    assert API_PYTHON.is_file() and os.access(API_PYTHON, os.X_OK)
+    if not (API_PYTHON.is_file() and os.access(API_PYTHON, os.X_OK)):
+        pytest.skip(f"provisioned API Python unavailable: {API_PYTHON}")
     container = Path(FRUSTRAMPNN_RUNTIME_IDENTITY.configured_sif_path)
     apptainer = shutil.which("apptainer")
     if not container.is_file() or apptainer is None:

@@ -12,11 +12,12 @@ from sqlalchemy.orm import sessionmaker
 
 from database import Base, ConformationalMappingSource
 from routers import conformational_mapping as cm
+from services.conformational_mapping import submission
 
 
 @pytest.mark.asyncio
 async def test_md_cm02_discovery_memo_io_and_replacement(tmp_path, monkeypatch):
-    monkeypatch.setattr(cm, "_confornets_discovery_digest", None)
+    monkeypatch.setattr(submission, "_confornets_discovery_digest", None)
     weights = tmp_path / "weights"
     checkpoint = weights / "openfold3/of3-p2-155k.pt"
     checkpoint.parent.mkdir(parents=True)
@@ -24,6 +25,7 @@ async def test_md_cm02_discovery_memo_io_and_replacement(tmp_path, monkeypatch):
     second = b"B" * len(first)
     checkpoint.write_bytes(first)
     monkeypatch.setattr(cm, "get_weights_root", lambda: weights)
+    monkeypatch.setattr(submission, "get_weights_root", lambda: weights)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'probe.db'}")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -31,7 +33,7 @@ async def test_md_cm02_discovery_memo_io_and_replacement(tmp_path, monkeypatch):
     counts = dict(hash_calls=0, checkpoint_bytes_read=0, insert=0, update=0, delete=0, commits=0)
     observations = {}
     original_open = Path.open
-    original_hash = cm._sha256_path
+    original_hash = submission._sha256_path
 
     class Reader:
         def __init__(self, handle):
@@ -58,7 +60,7 @@ async def test_md_cm02_discovery_memo_io_and_replacement(tmp_path, monkeypatch):
         return original_hash(path)
 
     monkeypatch.setattr(Path, 'open', counted_open)
-    monkeypatch.setattr(cm, '_sha256_path', counted_hash)
+    monkeypatch.setattr(submission, '_sha256_path', counted_hash)
 
     @event.listens_for(engine.sync_engine, 'before_cursor_execute')
     def sql_count(conn, cursor, statement, parameters, context, executemany):
@@ -102,13 +104,13 @@ async def test_md_cm02_discovery_memo_io_and_replacement(tmp_path, monkeypatch):
         before = dict(counts)
         async with factory() as session:
             assert (await cm._ensure_managed_confornets_checkpoint(session)).source_id == row['source_id']
-            assert (await cm._source(session, row['source_id'], cm._PERSONAL_WORKFLOW_PRINCIPAL, {'confornets_checkpoint'})).source_id == row['source_id']
+            assert (await submission._source(session, row['source_id'], submission._PERSONAL_WORKFLOW_PRINCIPAL, {'confornets_checkpoint'})).source_id == row['source_id']
         capture('warm_helper_and_selected_lookup', before)
         assert observations['warm_helper_and_selected_lookup'] == dict(hash_calls=0,
             checkpoint_bytes_read=0, insert=0, update=0, delete=0, commits=0)
         for label, read in (
-            ('default_read_after_warm', lambda session: cm._read_managed_confornets_checkpoint(session)),
-            ('submission_after_warm', lambda session: cm._managed_checkpoint_for_submission(session, row['source_id'])),
+            ('default_read_after_warm', lambda session: submission._read_managed_confornets_checkpoint(session)),
+            ('submission_after_warm', lambda session: submission._managed_checkpoint_for_submission(session, row['source_id'])),
         ):
             before = dict(counts)
             async with factory() as session:
@@ -129,9 +131,9 @@ async def test_md_cm02_discovery_memo_io_and_replacement(tmp_path, monkeypatch):
         assert changed['source_id'] != row['source_id']
         async with factory() as session:
             with pytest.raises(HTTPException) as old:
-                await cm._managed_checkpoint_for_submission(session, row['source_id'])
+                await submission._managed_checkpoint_for_submission(session, row['source_id'])
             assert old.value.status_code == 422
-            selected = await cm._managed_checkpoint_for_submission(session, changed['source_id'])
+            selected = await submission._managed_checkpoint_for_submission(session, changed['source_id'])
             assert selected.content_sha256 == changed['sha256']
 
         replacement = checkpoint.with_suffix('.replacement')
@@ -158,15 +160,21 @@ async def test_md_cm02_discovery_memo_io_and_replacement(tmp_path, monkeypatch):
         async with factory() as session:
             assert await cm._ensure_managed_confornets_checkpoint(session) is None
             with pytest.raises(HTTPException) as absent:
-                await cm._managed_checkpoint_for_submission(session, row['source_id'])
+                await submission._managed_checkpoint_for_submission(session, row['source_id'])
             assert absent.value.status_code == 503
         capture('absent_checkpoint', before)
+        async with factory() as session:
+            registered = await session.get(ConformationalMappingSource, row['source_id'])
+            registered.content_sha256 = row['sha256']
+            await session.commit()
         target = checkpoint.with_suffix('.target')
         target.write_bytes(first)
         checkpoint.symlink_to(target)
         before = dict(counts)
         async with factory() as session:
-            assert await cm._ensure_managed_confornets_checkpoint(session) is None
+            selected = await cm._ensure_managed_confornets_checkpoint(session)
+            assert selected.source_id == row['source_id']
+            assert selected.content_sha256 == row['sha256']
         capture('symlink_checkpoint', before)
         # A different pathname must not hit even when every inode field matches.
         checkpoint.unlink()
@@ -203,9 +211,9 @@ def test_md_cm02_uncertain_metadata_single_read_not_reused(tmp_path, monkeypatch
     checkpoint = tmp_path / 'checkpoint.pt'
     payload = b'offline-checkpoint'
     checkpoint.write_bytes(payload)
-    monkeypatch.setattr(cm, '_confornets_discovery_digest', None)
+    monkeypatch.setattr(submission, '_confornets_discovery_digest', None)
     original_lstat = Path.lstat
-    original_hash = cm._sha256_path
+    original_hash = submission._sha256_path
     calls = {'observations': 0, 'hashes': 0, 'bytes': 0}
 
     def observe(path, *args, **kwargs):
@@ -232,11 +240,11 @@ def test_md_cm02_uncertain_metadata_single_read_not_reused(tmp_path, monkeypatch
         return result
 
     monkeypatch.setattr(Path, 'lstat', observe)
-    monkeypatch.setattr(cm, '_sha256_path', counted_hash)
-    assert cm._confornets_discovery_checksum(checkpoint) == (hashlib.sha256(payload).hexdigest(), len(payload))
+    monkeypatch.setattr(submission, '_sha256_path', counted_hash)
+    assert submission._confornets_discovery_checksum(checkpoint) == (hashlib.sha256(payload).hexdigest(), len(payload))
     assert calls['hashes'] == 1
-    assert cm._confornets_discovery_digest is None
-    assert cm._confornets_discovery_checksum(checkpoint) == (hashlib.sha256(payload).hexdigest(), len(payload))
+    assert submission._confornets_discovery_digest is None
+    assert submission._confornets_discovery_checksum(checkpoint) == (hashlib.sha256(payload).hexdigest(), len(payload))
     assert calls['hashes'] == 2
     assert calls['bytes'] == 2 * len(payload)
 
@@ -245,32 +253,32 @@ def test_md_cm02_uncertain_metadata_single_read_not_reused(tmp_path, monkeypatch
 def test_md_cm02_each_observation_field_invalidates(tmp_path, monkeypatch, field):
     checkpoint = tmp_path / 'checkpoint.pt'
     checkpoint.write_bytes(b'checkpoint')
-    observation = cm._confornets_checkpoint_observation(checkpoint)
+    observation = submission._confornets_checkpoint_observation(checkpoint)
     assert observation is not None
     old = list(observation)
     index = ['path', 'device', 'inode', 'size', 'mtime_ns', 'ctime_ns'].index(field)
     old[index] = old[index] + 1 if index else str(tmp_path / 'other.pt')
-    monkeypatch.setattr(cm, '_confornets_discovery_digest', (tuple(old), '0' * 64))
+    monkeypatch.setattr(submission, '_confornets_discovery_digest', (tuple(old), '0' * 64))
     calls = []
-    original = cm._sha256_path
-    monkeypatch.setattr(cm, '_sha256_path', lambda path: (calls.append(path), original(path))[1])
-    assert cm._confornets_discovery_checksum(checkpoint) == (hashlib.sha256(b'checkpoint').hexdigest(), 10)
+    original = submission._sha256_path
+    monkeypatch.setattr(submission, '_sha256_path', lambda path: (calls.append(path), original(path))[1])
+    assert submission._confornets_discovery_checksum(checkpoint) == (hashlib.sha256(b'checkpoint').hexdigest(), 10)
     assert calls == [checkpoint]
-    assert cm._confornets_discovery_digest == (observation, hashlib.sha256(b'checkpoint').hexdigest())
+    assert submission._confornets_discovery_digest == (observation, hashlib.sha256(b'checkpoint').hexdigest())
 
 
 def test_md_cm02_hash_failure_keeps_existing_exception_no_retry(tmp_path, monkeypatch):
     checkpoint = tmp_path / 'checkpoint.pt'
     checkpoint.write_bytes(b'checkpoint')
-    monkeypatch.setattr(cm, '_confornets_discovery_digest', None)
+    monkeypatch.setattr(submission, '_confornets_discovery_digest', None)
     calls = []
 
     def unavailable(path):
         calls.append(path)
         raise OSError('inert unreadable checkpoint')
 
-    monkeypatch.setattr(cm, '_sha256_path', unavailable)
+    monkeypatch.setattr(submission, '_sha256_path', unavailable)
     with pytest.raises(OSError, match='inert unreadable checkpoint'):
-        cm._confornets_discovery_checksum(checkpoint)
+        submission._confornets_discovery_checksum(checkpoint)
     assert calls == [checkpoint]
-    assert cm._confornets_discovery_digest is None
+    assert submission._confornets_discovery_digest is None

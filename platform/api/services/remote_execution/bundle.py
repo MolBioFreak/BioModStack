@@ -1208,7 +1208,6 @@ def compile_remote_dependencies(
     # runtime role is not selected. Classify by the selected dependency closure,
     # never by top-level model or by containment in biological input storage.
     defaults = {"rfd_models": ("weights", "rfantibody"),
-                "af2_models": ("weights", "alphafold"),
                 "alphafold_params": ("weights", "alphafold"),
                 "boltz_models": ("weights", "boltz"),
                 "msa_local_db": ("reference_database", None)}

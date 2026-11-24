@@ -165,7 +165,7 @@ def _bundle(root: Path) -> None:
             "/work/output:/bms/output:rw",
         ],
         "sif_path": "/proc/self/fd/41",
-        "configured_sif_path": "/mnt/BioModStack/apptainer/frustrampnn.sif",
+        "configured_sif_path": "/data/bms/apptainer/frustrampnn.sif",
         "sif_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
         "executable_path": "/opt/venv/bin/frustrampnn",
         "executable_sha256": "32089d959f619c08a550c0e7d0fc7b66b508d009ec3179d007f13773a170212f",

@@ -130,13 +130,13 @@ params.protenix_target_geometry_mode = params.protenix_target_geometry_mode ?: n
 params.target_template_threshold_angstrom = params.target_template_threshold_angstrom ?: 2.0
 params.strict_target_rmsd = params.strict_target_rmsd ?: null
 
+include { sequenceSubmissionMetadata; normalizeProteinDesignSequenceBatchEntries } from '../modules/sequence_submission.nf'
 include { RFDiffusionWorkflow } from './rfdiffusion.nf'
 include { FilterRFD ; RunRFDiffusion } from '../modules/rfdiffusion.nf'
 include { PrepRFD3Input ; RunRFD3 ; FilterRFD3 } from '../modules/rfd3.nf'
 include { RunRF3 ; FilterRF3 } from '../modules/rf3.nf'
 include { PrepFAMPNN ; FilterFAMPNN ; RunFAMPNN } from '../modules/fampnn.nf'
 include { FilterMPNN ; PrepMPNN ; RunMPNN } from '../modules/proteinmpnn.nf'
-include { AlignAF2 ; FilterAF2 ; RunAF2 } from '../modules/af2.nf'
 include { AnalyseBestDesigns } from '../modules/analysis.nf'
 include { PublishResults } from '../modules/publish.nf'
 include { AlignBoltz ; FilterBoltz ; PrepBoltz ; RunBoltz } from '../modules/boltz.nf'
@@ -145,12 +145,10 @@ include { CombineMetadata } from '../modules/combine_metadata.nf'
 include { Compress as CompressRFD } from '../modules/compress'
 include { Compress as CompressMPNN } from '../modules/compress'
 include { Compress as CompressFAMPNN } from '../modules/compress'
-include { Compress as CompressAF2 } from '../modules/compress'
 include { Compress as CompressBoltz } from '../modules/compress'
 include { MergeUncroppedTarget } from '../modules/merge_uncropped_target.nf'
 include { BoltzFromSequence } from '../modules/structure_prediction.nf'
 include { structure_prediction_wf } from '../modules/structure_prediction.nf'
-include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm.nf'
 include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
 
 def proteinDesignSha256(rawPath) {
@@ -179,82 +177,10 @@ def proteinDesignCandidateId(parentJobId, producerStage, producerCandidateKey) {
     return "${digest[0..<8]}-${digest[8..<12]}-${digest[12..<16]}-${digest[16..<20]}-${digest[20..<32]}"
 }
 
-def invalidSequenceBatchIdentity(message) {
-    throw new IllegalArgumentException("protein_design:invalid_sequence_batch_identity:${message}")
-}
-
-def sequenceSubmissionMetadata(submissionId, submissionName, sequence, fold = null, rank = null) {
-    def authority = submissionId?.toString()?.trim()
-    def displayName = submissionName?.toString()?.trim()
-    def sequenceValue = sequence?.toString()?.trim()
-    if (!(authority ==~ /[A-Za-z0-9][A-Za-z0-9._-]*/)) {
-        invalidSequenceBatchIdentity('entry ID must be non-empty and safe')
-    }
-    if (!displayName || !sequenceValue) {
-        invalidSequenceBatchIdentity('entry name and sequence must be non-empty')
-    }
-    if (rank != null && (!(rank instanceof Integer) || (rank as int) < 0)) {
-        invalidSequenceBatchIdentity('entry rank must be null or a non-negative integer')
-    }
-    if (fold != null && !(fold instanceof Integer) && !(fold instanceof CharSequence)) {
-        invalidSequenceBatchIdentity('entry fold must be null, an integer, or a string')
-    }
-    return [
-        producer_artifact_id: authority,
-        producer_artifact_key: authority,
-        producer_sample: authority,
-        producer_sequence: sequenceValue,
-        producer_fold: fold,
-        producer_rank: rank,
-        producer_submission_id: authority,
-        producer_submission_name: displayName,
-        original_submission_identity: [id: authority, name: displayName],
-    ]
-}
-
-def normalizeProteinDesignSequenceBatchEntries(rawEntries) {
-    if (!(rawEntries instanceof Collection) || rawEntries.isEmpty()) {
-        invalidSequenceBatchIdentity('batch must contain at least one entry')
-    }
-    def normalized = rawEntries.collect { rawEntry ->
-        if (!(rawEntry instanceof Map)) {
-            invalidSequenceBatchIdentity('every batch entry must be an object')
-        }
-        def explicitIdentityFields = ['producer_artifact_id', 'entry_id', 'id'].findAll {
-            rawEntry.containsKey(it)
-        }
-        def explicitValues = explicitIdentityFields.collect {
-            rawEntry[it] == null ? '' : rawEntry[it].toString().trim()
-        }
-        if (explicitIdentityFields && (explicitValues.any { !it } || explicitValues.toSet().size() != 1)) {
-            invalidSequenceBatchIdentity('explicit entry IDs must be non-empty and agree')
-        }
-        def legacyName = rawEntry.name == null ? '' : rawEntry.name.toString().trim()
-        def authority = explicitValues ? explicitValues[0] : legacyName
-        def sequence = rawEntry.sequence == null ? '' : rawEntry.sequence.toString().trim()
-        def displayName = legacyName ?: authority
-        def metadata = sequenceSubmissionMetadata(
-            authority,
-            displayName,
-            sequence,
-            rawEntry.containsKey('fold') ? rawEntry.fold : null,
-            rawEntry.containsKey('rank') ? rawEntry.rank : null,
-        )
-        tuple(metadata, sequence, authority)
-    }
-    def artifactIds = normalized.collect { it[0].producer_artifact_id }
-    def artifactKeys = normalized.collect { it[0].producer_artifact_key }
-    if (artifactIds.toSet().size() != artifactIds.size() || artifactKeys.toSet().size() != artifactKeys.size()) {
-        invalidSequenceBatchIdentity('entry IDs must be unique within the batch')
-    }
-    return normalized
-}
-
 def proteinDesignTerminalCandidate(rawPath, branch, method, producer = [:]) {
     def branchAuthorities = [
         early_sequence_prediction: [producer_branch: 'early_sequence_prediction'],
         rfd3_only: [producer_branch: 'rfd3_only'],
-        af2_terminal: [producer_branch: 'af2_terminal'],
         boltz_terminal: [producer_branch: 'boltz_terminal'],
         rf3_terminal: [producer_branch: 'rf3_terminal'],
         protenix_terminal: [producer_branch: 'protenix_terminal'],
@@ -659,9 +585,6 @@ workflow PROTEIN_DESIGN {
     if (params.complex_json_path) {
         error("complex_json_path jobs are isolated from the core protein-design entrypoint; launch workflows/complex_prediction.nf directly")
     }
-    if (params.unidock_ligand_smiles || params.unidock_ntp_type || params.run_docking) {
-        error("standalone docking is isolated from the core protein-design entrypoint; launch workflows/docking.nf directly")
-    }
 
 
 
@@ -1057,39 +980,7 @@ workflow PROTEIN_DESIGN {
         else {
             filt_seq_pdbs.set { pred_input_pdbs }
         }
-        if (params.pred_method == "af2") {
-
-            pred_input_pdbs
-                .collect()
-                .map { allPdbs -> partitionGpuBatchesByNumRes(allPdbs, params.gpus) }
-                .flatten()
-                .groupTuple()
-                .set { pred_input_tuple }
-
-            RunAF2(pred_input_tuple)
-
-            CompressAF2("af2", RunAF2.out.pdbs_jsons.flatten().collect())
-
-            rebatchTuples(RunAF2.out.pdbs_jsons, 200)
-                .set { af2_tuple }
-
-            FilterAF2(af2_tuple)
-
-            if (params.rfd_mode in ['binder_denovo', 'binder_foldconditioning', 'binder_motifscaffolding', 'binder_partialdiffusion']) {
-                AlignAF2(FilterAF2.out.pdbs.flatten().collect(), pred_input_pdbs.flatten().last())
-                AlignAF2.out.pdbs
-                    .flatten()
-                    .collect()
-                    .set { analysis_input_pdbs }
-            }
-            else {
-                FilterAF2.out.pdbs
-                    .flatten()
-                    .collect()
-                    .set { analysis_input_pdbs }
-            }
-        }
-        else if (params.pred_method == "boltz") {
+        if (params.pred_method == "boltz") {
             PrepBoltz(pred_input_pdbs)
 
             PrepBoltz.out.yamls
@@ -1143,7 +1034,7 @@ workflow PROTEIN_DESIGN {
                 .set { analysis_input_pdbs }
         }
         else {
-            error("Not a valid structure prediction method. Choose from: af2, boltz, rf3, protenix")
+            error("Not a valid structure prediction method. Choose from: boltz, rf3, protenix")
         }
     }
     else if (!params.run_rfd_only && params.diffusion_method != 'boltzgen') {
@@ -1203,9 +1094,7 @@ workflow PROTEIN_DESIGN {
                         ? 'skip_rfd_seq'
                         : params.skip_rfd == true
                             ? 'skip_rfd'
-                            : params.pred_method == 'af2'
-                                ? 'af2_terminal'
-                                : params.pred_method == 'boltz'
+                            : params.pred_method == 'boltz'
                                     ? 'boltz_terminal'
                                     : params.pred_method == 'rf3'
                                         ? 'rf3_terminal'

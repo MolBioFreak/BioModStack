@@ -155,8 +155,9 @@ async def test_frustrampnn_project_identity_is_chosen_before_snapshots(setup_sto
             assert len({row['launch_context_id'] for row in result['children']}) == 2
             from fastapi import BackgroundTasks, HTTPException
             from routers import jobs
+            from services import job_submission
             async def submit():
-                return await jobs.submit_selected_child_jobs(requests_, BackgroundTasks(), core, session,
+                return await job_submission.submit_selected_child_jobs(requests_, BackgroundTasks(), core, session,
                     destination_launch_context_id=dest['launch_context_id'], idempotency_key='frustra',
                     preallocated_attempt_ids=attempts, response_context={})
             if remote:

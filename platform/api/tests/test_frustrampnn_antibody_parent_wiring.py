@@ -5,9 +5,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = REPO_ROOT / "workflows" / "antibody_denovo.nf"
-OPENMM = REPO_ROOT / "modules" / "openmm.nf"
 FRUSTRAMPNN_PARENT = REPO_ROOT / "modules" / "antibody_frustrampnn_parent.nf"
-ANTIBODY_OPENMM = REPO_ROOT / "modules" / "antibody_openmm_refinement.nf"
 
 
 def _workflow() -> str:
@@ -112,31 +110,6 @@ def test_antibody_disabled_branch_is_scheduled_and_emits_typed_status() -> None:
     assert "frustrampnn not_requested" in disabled
     assert "frustrampnn_results = ReportAntibodyFrustraMPNNNotRequested.out.result" in source
     assert "frustrampnn_results = frustrampnn_results" in source
-
-
-def test_antibody_iggm_sequence_change_fails_before_canonical_invocation() -> None:
-    source = _workflow()
-    guard = source.index("antibody_denovo:frustrampnn_stale_post_iggm_structure")
-    iggm = source.index("IGGM_AFFINITY_MATURATION(maturation_input)")
-    canonical = source.index("SchedulerFrustraMPNNParentFanout(")
-    assert guard < iggm < canonical
-    assert "run_affinity_maturation == true && params.run_frustrampnn == true" in source
-
-
-def test_antibody_openmm_preserves_task_coupled_producer_metadata() -> None:
-    source = _workflow()
-    assert "include { AntibodyOpenMMRefinement } from '../modules/antibody_openmm_refinement'" in source
-    assert "AntibodyOpenMMRefinement(validated_structures)" in source
-    openmm_slice = ANTIBODY_OPENMM.read_text(encoding="utf-8")
-    assert "openmm_records" in openmm_slice
-    assert "relaxed_with_batch" in openmm_slice
-    assert ".join(openmm_lineage)" in openmm_slice
-    assert "producer_artifact_key: openmmArtifact" in openmm_slice
-    assert "producer_method: 'openmm'" in openmm_slice
-    assert "transformation_lineage: lineage" in openmm_slice
-    assert ".baseName.replace('_relaxed'" not in openmm_slice
-    module = OPENMM.read_text(encoding="utf-8")
-    assert 'tuple val(batch_id), path("relaxed/*.pdb"), emit: relaxed_with_batch' in module
 
 
 def test_antibody_enabled_results_follow_actual_publisher_outputs() -> None:

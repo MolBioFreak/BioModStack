@@ -36,6 +36,7 @@ process FastqAlign {
 
     # Snapshot and authenticate the reference before alignment.
     ngs_input_snapshot "${reference}" reference.snapshot.fasta ${retainedReference}
+    reference_version_before="\$(stat -Lc '%s:%.9Y:%.9Z' reference.snapshot.fasta)"
     reference_raw_sha256_before="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
     normalized_reference="\$(awk '
       BEGIN { records=0; sequence="" }
@@ -72,7 +73,7 @@ process FastqAlign {
     samtools index aligned.bam
     chmod 0444 aligned.bam aligned.bam.bai
     samtools idxstats aligned.bam > /dev/null 2>>fastq_align.log
-    reference_raw_sha256_after="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
+    reference_raw_sha256_after="\$(ngs_snapshot_sha256_after reference.snapshot.fasta "\${reference_version_before}" "\${reference_raw_sha256_before}")"
     if [[ "\${reference_raw_sha256_before}" != "\${reference_raw_sha256_after}" ]]; then
         echo "ERROR: task-local reference snapshot changed during alignment." >&2
         exit 94

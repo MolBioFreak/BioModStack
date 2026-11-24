@@ -59,8 +59,8 @@ def test_dev_api_launcher_does_not_inherit_container_adapter_routing(tmp_path: P
     home.joinpath(".biomodstack", "env.sh").write_text(
         "export BMS_CORE_RUNTIME_MODE=1\n"
         "export BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18001\n"
-        "export BMS_DATA=/mnt/BioModStack\n"
-        "export BMS_DB_PATH=/mnt/BioModStack/biomodstack.db\n",
+        "export BMS_DATA=/data/bms\n"
+        "export BMS_DB_PATH=/data/bms/biomodstack.db\n",
         encoding="utf-8",
     )
     fake_uv = fake_bin / "uv"
@@ -132,7 +132,7 @@ def test_dev_api_launcher_parses_labeled_micromamba_base_output(tmp_path: Path) 
     fake_micromamba.write_text(
         "#!/bin/sh\n"
         "if [ \"$1\" = info ] && [ \"$2\" = --base ]; then\n"
-        "  printf '\\n base environment : /home/test/micromamba\\n'\n"
+        "  printf '\\n base environment : /home/example/micromamba\\n'\n"
         "  exit 0\n"
         "fi\n"
         "exit 2\n",
@@ -181,7 +181,7 @@ def test_dev_api_launcher_parses_labeled_micromamba_base_output(tmp_path: Path) 
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert capture_path.read_text(encoding="utf-8") == "/home/test/micromamba"
+    assert capture_path.read_text(encoding="utf-8") == "/home/example/micromamba"
 
 
 def test_biomodstack_launchers_isolate_uv_cache_from_shared_user_cache() -> None:

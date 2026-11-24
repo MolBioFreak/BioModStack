@@ -8,6 +8,7 @@ import pytest
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from services import job_submission
 from database import Design, Job, JobArtifact, get_session
 from routers import binder_blind_pose as route
 from services import binder_blind_pose_selected as selected
@@ -34,6 +35,7 @@ async def test_selected_remote_route_review_and_approved_insertion(admission, tm
     from datetime import datetime
     from database import ExecutionTarget
     from routers import jobs, ligandmpnn_interface_context as interface
+    from services import job_requests
     from schemas import JobCreate
     from services import ligandmpnn_interface_publication as publication
     from test_ligandmpnn_interface_context import example
@@ -44,9 +46,10 @@ async def test_selected_remote_route_review_and_approved_insertion(admission, tm
     candidate, _ = example(tmp_path)
     target = tmp_path / 'target.pdb'
     target.write_text(pdb('A', ['ALA', 'GLY']))
-    for owner in (paths, jobs, selected, interface):
+    for owner in (paths, job_submission, job_requests, selected, interface):
         monkeypatch.setattr(owner, 'get_allowed_roots', lambda: {'inputs': tmp_path})
-    for owner in (paths, jobs, selected, route, publication):
+    from services import binder_continuation
+    for owner in (paths, job_submission, binder_continuation, selected, route, publication):
         monkeypatch.setattr(owner, 'get_inputs_dir', lambda: tmp_path)
     monkeypatch.setattr(paths, 'get_results_dir', lambda: tmp_path / 'results')
     parent = Job(id='source', name='source', model_id='proteinmpnn', mode='default',
@@ -220,7 +223,11 @@ async def test_request_leaf_cpu_fixture_attachment_and_readback(source, monkeypa
         (output / 'manifest.json').write_text(json.dumps({'workflow': 'esmfold2', 'sequence_name': key,
                                                            'sample_count': 1, 'samples': [{
             'sample_id': sample, 'cif': sample + '.cif', 'metrics': sample + '.metrics.json'}]}))
-    monkeypatch.setattr('run_binder_blind_pose.subprocess.run', native)
+    def batch(command, check):
+        assert check and command[-2] == '--request-file'
+        for request in json.loads(Path(command[-1]).read_text()):
+            native(request['argv'], check)
+    monkeypatch.setattr('run_binder_blind_pose.subprocess.run', batch)
     output = tmp_path / 'results'
     run(directory / 'selection.json', directory, directory / 'target.pdb', output / 'blind_pose_results',
         model_variant='fast', model_id_or_path='', num_loops=1, num_sampling_steps=25,
@@ -306,7 +313,7 @@ async def test_bc2_route_resolves_only_declared_target(source, monkeypatch):
     async def enqueue(request, background_tasks, session):
         assert request.params['target_pdb'].endswith('target.cif')
         return {'job_id': 'child'}
-    monkeypatch.setattr(jobs, 'create_job', enqueue)
+    monkeypatch.setattr(job_submission, 'submit_job', enqueue)
     body = route.SelectedBlindPoseRequest(source_job_id='source', target_name='on',
         design_ids=[designs[0].id], binder_chains={designs[0].id: ['B']},
         target_chains=['T'], settings=route.BlindPoseSettings(model_variant='fast',
@@ -330,7 +337,7 @@ def test_api_contract_rejects_unrouted_mode_before_queue(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_generic_job_submission_cannot_bypass_selected_design_owner():
-    from routers.jobs import _create_job
+    from services.job_submission import _create_job
     from schemas import JobCreate
     request = JobCreate(name='unowned-blind-pose', model_id='esmfold2',
                         mode='blind_pose', params={})
@@ -358,7 +365,7 @@ async def test_selected_api_builds_exact_scheduler_job(source, monkeypatch):
         assert len(request.params['blind_pose_candidate_pdbs']) == len(designs)
         assert request.params['esmfold2_validation_num_sampling_steps'] == 25
         return {'job_id': 'child'}
-    monkeypatch.setattr(jobs, 'create_job', enqueue)
+    monkeypatch.setattr(job_submission, 'submit_job', enqueue)
     body = route.SelectedBlindPoseRequest(source_job_id='source',
         design_ids=[d.id for d in designs], binder_chains={d.id: ['B'] for d in designs},
         target_chains=['T'], settings=route.BlindPoseSettings(
@@ -398,7 +405,11 @@ async def test_successful_job_finalizes_blind_evidence_without_a_new_design(sour
             'samples': [{'sample_id': sample, 'cif': sample + '.cif',
                          'metrics': sample + '.metrics.json'}]}))
 
-    monkeypatch.setattr('run_binder_blind_pose.subprocess.run', native)
+    def batch(command, check):
+        assert check and command[-2] == '--request-file'
+        for request in json.loads(Path(command[-1]).read_text()):
+            native(request['argv'], check)
+    monkeypatch.setattr('run_binder_blind_pose.subprocess.run', batch)
     output = tmp_path / 'finished'
     run(directory / 'selection.json', directory, directory / 'target.pdb',
         output / 'blind_pose_results', model_variant='fast', model_id_or_path='',

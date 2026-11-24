@@ -43,13 +43,13 @@ def test_migration_v21_persists_and_attests_workflow_setup_contexts(tmp_path: Pa
     experiment_migrations.run_all(db_path)
     connection = sqlite3.connect(db_path)
     try:
-        assert experiment_migrations.LATEST_MIGRATION_VERSION == 23
+        assert experiment_migrations.LATEST_MIGRATION_VERSION == 24
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='workflow_setup_contexts'"
         ).fetchone() == ("workflow_setup_contexts",)
         assert connection.execute(
             "SELECT version, name FROM experiment_schema_migrations ORDER BY version DESC LIMIT 1"
-        ).fetchone() == (23, "family_msa_workflow_setup_routes")
+        ).fetchone() == (24, "editable_submitted_workflow_setups")
         assert experiment_migrations.attest_schema(connection)["ok"] is True
     finally:
         connection.close()
@@ -151,15 +151,14 @@ async def test_native_project_picker_is_independent_of_legacy_cad_publication(
     monkeypatch, tmp_path: Path
 ) -> None:
     rfd3_mode, local_redesign, templates_dir = _de_novo_capabilities()
-    for record in (rfd3_mode, local_redesign):
-        assert record["exposure_state"] == "accepted"
-        assert record["availability"]["state"] == "operational"
-        assert record["workflow_adapter_id"].startswith("bms.core-job.")
-        assert record["allowed_model_modes"]
-        assert record["project_setup_destination"] == "/submit?template=protein_modification_experimental"
-    assert protein_project_capabilities._PARAMETER_SCHEMAS[
-        "protein.de_novo.local_redesign"
-    ]["x-bms-native-editor-draft"] is True
+    assert rfd3_mode["exposure_state"] == "accepted"
+    assert rfd3_mode["availability"]["state"] == "operational"
+    assert rfd3_mode["workflow_adapter_id"].startswith("bms.core-job.")
+    assert rfd3_mode["allowed_model_modes"]
+    assert rfd3_mode["project_setup_destination"] == "/submit?template=protein_modification_experimental"
+    assert local_redesign["exposure_state"] == "integrated_component"
+    assert local_redesign["availability"]["state"] == "operational_as_child"
+    assert local_redesign["launch_mode"] == "scheduler_owned_child"
     baseline_registry = TemplateRegistry(templates_dir)
     monkeypatch.setattr(
         protein_project_capabilities, "get_template_registry", lambda: baseline_registry
@@ -169,7 +168,8 @@ async def test_native_project_picker_is_independent_of_legacy_cad_publication(
         item["capability_id"]
         for item in existing_inventory["capabilities"]
     }
-    assert {"protein.de_novo.local_redesign", "protein.de_novo.rfd3"} <= existing_ids
+    assert "protein.de_novo.rfd3" in existing_ids
+    assert "protein.de_novo.local_redesign" not in existing_ids
     _configure_legacy_protein_cad_catalog(monkeypatch, tmp_path)
 
     inventory = await _project_capability_api()
@@ -179,7 +179,7 @@ async def test_native_project_picker_is_independent_of_legacy_cad_publication(
     assert ready_ids == existing_ids
     assert protein_project_capabilities.protein_capability_record(
         "protein.de_novo.local_redesign"
-    )["project_setup_state"] == "ready"
+    )["project_setup_state"] != "ready"
     for item in inventory["capabilities"]:
         assert set(item) == {
             "capability_id", "label", "state", "adapter_id", "native_owner_id",

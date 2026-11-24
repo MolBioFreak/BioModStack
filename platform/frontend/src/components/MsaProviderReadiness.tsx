@@ -38,7 +38,7 @@ export function MsaProviderReadiness({ provider }: { provider: SavedMsaProvider 
         {!state ? 'Reading provider setup…' : <>
             <p>{selected}: {state.configured ? 'configured (not proof of live acceptance)' : 'not configured'}.
                 Authentication: {state.authentication ?? 'not reported'}; live acceptance: {state.live_acceptance ?? 'not reported'}.</p>
-            {typeof state.credential_configured === 'boolean' && <p>Server credential: {state.credential_configured ? 'configured' : 'missing'}. Credentials are deployment-owned.</p>}
+            {typeof state.credential_configured === 'boolean' && <p>Server credential: {state.credential_configured ? 'configured' : 'missing'}. Keys are set in the MSA hub or by the deployment.</p>}
             {Array.isArray(state.blockers) && state.blockers.filter(blocker => typeof blocker === 'string').map(blocker => <p key={blocker}>{blocker}</p>)}
         </>}
     </div>;

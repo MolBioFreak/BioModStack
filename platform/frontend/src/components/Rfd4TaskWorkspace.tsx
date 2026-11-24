@@ -1,3 +1,4 @@
+import { Rfd4EntryWorkspace, type Rfd4EntryProps } from './Rfd4EntryWorkspace';
 import { useState } from 'react';
 import { Rfd4Regions, Rfd4SelectionSummary, rfd4ConditionName, type Rfd4VisualSelection } from './Rfd4VisualWorkbench';
 import conditionMetadata from '../lib/rfd4ConditionMetadata.json';
@@ -66,7 +67,7 @@ function Conditions({ value, families, visual, onChange, onInspect, advanced }: 
         <h4>Applied conditions</h4>
         {!Object.keys(value).length && <p className="rfd4-empty">No condition overrides applied.</p>}
         {Object.entries(value).flatMap(([name, entries]) => Object.entries(nativeRecord(entries)).flatMap(([val, rows]) => (Array.isArray(rows) ? rows : []).map((row: any, i: number) => <div key={`${name}:${val}:${i}`} className="rfd4-condition-card">
-            <strong>{rfd4ConditionName(name)} · {val}</strong><code>{name}</code><div className="rfd4-condition-query">{row.select}</div>{onInspect && <button type="button" onClick={() => onInspect({ family: name, value: val, rowIndex: i, select: row.select, ...(row.group !== undefined ? { group: row.group } : {}) })}>Inspect {name} {val} row {i + 1}</button>}<details><summary>Edit expression & group</summary><label>Native selection<input aria-label={`${name} ${val} selection ${i + 1}`} value={row.select ?? ''} onChange={e => change({ ...value, [name]: { ...entries, [val]: rows.map((r: any, n: number) => n === i ? { ...r, select: e.target.value } : r) } })} /></label>
+            <strong>{rfd4ConditionName(name)} · {val}</strong><code>{name}</code><div className="rfd4-condition-query font-mono">{row.select}</div>{onInspect && <button type="button" onClick={() => onInspect({ family: name, value: val, rowIndex: i, select: row.select, ...(row.group !== undefined ? { group: row.group } : {}) })}>Inspect {name} {val} row {i + 1}</button>}<details><summary>Edit expression & group</summary><label>Native selection<input aria-label={`${name} ${val} selection ${i + 1}`} value={row.select ?? ''} onChange={e => change({ ...value, [name]: { ...entries, [val]: rows.map((r: any, n: number) => n === i ? { ...r, select: e.target.value } : r) } })} /></label>
             <label>Group<input aria-label={`${name} ${val} group ${i + 1}`} value={row.group ?? ''} onChange={e => change({ ...value, [name]: { ...entries, [val]: rows.map((r: any, n: number) => n === i ? patchNative(r, 'group', e.target.value || undefined) : r) } })} /></label></details>
             <button type="button" onClick={() => { const entriesNext = { ...entries, [val]: rows.filter((_: any, n: number) => n !== i) }; if (!entriesNext[val].length) delete entriesNext[val]; change(Object.keys(entriesNext).length ? { ...value, [name]: entriesNext } : patchNative(value, name, undefined)); }}>Remove {name} {val} row {i + 1}</button>
         </div>)))}
@@ -77,14 +78,14 @@ function Conditions({ value, families, visual, onChange, onInspect, advanced }: 
             {family === 'C_CENTROID' && <fieldset><legend>Native centroid xyz (Å)</legend>{['x', 'y', 'z'].map((axis, index) => <label key={axis}>{axis}<input aria-label={`Centroid ${axis}`} type="number" value={conditionValue.split(',')[index] ?? ''} onChange={e => { const xyz = [0, 1, 2].map(i => conditionValue.split(',')[i] ?? ''); xyz[index] = e.target.value; setConditionValue(xyz.join(',')); }} /></label>)}</fieldset>}
             <label>Selection expression<input aria-label="Selection expression" value={expression} onChange={e => setExpression(e.target.value)} /></label>
             <label>New condition group<input aria-label="New condition group" value={group} onChange={e => setGroup(e.target.value)} /></label></div>
-        {visual && <><p role="status" className="rfd4-condition-query">{visual.issue ?? `Selection from ${visual.slot}`}</p><button type="button" onClick={() => { if (visual.expression !== undefined) setExpression(visual.expression); }}>Use visual selection in new condition</button></>}
+        {visual && <><p role="status" className="rfd4-condition-query font-mono">{visual.issue ?? `Selection from ${visual.slot}`}</p><button type="button" onClick={() => { if (visual.expression !== undefined) setExpression(visual.expression); }}>Use visual selection in new condition</button></>}
         <button type="button" onClick={() => change({ ...value, [family]: { ...nativeRecord(value[family]), [conditionValue]: [...(nativeRecord(value[family])[conditionValue] ?? []), { select: expression, ...(group !== '' ? { group } : {}) }] } })}>Apply native condition</button></details>
         <button type="button" disabled={!undo || JSON.stringify(value) !== JSON.stringify(undo.after)} onClick={() => { if (undo) { onChange(undo.before); setUndo(undefined); } }}>Undo condition edit</button>
     </fieldset>;
 }
 
-export function Rfd4TaskWorkspace({ advanced, request, schema, mode, recipe, onRecipe, onChange, visual, sourceNames, renderNative, renderSource, retainedTasks, sourceChains, onClearSelection, effectiveConfig, onInspectCondition, lengthDrafts, onLengthDraftsChange }: {
-    advanced?: boolean; request: Record<string, any>; schema: Schema; mode: string; recipe?: string; onRecipe: (recipe: string) => void;
+export function Rfd4TaskWorkspace({ entry, advanced, request, schema, mode, recipe, onRecipe, onChange, visual, sourceNames, renderNative, renderSource, retainedTasks, sourceChains, onClearSelection, effectiveConfig, onInspectCondition, lengthDrafts, onLengthDraftsChange }: {
+    entry?: Rfd4EntryProps; advanced?: boolean; request: Record<string, any>; schema: Schema; mode: string; recipe?: string; onRecipe: (recipe: string) => void;
     onChange: (request: Record<string, any>) => void; visual?: Visual; sourceNames: string[];
     renderNative: (key: string, schema: Schema) => React.ReactNode;
     renderSource?: (label: string, value: string, onChange: (slot: string) => void) => React.ReactNode;
@@ -116,8 +117,8 @@ export function Rfd4TaskWorkspace({ advanced, request, schema, mode, recipe, onR
         const flattened = chains.flat() as string[];
         return new Set(flattened).size === flattened.length ? visual : undefined;
     };
-    return <div data-rfd4-task-workspace className="space-y-4 min-w-0">
-        {mode !== 'evaluate' && <label>RFD4 task<select aria-label="RFD4 task" value={recipe ?? ''} onChange={e => onRecipe(e.target.value)}><option value="">{Object.keys(request).length ? 'Saved task / choose another' : 'Choose task'}</option>{RFD4_RECIPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{retainedTasks?.map(({ key, label }) => <option key={key} value={`legacy:${key}`}>Restore retained {label}</option>)}</select></label>}
+    const picker = (choose: () => void) => mode !== 'evaluate' && <label>RFD4 task<select aria-label="RFD4 task" value={recipe ?? ''} onChange={e => { onRecipe(e.target.value); choose(); }}><option value="">{Object.keys(request).length ? 'Saved task / choose another' : 'Choose task'}</option>{RFD4_RECIPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{retainedTasks?.map(({ key, label }) => <option key={key} value={`legacy:${key}`}>Restore retained {label}</option>)}</select></label>;
+    const inputs = <>
         {mode === 'evaluate' && <h3>Evaluate annotated outputs</h3>}
         {input.kind === 'condition_spec' && <p>Choose a source, select residues, then apply a condition.</p>}
         {input.kind === 'unconditional' && <fieldset><legend>Generated chains</legend><p className="text-xs">New chains is source-free. To edit a document in AtomWorks, choose a context, motif or annotated task.</p>
@@ -160,6 +161,9 @@ export function Rfd4TaskWorkspace({ advanced, request, schema, mode, recipe, onR
                 </details>
                 <button type="button" onClick={() => setInput({ ...input, examples: examples.filter((_: any, n: number) => n !== i) })}>Remove example {i + 1}</button>
             </fieldset>)}<button type="button" onClick={() => setInput({ ...input, examples: [...examples, { name: RFD4_DEFAULT_EXAMPLE_NAME, sources: [] }] })}>Add conditioned example</button></>}
+    </>;
+    return <div data-rfd4-task-workspace className="space-y-4 min-w-0">
+        {entry ? <Rfd4EntryWorkspace entry={entry} picker={picker}>{inputs}</Rfd4EntryWorkspace> : <>{picker(() => {})}{inputs}</>}
         <datalist id="rfd4-source-names">{sourceNames.map(name => <option key={name} value={name} />)}</datalist>
         {mode !== 'evaluate' && <fieldset><legend>Sampling amount</legend><p>Designs per input are replicates; batch size is parallel sampling, not final beam count.</p><div className="flex flex-wrap gap-3">{[['num_replicates', 'Designs per input'], ['batch_size', 'Batch size'], ['seed', 'Seed']].map(([key, label]) => <NativeNumber key={key} label={label} value={settings[key]} inheritedLabel={effectiveConfig && Object.hasOwn(effectiveConfig, key) ? 'Resolved native value' : 'Schema reference'} inherited={effectiveConfig && Object.hasOwn(effectiveConfig, key) ? effectiveConfig[key] : schema.properties?.settings?.properties?.[key]?.default} nullable={key === 'seed'} onChange={v => setSetting(key, v)} />)}</div></fieldset>}
         {recipe === 'partial' && <fieldset><legend>Partial diffusion</legend><p>Native trajectory-tail fraction has domain (0,1], not percent. Trajectory-tail fraction counts the tail of integration steps; backbone and latent partial times are separate native controls. No fraction is chosen automatically.</p>{['partial_trajectory_fraction_steps', 'partial_t_backbone', 'partial_t_latent'].map(key => <NativeNumber key={key} label={key} maximum={key === 'partial_trajectory_fraction_steps' ? 1 : undefined} help={key === 'partial_trajectory_fraction_steps' ? 'Native fraction (0,1]; exact precision retained, no default partial override.' : 'Independent native time; not a percentage.'} value={settings.generation?.args?.[key]} inherited={effectiveConfig?.generation?.args?.[key]} onChange={v => setSetting('generation', { ...nativeRecord(settings.generation), args: patchNative(nativeRecord(settings.generation?.args), key, v) })} />)}</fieldset>}

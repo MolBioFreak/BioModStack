@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -119,9 +120,9 @@ def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
     param_name: str,
     payload: str,
 ) -> None:
-    nextflow = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
-    if not (nextflow.is_file() and os.access(nextflow, os.X_OK)):
-        pytest.skip(f"real Nextflow launcher unavailable: {nextflow}")
+    jar = os.environ.get("BMS_TEST_NEXTFLOW_JAR")
+    if not jar:
+        pytest.skip("BMS_TEST_NEXTFLOW_JAR required for real offline Nextflow")
 
     pod5_dir = tmp_path / "pod5"
     pod5_dir.mkdir()
@@ -131,7 +132,7 @@ def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
     harness.write_text(
         "nextflow.enable.dsl=2\n"
         f"include {{ DoradoPreflight }} from '{(ROOT / 'modules/ngs/dorado_basecall.nf').as_posix()}'\n"
-        f"params.pod5_dir=null; params.out_dir=null; params.code_root='{ROOT.as_posix()}'; params.weights_root='/mnt/BioModStack/models'; params.container_dir='/home/dalab/biomodstack/biomodstack/apptainer'; params.pod5_python='{Path(sys.executable).as_posix()}'\n"
+        f"params.pod5_dir=null; params.out_dir=null; params.code_root='{ROOT.as_posix()}'; params.weights_root='{(tmp_path / 'models').as_posix()}'; params.container_dir='{(tmp_path / 'apptainer').as_posix()}'; params.pod5_python='{Path(sys.executable).as_posix()}'\n"
         "workflow { DoradoPreflight(Channel.of(file(params.pod5_dir))) }\n",
         encoding="utf-8",
     )
@@ -144,12 +145,12 @@ def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
         encoding="utf-8",
     )
     env = os.environ.copy()
-    env["NXF_OFFLINE"] = "true"
+    env.update(NXF_OFFLINE="true", NXF_DISABLE_CHECK_LATEST="true", NXF_HOME=str(tmp_path / "nxf-home"))
     for key in ("SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"):
         env.pop(key, None)
     completed = subprocess.run(
         [
-            str(nextflow),
+            "java", "-jar", jar,
             "run",
             str(harness),
             "-c",
@@ -161,15 +162,15 @@ def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
             "--code_root",
             str(ROOT),
             "--weights_root",
-            "/mnt/BioModStack/models",
+            str(tmp_path / "models"),
             "--container_dir",
-            "/home/dalab/biomodstack/biomodstack/apptainer",
+            str(tmp_path / "apptainer"),
             "--dorado_lock_manifest",
             str(ROOT / "config/ngs/dorado_v1.3.1.lock.json"),
             "--dorado_model_root",
-            "/mnt/BioModStack/models/dorado/1.3.1",
+            str(tmp_path / "models" / "dorado" / "1.3.1"),
             "--dorado_runtime_sif",
-            "/home/dalab/biomodstack/biomodstack/apptainer/dorado.sif",
+            str(tmp_path / "apptainer" / "dorado.sif"),
             "--pod5_python",
             sys.executable,
             f"--{param_name}",
@@ -305,12 +306,14 @@ def test_generic_submit_rejects_server_controlled_provenance_and_runtime_roots(
         )
 
 
-def test_verification_workflow_requires_expected_reference() -> None:
-    with pytest.raises(ValueError, match="requires reference_fasta"):
-        _job_create_for_ont_submit(
-            "wf_clone_validation",
-            _request({"fastq_path": "/tmp/reads.fastq"}),
-        )
+def test_verification_workflow_runs_without_an_expected_reference() -> None:
+    # No expected sequence means assemble and annotate only; it is not refused.
+    job_data = _job_create_for_ont_submit(
+        "wf_clone_validation",
+        _request({"fastq_path": "/tmp/reads.fastq"}),
+    )
+    assert not job_data.params.get("reference_fasta")
+    assert job_data.params.get("fastq_path") == "/tmp/reads.fastq"
 
 
 def test_fastq_submission_cannot_claim_modkit_evidence() -> None:
@@ -434,7 +437,7 @@ def test_bam_prepare_runtime_handles_output_and_arbitrary_input_basenames(
     input_basename: str,
 ) -> None:
     nextflow = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
-    samtools = Path(os.environ.get("BMS_SAMTOOLS_BIN", "/home/dalab/micromamba/bin/samtools"))
+    samtools = Path(os.environ.get("BMS_SAMTOOLS_BIN") or shutil.which("samtools") or "samtools")
     if not (nextflow.is_file() and os.access(nextflow, os.X_OK)):
         pytest.skip(f"real Nextflow launcher unavailable: {nextflow}")
     if not (samtools.is_file() and os.access(samtools, os.X_OK)):
@@ -534,7 +537,7 @@ def test_bam_prepare_runtime_handles_output_and_arbitrary_input_basenames(
 
 def test_nextflow_runtime_rejects_wrong_reference_and_untagged_modkit_bam(tmp_path: Path) -> None:
     nextflow_bin = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
-    samtools_bin = Path(os.environ.get("BMS_SAMTOOLS_BIN", "/home/dalab/micromamba/bin/samtools"))
+    samtools_bin = Path(os.environ.get("BMS_SAMTOOLS_BIN") or shutil.which("samtools") or "samtools")
     if not nextflow_bin.is_file() or not samtools_bin.is_file():
         pytest.skip("Nextflow runtime gate requires executable Nextflow and samtools")
 
@@ -706,7 +709,7 @@ def test_nextflow_runtime_rejects_wrong_reference_and_untagged_modkit_bam(tmp_pa
 
 def test_fastq_runtime_fails_closed_without_fake_consensus_or_manifest(tmp_path: Path) -> None:
     nextflow = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
-    samtools = Path(os.environ.get("BMS_SAMTOOLS_BIN", "/home/dalab/micromamba/bin/samtools"))
+    samtools = Path(os.environ.get("BMS_SAMTOOLS_BIN") or shutil.which("samtools") or "samtools")
     if not (nextflow.is_file() and os.access(nextflow, os.X_OK)):
         pytest.skip(f"real Nextflow launcher unavailable: {nextflow}")
     if not (samtools.is_file() and os.access(samtools, os.X_OK)):

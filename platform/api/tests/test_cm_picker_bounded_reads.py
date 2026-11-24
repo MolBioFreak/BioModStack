@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from database import ConformationalMappingSource, get_session
 from routers import conformational_mapping as cm
+from services.conformational_mapping import submission
 
 
 @pytest.mark.asyncio
@@ -46,12 +47,12 @@ async def test_picker_summary_and_exact_detail(tmp_path, monkeypatch, count):
         ensure_calls.append(1)
         return await session.get(ConformationalMappingSource, 'zz-managed')
     monkeypatch.setattr(cm, '_ensure_managed_confornets_checkpoint', ensure)
-    monkeypatch.setattr(cm, '_principal', lambda request: 'alice')
+    monkeypatch.setattr(submission, '_principal', lambda request: 'alice')
     authority_reads = []
     def authority(row):
         authority_reads.append(row.source_id)
         return {'source_id': row.source_id, 'payload': {'scientific': 'y' * 8192}}
-    monkeypatch.setattr(cm, '_read_source_authority', authority)
+    monkeypatch.setattr(submission, '_read_source_authority', authority)
     statements = []
     parameters_seen = []
     event.listen(engine.sync_engine, 'before_cursor_execute',

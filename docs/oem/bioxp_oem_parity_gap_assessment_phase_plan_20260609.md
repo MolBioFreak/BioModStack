@@ -6,7 +6,7 @@
 
 **Architecture:** Robot-local FastAPI/runtime remains the single hardware owner. BMS remains a thin proxy/operator surface. Gaps are closed in this order: source truth completeness → config truth → hardware readback truth → no-motion hardware-mutating setup → single-step supervised live motion → wrappers/runtime → BMS cockpit → evidence signoff.
 
-**Tech Stack:** Python/FastAPI robot repo `/home/molbiofreak/bioxp_re`, decompiled OEM C# source under `/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup`, BMS repo `/home/dalab/biomodstack/biomodstack`, pytest, JSON/JSONL artifacts, robot-local route verification, BMS read-only/proxy verification.
+**Tech Stack:** Python/FastAPI robot repo `<robot-repo>`, decompiled OEM C# source under `OEM-source/BioXP_SSD_Backup`, BMS repo `<repo-root>`, pytest, JSON/JSONL artifacts, robot-local route verification, BMS read-only/proxy verification.
 
 ---
 

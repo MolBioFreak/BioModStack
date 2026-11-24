@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
+import shutil
 from typing import Any, Callable, Iterable
 
 from .ont_start_receipts import claim_start, finish_start
@@ -368,6 +369,29 @@ def _sequencing_kits(connection: Any, product_code: str | None) -> list[str]:
     return sorted(kits)
 
 
+def _basecall_model_catalog(config: Any) -> list[dict[str, Any]]:
+    """The current simplex models of one basecall configuration, each with its modification models."""
+    catalog: list[dict[str, Any]] = []
+    for simplex in _safe_get(config, "simplex_models", []) or []:
+        name = _string_or_none(_safe_get(simplex, "name"))
+        variant = (_string_or_none(_safe_get(simplex, "variant")) or "").casefold()
+        if not name or not variant or _safe_get(simplex, "outdated", False) is True:
+            continue
+        if any(item["variant"] == variant for item in catalog):
+            continue
+        modified = [
+            {"name": str(_safe_get(model, "name")), "variant": str(_safe_get(model, "variant")),
+             "canonical_base": _string_or_none(_safe_get(model, "canonical_base")),
+             "context": _string_or_none(_safe_get(model, "context"))}
+            for model in _safe_get(simplex, "modified_models", []) or []
+            if _string_or_none(_safe_get(model, "name")) and _string_or_none(_safe_get(model, "variant"))
+            and _safe_get(model, "outdated", False) is not True
+        ]
+        catalog.append({"name": name, "variant": variant,
+                        "min_qscore": _safe_get(simplex, "default_q_score_cutoff"), "modified_models": modified})
+    return catalog
+
+
 def protocol_options(
     position: str,
     *,
@@ -403,11 +427,21 @@ def protocol_options(
                     if protocol_id and basecalling_enabled:
                         sample_rate = (device.get("flow_cell") or {}).get("sample_rate")
                         configs = manager.find_basecall_configurations(product, kit, sample_rate)
+                        if not configs:
+                            # An idle device reports the rate it last ran at; the protocol sets its own.
+                            # Use the rate the kit's basecall configuration names when there is exactly one.
+                            configs = manager.find_basecall_configurations(product, kit)
+                            rates = {_safe_get(config, "sampling_rate") for config in configs}
+                            if len(rates) == 1:
+                                sample_rate = rates.pop()
                         _config, simplex = tools.find_default_simplex_model(connection, kit, sample_rate, configs)
                         basecalling_options = {
                             "simplex_models": [simplex.name],
                             "min_qscore": _safe_get(simplex, "default_q_score_cutoff"),
                         }
+                        models = _basecall_model_catalog(_config)
+                        if models:
+                            basecalling_options["models"] = models
             except Exception as exc:  # noqa: BLE001 - grpc/minknow failures vary by version
                 lookup_error = str(exc)[:500]
         result = build_protocol_options_preflight(
@@ -466,25 +500,44 @@ def start_protocol(position_name: str, payload: dict[str, Any], *,
         return rejected(409, "A protocol is already running on this position")
     tools = _protocols_module()
     basecalling = None
+    modified_models: list[str] | None = None
     if payload.get("basecalling_enabled") is True:
         simplex_model = _string_or_none(payload.get("simplex_model"))
         if not simplex_model:
             return rejected(400, "Basecalling needs a simplex model")
+        # A barcoding kit is demultiplexed by MinKNOW as the run is basecalled.
+        kits = [str(kit) for kit in payload.get("barcoding_kits") or [] if str(kit).strip()]
+        barcoding = tools.BarcodingArgs(kits=kits, trim_barcodes=False,
+                                        barcodes_both_ends=payload.get("barcodes_both_ends") is True) if kits else None
+        modified_models = [str(name) for name in payload.get("modified_models") or [] if str(name).strip()] or None
         basecalling = tools.BasecallingArgs(
-            simplex_model=simplex_model, modified_models=None, stereo_model=None,
-            barcoding=None, alignment=None, min_qscore=payload.get("min_qscore"),
+            simplex_model=simplex_model, modified_models=modified_models, stereo_model=None,
+            barcoding=barcoding, alignment=None, min_qscore=payload.get("min_qscore"),
         )
+    read_until = None
+    if payload.get("adaptive_sampling"):
+        try:
+            read_until = _adaptive_sampling_args(tools, request_id, payload["adaptive_sampling"])
+        except (ValueError, OSError) as exc:
+            return rejected(400, f"Adaptive sampling could not be set up: {exc}"[:500])
     output = tools.OutputArgs(reads_per_file=None, batch_duration=None)
+    # Sample names per barcode, so MinKNOW labels its own output with them.
+    barcode_info = [tools.BarcodeUserData(barcode_name=str(item["barcode"]), alias=str(item["alias"]))
+                    for item in payload.get("barcode_samples") or []] or None
     try:
         run_id = tools.start_protocol(
             connection,
             identifier=protocol_id,
             sample_id=_string_or_none(payload.get("sample_id")) or "",
             experiment_group=_string_or_none(payload.get("experiment_group")) or "",
-            barcode_info=None,
+            barcode_info=barcode_info,
             basecalling=basecalling,
             pod5_arguments=output,
             fastq_arguments=output if basecalling else None,
+            # Modification calls travel in BAM tags, so a run that calls them also writes BAM.
+            **({"bam_arguments": output} if modified_models else {}),
+            # MinKNOW runs adaptive sampling itself; BMS only hands it the mode and files.
+            **({"read_until": read_until} if read_until is not None else {}),
             experiment_duration=float(run_hours),
         )
     except Exception as exc:  # noqa: BLE001
@@ -768,6 +821,348 @@ def _run_info(position_name: str, minknow_run_id: str) -> dict[str, Any] | None:
         "output_path": _string_or_none(_safe_get(info, "output_path")),
         "acquisition_id": acquisitions[-1] if acquisitions else None,
     }
+
+
+_YIELD_FIELDS = (
+    "read_count", "basecalled_pass_read_count", "basecalled_fail_read_count",
+    "basecalled_pass_bases", "basecalled_fail_bases", "estimated_selected_bases",
+)
+_SEQUENCING_STATES = frozenset({"strand", "adapter"})
+_OPEN_PORE_STATES = frozenset({"pore"})
+
+
+def _yield_counts(summary: Any) -> dict[str, int]:
+    return {field: int(_safe_get(summary, field, 0) or 0) for field in _YIELD_FIELDS}
+
+
+def _stream_deadline(error: Exception) -> bool:
+    code = getattr(error, "code", None)
+    return getattr(code() if callable(code) else None, "name", "") in {"DEADLINE_EXCEEDED", "CANCELLED"}
+
+
+def _first_stream_messages(stream: Any, *, limit: int = 64, errors: list[Exception] | None = None) -> list[Any]:
+    """Messages MinKNOW sends before a live stream goes quiet; the deadline ending the wait is expected."""
+    messages: list[Any] = []
+    try:
+        for message in stream:
+            messages.append(message)
+            if len(messages) >= limit:
+                break
+    except Exception as error:  # noqa: BLE001 - a live acquisition keeps the stream open until the timeout
+        if errors is not None and not _stream_deadline(error):
+            errors.append(error)
+    finally:
+        cancel = getattr(stream, "cancel", None)
+        if callable(cancel):
+            cancel()
+    return messages
+
+
+def _acquisition_barcodes(connection: Any, acquisition_id: str, statistics: Any) -> dict[str, dict[str, Any]]:
+    """Latest per-barcode output of one acquisition, keyed by barcode name."""
+    stream = connection.statistics.stream_acquisition_output(
+        acquisition_run_id=acquisition_id, split=statistics.AcquisitionOutputSplit(barcode_name=True), _timeout=3.0)
+    barcodes: dict[str, dict[str, Any]] = {}
+    errors: list[Exception] = []
+    messages = _first_stream_messages(stream, errors=errors)
+    if errors and not messages:
+        raise errors[0]
+    for message in messages:
+        for group in _safe_get(message, "snapshots", []) or []:
+            keys = list(_safe_get(group, "filtering", []) or [])
+            name = _string_or_none(_safe_get(keys[0], "barcode_name")) if keys else None
+            snapshots = list(_safe_get(group, "snapshots", []) or [])
+            if not name or not snapshots:
+                continue
+            latest = max(snapshots, key=lambda item: int(_safe_get(item, "seconds", 0) or 0))
+            seconds = int(_safe_get(latest, "seconds", 0) or 0)
+            if name in barcodes and barcodes[name]["seconds"] > seconds:
+                continue
+            barcodes[name] = {"barcode": name, "alias": _string_or_none(_safe_get(keys[0], "barcode_alias")),
+                              "seconds": seconds, **_yield_counts(_safe_get(latest, "yield_summary"))}
+    return barcodes
+
+
+def _acquisition_channels(connection: Any, acquisition_id: str, statistics: Any) -> dict[str, Any] | None:
+    """Share of channel time sequencing, open and otherwise in the latest full minute of one acquisition."""
+    stream = connection.statistics.stream_duty_time(
+        acquisition_run_id=acquisition_id, data_selection=statistics.DataSelection(step=60), _timeout=3.0)
+    messages = _first_stream_messages(stream, limit=1)
+    if not messages:
+        return None
+    ranges = list(_safe_get(messages[0], "bucket_ranges", []) or [])
+    states = {str(name): list(_safe_get(data, "state_times", []) or [])
+              for name, data in dict(_safe_get(messages[0], "channel_states", {}) or {}).items()}
+    # The newest bucket is still filling, so the one before it is the latest full minute.
+    index = len(ranges) - 2 if len(ranges) > 1 else len(ranges) - 1
+    if index < 0:
+        return None
+    times = {name: int(values[index]) for name, values in states.items() if len(values) > index}
+    total = sum(times.values())
+    if total <= 0:
+        return None
+
+    def share(names: frozenset[str]) -> float:
+        return round(sum(times.get(name, 0) for name in names) / total, 4)
+
+    return {
+        "minute_start_seconds": int(_safe_get(ranges[index], "start", 0) or 0),
+        "sequencing_fraction": share(_SEQUENCING_STATES),
+        "open_pore_fraction": share(_OPEN_PORE_STATES),
+        "other_fraction": round(1 - share(_SEQUENCING_STATES | _OPEN_PORE_STATES), 4),
+    }
+
+
+_RECOVERING_STATES = frozenset({"unavailable", "unblocking", "active_feedback"})
+_ACTIVITY_GROUPS = ("sequencing", "pore", "recovering", "inactive", "unclassified")
+_CHART_POINTS = 240
+
+
+def _activity_group(name: str) -> str:
+    if name in _SEQUENCING_STATES:
+        return "sequencing"
+    if name in _OPEN_PORE_STATES:
+        return "pore"
+    if name in _RECOVERING_STATES:
+        return "recovering"
+    if name.startswith(("unclassified", "pending")):
+        return "unclassified"
+    return "inactive"
+
+
+def _chart_step(latest: dict[str, Any]) -> int:
+    """Seconds per graph point: one minute, widened so a long run stays near 120 points."""
+    import time  # noqa: PLC0415
+    started = int(latest.get("started_at") or 0)
+    ended = int(latest.get("ended_at") or 0) or int(time.time())
+    minutes = max(1, (ended - started) // 60) if started else 1
+    return 60 * max(1, -(-minutes // 120))
+
+
+def _pore_activity(connection: Any, acquisition_id: str, statistics: Any, step: int) -> list[dict[str, Any]]:
+    """Share of channel time per state group for each time bucket, as MinKNOW's pore activity plot."""
+    stream = connection.statistics.stream_duty_time(
+        acquisition_run_id=acquisition_id, data_selection=statistics.DataSelection(step=step), _timeout=3.0)
+    messages = _first_stream_messages(stream, limit=1)
+    if not messages:
+        return []
+    ranges = list(_safe_get(messages[0], "bucket_ranges", []) or [])
+    states = {str(name): list(_safe_get(data, "state_times", []) or [])
+              for name, data in dict(_safe_get(messages[0], "channel_states", {}) or {}).items()}
+    rows: list[dict[str, Any]] = []
+    for index, bucket in enumerate(ranges):
+        groups = dict.fromkeys(_ACTIVITY_GROUPS, 0)
+        for name, values in states.items():
+            if len(values) > index:
+                groups[_activity_group(name)] += int(values[index])
+        total = sum(groups.values())
+        if total > 0:
+            rows.append({"start_seconds": int(_safe_get(bucket, "start", 0) or 0),
+                         **{group: round(value / total, 4) for group, value in groups.items()}})
+    return rows[-_CHART_POINTS:]
+
+
+def _cumulative_output(connection: Any, acquisition_id: str, statistics: Any, step: int) -> list[dict[str, Any]]:
+    """Reads and bases so far at each time point, for the cumulative output plot."""
+    stream = connection.statistics.stream_acquisition_output(
+        acquisition_run_id=acquisition_id, data_selection=statistics.DataSelection(step=step), _timeout=3.0)
+    points: dict[int, dict[str, Any]] = {}
+    for message in _first_stream_messages(stream):
+        for group in _safe_get(message, "snapshots", []) or []:
+            for snapshot in _safe_get(group, "snapshots", []) or []:
+                seconds = int(_safe_get(snapshot, "seconds", 0) or 0)
+                points[seconds] = {"seconds": seconds, **_yield_counts(_safe_get(snapshot, "yield_summary"))}
+    return [points[key] for key in sorted(points)][-_CHART_POINTS:]
+
+
+def _read_lengths(connection: Any, acquisition_id: str, statistics: Any) -> dict[str, Any] | None:
+    """Estimated bases per read-length bin with the N50, trimmed of the far tail and at most 80 bars."""
+    stream = connection.statistics.stream_read_length_histogram(
+        acquisition_run_id=acquisition_id, read_length_type=statistics.EstimatedBases,
+        bucket_value_type=statistics.ReadLengths, _timeout=3.0)
+    messages = _first_stream_messages(stream, limit=1)
+    data = list(_safe_get(messages[0], "histogram_data", []) or []) if messages else []
+    if not data:
+        return None
+    ranges = list(_safe_get(messages[0], "bucket_ranges", []) or [])
+    values = [int(value) for value in _safe_get(data[0], "bucket_values", []) or []][:len(ranges)]
+    total = sum(values)
+    if total <= 0:
+        return None
+    running, cut = 0, len(values)
+    for index, value in enumerate(values):
+        running += value
+        if running >= 0.995 * total:
+            cut = index + 1
+            break
+    size = max(1, -(-cut // 80))
+    rejected = _rejected_lengths(connection, acquisition_id, statistics, ranges, len(values))
+    buckets = []
+    for start in range(0, cut, size):
+        end = min(start + size, cut)
+        bucket = {"start": int(_safe_get(ranges[start], "start", 0) or 0),
+                  "end": int(_safe_get(ranges[end - 1], "end", 0) or 0), "value": sum(values[start:end])}
+        if rejected is not None:
+            bucket["rejected"] = sum(rejected[start:end])
+        buckets.append(bucket)
+    return {"n50": float(_safe_get(data[0], "n50", 0) or 0), "buckets": buckets}
+
+
+def _acquisition_charts(connection: Any, latest: dict[str, Any], statistics: Any) -> dict[str, Any]:
+    """Series for the run graphs. Each is read on its own, so one missing series leaves the others."""
+    from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+    acquisition_id, step = latest["acquisition_id"], _chart_step(latest)
+
+    def attempt(read: Any, default: Any) -> Any:
+        try:
+            return read()
+        except Exception:  # noqa: BLE001 - a series MinKNOW cannot give yet shows as empty
+            return default
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        activity = pool.submit(attempt, lambda: _pore_activity(connection, acquisition_id, statistics, step), [])
+        cumulative = pool.submit(attempt, lambda: _cumulative_output(connection, acquisition_id, statistics, step), [])
+        lengths = pool.submit(attempt, lambda: _read_lengths(connection, acquisition_id, statistics), None)
+        return {"pore_activity": activity.result(), "cumulative": cumulative.result(), "read_lengths": lengths.result()}
+
+
+_ADAPTIVE_MODES = frozenset({"enrich", "deplete", "barcode_balance"})
+_ADAPTIVE_REJECTION_REASON = 7  # ReadEndReason.DataServiceUnblockMuxChange: ejected by adaptive sampling
+
+
+def _adaptive_sampling_dir() -> Path:
+    """Where MinKNOW, which cannot read a home directory, is given the reference and target files."""
+    return Path(os.environ.get("BMS_ONT_ADAPTIVE_SAMPLING_DIR") or "/var/lib/minknow/data/bms_adaptive_sampling")
+
+
+def _adaptive_sampling_args(tools: Any, request_id: str, adaptive: Any) -> Any:
+    """MinKNOW's own adaptive sampling arguments, with the files copied to where MinKNOW can read them."""
+    mode = str((adaptive or {}).get("mode") or "") if isinstance(adaptive, dict) else ""
+    if mode not in _ADAPTIVE_MODES:
+        raise ValueError("adaptive sampling mode must be enrich, deplete or barcode_balance")
+    reference = bed = None
+    if mode != "barcode_balance":
+        source = _string_or_none(adaptive.get("reference_path"))
+        if not source:
+            raise ValueError("enrich and deplete need a reference FASTA")
+        folder = _adaptive_sampling_dir() / request_id
+        folder.mkdir(parents=True, exist_ok=True)
+        folder.chmod(0o755)
+        suffix = Path(source).suffix.lower()
+        reference = folder / f"reference{suffix if suffix in {'.fasta', '.fa', '.fna', '.mmi'} else '.fasta'}"
+        shutil.copyfile(source, reference)
+        reference.chmod(0o644)
+        bed_source = _string_or_none(adaptive.get("bed_path"))
+        if bed_source:
+            bed = folder / "targets.bed"
+            shutil.copyfile(bed_source, bed)
+            bed.chmod(0o644)
+    return tools.ReadUntilArgs(filter_type=mode, reference_files=[str(reference)] if reference else None,
+                               bed_file=str(bed) if bed else None, first_channel=None, last_channel=None)
+
+
+def _rejected_lengths(connection: Any, acquisition_id: str, statistics: Any, ranges: list[Any], count: int) -> list[int] | None:
+    """Bases per read-length bin from strands adaptive sampling ejected, when MinKNOW gives them on the same bins."""
+    try:
+        stream = connection.statistics.stream_read_length_histogram(
+            acquisition_run_id=acquisition_id, read_length_type=statistics.EstimatedBases,
+            bucket_value_type=statistics.ReadLengths,
+            split=statistics.ReadLengthHistogramSplit(read_end_reason=True), _timeout=3.0)
+        messages = _first_stream_messages(stream, limit=1)
+    except Exception:  # noqa: BLE001 - the plain histogram stays useful without the split
+        return None
+    if not messages:
+        return None
+
+    def edges(items: list[Any]) -> list[tuple[int, int]]:
+        return [(int(_safe_get(item, "start", 0) or 0), int(_safe_get(item, "end", 0) or 0)) for item in items]
+
+    if edges(list(_safe_get(messages[0], "bucket_ranges", []) or [])) != edges(ranges):
+        return None
+    for data in _safe_get(messages[0], "histogram_data", []) or []:
+        keys = list(_safe_get(data, "filtering", []) or [])
+        if keys and _safe_get(keys[0], "read_end_reason") == _ADAPTIVE_REJECTION_REASON:
+            values = [int(value) for value in _safe_get(data, "bucket_values", []) or []][:count]
+            return values + [0] * (count - len(values))
+    return None
+
+
+def _statistics_module():
+    from minknow_api import statistics_pb2  # noqa: PLC0415 - only present in the MinKNOW runtime
+    return statistics_pb2
+
+
+def run_live_stats(minknow_run_id: str) -> dict[str, Any]:
+    """Read-only live numbers for one run: reads, basecalled yield, per-barcode output and channel use."""
+    requested = str(minknow_run_id or "").strip()
+    result: dict[str, Any] = {"minknow_run_id": requested, "available": False, "fake_or_demo_devices": False}
+    status = discover_status()
+    if not requested or status.get("implementation_status") != MINKNOW_STATUS_CONFIGURED:
+        return result
+    statistics = _statistics_module()
+    for device in status.get("live_devices") or []:
+        position_name = _string_or_none(device.get("position"))
+        if not position_name:
+            continue
+        try:
+            _manager, connection = _connect_position(position_name)
+            info = connection.protocol.get_run_info(run_id=requested)
+        except Exception:  # noqa: BLE001 - unknown run ids and offline positions both raise
+            continue
+        if _string_or_none(_safe_get(info, "run_id")) != requested:
+            continue
+        acquisition_ids = [str(item) for item in (_safe_get(info, "acquisition_run_ids", []) or [])]
+        totals = dict.fromkeys(_YIELD_FIELDS, 0)
+        barcodes: dict[str, dict[str, Any]] = {}
+        latest: dict[str, Any] | None = None
+        barcodes_available = True
+        for acquisition_id in acquisition_ids:
+            try:
+                acquisition = connection.acquisition.get_acquisition_info(run_id=acquisition_id)
+            except Exception:  # noqa: BLE001
+                continue
+            summary = _safe_get(acquisition, "yield_summary")
+            counts = _yield_counts(summary)
+            for field in _YIELD_FIELDS:
+                totals[field] += counts[field]
+            config = _safe_get(acquisition, "config_summary")
+            started = int(_safe_get(_safe_get(acquisition, "start_time"), "seconds", 0) or 0)
+            ended = int(_safe_get(_safe_get(acquisition, "end_time"), "seconds", 0) or 0)
+            latest = {"acquisition_id": acquisition_id, "started_at": started or None, "ended_at": ended or None,
+                      "basecalling_enabled": bool(_safe_get(config, "basecalling_enabled", False)),
+                      "channel_count": int(_safe_get(config, "channel_count", 0) or 0) or None,
+                      "fraction_basecalled": float(_safe_get(summary, "fraction_basecalled", 0) or 0),
+                      "fraction_skipped": float(_safe_get(summary, "fraction_skipped", 0) or 0)}
+            try:
+                for name, item in _acquisition_barcodes(connection, acquisition_id, statistics).items():
+                    seen = barcodes.setdefault(name, {"barcode": name, "alias": item["alias"], **dict.fromkeys(_YIELD_FIELDS, 0)})
+                    seen["alias"] = seen["alias"] or item["alias"]
+                    for field in _YIELD_FIELDS:
+                        seen[field] += item[field]
+            except Exception:  # noqa: BLE001 - totals stay useful when the per-barcode stream is unavailable
+                barcodes_available = False
+        channels = None
+        if latest is not None:
+            try:
+                channels = _acquisition_channels(connection, latest["acquisition_id"], statistics)
+            except Exception:  # noqa: BLE001
+                channels = None
+        charts = _acquisition_charts(connection, latest, statistics) if latest is not None else {}
+        raw_state = _safe_get(info, "state")
+        result.update({
+            "available": latest is not None,
+            "position": position_name,
+            "status": _protocol_state_to_status(_enum_name(info, "state", raw_state) or _string_or_none(raw_state) or ""),
+            "acquisition_count": len(acquisition_ids),
+            "latest_acquisition": latest,
+            "totals": totals,
+            "barcodes": sorted(barcodes.values(), key=lambda item: item["barcode"]),
+            "barcodes_available": barcodes_available,
+            "channels": channels,
+            "charts": charts,
+        })
+        return result
+    return result
 
 
 def observe_run(minknow_run_id: str) -> dict[str, Any]:

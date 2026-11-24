@@ -28,7 +28,10 @@ def test_compact_choices_preserve_metadata_and_selected_detail():
             detail = client.get(f"/api/models/{model['id']}")
             assert detail.status_code == 200
             assert detail.json()["params"] == model["params"]
-            assert detail.json()["modes"] == model["modes"]
+            # Detail retains historical modes; the picker deliberately hides them.
+            public_modes = [{key: value for key, value in mode.items() if key != 'compatibility_only'}
+                for mode in detail.json()['modes'] if not mode['compatibility_only']]
+            assert public_modes == model["modes"]
         assert compact.json() == expected
         assert len(compact.content) < len(full.content)
         category = expected[0]["category"]

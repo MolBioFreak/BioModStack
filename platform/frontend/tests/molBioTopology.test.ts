@@ -25,17 +25,15 @@ test('circularizing preserves sequence and geometry while changing only topology
     assert.deepEqual(setSequenceTopology(linear, true), { ...linear, circular: true });
 });
 
-test('linearization fails closed when features or primers traverse the current origin', () => {
-    const blockers = findLinearizationBlockers({
+test('linearization no longer blocks on origin-spanning features or primers (R11, by design)', () => {
+    const data = {
         sequence: 'AACCGGTT',
         circular: true,
         features: [{ id: 'wrap-feature', start: 0, end: 8, segments: [{ start: 6, end: 8 }, { start: 0, end: 2 }] }],
         primers: [{ id: 'wrap-primer', start: 6, end: 2, sites: [{ start: 6, end: 8 }, { start: 0, end: 2 }] }],
-    });
-
-    assert.deepEqual(blockers, ['1 origin-spanning feature', '1 origin-spanning primer']);
-    assert.throws(
-        () => setSequenceTopology({ sequence: 'AACCGGTT', circular: true, features: [], primers: [{ start: 6, end: 2 }] }, false),
-        /rotate the origin/i,
-    );
+    };
+    assert.deepEqual(findLinearizationBlockers(data), []);
+    const out = setSequenceTopology(data, false);
+    assert.equal(out.circular, false);
+    assert.equal(out.features[0].segments?.length, 2);
 });

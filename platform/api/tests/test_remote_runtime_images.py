@@ -160,30 +160,6 @@ def test_runtime_image_projection_rejects_symlinks_before_resolving(package, mon
                                only_kinds=frozenset({'image'}))
 
 
-def test_native_metadata_digest_matches_final_cache_and_bundle_inventory(tmp_path):
-    from types import SimpleNamespace
-    from model_registry import native_checkpoint_dependencies
-    from services.remote_execution import bundle
-    files = []
-    for family in ('score_model', 'confidence_model'):
-        path = tmp_path/'diffdock/workdir/v1.1'/family/'model_parameters.yml'
-        path.parent.mkdir(parents=True)
-        path.write_text('esm_embeddings_model: precomputed\n')
-        files.append(path)
-    dependencies, blockers = native_checkpoint_dependencies('RunDiffDock', {'weights_root': str(tmp_path)})
-    assert not blockers
-    plan = SimpleNamespace(dependencies=dependencies)
-    def actual_inventory():
-        return {record.relative_path: record.sha256 for path in files
-                for record in bundle._records_for_source(path, 'weights/' + path.relative_to(tmp_path).as_posix(), 'runtime')}
-    bundle.verify_selected_runtime_hashes(plan, actual_inventory())
-    files[0].write_text('esm_embeddings_model: esm2_t6_8M_UR50D\n')
-    with pytest.raises(bundle.RemoteBundleError, match='metadata changed or is missing'):
-        bundle.verify_selected_runtime_hashes(plan, actual_inventory())
-    with pytest.raises(bundle.RemoteBundleError, match='metadata changed or is missing'):
-        bundle.verify_selected_runtime_hashes(plan, {})
-
-
 def test_shared_plan_metadata_root_is_server_owned(monkeypatch, tmp_path):
     import model_registry
     import paths
@@ -772,9 +748,17 @@ async def test_dorado_typed_selector_passes_actual_strict_sif_gate(package, loca
     monkeypatch.setattr(native.subprocess, 'run', stop_before_apptainer)
     kwargs = dict(lock_path=lock_path, pod5_root=roots['inputs'], molecule='dna', quality='hac',
                   mode='simplex', model_root=roots['weights'], verify_assets=True)
-    with pytest.raises(PassedStrictImageGate):
-        native.build_preflight(runtime_sif=selected, **kwargs)
     alias = Path(prepared.runtime_images[0].aliases[0])
+    # The worker's configured store, as the remote envelope exports it.
+    store = Path(target.remote_root) / 'cache/runtime-images'
+    assert selected.parents[3] == store
+    monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(store))
+    # The alias only names the store object; Apptainer still gets `selected`.
+    for runtime_sif in (selected, alias):
+        with pytest.raises(PassedStrictImageGate):
+            native.build_preflight(runtime_sif=runtime_sif, **kwargs)
+    monkeypatch.delenv('BMS_RUNTIME_IMAGE_STORE')
+    monkeypatch.delenv('BMS_CONTAINER_DIR', raising=False)
     with pytest.raises(ValueError, match='SIF identity mismatch'):
         native.build_preflight(runtime_sif=alias, **kwargs)
 

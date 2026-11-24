@@ -29,20 +29,16 @@ def _fixture() -> dict:
 def test_file_projection_is_producer_bound_and_contract_validated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result_root = Path(
-        "/home/dalab/.biomodstack-dev/bms_results/"
-        "BFX6NB_Q2-01_ont_fastq_qc_acceptance_retry3_20260816_175924"
+    package_vars = (
+        "BMS_TEST_ONT_FASTQ_QC_RESULT_ROOT",
+        "BMS_TEST_ONT_FASTQ_QC_SOURCE_FASTQ",
+        "BMS_NGS_RUNTIME_SIF",
     )
-    source_fastq = Path(
-        "/home/dalab/.biomodstack-dev/inputs/ngs/bfx6nb-fastq-qc/"
-        "BFX6NB_1_JAN26-EL-Q2-01.fastq.gz"
-    )
-    runtime_sif = Path(
-        os.environ.get(
-            "BMS_NGS_RUNTIME_SIF",
-            "/mnt/BioModStack/dev/apptainer/dorado-v1.3.1-samtools-v1.24.sif",
-        )
-    )
+    if not all(os.environ.get(name) for name in package_vars):
+        pytest.skip("Development retry3 acceptance package: set " + ", ".join(package_vars))
+    result_root = Path(os.environ["BMS_TEST_ONT_FASTQ_QC_RESULT_ROOT"])
+    source_fastq = Path(os.environ["BMS_TEST_ONT_FASTQ_QC_SOURCE_FASTQ"])
+    runtime_sif = Path(os.environ["BMS_NGS_RUNTIME_SIF"])
     if not result_root.is_dir() or not source_fastq.is_file() or not runtime_sif.is_file():
         pytest.skip("Development retry3 acceptance package is unavailable")
     monkeypatch.setenv("BMS_RESULTS_DIR", str(result_root.parent))

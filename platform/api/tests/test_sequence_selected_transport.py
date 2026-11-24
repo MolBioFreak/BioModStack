@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from schemas import JobCreate
-from routers.jobs import normalize_job_request
+from services.job_requests import normalize_job_request
 from services.binder_continuation import individual_model_requests, model_request
 from services.nextflow import compile_job_nextflow_invocation
 from services.sequence_designer_settings import normalize_historical_sequence_settings

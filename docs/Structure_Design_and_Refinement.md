@@ -43,7 +43,7 @@ Current pipeline shape:
 2. sequence design with FAMPNN, AntiFold, or ProteinMPNN
 3. structure validation with Boltz-2, plus workflow-level Protenix validation when explicitly selected by the antibody/structure workflows
 4. downstream scoring and review
-5. optional refinement/maturation branches such as PPIFlow and OpenMM
+5. optional refinement/maturation branches such as PPIFlow
 
 Important notes:
 
@@ -64,7 +64,6 @@ registry under [platform/api/config/models](../platform/api/config/models) and
 Current registry-backed predictor families:
 
 - [Boltz-2](../platform/api/config/models/boltz2.yaml)
-- [AlphaFold2](../platform/api/config/models/af2.yaml)
 - [RF3](../platform/api/config/models/rf3.yaml)
 - [NVIDIA Fold-CP](../platform/api/config/models/boltz_cp_experimental.yaml)
 
@@ -75,7 +74,7 @@ or an equivalent API registry entry exists again.
 
 Important distinction:
 
-- Boltz-2 / AF2 / RF3 remain registry-backed structure predictors
+- Boltz-2 / RF3 remain registry-backed structure predictors
 - NVIDIA Fold-CP is selected inside Structure Prediction when OEM context
   parallelism is appropriate for the target and compute placement
 
@@ -214,14 +213,6 @@ Purpose:
 
 - multi-polymer design across DNA, RNA, protein, and mixed assemblies
 
-### Docking
-
-Docking support includes:
-
-- [DiffDock](../platform/api/config/models/diffdock.yaml)
-- [Uni-Dock](../platform/api/config/models/unidock.yaml)
-- [shared docking surface](../platform/api/config/models/docking.yaml)
-
 ## Model groups
 
 ### Backbone or generative design
@@ -241,28 +232,19 @@ Docking support includes:
 - AntiFold
 - ProteinMPNN
 - FrustraMPNN
-- IgGM
 - Caliby Experimental
 
 ### Prediction and validation
 
 - Boltz-2
 - Protenix
-- AlphaFold2
 - RF3
 - NVIDIA Fold-CP
 
 ### Post-processing and scoring
 
-- ThermoMPNN
 - AntiBERTy
-- OpenMM
 - ANARCI / ANARCII
-
-### Docking and ligand-aware utilities
-
-- DiffDock
-- Uni-Dock
 
 ## Internal-only orchestrator models
 

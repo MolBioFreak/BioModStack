@@ -1,6 +1,6 @@
 import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query';
 
 import { api } from './api.js';
 import { bioXpProviderFailure } from './bioxpEvidencePresentation';
@@ -301,7 +301,7 @@ export interface BioXpOperatorDashboard {
     schema_version: 'bioxp.operator_dashboard.v1';
     ownership_generation: number;
     connection: { live: boolean; ownership: Record<string, unknown> };
-    motion: { enabled: boolean; reason: string | null };
+    motion: { enabled: boolean; reason: string | null; state?: 'on' | 'off' | 'blocked' | 'unknown' };
     operation: { state: string | null; reason: string | null };
     enclosure: { door_closed: boolean | null; latch_closed: boolean | null };
     axes: BioXpOperatorDashboardAxis[];
@@ -577,6 +577,13 @@ export interface BioXpDeckDestinationV1 {
     source_anchors: string[];
     enabled: boolean;
     disabled_reason: string | null;
+    /** Bulk reagent holder row/well extensions: native catalog XY only (no Z). */
+    xy?: { x: number; y: number } | null;
+    holder_row?: string | null;
+    well_number?: number | null;
+    channel_wells?: number[];
+    calibration_axes?: string[];
+    station_target?: string;
 }
 
 export interface BioXpOperatorControlCatalogV2 {
@@ -656,6 +663,9 @@ export interface BioXpPipettes {
     live_query_performed: false;
     /** Software-selected group tip type, not evidence of a physically loaded tip. */
     tip_type: number;
+    /** Robot: false for a clean pickup, true once the tip touched liquid or went into a well. */
+    tip_used?: boolean;
+    tip_type_known?: boolean;
     allow_to_stop: boolean;
     last_error: { channel: 0 | 1 | 2 | 3; error_code: number; source: 'ClassPipetteCollection.handlePipetteMessage' } | null;
     last_group_transaction: Record<string, unknown> | null;
@@ -1036,7 +1046,9 @@ export function bioXpOperatorGenerationPayload(
 // Live workflows use robot custody.
 export type BioXpWorkflowPhase = 'queued' | 'preparing' | 'starting' | 'executing' | 'waiting' | 'waking' | 'epilogue' | 'cleanup' | 'reconciling' | 'terminal';
 export type BioXpWorkflowGate = 'ordinary_pause' | 'deferred_pause' | 'delaypoint' | 'review' | 'error_hold';
+export type BioXpRecoveryAction = { action: 'recover'; scope?: 'action' | 'occurrence'; decision: 'retry' | 'repeat' | 'skip' | 'manual_complete'; gate_id: string; source_occurrence_id: string; native_action_id: string; expected_attempt: number; overrides: Record<string, number | string | null> };
 export type BioXpWorkflowAction =
+    | BioXpRecoveryAction
     | { action: 'pause'; mode: 'ordinary' | 'deferred' }
     | { action: 'wake'; gate_id: string }
     | { action: 'continue'; gate: 'ordinary_pause' | 'deferred_pause' | 'delaypoint'; gate_id: string }
@@ -1047,7 +1059,9 @@ export interface BioXpWorkflowState {
     gate: BioXpWorkflowGate | null;
     gate_id: string | null;
     source_occurrence_id: string | null;
-    requested_control: BioXpWorkflowAction | null;
+    native_action_id?: string | null;
+    attempt?: number | null;
+    requested_control: BioXpWorkflowAction | { action: 'recover'; gate_id: string } | null;
     last_control_id: string | null;
     reached_control_id: string | null;
     held_reason: string | null;
@@ -1058,7 +1072,7 @@ export interface BioXpWorkflowCommand {
     idempotency_key: string;
     ownership_generation: number;
     state_version: number;
-    status: 'queued' | 'dispatched' | 'interrupting' | 'completed' | 'failed' | 'interrupted' | 'cleared' | 'ambiguous' | 'rejected';
+    status: 'queued' | 'dispatched' | 'interrupting' | 'completed' | 'failed' | 'interrupted' | 'cleared' | 'ambiguous' | 'rejected' | 'outcome_unknown' | 'reconciliation_required' | 'issued_pending' | 'stop_requested' | 'abort_requested' | 'stopped' | 'aborted' | 'cancelled';
     terminal: boolean;
     status_path: string;
 }
@@ -1653,6 +1667,15 @@ function assertCanonicalBoardEpochMap(value: Record<string, number>): void {
 
 export function assertBioXpOperatorActionV2Request(request: BioXpOperatorActionV2Request): void {
     assertCanonicalBoardEpochMap(request.expected_board_epoch_by_board);
+    if (request.action_id === 'oem.deck.catch_plate' || request.action_id === 'oem.deck.release_plate') {
+        const inputs = request.inputs as Record<string, unknown>;
+        const ordinal = request.action_id === 'oem.deck.catch_plate' ? 'plate' : 'destination';
+        const allowed = request.action_id === 'oem.deck.catch_plate' ? ['plate', 'run_in_parallel'] : ['destination', 'press_plate', 'run_in_parallel'];
+        if (!Number.isSafeInteger(inputs[ordinal]) || Object.keys(inputs).some(key => !allowed.includes(key))
+            || ['run_in_parallel', 'press_plate'].some(key => key in inputs && typeof inputs[key] !== 'boolean')) {
+            throw new Error('Plate handling inputs must match the native integer and optional boolean fields only');
+        }
+    }
     if (request.action_id === 'oem.deck.move_to_well') {
         if (Object.keys(request.inputs).sort().join(',') !== 'location_id,position_flag,well'
             || !Number.isSafeInteger(request.inputs.location_id)
@@ -1731,6 +1754,8 @@ export type BioXpOperatorActionV2Request =
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_absolute'; inputs: { target_steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.manual_panel_home'; inputs: Record<string, never> })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.move_to_location'; inputs: { target: string; camera_offset: boolean } })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.catch_plate'; inputs: { plate: number; run_in_parallel?: boolean } })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.release_plate'; inputs: { destination: number; press_plate?: boolean; run_in_parallel?: boolean } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.move_to_well'; inputs: { location_id: number; well: string | number; position_flag: 0 | 1 | 2 } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.xy.move_sequence'; inputs: { targets: BioXpXYTarget[] } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.xy.retarget'; inputs: { target: BioXpXYTarget } });
@@ -1822,8 +1847,8 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
 export const useInvokeBioXpOperatorActionV2 = () => useInvokeBioXpOperatorActionV2Mutation();
 
 /** Deck click lane: Full report (named/well moves), Fast lane (sequence) and Retarget. */
-export const BIOXP_DECK_LANE_ACTION_IDS: readonly string[] = ['oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.xy.move_sequence', 'oem.xy.retarget'];
-type BioXpDeckLaneActionId = 'oem.deck.move_to_location' | 'oem.deck.move_to_well' | 'oem.xy.move_sequence' | 'oem.xy.retarget';
+export const BIOXP_DECK_LANE_ACTION_IDS: readonly string[] = ['oem.deck.catch_plate', 'oem.deck.release_plate', 'oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.xy.move_sequence', 'oem.xy.retarget'];
+type BioXpDeckLaneActionId = 'oem.deck.catch_plate' | 'oem.deck.release_plate' | 'oem.deck.move_to_location' | 'oem.deck.move_to_well' | 'oem.xy.move_sequence' | 'oem.xy.retarget';
 const isDeckLaneRequest = (request: BioXpOperatorActionV2Request): request is Extract<BioXpOperatorActionV2Request, { action_id: BioXpDeckLaneActionId }> =>
     BIOXP_DECK_LANE_ACTION_IDS.includes(request.action_id);
 
@@ -2002,10 +2027,29 @@ export const bioXpDeckRecoveryResolution = (receipt: (BioXpOperatorReceiptV2 & P
         || !Number.isSafeInteger(value.transition_sequence) || value.transition_sequence < 1
         || value.command_id !== receipt?.command_id || receipt.terminal !== true
         || !['failed', 'ambiguous', 'interrupted', 'stopped', 'aborted', 'cancelled'].includes(receipt.status)
-        || !['oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.deck._mov_execution', 'oem.deck._finite_operation', 'oem.xy.move_sequence', 'oem.xy.retarget'].includes(receipt.action_id)) {
+        || !['oem.deck.catch_plate', 'oem.deck.release_plate', 'oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.deck._mov_execution', 'oem.deck._finite_operation', 'oem.xy.move_sequence', 'oem.xy.retarget'].includes(receipt.action_id)) {
         throw new Error('Invalid deck recovery resolution');
     }
     return value;
+};
+
+/** As on the OEM, a job keeps step progress only; each step's full evidence lives once on its
+ * child command. Read it after the job settles. */
+type BioXpJobChildren = { command?: { terminal?: boolean } | null;
+    execution?: { runtime_state: { workflow?: { child_command_ids?: string[] } | null } } | null };
+export const useBioXpChildEvidence = (job: BioXpJobChildren | null | undefined, connectionGeneration: number, enabled = true) => {
+    const ids = job?.command?.terminal ? (job.execution?.runtime_state.workflow?.child_command_ids ?? []) : [];
+    const queries = useQueries({ queries: ids.map(id => ({
+        queryKey: ['bioxp', 'operator-controls', 'v2', 'child-evidence', id, connectionGeneration],
+        queryFn: async ({ signal }: { signal: AbortSignal }) => decodeBioXpReceiptDetailV2((await api.get<BioXpOperatorReceiptDetailV2>(
+            `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(id)}`,
+            { signal, timeout: 12000, params: { detail: true, expected_connection_generation: connectionGeneration } })).data, id),
+        enabled: enabled && connectionGeneration > 0, staleTime: Infinity, gcTime: 0, retry: false,
+    })) });
+    return queries.flatMap(query => {
+        const evidence = query.data?.source_receipt?.terminal_evidence;
+        return evidence && typeof evidence === 'object' ? [evidence as Record<string, unknown>] : [];
+    });
 };
 
 export const decodeBioXpReceiptDetailV2 = (receipt: BioXpOperatorReceiptDetailV2, commandId: string) => {
@@ -2833,15 +2877,8 @@ export const useBioXpWorkflowJob = (jobId: string | null, generation: number, en
     })).data,
     enabled: enabled && generation > 0 && jobId !== null,
     retry: false,
-    refetchInterval: (query) => {
-        if (!enabled) return false;
-        const job = query.state.data;
-        const command = job?.command;
-        const workflow = job?.execution?.runtime_state.workflow;
-        const settled = command?.command_id === jobId && command.terminal
-            && workflow?.command_id === jobId && workflow.phase === 'terminal';
-        return settled ? false : 2_000;
-    },
+    staleTime: Infinity,
+    refetchInterval: false,
     refetchIntervalInBackground: false,
 });
 // The monitor consumes control/review truth, never source trays or retained
@@ -2866,6 +2903,29 @@ export const useBioXpWorkflowJobObservation = (jobId: string | null, generation:
     },
     refetchIntervalInBackground: false,
 });
+// Native nonterminal states only: retained unknown outcomes are not active work.
+export function isActiveBioXpWorkflow(job: BioXpWorkflowJob | BioXpWorkflowJobSummary): boolean {
+    const dryRun = 'dry_run' in job ? job.dry_run : job.execution?.dry_run;
+    return dryRun === false && job.command?.command_id === job.job_id && job.command.terminal === false
+        && ['queued', 'dispatched', 'interrupting', 'issued_pending', 'stop_requested', 'abort_requested'].includes(job.command.status);
+}
+
+// Compact progress while running; fetch retained action results once on settlement.
+export function useBioXpWorkflowFeedback(jobId: string | null, generation: number, enabled: boolean) {
+    const observation = useBioXpWorkflowJobObservation(jobId, generation, enabled);
+    const detail = useBioXpWorkflowJob(jobId, generation, enabled && observation.data?.command?.terminal === true);
+    const full = detail.data;
+    const current = observation.data;
+    const data = current ? { ...full, ...current,
+        command: current.command ? { ...full?.command, ...current.command } : full?.command,
+        execution: { ...current.execution, dry_run: current.execution?.dry_run ?? full?.execution?.dry_run ?? true, runtime_state: {
+            ...full?.execution?.runtime_state, ...current.execution?.runtime_state,
+            action_results: (current.execution && 'action_results' in current.execution.runtime_state
+                ? current.execution.runtime_state.action_results : full?.execution?.runtime_state.action_results) ?? [],
+        } },
+    } : full;
+    return { ...observation, data, isError: observation.isError || detail.isError, error: observation.error ?? detail.error };
+}
 export const useSubmitBioXpProtocol = () => useMutation({
     mutationFn: async (request: BioXpWorkflowSubmission) => (
         await api.post<BioXpWorkflowJob>('/api/bioxp/protocols/submit', request)

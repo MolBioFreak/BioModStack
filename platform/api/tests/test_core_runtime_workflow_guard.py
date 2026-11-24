@@ -62,7 +62,7 @@ class _ExplodingSession:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ["cross-class-backlog", "preparation-failure"])
+@pytest.mark.parametrize("scenario", ["cross-class-backlog", "preparation-failure", "manifest-failure", "path-failure", "loop-failure"])
 async def test_analysis_worker_real_loop_preserves_progress_and_cleanup(monkeypatch, tmp_path, scenario):
     from datetime import datetime, timedelta
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -78,6 +78,8 @@ async def test_analysis_worker_real_loop_preserves_progress_and_cleanup(monkeypa
     factory = async_sessionmaker(engine, expire_on_commit=False)
     worker = analysis_worker.AnalysisWorker(factory, poll_interval=0.001)
     children = []
+    handles = []
+    launched = []
 
     class Child:
         terminated = False
@@ -88,7 +90,15 @@ async def test_analysis_worker_real_loop_preserves_progress_and_cleanup(monkeypa
         def terminate(self):
             self.terminated = True
 
-    def spawn(*_, **__):
+    def open_log(*args, **kwargs):
+        handle = open(*args, **kwargs)
+        handles.append(handle)
+        return handle
+
+    monkeypatch.setattr(analysis_worker, "open", open_log, raising=False)
+
+    def spawn(command, **kwargs):
+        launched.append(command[-1])
         child = Child()
         children.append(child)
         return child
@@ -108,11 +118,21 @@ async def test_analysis_worker_real_loop_preserves_progress_and_cleanup(monkeypa
             await connection.run_sync(Base.metadata.create_all)
         if scenario == "cross-class-backlog":
             rows = [run(f"heavy-{i}", "cpu_heavy", i) for i in range(65)]
-            rows.append(run("light", "cpu_light", 100))
+            rows.extend(run(f"light-{i}", "cpu_light", 100 + i) for i in range(5))
         else:
-            rows = [run("good", "cpu_light", 0), run("bad", "cpu_light", 1)]
+            rows = [run("good", "cpu_light", 0), run("bad", "cpu_light", 1), run("later", "cpu_light", 2)]
             # Valid producer manifests; a real filesystem failure after first spawn.
-            resolve_allowed_path(rows[1].artifact_manifest["stderr_log"]).mkdir(parents=True)
+            if scenario == "preparation-failure":
+                resolve_allowed_path(rows[1].artifact_manifest["stderr_log"]).mkdir(parents=True)
+            elif scenario == "manifest-failure":
+                rows[1].artifact_manifest = None
+
+                def build_manifest(row):
+                    raise ValueError("invalid manifest")
+
+                monkeypatch.setattr(analysis_worker, "build_artifact_manifest_for_run", build_manifest)
+            elif scenario == "path-failure":
+                rows[1].artifact_manifest["stdout_log"] = "/etc/analysis-forbidden.log"
         async with factory() as session:
             session.add_all(rows)
             await session.commit()
@@ -124,23 +144,38 @@ async def test_analysis_worker_real_loop_preserves_progress_and_cleanup(monkeypa
             nonlocal cycles
             await launch()
             cycles += 1
+            if scenario == "loop-failure":
+                raise RuntimeError("loop failed")
             if cycles == 3:
                 worker._stop_event.set()
 
         monkeypatch.setattr(worker, "_launch_available_runs", bounded_launch)
         monkeypatch.setattr(analysis_worker.subprocess, "Popen", spawn)
         await worker.start()
-        # Exercise the task itself, not merely the start/stop calls. Current
-        # preparation failure is intentionally an effective, un-xfailed regression.
-        await asyncio.wait_for(asyncio.shield(worker._task), timeout=5)
-        await worker.stop()
+        # Exercise task failure and normal stop through the same lifecycle.
+        if scenario == "loop-failure":
+            with pytest.raises(RuntimeError, match="loop failed"):
+                await asyncio.wait_for(asyncio.shield(worker._task), timeout=5)
+            with pytest.raises(RuntimeError, match="loop failed"):
+                await worker.stop()
+            assert worker._task is None
+        else:
+            await asyncio.wait_for(asyncio.shield(worker._task), timeout=5)
+            await worker.stop()
         async with factory() as session:
             if scenario == "cross-class-backlog":
-                assert (await session.get(AnalysisRun, "light")).status == "running"
-            else:
-                assert (await session.get(AnalysisRun, "bad")).status == "failed"
+                assert launched == ["heavy-0", "light-0", "light-1", "light-2", "light-3"]
+                assert (await session.get(AnalysisRun, "heavy-1")).status == "queued"
+                assert (await session.get(AnalysisRun, "light-4")).status == "queued"
+            elif scenario != "loop-failure":
+                failed = await session.get(AnalysisRun, "bad")
+                assert failed.status == "failed"
+                assert failed.error_message and failed.completed_at
+                assert (await session.get(AnalysisRun, "later")).status == "running"
+                assert launched == ["good", "later"]
         assert children and all(child.terminated for child in children)
         assert not worker._running
+        assert all(handle.closed for handle in handles)
     finally:
         worker._stop_event.set()
         if worker._task is not None:

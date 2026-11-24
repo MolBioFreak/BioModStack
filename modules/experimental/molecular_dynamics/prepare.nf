@@ -46,6 +46,8 @@ if preparation_owner(config) == 'amber':
             '/opt/bms-md-preparation-runtime.lock',
         )),
         runtime_image=runtime_image,
+        # Legacy curated preparation has a fixed solvateOct recipe.
+        box_type=config['preparation']['box_type'] if config['schema'] == 'bms.md.job.v3' else 'octahedron',
         padding_nm=config['preparation']['padding_nm'],
         salt_molar=config['preparation']['salt_molar'],
         neutralize=config['preparation']['neutralize'],

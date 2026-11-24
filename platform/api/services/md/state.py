@@ -544,8 +544,11 @@ async def reconcile_component_projection(session: AsyncSession, parent: Job,
             # must not turn its new queued segment back into the old pause.
             continue
         raw_state = control.get('state', child.status)
-        replica.state = ({'execution_finished': 'running', 'uncertain': 'orphaned'}
-                         .get(raw_state, raw_state))
+        state = {'execution_finished': 'running', 'uncertain': 'orphaned'}.get(raw_state, raw_state)
+        if (latest_segment is not None and latest_segment.state in {'failed', 'cancelled', 'orphaned'}
+                and latest_segment.state != state):
+            raise MdStateError('MD_STATE_CORRUPT', 'component projection would rewrite a failed segment')
+        replica.state = state
         if replica.state not in TERMINAL_REPLICA_STATES | ACTIVE_REPLICA_STATES:
             raise MdStateError('MD_STATE_CORRUPT', 'unknown projected native component state')
         if replica.state in TERMINAL_REPLICA_STATES:

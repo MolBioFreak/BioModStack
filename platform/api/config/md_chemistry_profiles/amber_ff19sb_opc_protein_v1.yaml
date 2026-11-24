@@ -12,7 +12,6 @@ runtime_validated: true
 operator_enabled: true
 supported_engines:
   - gromacs
-  - openmm
 v1_preparation:
   force_field: ff19SB
   water_model: opc

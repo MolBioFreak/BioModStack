@@ -179,7 +179,7 @@ def test_actual_remote_bundle_preserves_generated_alignment(provider, placement,
 
 
 def test_actual_typed_normalization_omitted_values_and_presets(monkeypatch, tmp_path):
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from services.nextflow import build_nextflow_command
     native_bin = tmp_path / 'nextflow'
     native_bin.write_text('#!/bin/sh\nexit 99\n')

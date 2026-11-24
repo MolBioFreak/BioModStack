@@ -10,7 +10,7 @@ inventory_class: candidate
 installed: false
 runtime_validated: false
 operator_enabled: false
-supported_engines: [gromacs, openmm]
+supported_engines: [gromacs]
 v1_preparation:
   force_field: ff19SB+OL21
   water_model: opc

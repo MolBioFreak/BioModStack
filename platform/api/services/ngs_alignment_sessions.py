@@ -137,6 +137,10 @@ class AlignmentSessionError(ValueError):
     """Raised when a requested session or artifact is unsafe or unavailable."""
 
 
+class AlignmentPresentationBusy(AlignmentSessionError):
+    """Another request holds a presentation generation lock."""
+
+
 class _AlignmentDerivativeByteLimit(AlignmentSessionError):
     """Raised when the kernel-enforced derivative file limit is reached."""
 
@@ -1690,6 +1694,8 @@ _PACKAGE_ARTIFACT_METADATA = {
     "source_read_provenance": ("source_input", 34, "attachment", "json"),
     "source_reads_fastq": ("source_input", 35, "attachment", "fastq.gz"),
     "signal_data": ("optional_evidence", 36, "none", None),
+    # Read pileup of the consensus in the AB1 container; not a Sanger trace.
+    "pileup_chromatogram": ("consensus", 37, "attachment", "ab1"),
 }
 
 
@@ -1750,7 +1756,7 @@ def _package_artifact_descriptor(
         display_order = display_order_override
     suffix = path.suffix.lower()
     mime_type = (
-        "application/octet-stream" if suffix in {".bam", ".bai", ".csi"}
+        "application/octet-stream" if suffix in {".bam", ".bai", ".csi", ".log"}
         else "text/x-vcf" if suffix == ".vcf"
         else mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     )
@@ -3070,7 +3076,7 @@ def _alignment_presentation_generation_slot() -> Iterator[None]:
         try:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise AlignmentSessionError("alignment presentation concurrency limit exceeded") from exc
+            raise AlignmentPresentationBusy("alignment presentation concurrency limit exceeded") from exc
         try:
             yield
         finally:
@@ -3088,7 +3094,7 @@ def _load_trusted_presentation(
         try:
             fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise AlignmentSessionError("alignment presentation generation is already in progress") from exc
+            raise AlignmentPresentationBusy("alignment presentation generation is already in progress") from exc
         with open_presentation_authority_root(destination, create=False) as pinned_destination:
             cached = _load_derived_package(
                 pinned_destination, expected_authority_sha256=cache_key,
@@ -3168,7 +3174,7 @@ def build_alignment_presentation(
         try:
             fcntl.flock(producer_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise AlignmentSessionError("alignment presentation generation is already in progress") from exc
+            raise AlignmentPresentationBusy("alignment presentation generation is already in progress") from exc
         namespace_fd = int(namespace_parts[4])
         protected_names = _presentation_names_for_manifest(namespace, expected_manifest_sha256)
         _cleanup_presentation_namespace(

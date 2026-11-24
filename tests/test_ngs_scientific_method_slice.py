@@ -67,7 +67,7 @@ def test_fastq_qc_uses_primary_logical_read_accounting() -> None:
 def test_fastq_qc_manifest_uses_persisted_workflow_and_input_authority() -> None:
     fastq = (ROOT / "modules/ngs/fastq_plasmid_qc.nf").read_text(encoding="utf-8")
     assert "params.workflow_id ?: params.ont_workflow_id" in fastq
-    assert "['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation']" in fastq
+    assert "['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation', 'ont_basecall_dna']" in fastq
     assert "params.input_mode ?: params.ont_input_mode" in fastq
     assert "['fastq', 'bam', 'pod5']" in fastq
     assert "--workflow-id ${workflowIdArg}" in fastq

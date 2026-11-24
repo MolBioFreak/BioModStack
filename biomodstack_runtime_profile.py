@@ -125,10 +125,13 @@ RESERVED_AUXILIARY_PORTS: dict[int, str] = {
 _FEATURE_DEFAULTS = {
     "bioxp": True,
     "molecular_dynamics": False,
+    # Legacy local MMseqs2 MSA server. Off unless the installation declares it.
+    "local_msa": False,
 }
 _FEATURE_ENV_NAMES = {
     "bioxp": "BMS_FEATURE_BIOXP",
     "molecular_dynamics": "BMS_FEATURE_MOLECULAR_DYNAMICS",
+    "local_msa": "BMS_FEATURE_LOCAL_MSA",
 }
 
 
@@ -371,8 +374,16 @@ def _default_dev_data_root() -> Path:
     return Path.home().resolve() / ".biomodstack-dev"
 
 
+def configured_data_root_candidates() -> list[Path]:
+    """Data root named by the install profile, if any (unlocked read; callers may hold the lock)."""
+    configured = _read_install_profile().get("data_root")
+    if isinstance(configured, str) and configured.strip():
+        return [Path(configured)]
+    return []
+
+
 def _candidate_data_roots() -> list[Path]:
-    return [Path("/mnt/BioModStack"), _default_data_root()]
+    return [*configured_data_root_candidates(), _default_data_root()]
 
 
 def _looks_like_data_root(path: Path) -> bool:
@@ -481,7 +492,7 @@ def managed_runtime_storage_paths(resolved: Mapping[str, object], runtime: str) 
         raise ValueError("runtime must be dev or container")
     shared = ("container_dir", "weights_root", "colabfold_db")
     mutable = MUTABLE_RUNTIME_STORAGE_FIELDS
-    shared_root = Path(str(resolved.get("data_root", "/mnt/BioModStack")))
+    shared_root = Path(str(resolved.get("data_root", Path.home() / ".biomodstack")))
     paths = {key: str(resolved.get(key, shared_root / leaf)) for key, leaf in
              zip(shared, ("apptainer", "weights", "colabfold_db"))}
     base_key = "dev_data_root" if runtime == "dev" else "data_root"
@@ -566,8 +577,7 @@ def _legacy_configuration_write(function):
     return wrapped
 
 
-@_consistent_configuration_read
-def load_install_profile() -> dict[str, object]:
+def _read_install_profile() -> dict[str, object]:
     path = get_install_profile_path()
     if not path.exists():
         return {}
@@ -578,6 +588,11 @@ def load_install_profile() -> dict[str, object]:
     if not isinstance(data, Mapping):
         return {}
     return normalize_install_profile(data)
+
+
+@_consistent_configuration_read
+def load_install_profile() -> dict[str, object]:
+    return _read_install_profile()
 
 
 def _coerce_env_int(name: str, default: int, environ: Mapping[str, str] | None = None) -> int:
@@ -869,6 +884,7 @@ def _compat_env_lines(resolved: Mapping[str, object]) -> list[str]:
         'export BMS_WORKFLOW_ADAPTER_LANE="${BMS_WORKFLOW_ADAPTER_LANE:-production}"',
         f'export BMS_FEATURE_BIOXP="${{BMS_FEATURE_BIOXP:-{1 if resolved["features"]["bioxp"] else 0}}}"',
         f'export BMS_FEATURE_MOLECULAR_DYNAMICS="${{BMS_FEATURE_MOLECULAR_DYNAMICS:-{1 if resolved["features"]["molecular_dynamics"] else 0}}}"',
+        f'export BMS_FEATURE_LOCAL_MSA="${{BMS_FEATURE_LOCAL_MSA:-{1 if resolved["features"]["local_msa"] else 0}}}"',
         f'export BMS_WORKFLOW_ADAPTER_URL="${{BMS_WORKFLOW_ADAPTER_URL:-{resolved["workflow_adapter_url"]}}}"',
         f'export BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL="${{BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL:-{resolved["development_workflow_adapter_url"]}}}"',
         f'export BMS_PRODUCTION_WORKFLOW_ADAPTER_URL="${{BMS_PRODUCTION_WORKFLOW_ADAPTER_URL:-{resolved["production_workflow_adapter_url"]}}}"',
@@ -993,6 +1009,7 @@ def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
         'BMS_WORKFLOW_ADAPTER_LANE=production',
         f'BMS_FEATURE_BIOXP={1 if resolved["features"]["bioxp"] else 0}',
         f'BMS_FEATURE_MOLECULAR_DYNAMICS={1 if resolved["features"]["molecular_dynamics"] else 0}',
+        f'BMS_FEATURE_LOCAL_MSA={1 if resolved["features"]["local_msa"] else 0}',
         f'BMS_WORKFLOW_ADAPTER_URL={resolved["workflow_adapter_url"]}',
         f'BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL={resolved["development_workflow_adapter_url"]}',
         f'BMS_PRODUCTION_WORKFLOW_ADAPTER_URL={resolved["production_workflow_adapter_url"]}',

@@ -9,7 +9,7 @@ const foreignGpuCatalog = buildGpuCatalog([
     { index: 4, name: 'NVIDIA L40S', memory_total_mb: 46068 },
 ]);
 
-test('multi-gpu queue display uses dynamic non-DALAB labels instead of hardcoded local rig names', () => {
+test('multi-gpu queue display uses dynamic non-site-specific labels instead of hardcoded local rig names', () => {
     const display = resolveQueueGpuDisplay({
         displayGpuIds: [0, 4],
         pinnedGpu: null,

@@ -25,7 +25,7 @@ def occurrence(identifier, rows, action='transfer', **kwargs):
 
 def test_source_bytes_counts_numeric_and_null_roundtrip():
     text = source_catalog_text()
-    assert hashlib.sha256(text.encode()).hexdigest() == 'ff7687cc6458e7131f5c0ce2bf2ea94f446d2007d306ea5fd89b99377906b02e'
+    assert hashlib.sha256(text.encode()).hexdigest() == '4daeac878d4a69b555a0d7fe65fed7b4a7a00cc06bf049397fcd8535cb3a8174'
     original = json.loads(text, parse_float=Decimal)
     catalog = load_source_catalog()
     assert len(catalog['classes']) == 5

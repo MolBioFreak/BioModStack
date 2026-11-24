@@ -41,6 +41,7 @@ async function click(name: string) {
 }
 async function input(name: string, value: string) {
     const el = host.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${name}"]`)!; expect(el, name).toBeTruthy();
+    if (el.getAttribute('role') === 'listbox') { const option = el.querySelector<HTMLElement>(`[data-value="${value}"]`)!; expect(option, value).toBeTruthy(); await act(async () => option.click()); await settle(); return; }
     await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); await settle();
 }
 beforeEach(() => {
@@ -84,7 +85,7 @@ async function journey(name: string, expected: any, editAssumptions: boolean, co
     expect(exact.method.editor_state.run_inputs).toEqual(expected);
     expect(exact.method.editor_state.recovery_linkage).toMatchObject({ original_job_id: original.job_id, submitted: false });
     await act(async () => root.unmount()); client.clear(); localStorage.clear(); await mount();
-    expect(host.querySelector(`[aria-label="Library entry"] option[value="${accepted.id}"]`)).toBeTruthy();
+    expect(host.querySelector(`[aria-label="Library entry"] [data-value="${accepted.id}"]`)).toBeTruthy();
     await input('Library entry', accepted.id); await click('Open'); await click('Save');
     const reopened = await wire('get', `/api/bioxp/methods/library/${accepted.id}`);
     expect(reopened.revision).toBe(2); expect(reopened.method).toEqual(exact.method);

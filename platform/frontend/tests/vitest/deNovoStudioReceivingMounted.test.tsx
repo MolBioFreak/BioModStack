@@ -131,6 +131,22 @@ it('empty motif acquisition binds the task before parsing controls, and opens/fo
     expect(latest.rfd4_request.input.examples[0].sources).toEqual([{ slot: 'input_1' }]);
 });
 
+it('keeps the inspected source bound until the rail adopts the Studio document', async () => {
+    await mount(); await open(); await changed();
+    const workspace = document.querySelector('[aria-label="AtomWorks entry workspace"]')!;
+    const rail = document.querySelector('[aria-label="Active task"]')!;
+    expect(workspace.querySelector('iframe[title="AtomWorks Studio"]')).toBeTruthy();
+    expect(rail.textContent).toContain('Studio edits not yet applied');
+    expect(latest.native_job_request.params.native_sources.source).toEqual(original);
+    const action = [...rail.querySelectorAll('button')].find(b => b.textContent === 'Use edited document for source');
+    expect(action).toBeTruthy(); await act(async () => action!.click());
+    await wait(() => expect(rail.textContent).toContain('Edited structure applied'));
+    expect(uploaded).toHaveLength(1);
+    expect(latest.native_job_request.params.native_sources.source.path).toBe(uploaded[0].path);
+    expect(latest.rfd4_request).toEqual(scientific);
+    expect(calls.some(c => c.url === '/api/jobs')).toBe(false);
+});
+
 it('Run scope lists only enabled follow-ons in retained order while preview excludes them', async () => {
     const stage = (id: string, model_id: string) => ({ enabled: true, drafts: {}, stage: { id, kind: 'sequence_design', input: { selected: true }, models: [{ invocation_id: id + '-call', model_id, mode: 'design', params: {} }] } });
     const invocation_draft = { enabled: true, stages: [stage('first', 'proteinmpnn'), { ...stage('off', 'caliby_experimental'), enabled: false }, stage('second', 'fampnn')] };

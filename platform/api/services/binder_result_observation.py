@@ -44,7 +44,7 @@ async def observe_retained_binder_results(session, job, output_path, *, commit=F
             return result
         # RFD3 already owns paired Design rows plus retained unpaired artifacts.
         # Import through that owner only; never call the success finalizer here.
-        from services.result_ingester import _ingest_rfd3_generation_manifest
+        from services.rfd3_generation_results import _ingest_rfd3_generation_manifest
         count = await _ingest_rfd3_generation_manifest(job, root, session, commit=False)
         result.update(available=True, publication_ref='rfd3_generation_result_manifest_sha256',
                       native_record_count=count, document_count=count)

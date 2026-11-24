@@ -186,7 +186,7 @@ test('run notes and general CM source paths are typed without unrelated metadata
         assert.match(launcher, new RegExp(`label: '${label}'`));
     }
     assert.doesNotMatch(launcher, /label: 'Presets'/);
-    assert.doesNotMatch(launcher, /SAbDab|project|campaign/i);
+    assert.doesNotMatch(launcher, /SAbDab|campaign|project(?!Request\b|DraftJson\b)/i);
 });
 
 test('launcher does not promote browser-augmented metadata into server-owned source identity', () => {

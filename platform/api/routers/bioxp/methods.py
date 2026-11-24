@@ -17,7 +17,7 @@ from routers import user_templates
 from services.user_template_revisions import exact_revision
 from services.bioxp.protocol_models import (
     ProtocolSubmission, ProtocolControlRequest, ProtocolReviewRequest, ProtocolJob,
-    ProtocolJobObservation, ProtocolControlResponse,
+    ProtocolJobObservation, ProtocolControlResponse, RequestedRecovery,
 )
 from services.bioxp.method_report import occurrence_outcomes, application_report, duration_report
 from services.bioxp.method_recovery import resolve_occurrence, original_occurrences
@@ -323,6 +323,30 @@ def _evidence(job, snapshot):
     return snapshot_evidence(job.protocol.document, snapshot)
 
 
+@router.get("/runs/{job_id}/context")
+async def run_context(job_id: str, expected_connection_generation: int | None = Query(None, ge=0),
+                      runtime=Depends(get_bioxp_runtime)):
+    job = await protocols.get_protocol_job(job_id, expected_connection_generation, False, runtime)
+    snapshot = _snapshot(job)
+    # Only frozen target fields for the read-only run deck (not live pose).
+    targets = {}
+    for stage in job.protocol.document.get('stages', []):
+        for action in stage.get('actions', []):
+            params = action.get('params', {})
+            recipe = params.get('recipe') or {}
+            positions = [step.get('positioning', {}) for phase in ('before_leading_air', 'before_liquid', 'before_dispense')
+                         for step in recipe.get(phase, []) if step.get('operation') == 'position']
+            if recipe.get('multi'):
+                positions.extend(step.get('positioning', {}) for aliquot in recipe['multi'].get('aliquots', [])
+                                 for step in aliquot.get('before', []) if step.get('operation') == 'position')
+            positions = params.get('targets') or positions or [params]
+            targets[action['action_id']] = [{k: p[k] for k in ('target_location', 'location_id', 'destination_location_id', 'target', 'destination', 'operation', 'tray', 'well', 'reference_well') if k in p}
+                                            for p in positions if isinstance(p, dict)]
+
+    return {"job_id": job.job_id, "action_targets": targets, "method": snapshot.get("method") if snapshot else None,
+            "provenance": snapshot.get("compilation", {}).get("provenance", []) if snapshot else []}
+
+
 @router.get("/runs/{job_id}/report")
 async def report(job_id: str, expected_connection_generation: int | None = Query(None, ge=0),
                  runtime=Depends(get_bioxp_runtime)):
@@ -356,6 +380,18 @@ async def clone_run(job_id: str, expected_connection_generation: int | None = Qu
             "snapshot_evidence": _evidence(job, snapshot)}
 
 
+@router.post("/runs/{job_id}/recovery-preview")
+async def recovery_preview(job_id: str, data: RequestedRecovery,
+                           expected_connection_generation: int | None = Query(None, ge=0),
+                           runtime=Depends(get_bioxp_runtime)):
+    from services.bioxp.method_recovery import preview_recovery
+    job = await protocols.get_protocol_job(job_id, expected_connection_generation, False, runtime)
+    try:
+        return await run_in_threadpool(preview_recovery, job, _snapshot(job), data)
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+
+
 @router.post("/runs/{job_id}/recovery-draft")
 async def recovery(job_id: str, data: Recovery,
                    expected_connection_generation: int | None = Query(None, ge=0),
@@ -381,6 +417,111 @@ async def recovery(job_id: str, data: Recovery,
                          "strategy": "whole_original_draft_for_explicit_editing"},
             "issues": [{"code": "recovery_requires_authoring", "category": "advisory", "path": "/method",
                         "message": "Original actions retained, not replayed. Author intended recovery actions and starting assumptions; partial operations are not self-contained."}]}
+
+
+# Compact reads and small edits for API/LLM callers. Same stored document, same
+# revision rules as PUT; nothing here touches the robot.
+class OutlineRequest(Wire):
+    method: dict[str, JsonValue]
+    check: StrictBool = False
+    bindings: dict[str, JsonValue] = Field(default_factory=dict)
+    dependencies: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class EditRequest(Wire):
+    method: dict[str, JsonValue]
+    edits: list[dict[str, JsonValue]] = Field(min_length=1)
+
+
+class SavedEditRequest(Wire):
+    expected_base_revision: Revision
+    edits: list[dict[str, JsonValue]] = Field(min_length=1)
+
+
+class RecipeBuild(Wire):
+    answers: dict[str, JsonValue] = Field(default_factory=dict)
+    name: str | None = Field(None, min_length=1, max_length=255)
+    save: StrictBool = False
+
+
+def _edited(method, edits):
+    from bioxp_method_outline import apply_edits, EditError
+    try:
+        return apply_edits(method, edits)
+    except EditError as error:
+        raise HTTPException(422, {"code": "edit_rejected", "category": "representation", "edit_index": error.index,
+                                  "message": error.detail, "applied": False})
+
+
+def _recipe(recipe_id):
+    from bioxp_method_model import method_examples
+    entries = method_examples()
+    entries = entries if isinstance(entries, list) else entries.get("examples", [])
+    for entry in entries:
+        if entry.get("id") == recipe_id:
+            return entry
+    raise HTTPException(404, f"No recipe {recipe_id!r}")
+
+
+@router.post("/outline")
+async def outline_draft(data: OutlineRequest):
+    from bioxp_method_outline import outline
+    compiled = None
+    if data.check:
+        compiled = await run_in_threadpool(compile_method, deepcopy({"method": data.method, "bindings": data.bindings,
+                                                                     "dependencies": data.dependencies}))
+    return outline(deepcopy(data.method), compiled)
+
+
+@router.get("/library/{template_id}/outline")
+async def outline_saved(template_id: str, revision: int | None = Query(None, ge=0), check: bool = False,
+                        session: AsyncSession = Depends(get_session)):
+    from bioxp_method_outline import outline
+    saved = await exact_revision(session, await _template(session, "library", template_id), revision)
+    compiled = await run_in_threadpool(compile_method, {"method": deepcopy(saved["method"])}) if check else None
+    return {"id": saved["id"], "revision": saved["revision"], **outline(deepcopy(saved["method"]), compiled)}
+
+
+@router.post("/edit")
+def edit_draft(data: EditRequest):
+    """Apply addressed edits to a draft body and return it; nothing is saved."""
+    method, changes = _edited(data.method, data.edits)
+    return {"method": method, "changes": changes}
+
+
+@router.post("/library/{template_id}/edits", response_model=dict[str, JsonValue])
+async def edit_saved(template_id: str, data: SavedEditRequest, session: AsyncSession = Depends(get_session)):
+    """Apply edits to the saved head and store them as the next revision (stale base is refused like PUT)."""
+    template = await _template(session, "library", template_id)
+    head = await exact_revision(session, template, data.expected_base_revision)
+    method, changes = _edited(head["method"], data.edits)
+    _check_schema("library", method)
+    updated = await user_templates.update_user_template(template_id, user_templates.UserTemplateUpdate(
+        params=method, expected_base_revision=data.expected_base_revision), session)
+    record = await exact_revision(session, updated, data.expected_base_revision + 1)
+    return {**record, "changes": changes}
+
+
+@router.get("/recipes")
+def list_recipes():
+    """Starting points and the questions each one asks. Values are never invented here."""
+    from bioxp_method_model import method_examples
+    from bioxp_method_outline import recipes
+    entries = method_examples()
+    return recipes(entries if isinstance(entries, list) else entries.get("examples", []))
+
+
+@router.post("/recipes/{recipe_id}/build")
+async def build_recipe(recipe_id: str, data: RecipeBuild, session: AsyncSession = Depends(get_session)):
+    """Method plus bindings from the caller's answers. Optionally saved as a new library entry; never run."""
+    from bioxp_method_outline import build_recipe as build
+    try:
+        built = build(_recipe(recipe_id), data.answers, data.name)
+    except ValueError as error:
+        raise HTTPException(422, {"code": "recipe_answers", "category": "representation", "message": str(error)})
+    if data.save:
+        built["saved"] = await _create("library", DraftCreate(method=built["method"], name=data.name), session)
+    return built
 
 
 # Static run/discovery routes precede collection parameter routes.

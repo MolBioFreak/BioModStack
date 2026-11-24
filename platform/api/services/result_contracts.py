@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -671,3 +673,15 @@ def validate_design_analysis_request(design: Any, analysis_type: str) -> Optiona
 def is_design_analysis_allowed(design: Any, analysis_type: str) -> bool:
     contract = result_contract_for_design(design)
     return _token(analysis_type) in {_token(item) for item in contract.supported_analyzers}
+
+
+def _parse_job_params(raw_params: Any) -> Dict[str, Any]:
+    if isinstance(raw_params, dict):
+        return raw_params
+    if isinstance(raw_params, str) and raw_params:
+        try:
+            parsed = json.loads(raw_params)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}

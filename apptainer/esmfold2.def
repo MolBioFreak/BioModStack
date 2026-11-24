@@ -78,7 +78,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu24.04
     - PDB coordinates are sequence sources only; no structural-template conditioning is claimed here
     - no Biohub remote API path
     - model assets are expected at /weights/esmfold2/hf_home, bound from
-      /mnt/BioModStack/weights/esmfold2/hf_home on the workstation
+      $BMS_WEIGHTS/esmfold2/hf_home on the host
 
     Upstream pins:
     - Biohub/esm@c94ed8d763bbd7088b296949e5b401e8ea12073a

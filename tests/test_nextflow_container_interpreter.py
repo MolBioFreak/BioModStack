@@ -38,7 +38,8 @@ def test_nested_inventory_and_truthful_identity(monkeypatch):
     monkeypatch.setenv('BMS_CONTAINER_EXECUTABLE', '/trusted/bin/bms-container')
     lock = ROOT/'config/ngs/wf_clone_validation_v1.8.4.lock.json'
     config = wf_clone_container_config(lock)
-    assert json.loads(lock.read_text())['containers']['cache_dir'] in config
+    from scripts.validate_wf_clone_runtime import resolve_lock_path
+    assert str(resolve_lock_path(lock, json.loads(lock.read_text())['containers']['cache_dir'])) in config
     assert 'singularity.libraryDir' in config
     with pytest.raises(ValueError, match='cache naming'):
         task_container_config(image_paths={'docker://example:pin': '/cache/wrong.img'})

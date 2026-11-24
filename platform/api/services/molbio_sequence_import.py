@@ -10,7 +10,7 @@ from io import StringIO
 from typing import Any, Literal, Mapping
 
 from Bio import SeqIO
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictInt, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 from sqlalchemy import func, select
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -136,6 +136,11 @@ class SequenceImportRequest(BaseModel):
     source_provider: Literal["upload", "paste", "ncbi", "library"] | None = None
     source_id: str | None = Field(default=None, max_length=255)
 
+    @field_validator("topology_overrides", mode="before")
+    @classmethod
+    def accept_json_object_keys(cls, value: Any) -> Any:
+        return _int_ordinal_keys(value)
+
     @model_validator(mode="after")
     def require_one_source(self) -> "SequenceImportRequest":
         source_format = normalize_source_format(self.source_format)
@@ -170,6 +175,7 @@ class _ParsedRecord:
     accession: str | None = None
     organism: str | None = None
     source_topology: str | None = None
+    topology_source: str = "default"
 
 
 class SequenceImportInputError(ValueError):
@@ -221,6 +227,20 @@ def source_digest(request: SequenceImportRequest) -> str:
     if source_format in {"fasta", "genbank", "csv"}:
         return hashlib.sha256((request.source_text or "").encode("utf-8")).hexdigest()
     return hashlib.sha256(_canonical_json(_source_payload(request)).encode("utf-8")).hexdigest()
+
+
+def _int_ordinal_keys(value: Any) -> Any:
+    """JSON object keys are always strings: turn all-digit keys into ints, leave anything else to strict validation."""
+    if not isinstance(value, dict):
+        return value
+    out: dict[Any, Any] = {}
+    for key, topology in value.items():
+        if isinstance(key, str) and key.isascii() and key.isdigit():
+            key = int(key)
+        if key in out and out[key] != topology:
+            return value  # conflicting spellings of one ordinal: leave to existing validation
+        out[key] = topology
+    return out
 
 
 def _normalized_topology_overrides(
@@ -360,6 +380,11 @@ def _features_from_seqrecord(record: Any, *, ordinal: int, sequence_length: int)
     return features
 
 
+def _declared_genbank_topology(annotations: Any) -> str | None:
+    declared = str(annotations.get("topology") or "").strip().lower()
+    return declared if declared in ("circular", "linear") else None
+
+
 def _seqrecord_to_parsed(record: Any, *, ordinal: int) -> _ParsedRecord:
     try:
         sequence = canonicalize_nucleotide_sequence(str(record.seq), "dna", allow_empty=False)
@@ -410,6 +435,7 @@ def _seqrecord_to_parsed(record: Any, *, ordinal: int) -> _ParsedRecord:
         description=description,
         sequence=sequence,
         topology="linear",
+        source_topology=_declared_genbank_topology(annotations),
         features=_features_from_seqrecord(record, ordinal=ordinal, sequence_length=len(sequence)),
         accession=accession,
         organism=organism,
@@ -644,6 +670,9 @@ def _apply_topology(
                 )
             )
         record.topology = mapped or row_topology or record.source_topology or request.topology_default
+        record.topology_source = (
+            "override" if mapped else "file" if (row_topology or record.source_topology) else "default"
+        )
 
 
 def _record_report(record: _ParsedRecord) -> dict[str, Any]:
@@ -656,6 +685,7 @@ def _record_report(record: _ParsedRecord) -> dict[str, Any]:
         "sequence": record.sequence,
         "sequence_type": "dna",
         "topology": record.topology,
+        "topology_source": record.topology_source,
         "length": len(record.sequence),
         "canonical_digest": canonical_digest,
         "content_sha256": canonical_digest,

@@ -26,8 +26,8 @@ test('theme payload refuses incomplete computed theme state', () => {
 
 test('iframe messages target the exact discovered add-on origin', () => {
   assert.equal(
-    resolveExactTargetOrigin('/stats/embed/', 'https://compute-node.example/bms/'),
-    'https://compute-node.example',
+    resolveExactTargetOrigin('/stats/embed/', 'https://node.example/bms/'),
+    'https://node.example',
   );
   assert.equal(
     resolveExactTargetOrigin('https://stats.internal.example/embed/', 'https://bms.example/'),

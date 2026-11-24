@@ -13,7 +13,7 @@ from services.bioxp.connection import mask_target_url
 from services.bioxp.models import BioXpFreshnessSettings, BioXpProfile
 from services.bioxp.runtime import BioXpRuntime, bioxp_connection_enabled
 from services.bioxp.service_control import (
-    ServiceAvailability, ServiceControlError, ServiceRestartRequest,
+    ServiceAvailability, ServiceControlError, ServiceRebootResult, ServiceRestartRequest,
     ServiceRestartResult, service_control,
 )
 
@@ -72,6 +72,18 @@ async def restart_service(
 ) -> ServiceRestartResult:
     try:
         return await service_control.restart(runtime.connection)
+    except ServiceControlError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post("/service/reboot", response_model=ServiceRebootResult)
+async def reboot_robot(
+    body: ServiceRestartRequest,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> ServiceRebootResult:
+    """Operating-system reboot of the robot computer over the configured service SSH target."""
+    try:
+        return await service_control.reboot(runtime.connection)
     except ServiceControlError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 

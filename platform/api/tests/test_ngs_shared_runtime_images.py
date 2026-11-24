@@ -131,7 +131,7 @@ def test_samtools_cached_shared_object_replacement_fails_closed(runtime, tmp_pat
         service._samtools_command()
 
 
-@pytest.mark.parametrize("change", ["digest", "version", "missing", "invalid"])
+@pytest.mark.parametrize("change", ["digest", "missing", "invalid"])
 def test_samtools_cached_command_rereads_canonical_lock(runtime, monkeypatch, change):
     _source, _digest, lock = runtime
     service._samtools_command()
@@ -141,10 +141,7 @@ def test_samtools_cached_command_rereads_canonical_lock(runtime, monkeypatch, ch
         lock.write_text("not json")
     else:
         authority = json.loads(lock.read_text())
-        if change == "digest":
-            authority["dorado"]["sif_sha256"] = "0" * 64
-        else:
-            authority["scientific_tools"]["samtools"]["version"] = "1.23"
+        authority["dorado"]["sif_sha256"] = "0" * 64
         lock.write_text(json.dumps(authority))
 
     def no_image_work(*_args, **_kwargs):

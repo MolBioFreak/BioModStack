@@ -1,0 +1,28 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "confornets",
+  "name": "ConforNets (conformational mapping)",
+  "label": "starting-point",
+  "modules": [
+    "structure_prediction"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/aqlaboratory/confornets"
+  },
+  "notes": "This repository has no definition for the base image confornets.sif. Build it yourself from upstream commit 4df561a1fbd0fd2b9c7a230fa62957a837d9f72d with the code at /opt/confornets, put it in the container folder, then build this; it adds the coordinate-ledger patch on top. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "confornets-canonical.sif",
+      "def": "containers/confornets-canonical/ConforNets.def",
+      "approx_size_gb": 12,
+      "needs": [
+        "confornets.sif"
+      ],
+      "build_args": {
+        "container_dir": "{container_dir}"
+      },
+      "build_dir": "containers/confornets-canonical"
+    }
+  ],
+  "weights": []
+}

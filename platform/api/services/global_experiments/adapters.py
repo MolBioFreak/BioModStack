@@ -1972,9 +1972,55 @@ class NgsAnalysisReferenceAdapter(SequenceQcReferenceAdapter):
         return projections
 
     async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
-        receipt = await super().verify(core_session, entity_id)
+        try:
+            receipt = await super().verify(core_session, entity_id)
+        except AdapterError as exc:
+            if exc.code != "source_contract_unavailable":
+                raise
+            # Assembly, methylation, pooled, RNA and signal runs publish no
+            # construct-QC manifest. Their published files are the result.
+            return await self._verify_native_publication(core_session, entity_id)
         receipt["metadata"]["result_contract_id"] = "ngs_analysis_manifest_v1"
         return receipt
+
+    async def _verify_native_publication(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+        from starlette.concurrency import run_in_threadpool
+        from services.ngs_alignment_sessions import build_ngs_package_artifacts
+        from services.ont_ngs_completion import OntNgsCompletionError, canonical_ngs_package_authority
+        job = await core_session.get(Job, entity_id)
+        if job is None:
+            raise AdapterError("entity_not_found", "NGS analysis job does not exist")
+        params = dict(job.params or {})
+        try:
+            root = resolve_persisted_job_result_root(job)
+            artifacts = await run_in_threadpool(
+                build_ngs_package_artifacts, job.id, native_outputs=True, job_output_dir=root,
+            )
+            authority = canonical_ngs_package_authority(artifacts)
+        except (AlignmentSessionError, OntNgsCompletionError, OSError, ValueError) as exc:
+            raise AdapterError("source_contract_invalid", "native NGS publication could not be read") from exc
+        if not authority["present_artifact_count"]:
+            raise AdapterError("source_contract_unavailable", "NGS job published no result files")
+        digest = authority["artifact_set_sha256"]
+        return _receipt(
+            self,
+            entity_id=job.id,
+            content_digest=digest,
+            contract_digest=digest,
+            reopen_uri=_query_uri("/ngs", job_id=job.id),
+            metadata={
+                "canonical_state": str(job.status),
+                "job_status": str(job.status),
+                "model_id": job.model_id,
+                "workflow_id": params.get("ont_workflow_id") or params.get("workflow_id"),
+                "input_mode": params.get("ont_input_mode") or params.get("input_mode"),
+                "analysis_status": str(job.status),
+                "artifact_count": authority["present_artifact_count"],
+                "artifact_set_sha256": digest,
+                "published_sources": sorted({str(item["source"]) for item in artifacts}),
+                "result_contract_id": "ngs_native_publication_v1",
+            },
+        )
 
 
 def _member_global_entity_id(authority: dict[str, Any]) -> str:

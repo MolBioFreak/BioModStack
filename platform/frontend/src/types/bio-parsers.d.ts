@@ -2,6 +2,7 @@ declare module '@teselagen/bio-parsers' {
     export interface ParseOptions {
         fileName?: string;
         inclusive1BasedStart?: boolean;
+        inclusive1BasedEnd?: boolean;
         jsonType?: string;
         parseOptions?: {
             inclusive1BasedStart?: boolean;

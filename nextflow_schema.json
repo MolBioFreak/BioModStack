@@ -115,10 +115,9 @@
                 },
                 "pred_method": {
                     "type": "string",
-                    "default": "af2",
-                    "description": "Structure prediction method. Choose from 'af2' (AlphaFold2 Initial-Guess) or 'boltz' (Boltz-2).",
+                    "default": "boltz",
+                    "description": "Structure prediction method. Choose from 'boltz' (Boltz-2), 'rf3' (RosettaFold3) or 'protenix'.",
                     "enum": [
-                        "af2",
                         "boltz"
                     ]
                 },
@@ -517,17 +516,6 @@
                     "format": "file-path",
                     "pattern": "\\.pdb$"
                 },
-                "af2_initial_guess": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Use an initial-guess of the target chain(s) when performing binder structure prediction. When false, AF2 will not use an initial guess. Default = true",
-                    "hidden": true
-                },
-                "af2_extra_config": {
-                    "type": "string",
-                    "hidden": true,
-                    "description": "Additional configuration parameters to pass to AlphaFold2 Initial-Guess that are not externalised in Nextflow. e.g. '-recycle 3'"
-                },
                 "boltz_recycling_steps": {
                     "type": "integer",
                     "default": 3,
@@ -618,61 +606,6 @@
                     "description": "Max PSCE score for designed side-chains. A lower score means FAMPNN is more confident in the sequence.",
                     "hidden": true
                 },
-                "af2_max_pae_interaction": {
-                    "type": "number",
-                    "description": "Max predicted aligned error for interactions e.g. 10",
-                    "hidden": true
-                },
-                "af2_max_pae_overall": {
-                    "type": "number",
-                    "description": "Max predicted aligned error for all chains e.g. 10",
-                    "hidden": true
-                },
-                "af2_max_pae_binder": {
-                    "type": "number",
-                    "description": "Max predicted aligned error for binder e.g. 5",
-                    "hidden": true
-                },
-                "af2_max_pae_target": {
-                    "type": "number",
-                    "description": "Max predicted aligned error for target e.g. 5",
-                    "hidden": true
-                },
-                "af2_min_plddt_overall": {
-                    "type": "number",
-                    "description": "Min average pLDDT score for target and binder chains e.g. 90",
-                    "hidden": true
-                },
-                "af2_min_plddt_binder": {
-                    "type": "number",
-                    "description": "Min pLDDT score required for binder e.g. 85",
-                    "hidden": true
-                },
-                "af2_min_plddt_target": {
-                    "type": "number",
-                    "description": "Min pLDDT score required for target e.g 90",
-                    "hidden": true
-                },
-                "af2_max_rmsd_overall": {
-                    "type": "number",
-                    "description": "Max RMSD when all chains are aligned e.g. 2",
-                    "hidden": true
-                },
-                "af2_max_rmsd_binder_bndaln": {
-                    "type": "number",
-                    "description": "Max binder RMSD when binder chains are aligned e.g. 1",
-                    "hidden": true
-                },
-                "af2_max_rmsd_binder_tgtaln": {
-                    "type": "number",
-                    "description": "Max binder RMSD when target chains are aligned e.g. 2",
-                    "hidden": true
-                },
-                "af2_max_rmsd_target": {
-                    "type": "number",
-                    "description": "Max target RMSD when target chains are aligned e.g. 2",
-                    "hidden": true
-                },
                 "boltz_max_overall_rmsd": {
                     "type": "number",
                     "description": "Max RMSD between all chains of Boltz-2 prediction and input design. e.g. 2",
@@ -741,12 +674,6 @@
                     "type": "string",
                     "format": "directory-path",
                     "description": "Path to the RFdiffusion model checkpoints.",
-                    "hidden": true
-                },
-                "af2_models": {
-                    "type": "string",
-                    "format": "directory-path",
-                    "description": "Path to the AlphaFold2 databases.",
                     "hidden": true
                 },
                 "boltz_models": {

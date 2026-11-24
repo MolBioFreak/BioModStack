@@ -118,6 +118,64 @@ class PrerequisitesTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), str(managed))
 
+    def test_dispatch_validates_identity_under_retained_managed_python(self):
+        # A private venv retains this interpreter, while the launching shell's
+        # version identity changes. No packages are installed and no uv runs.
+        import venv
+        venv.EnvBuilder(with_pip=False).create(self.external / "environment")
+        state = self.receipt()
+        before = (self.external / "state.json").read_bytes()
+        probe = self.base / "dispatch.py"
+        probe.write_text(
+            "import sys, json, os\nfrom pathlib import Path\nfrom types import SimpleNamespace\n"
+            f"sys.path.insert(0, {str(ROOT)!r})\n"
+            "import biomodstack_python_prerequisites as p\n"
+            f"managed = Path({str(self.external / 'environment')!r})\n"
+            "if Path(sys.prefix) != managed:\n"
+            "    p.sys = SimpleNamespace(version_info=SimpleNamespace(major=99, minor=0), "
+            "prefix=sys.prefix, base_prefix=sys.base_prefix, argv=sys.argv)\n"
+            "p.check_environment = lambda root: 'inventory'\n"
+            "os.environ['PIP_INDEX_URL'] = 'https://unused.invalid/simple'\n"
+            f"p.dispatch_setup(Path({str(self.source)!r}))\n"
+            "assert 'PIP_INDEX_URL' not in os.environ\n"
+            "assert os.environ.get('VIRTUAL_ENV') == sys.prefix\n"
+            "assert os.environ['PATH'].split(os.pathsep)[0] == str(Path(sys.prefix) / 'bin')\n"
+            "if Path(sys.prefix) != managed:\n"
+            "    assert os.environ.get('BMS_SUPPORT_PAYLOAD_RECEIPT') == str(Path(sys.prefix) / 'support-payload.json')\n"
+            "print(json.dumps(dict(prefix=sys.prefix, version=p.identity("
+            f"Path({str(self.source)!r}))['python'])))\n"
+        )
+        result = subprocess.run([sys.executable, "-B", str(probe)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {
+            "prefix": str(self.external / "environment"), "version": p.identity(self.source)["python"]})
+        self.assertEqual((self.external / "state.json").read_bytes(), before)
+        # The optional published representation must not bounce back to the
+        # mutable environment on its next dispatch.
+        published = self.base / "published"
+        venv.EnvBuilder(with_pip=False).create(published)
+        state["support_payload"] = {"python": str(published / "bin/python"), "payload_root": str(published)}
+        p.save(self.external, state)
+        probe.write_text(probe.read_text().replace(
+            "if Path(sys.prefix) != managed:",
+            f"if Path(sys.prefix) not in (managed, Path({str(published)!r})):", 1))
+        result = subprocess.run([sys.executable, "-B", str(probe)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["prefix"], str(published))
+        before = (self.external / "state.json").read_bytes()
+        valid_probe = probe.read_text()
+        probe.write_text(valid_probe.replace("lambda root: 'inventory'", "lambda root: 'changed'"))
+        result = subprocess.run([sys.executable, "-B", str(probe)], capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Installed distribution inventory changed", result.stderr)
+        self.assertEqual((self.external / "state.json").read_bytes(), before)
+        probe.write_text(valid_probe)
+        (self.source / "platform/api/uv.lock").write_text("changed")
+        result = subprocess.run([sys.executable, "-B", str(probe)], capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Source, manifests, Python or policy changed", result.stderr)
+        self.assertEqual((self.external / "state.json").read_bytes(), before)
+
     def test_plan_no_writes_no_processes(self):
         with patch.object(p.subprocess, "run", side_effect=AssertionError("process")):
             report = p.prerequisite_report("python-plan", project_root=self.source)

@@ -17,6 +17,9 @@ from fastapi import BackgroundTasks
 
 from database import Job
 from routers import jobs
+from services import job_submission
+from services import binder_continuation
+from services import job_requests
 from test_core_protein_scientific_admission import admission
 from services.fampnn_policy_admission import compile_declaration, guard_cached_declaration
 
@@ -33,6 +36,7 @@ def pdb(domain):
 @pytest.mark.parametrize('sidechains', [False, True])
 async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_path, monkeypatch, selection, sidechains):
     import routers.files as files
+    from services import binder_source_materialization
     import services.binder_source_materialization as bsm
     import paths
     from services.nextflow import compile_job_nextflow_invocation
@@ -44,9 +48,10 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
     inputs = tmp_path / 'inputs'; inputs.mkdir()
     (tmp_path / 'results').mkdir(exist_ok=True)
     roots = {'inputs': inputs, 'bms_results': tmp_path / 'results'}
-    for module in (paths, files, jobs):
+    for module in (paths, files, binder_source_materialization, job_submission, job_requests):
         monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: inputs)
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: inputs)
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: inputs)
     selected = inputs / 'design_selections' / 'protein_local_redesign' / 'selection'; selected.mkdir(parents=True)
     sources = []
     domains = [[('A', 10, ''), ('A', 12, ''), ('B', 21, '')],
@@ -54,8 +59,10 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
     for i, domain in enumerate(domains):
         source = inputs / f'source{i}.pdb'; source.write_text(pdb(domain)); sources.append(source)
     monkeypatch.setattr(jobs, '_create_generic_selection_dir', lambda *a: selected)
-    monkeypatch.setattr(files, 'is_path_allowed', lambda p: True)
+    monkeypatch.setattr(binder_continuation, '_create_generic_selection_dir', lambda *a: selected)
+    monkeypatch.setattr(binder_source_materialization, 'is_path_allowed', lambda p: True)
     monkeypatch.setattr(jobs, 'resolve_allowed_path', lambda p: Path(p))
+    monkeypatch.setattr(job_requests, 'resolve_allowed_path', lambda p: Path(p))
     async def resolve(request, session):
         return Path(request.path), {}
     monkeypatch.setattr(bsm, 'resolve_structure_source', resolve)
@@ -69,8 +76,8 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
     monkeypatch.setattr(bsm, 'materialize_source_bytes', materialize)
     async def create(request, background, session):
         request.params['fix_fixed_sidechains'] = sidechains
-        return await jobs._create_job(request, background, session)
-    monkeypatch.setattr(jobs, 'create_job', create)
+        return await job_submission._create_job(request, background, session)
+    monkeypatch.setattr(job_submission, 'submit_job', create)
     selectors = ({'fixed_positions': 'A10,A110'} if selection == 'keep' else
                  {'designable_positions': 'A12,A112'} if selection == 'change' else {})
     request = jobs.ResequenceLaunchRequest(sources=[{'path': str(p)} for p in sources],

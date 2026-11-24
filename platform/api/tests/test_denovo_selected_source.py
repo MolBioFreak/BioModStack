@@ -7,6 +7,10 @@ import pytest
 
 from database import Job, Design
 from routers import jobs, files
+from routers import job_results
+from services import binder_source_materialization
+from services import job_submission
+from services import job_requests
 from schemas import JobCreate
 from services.binder_source_materialization import StructureSourceRequest
 from tests.test_binder_source_materialization import source_api, stores, cif
@@ -37,7 +41,7 @@ async def test_selected_source_into_different_project_real_insertion(
 
     root = tmp_path / 'owned'
     roots = {'inputs': root / 'inputs', 'bms_results': root / 'results'}
-    for module in (paths, files, jobs):
+    for module in (paths, files, binder_source_materialization, job_submission, job_requests):
         monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
     async with setup_store() as exp, isolated_core() as core:
         source_context = await destination(exp)
@@ -54,14 +58,14 @@ async def test_selected_source_into_different_project_real_insertion(
         payload = JobCreate(name='Independent destination prediction', model_id='esmfold2',
             mode='predict', params={'sequence': 'MQIFVK', 'pred_method': 'esmfold2'},
             source_structure=selection, execution_target_id=None, parent_job_id=None)
-        await jobs._prepare_selected_structure(payload, core)
+        await job_submission._prepare_selected_structure(payload, core)
         retained = payload.source_structure.model_dump(mode='json', exclude_none=True)
         retained_path = paths.resolve_allowed_path(retained['path'])
         retained_bytes = retained_path.read_bytes()
         original.unlink()
         # Reopen the exact retained source after the original producer is offline.
         clone = JobCreate.model_validate(payload.model_dump(mode='json'))
-        identity = await jobs._prepare_selected_structure(clone, core)
+        identity = await job_submission._prepare_selected_structure(clone, core)
         assert identity['owner_job_id'] == 'source'
         assert identity['lineage_root_job_id'] == 'scientific-root'
         assert clone.source_structure == payload.source_structure
@@ -101,12 +105,12 @@ async def test_selected_source_into_different_project_real_insertion(
         assert child.provenance['source_structure'] == retained
         assert retained_path.read_bytes() == retained_bytes
         assert {key: getattr(source, key) for key in source_before} == source_before
-        detail = await jobs.get_job(child.id, core)
+        detail = await job_results.get_job(child.id, core)
         assert detail.source_structure.model_dump(mode='json', exclude_none=True) == retained
         reopened = JobCreate(name='Clone retained source', model_id=child.model_id,
             mode=child.mode, params={'sequence': 'MQIFVK', 'pred_method': 'esmfold2'},
             source_structure=detail.source_structure, execution_target_id=None)
-        assert (await jobs._prepare_selected_structure(reopened, core))['owner_job_id'] == 'source'
+        assert (await job_submission._prepare_selected_structure(reopened, core))['owner_job_id'] == 'source'
 
 
 async def source_rows(session, root, native):
@@ -130,8 +134,8 @@ async def source_rows(session, root, native):
         # one generated, not accepted, source specimen; no inference is claimed.
         job.params = {'rfd3_generation_request': {}, 'rfd3_generation_result_manifest_sha256': '4' * 64,
                       'rfd3_generation_aggregate': {'requested': 1, 'generated': 1, 'accepted': 0,
-                          'length': jobs._rfd3_generation_range([1.0]),
-                          'radius_of_gyration': jobs._rfd3_generation_range([0.0])}}
+                          'length': job_results._rfd3_generation_range([1.0]),
+                          'radius_of_gyration': job_results._rfd3_generation_range([0.0])}}
         design = next(row for row in session.new if isinstance(row, Design))
         design.provenance = {**design.provenance, 'accepted': False,
                              'metrics': {'residue_count': 1, 'radius_of_gyration': 0.0,
@@ -145,7 +149,7 @@ async def source_rows(session, root, native):
 async def test_exact_source_conversion_offline_and_wrong_owner(source_api, native):
     client, session, _, root = source_api
     path, selection = await source_rows(session, root, native)
-    readback = await jobs.get_rfd3_generation_result('source', session)
+    readback = await job_results.get_rfd3_generation_result('source', session)
     row = readback['candidates'][0]
     assert row['source_structure'] == {**{k: v for k, v in selection.items() if k != 'model_number'},
                                        'output_format': 'native'}
@@ -169,18 +173,18 @@ async def test_exact_source_conversion_offline_and_wrong_owner(source_api, nativ
         params={'sequence': 'ACDE', 'boltz_use_msa': False},
         source_structure=prepared['source_structure'], execution_target_id=None)
     before = payload.params.copy()
-    identity = await jobs._prepare_selected_structure(payload, session)
+    identity = await job_submission._prepare_selected_structure(payload, session)
     assert identity['owner_job_id'] == 'source'
     assert identity['lineage_root_job_id'] == 'scientific-root'
     assert payload.params == before and payload.parent_job_id is None
     bad = payload.model_copy(deep=True)
     bad.source_structure.job_id = 'foreign'
     with pytest.raises(Exception, match='requested|belong'):
-        await jobs._prepare_selected_structure(bad, session)
+        await job_submission._prepare_selected_structure(bad, session)
     from paths import resolve_allowed_path
     resolve_allowed_path(prepared['source_structure']['path']).write_bytes(b'changed')
     with pytest.raises(Exception, match='digest'):
-        await jobs._prepare_selected_structure(payload, session)
+        await job_submission._prepare_selected_structure(payload, session)
 
 
 @pytest.mark.asyncio
@@ -216,12 +220,18 @@ async def test_preview_approved_insert_offline_independent_lineage(admission, se
         directory.mkdir(exist_ok=True)
     monkeypatch.setattr(paths, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: roots)
+    monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: roots)
     from services import job_result_roots
     monkeypatch.setattr(job_result_roots, 'get_results_dir', lambda: roots['bms_results'])
-    for module in (paths, jobs, bundle):
+    for module in (paths, job_submission, bundle):
         monkeypatch.setattr(module, 'get_results_dir', lambda: roots['bms_results'])
         monkeypatch.setattr(module, 'get_inputs_dir', lambda: roots['inputs'])
         monkeypatch.setattr(module, 'get_data_root', lambda: tmp_path)
+    from services import binder_continuation
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: roots['inputs'])
+    monkeypatch.setattr(binder_continuation, 'get_data_root', lambda: tmp_path)
+    from services import job_readback
+    monkeypatch.setattr(job_readback, 'get_data_root', lambda: tmp_path)
     monkeypatch.setattr(nextflow, 'get_work_dir', lambda: tmp_path / 'work')
     async with factory() as session:
         original, selection = await source_rows(session, tmp_path, False)
@@ -293,5 +303,5 @@ async def test_preview_approved_insert_offline_independent_lineage(admission, se
         'source_structure': detail.json()['source_structure'],
         'execution_plan_approval': None, 'execution_target_id': None})
     async with factory() as session:
-        assert (await jobs._prepare_selected_structure(clone, session))['owner_job_id'] == 'source'
+        assert (await job_submission._prepare_selected_structure(clone, session))['owner_job_id'] == 'source'
     assert clone.parent_job_id is None and clone.execution_target_id is None

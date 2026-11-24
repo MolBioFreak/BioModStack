@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pytest
 from fastapi.testclient import TestClient
 from test_annotated_structure_capture import capture_api  # noqa: F401
 from test_molecular_geometry import payload
@@ -11,7 +12,8 @@ from services.molecular_geometry_recipe import MolecularGeometryRequest
 
 
 def test_native_prepared_geometry_exact_upload_readback_materialize(capture_api):
-    assert os.environ.get('BMS_MOLECULAR_GEOMETRY_BUNDLE'), 'Native bundle required, not a skip'
+    if not os.environ.get('BMS_MOLECULAR_GEOMETRY_BUNDLE'):
+        pytest.skip('BMS_MOLECULAR_GEOMETRY_BUNDLE (native molecular geometry bundle) is not set')
     request = payload()
     result = construct_geometry(MolecularGeometryRequest.model_validate(request)).model_dump(mode='json')
     raw = result['coordinate_text'].encode()

@@ -12,7 +12,7 @@ if str(API_ROOT) not in sys.path:
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
-from routers.jobs import _normalize_antibody_job_params
+from services.job_requests import _normalize_antibody_job_params
 from screen_rfantibody_backbones import (
     annotate_loop_metrics,
     build_loop_screening_summary,

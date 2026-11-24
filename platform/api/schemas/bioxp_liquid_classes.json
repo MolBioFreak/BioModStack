@@ -7,7 +7,7 @@
   "sources": [
     {
       "id": "P",
-      "local_path": "/home/dalab/.hermes/profiles/fresh/cache/scratch/adp-pipetting.pdf",
+      "local_path": "vendor-docs/adp-pipetting.pdf",
       "title": "Pipetting with the ADP",
       "document_number": "399156",
       "revision": "V1.0",
@@ -26,7 +26,7 @@
     },
     {
       "id": "S",
-      "local_path": "/home/dalab/.hermes/profiles/fresh/cache/scratch/adp-pressure-streaming.pdf",
+      "local_path": "vendor-docs/adp-pressure-streaming.pdf",
       "title": "ADP and Pressure Streaming",
       "document_number": "399155",
       "revision": "V1.0",
@@ -41,7 +41,7 @@
     },
     {
       "id": "L",
-      "local_path": "/home/dalab/.hermes/profiles/fresh/cache/scratch/adp-liquid-level.pdf",
+      "local_path": "vendor-docs/adp-liquid-level.pdf",
       "title": "ADP and Liquid-Level Detection",
       "document_number": "399094",
       "revision": "V1.0",
@@ -56,7 +56,7 @@
     },
     {
       "id": "D",
-      "local_path": "/home/dalab/.hermes/profiles/fresh/cache/scratch/adp-detect-brochure.pdf",
+      "local_path": "vendor-docs/adp-detect-brochure.pdf",
       "title": "Cavro ADP Detect",
       "document_number": "402753",
       "revision": "V1.0",

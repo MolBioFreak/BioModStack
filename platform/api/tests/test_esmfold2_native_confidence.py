@@ -183,6 +183,15 @@ def produce(tmp_path, monkeypatch, *, confidence=True, pae=True, cif=CIF):
     else:
         monkeypatch.delenv('BMS_ESMFOLD2_EFFECTIVE_SETTINGS', raising=False)
     assert runner.main(argv) == 0
+    if not confidence:
+        for path in output.glob('*.confidence.npz'):
+            path.unlink()
+        for path in [output / 'manifest.json', *output.glob('*.metrics.json')]:
+            payload = json.loads(path.read_text())
+            for record in [payload, *payload.get('samples', [])]:
+                for key in ('native_confidence', 'confidence_dialect', 'confidence_states'):
+                    record.pop(key, None)
+            path.write_text(json.dumps(payload))
     assert len(observed) == 1
     assert observed[0][0].sequences[0].sequence == 'ACD'
     assert observed[0][1]['num_diffusion_samples'] == 2

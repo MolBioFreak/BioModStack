@@ -4,6 +4,7 @@ Collect PPIFlow maturation outputs from child job directories.
 """
 import argparse
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -35,15 +36,31 @@ def is_final_ppiflow_pdb(path: Path) -> bool:
     return name.endswith(".pdb") and "ppiflow" in name and not name.endswith("_enriched_complex.pdb")
 
 
+def host_data_root():
+    """Host path of the core-runtime state mounted at /var/lib/biomodstack."""
+    configured = os.environ.get("BMS_HOST_DATA", "").strip()
+    if configured:
+        return Path(configured)
+    config_home = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    try:
+        profile = json.loads((Path(config_home) / "biomodstack" / "install_profile.json").read_text())
+    except (OSError, ValueError):
+        return None
+    value = profile.get("data_root") if isinstance(profile, dict) else None
+    return Path(value) if isinstance(value, str) and value.strip() else None
+
+
 def candidate_output_dirs(raw_output_dir):
     raw = str(raw_output_dir)
     candidates = [Path(raw)]
     if component_runtime_enabled():
         return candidates
-    if raw.startswith("/var/lib/biomodstack/"):
-        candidates.append(Path("/mnt/BioModStack") / raw.removeprefix("/var/lib/biomodstack/"))
-    if raw.startswith("/mnt/BioModStack/"):
-        candidates.append(Path("/var/lib/biomodstack") / raw.removeprefix("/mnt/BioModStack/"))
+    host_root = host_data_root()
+    if host_root is not None:
+        if raw.startswith("/var/lib/biomodstack/"):
+            candidates.append(host_root / raw.removeprefix("/var/lib/biomodstack/"))
+        if raw.startswith(f"{host_root}/"):
+            candidates.append(Path("/var/lib/biomodstack") / raw.removeprefix(f"{host_root}/"))
 
     seen = set()
     ordered = []

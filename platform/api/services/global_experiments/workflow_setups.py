@@ -450,8 +450,8 @@ async def save_workflow_setup_draft(
     if replay is not None:
         return replay
     row = await _owned_setup(session, project_id, setup_context_id)
-    if row.lifecycle_state != "open":
-        raise ValidationFailure("only an open workflow setup can be edited")
+    if row.lifecycle_state == "deleted":
+        raise ValidationFailure("a deleted workflow setup cannot be edited")
     if row.generation != expected_generation:
         raise RevisionConflict(
             f"workflow setup generation conflict: expected {expected_generation}, current {row.generation}"
@@ -495,8 +495,8 @@ async def prepare_workflow_setup_launch(
     if replay is not None:
         return replay
     row = await _owned_setup(session, project_id, setup_context_id)
-    if row.lifecycle_state != "open" or row.validation_state != "ready":
-        raise ValidationFailure("workflow setup must be open and ready before preparation")
+    if row.lifecycle_state == "deleted" or row.validation_state != "ready":
+        raise ValidationFailure("workflow setup must be active and ready before preparation")
     if row.generation != expected_generation:
         raise RevisionConflict(
             f"workflow setup generation conflict: expected {expected_generation}, current {row.generation}"
@@ -508,7 +508,7 @@ async def prepare_workflow_setup_launch(
             ExperimentWorkflowSetupContext.setup_context_id == setup_context_id,
             ExperimentWorkflowSetupContext.project_id == project_id,
             ExperimentWorkflowSetupContext.generation == expected_generation,
-            ExperimentWorkflowSetupContext.lifecycle_state == "open",
+            ExperimentWorkflowSetupContext.lifecycle_state != "deleted",
             ExperimentWorkflowSetupContext.validation_state == "ready",
         ).values(generation=expected_generation).execution_options(synchronize_session=False)
     )
@@ -550,7 +550,7 @@ async def prepare_workflow_setup_launch(
         # consumes; otherwise valid source materialization changes Plan params.
         # Unbound authoring drafts retain their existing Prepare behavior.
         from schemas import JobCreate
-        from routers.jobs import normalize_job_request
+        from services.job_requests import normalize_job_request
         from services.native_generation_sources import prepare_native_sources
         staged = normalize_job_request(JobCreate.model_validate(native_request))
         # Use the immutable Plan's serialization before deriving closure paths.

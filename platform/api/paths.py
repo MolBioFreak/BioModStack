@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from biomodstack_runtime_profile import resolve_runtime_paths
+from biomodstack_runtime_profile import configured_data_root_candidates, resolve_runtime_paths
 
 
 def _resolve_path(value: str) -> Path:
@@ -35,7 +35,7 @@ def _runtime_paths() -> dict[str, object]:
 
 def _candidate_data_roots() -> list[Path]:
     return [
-        Path("/mnt/BioModStack"),
+        *configured_data_root_candidates(),
         _default_data_root(),
     ]
 
@@ -311,6 +311,10 @@ def get_allowed_roots() -> dict[str, Path]:
     downloads = home / "Downloads"
     if downloads.exists():
         roots["downloads"] = downloads
+    # Where the sequencer writes its runs, so a finished run's POD5 can be chosen for analysis.
+    sequencer = os.getenv("BMS_ONT_SEQUENCER_OUTPUT_ROOT", "").strip()
+    if sequencer and Path(sequencer).is_dir():
+        roots["sequencer_runs"] = Path(sequencer)
     return roots
 
 

@@ -147,8 +147,13 @@ def _runtime_image_path() -> Path | None:
     data_root = str(os.getenv("BMS_DATA") or "").strip()
     if data_root:
         candidates.append(Path(data_root) / "apptainer" / DEFAULT_GROMACS_IMAGE)
-    candidates.append(Path("/mnt/BioModStack/apptainer") / DEFAULT_GROMACS_IMAGE)
+    candidates.append(_container_dir() / DEFAULT_GROMACS_IMAGE)
     return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
+def _container_dir() -> Path:
+    from paths import get_container_dir
+    return get_container_dir()
 
 
 def _preparation_image_path() -> Path | None:
@@ -157,7 +162,7 @@ def _preparation_image_path() -> Path | None:
     data_root = str(os.getenv("BMS_DATA") or "").strip()
     if data_root:
         candidates.append(Path(data_root) / "apptainer" / DEFAULT_PREPARATION_IMAGE)
-    candidates.append(Path("/mnt/BioModStack/apptainer") / DEFAULT_PREPARATION_IMAGE)
+    candidates.append(_container_dir() / DEFAULT_PREPARATION_IMAGE)
     return next((candidate for candidate in candidates if candidate.is_file()), None)
 
 

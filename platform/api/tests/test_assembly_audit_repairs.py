@@ -21,26 +21,23 @@ def _binding():
 
 
 def _fragments(junctions, circular=False):
-    # Deliberately absent from the top strings: end metadata is not a new
-    # sequence-membership gate (including for historical saved metadata).
+    # The declared left overhang is the first bases of each sequence: Golden Gate refuses a mismatch.
     count = len(junctions) if circular else len(junctions) + 1
+    lefts = [junctions[i-1] if i or circular else "ACGA" for i in range(count)]
     return [AssemblyFragment(
-        id=str(i), name=f"part {i}", sequence="CCCCCCCC",
-        left_end=FragmentEnd("sticky_5", junctions[i-1] if i or circular else "ACGA"),
+        id=str(i), name=f"part {i}", sequence=lefts[i] + "CCCC",
+        left_end=FragmentEnd("sticky_5", lefts[i]),
         right_end=FragmentEnd("sticky_5", junctions[i] if i < len(junctions) else "TCGA"),
         metadata={"legacy_saved": {"end_label": "retained", "unknown": [1, 2]}},
     ) for i in range(count)]
 
 
 @pytest.mark.parametrize("circular", [False, True])
-@pytest.mark.parametrize("junctions,duplicates,palindromes", [
-    (["AATG", "AGAC"], 0, 0),
-    (["AATG", "AATG"], 1, 0),
-    (["AATG", "CATT"], 1, 0),
-    (["ATAT", "AGAC"], 0, 1),
-    (["ATAT", "ATAT"], 1, 1),
+@pytest.mark.parametrize("junctions,palindromes", [
+    (["AATG", "AGAC"], 0),
+    (["ATAT", "AGAC"], 1),
 ])
-def test_warnings_do_not_block_or_change_product(junctions, duplicates, palindromes, circular):
+def test_warnings_do_not_block_or_change_product(junctions, palindromes, circular):
     fragments = _fragments(junctions, circular)
     before = [asdict(fragment) for fragment in fragments]
     reference = simulate_ligation(fragments, circular=circular, mode="golden_gate")
@@ -50,7 +47,6 @@ def test_warnings_do_not_block_or_change_product(junctions, duplicates, palindro
     assert result.fragments == reference.fragments
     assert result.junctions == reference.junctions
     assert [asdict(fragment) for fragment in fragments] == before
-    assert sum("is reused" in warning for warning in result.warnings) == duplicates
     assert sum("is palindromic" in warning for warning in result.warnings) == palindromes
     assert all("may occur" in warning for warning in result.warnings)
     again = simulate_golden_gate(fragments, enzyme=resolve_golden_gate_enzyme(**_binding()), circular=circular)
@@ -66,16 +62,16 @@ def client():
         yield result
 
 
-def test_public_golden_gate_keeps_legacy_metadata_and_no_sequence_gate(client):
-    fragments = _fragments(["ATAT", "ATAT"])
+def test_public_golden_gate_keeps_legacy_metadata(client):
+    fragments = _fragments(["ATAT", "AGAC"])
     response = client.post("/api/molbio/assembly/golden-gate/simulate", json={
         "fragments": [asdict(fragment) for fragment in fragments],
         "circular": False, **_binding(),
     })
     assert response.status_code == 200, response.text
     product = response.json()["product"]
-    assert product["sequence"] == "CCCCCCCC" * 3
-    assert len(product["warnings"]) == 2
+    assert product["sequence"] == "".join(fragment.sequence for fragment in fragments)
+    assert len(product["warnings"]) == 1
     assert [fragment["metadata"] for fragment in product["fragments"]] == [fragment.metadata for fragment in fragments]
 
 

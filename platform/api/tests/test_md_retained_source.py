@@ -70,6 +70,37 @@ async def test_selected_retained_source_survives_producer_cleanup(tmp_path, retu
     wrong.candidate_ref.model = 1
     with pytest.raises(sources.StartingStructureError, match='different selection'):
         await sources.resolve_source(wrong, Session())
+    selected_leaf = root / retained['snapshot']['structure'] if returned else selected
+    selected_leaf.unlink()
+    with pytest.raises(sources.StartingStructureError):
+        await sources.resolve_source(ref, Session())
+    selected_leaf.write_bytes(ensemble())
+    with pytest.raises(sources.StartingStructureError):
+        await sources.resolve_source(ref, Session())
+    if not returned:
+        # Historical selected-only custody must not manufacture an original.
+        selected_leaf.write_bytes(expected)
+        original_record = provenance.pop('original_snapshot')
+        reopened = await sources.resolve_source(ref, Session())
+        try:
+            assert sources.read_resolved_structure(reopened).data == expected
+            assert reopened.original_runtime_path is None
+        finally:
+            reopened.close()
+        # Explicit original-only recovery is possible, but is not selected custody.
+        provenance['original_snapshot'] = original_record
+        del provenance['snapshot']
+        selected_leaf.unlink()
+        recovered = await sources.resolve_source(ref, Session())
+        try:
+            assert sources.read_resolved_structure(recovered).data == expected
+            assert 'snapshot' not in recovered.source_provenance
+            assert not selected_leaf.exists()
+        finally:
+            recovered.close()
+        provenance['source_sha256'] = '0' * 64
+        with pytest.raises(sources.StartingStructureError, match='recovered'):
+            await sources.resolve_source(ref, Session())
     job.output_dir = str(tmp_path / 'not-returned')
     with pytest.raises(sources.StartingStructureError, match='unavailable'):
         await sources.resolve_source(ref, Session())

@@ -1,15 +1,14 @@
-import { resolveApiResourceUrl } from '../../../runtime/tailnetEnvironment';
 import { digestFragmentsForAssembly } from '../../../lib/digestAssemblyTransfer';
 import type { AssemblyFragmentInput } from '../../../lib/api';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { saveRestrictionDigest, restrictionRecognitionSite } from '../../../lib/restrictionAnalysis';
+import { saveRestrictionDigest, restrictionRecognitionSite, digestCleavages, type RestrictionCleavageEvent } from '../../../lib/restrictionAnalysis';
 import { restrictionSpecialCase } from '../../../lib/restrictionSpecialCases';
-import { hasStickyDigestEnds } from '../../../lib/retainedDigestFragment';
 import type { HighlightedRegion, SelectionInfo, SequenceData } from '../types';
 import type {
     RestrictionAnalysisBatch,
     RestrictionCatalogReceipt,
     RestrictionDigestEnd,
+    RestrictionDigestSaveAcknowledgement,
     RestrictionDigestSimulation,
     RestrictionProductReleaseReceipt,
     RestrictionRecord,
@@ -17,7 +16,7 @@ import type {
 } from '../../../lib/restrictionAnalysis';
 
 type CutFilter = 'all' | 'zero' | 'unique' | 'double' | 'three_plus' | 'selection';
-type GroupFilter = 'all' | 'digest' | 'nicking' | 'recognition_only' | 'special';
+type GroupFilter = 'all' | 'golden_gate' | 'digest' | 'nicking' | 'recognition_only' | 'special';
 export type QuickMapGroup = 'unique' | 'double' | 'three_plus' | 'nicking' | 'type_iis';
 
 interface DigestPanelProps {
@@ -43,7 +42,7 @@ interface DigestPanelProps {
     digestLoading: boolean;
     digestError: string | null;
     onDigestSelectionChange: (enzymeIds: string[]) => void;
-    onSimulateDigest: (enzymeIds: string[]) => void;
+    onSimulateDigest: (enzymeIds: string[], excludedCleavageGroupIds?: string[]) => void;
     onAnalyzeAll?: () => Promise<RestrictionAnalysisBatch | undefined> | void;
     onReadEnzymeDetails?: (enzymeIds: string[]) => Promise<RestrictionRecord[]>;
 }
@@ -80,6 +79,11 @@ export function toggleQuickMapGroupSelection(state: QuickMapSelectionState, manu
 }
 
 function endLabel(end: RestrictionDigestEnd): string {
+    const state = end.five_prime_phosphate ?? (end.enzyme_created ? 'phosphorylated' : 'unknown');
+    const phosphate = state === 'phosphorylated' ? ' (5′ phosphate)' : state === 'unphosphorylated' ? ' (5′ OH)' : '';
+    return endLabelBase(end) + phosphate;
+}
+function endLabelBase(end: RestrictionDigestEnd): string {
     if (end.kind === 'five_prime_overhang') return `5′ ${end.overhang_sequence_5to3} overhang`;
     if (end.kind === 'three_prime_overhang') return `3′ ${end.overhang_sequence_5to3} overhang`;
     if (end.kind === 'blunt') return 'blunt end';
@@ -117,6 +121,7 @@ function filterEnzymeRows(rows: EnzymeCutData[], searchQuery: string, groupFilte
         if (Boolean(restrictionSpecialCase(record.enzyme_id)) !== (groupFilter === 'special')) return false;
         if (query && ![record.enzyme_id, record.canonical_name, restrictionRecognitionSite(record), ...record.aliases].some(value => value.toLowerCase().includes(query))) return false;
         if (groupFilter === 'special') return true; // Motif counts are not ordinary cut-count filters.
+        if (groupFilter === 'golden_gate' && !record.golden_gate_compatible) return false;
         if (groupFilter === 'digest' && record.analysis_capability !== 'digest_simulation') return false;
         if (groupFilter === 'nicking' && (summary?.nick_count ?? 0) === 0) return false;
         if (groupFilter === 'recognition_only' && record.analysis_capability !== 'recognition_only') return false;
@@ -132,14 +137,13 @@ function filterEnzymeRows(rows: EnzymeCutData[], searchQuery: string, groupFilte
 }
 
 const CUT_FILTERS: Array<[CutFilter, string]> = [['all','All'],['unique','1x'],['double','2x'],['three_plus','3x+'],['zero','0x'],['selection','In Selection']];
-const GROUP_FILTERS: Array<[GroupFilter, string]> = [['all','All Types'],['digest','Digest-ready'],['nicking','Nicking'],['recognition_only','Recognition only']];
+const GROUP_FILTERS: Array<[GroupFilter, string]> = [['all','All Types'],['golden_gate','Golden Gate'],['digest','Digest-ready'],['nicking','Nicking'],['recognition_only','Recognition only']];
 const QUICK: Array<[QuickMapGroup, string]> = [['unique','Map all 1x'],['double','Map all 2x'],['three_plus','Map all 3x+'],['nicking','Map nicking'],['type_iis','Map Golden Gate']];
 
 export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, groupSameSiteLabels = true, onGroupSameSiteLabelsChange, catalog, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest, onAnalyzeAll, onReadEnzymeDetails, productEvidence, sequenceId, onUseInAssembly }: DigestPanelProps) {
     const substrateError = sequenceData.moleculeStrandedness !== 'double'
         ? 'Digest requires confirmed double-stranded DNA. Single-stranded or unknown substrates are unsupported.'
-        : hasStickyDigestEnds(sequenceData.digestFragment)
-            ? 'Redigestion of a retained sticky-ended fragment is unsupported. Preserve its exact duplex ends for assembly.' : null;
+        : null;
     const [assemblySelection, setAssemblySelection] = useState<{simulation: RestrictionDigestSimulation; indices: number[]} | null>(null);
     const assemblyIndices = assemblySelection?.simulation === digestSimulation ? assemblySelection.indices : [];
     const [digestEnzymes, setDigestEnzymes] = useState<string[]>([]);
@@ -159,20 +163,39 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
         }
     };
     const visibleDetails = detailState?.key === detailKey ? detailState : null;
-    const [saveState, setSaveState] = useState<{ simulation: RestrictionDigestSimulation; pending?: boolean; operationId?: string; error?: string } | null>(null);
+    const [saveState, setSaveState] = useState<{ simulation: RestrictionDigestSimulation; pending?: boolean; saved?: RestrictionDigestSaveAcknowledgement; error?: string } | null>(null);
+    const pendingExcluded = useRef<string[] | null>(null);
+    const [excluded, setExcluded] = useState<string[]>([]);
+    const [simulatedExcluded, setSimulatedExcluded] = useState<{ simulation: RestrictionDigestSimulation | null; ids: string[] }>({ simulation: null, ids: [] });
+    const [savedOpen, setSavedOpen] = useState(false);
+    const appliedExcluded = simulatedExcluded.simulation === digestSimulation ? simulatedExcluded.ids : [];
+    const runDigest = (ids: string[]) => { pendingExcluded.current = ids; setSimulatedExcluded({ simulation: null, ids }); if (ids.length) onSimulateDigest(digestEnzymes, ids); else onSimulateDigest(digestEnzymes); };
     const saveRequest = useRef<{ simulation: RestrictionDigestSimulation; key: string } | null>(null);
     const saveDigest = async () => {
         if (!digestSimulation) return;
         if (saveRequest.current?.simulation !== digestSimulation) saveRequest.current = { simulation: digestSimulation, key: crypto.randomUUID() };
         setSaveState({ simulation: digestSimulation, pending: true });
         try {
-            const operationId = await saveRestrictionDigest(digestSimulation, saveRequest.current.key);
-            setSaveState(current => current?.simulation === digestSimulation ? { simulation: digestSimulation, operationId } : current);
+            const saved = await saveRestrictionDigest(digestSimulation, saveRequest.current.key, appliedExcluded);
+            setSaveState(current => current?.simulation === digestSimulation ? { simulation: digestSimulation, saved } : current);
         } catch (error) {
             setSaveState(current => current?.simulation === digestSimulation ? { simulation: digestSimulation, error: error instanceof Error ? error.message : 'Digest save failed.' } : current);
         }
     };
     const currentSave = saveState?.simulation === digestSimulation ? saveState : null;
+    // The server lists only the sites that were cut, so keep the list from the run with nothing excluded and show it
+    // while exclusions are applied; otherwise an unchecked site could not be switched back on.
+    const siteListKey = digestSimulation ? JSON.stringify([digestSimulation.source, digestSimulation.selected_enzyme_ids]) : '';
+    const allSites = useRef<{ key: string; sites: RestrictionCleavageEvent[] } | null>(null);
+    if (digestSimulation && !digestSimulation.excluded_cleavage_group_ids?.length) allSites.current = { key: siteListKey, sites: digestCleavages(digestSimulation) };
+    const cleavageSites = !digestSimulation ? []
+        : digestSimulation.excluded_cleavage_group_ids?.length && allSites.current?.key === siteListKey ? allSites.current.sites
+        : digestCleavages(digestSimulation);
+        useEffect(() => {
+        if (digestSimulation && pendingExcluded.current && simulatedExcluded.simulation === null) {
+            setSimulatedExcluded({ simulation: digestSimulation, ids: pendingExcluded.current });
+        }
+    }, [digestSimulation, simulatedExcluded.simulation]);
     const [searchQuery, setSearchQuery] = useState('');
     const [displayPage, setDisplayPage] = useState(0);
     const [cutFilter, setCutFilter] = useState<CutFilter>('all');
@@ -209,6 +232,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
 
     useEffect(() => {
         setDigestEnzymes([]);
+        setExcluded([]);
         onDigestSelectionChange([]);
         const previous = mappingContextRef.current;
         if (previous.sequenceId !== sequenceId || previous.dna !== sequenceData.sequence || previous.circular !== sequenceData.circular
@@ -225,7 +249,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
     const filtered = useMemo(() => filterEnzymeRows(enzymeData, searchQuery, groupFilter, cutFilter), [cutFilter, enzymeData, groupFilter, searchQuery]);
     const specialCasesVisible = groupFilter === 'special';
     const displayCounts = useMemo(() => {
-        const rows = (analysis?.analysis.enzyme_summaries ?? []).filter(row => Boolean(restrictionSpecialCase(row.enzyme_id)) === specialCasesVisible);
+        const rows = filtered.flatMap(row => row.summary ? [row.summary] : []);
         return rows.reduce((counts, row) => ({
             definite: counts.definite + row.recognition_site_count_definite,
             possible: counts.possible + row.recognition_site_count_possible,
@@ -233,7 +257,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
             nicks: counts.nicks + row.nick_count,
             enzymes: counts.enzymes + 1,
         }), { definite: 0, possible: 0, dsb: 0, nicks: 0, enzymes: 0 });
-    }, [analysis, specialCasesVisible]);
+    }, [filtered]);
     const filteredMapIds = useMemo(() => filtered.filter(({ summary }) => summary !== null && summary.recognition_site_count_definite + summary.recognition_site_count_possible > 0).map(({ record }) => record.enzyme_id), [filtered]);
 
     // Paging only bounds mounted rows; special cases remain available by explicit choice.
@@ -242,7 +266,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
     const displayed = filtered.slice(currentPage * 50, (currentPage + 1) * 50);
     useEffect(() => { setDisplayPage(0); }, [searchQuery, cutFilter, groupFilter, sequenceData.sequence, sequenceData.circular, catalog?.catalog_sha256, groupFilter]);
 
-    const updateDigest = (next: string[]) => { setDigestEnzymes(next); onDigestSelectionChange(next); };
+    const updateDigest = (next: string[]) => { setDigestEnzymes(next); setExcluded([]); onDigestSelectionChange(next); };
     const toggleDigest = (id: string) => updateDigest(digestEnzymes.includes(id) ? digestEnzymes.filter((entry) => entry !== id) : [...digestEnzymes, id]);
     const toggleMap = (id: string) => {
         const isSelected = selectedEnzymes.includes(id);
@@ -274,6 +298,12 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
         const request = Symbol(group);
         const activate = !activeGroupsRef.current.has(group);
         if (activate) {
+            if (group === 'type_iis') {
+                setGroupFilter('golden_gate');
+                setCutFilter('all');
+                setSearchQuery('');
+                setDisplayPage(0);
+            }
             pendingGroups.current.set(group, request);
             setPendingMappingCount(pendingGroups.current.size);
             setMappingError(null);
@@ -353,6 +383,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
             {analysis?.complete === false && <span className="text-amber-300">Partial scan: {analysis.analysis.enzyme_summaries.length}/{analysis.requested_enzyme_count} requested enzymes analyzed.</span>}
         </div>
         {analysis && <div data-restriction-counts="true" className="grid grid-cols-3 gap-2 px-3 text-xs text-slate-300">
+            <p className="col-span-3 text-slate-400">Totals for the current list filters</p>
             <div><strong>{displayCounts.definite}</strong> definite {specialCasesVisible ? 'sequence-motif' : 'enzyme-site'} match{displayCounts.definite === 1 ? '' : 'es'} <span className="text-slate-500">across {displayCounts.enzymes} analyzed enzymes</span><div className="text-slate-500"><strong>{displayCounts.possible}</strong> possible match{displayCounts.possible === 1 ? '' : 'es'}</div></div>
             {specialCasesVisible ? <div className="col-span-2 text-amber-200">Sequence motifs only; no cuts on unmodified DNA.</div> : <><div><strong>{displayCounts.dsb}</strong> predicted DSB{displayCounts.dsb === 1 ? '' : 's'}</div><div><strong>{displayCounts.nicks}</strong> nicks</div></>}
         </div>}
@@ -361,6 +392,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
         <div data-digest-mobile-sticky-search={mobile ? 'true' : undefined} className="space-y-2 px-3">
             <button type="button" aria-pressed={specialCasesVisible} onClick={() => { setGroupFilter(specialCasesVisible ? 'all' : 'special'); setCutFilter('all'); setDisplayPage(0); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-3 py-1 ${specialCasesVisible ? 'border-amber-400 bg-amber-900/40' : 'border-slate-600 bg-slate-800'}`}>Special cases</button>
             {specialCasesVisible && <p className="text-xs text-amber-200">These enzymes require modified cytosines. Sequence matches alone do not establish cleavage; substrate requirements differ by enzyme. Map them here to inspect sequence motifs.</p>}
+            {groupFilter === 'golden_gate' && <p className="text-xs text-slate-400">Type IIS candidates with compatible cut geometry. Map actions add to the existing selection.</p>}
             <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search enzyme or recognition site…" data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 ${mobile ? 'min-h-12 min-w-12' : ''}`} />
             {!compactLandscape && <>{!specialCasesVisible && <div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{CUT_FILTERS.map(([value,label]) => <button key={value} onClick={() => { setCutFilter(value); if (value !== 'all') requestCountAnalysis(); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${cutFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div>}{!specialCasesVisible && <div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{GROUP_FILTERS.map(([value,label]) => <button key={value} onClick={() => { setGroupFilter(value); if (value === 'nicking') requestCountAnalysis(); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${groupFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div>}<div data-digest-bulk-map="true" className="flex gap-1 overflow-x-auto"><button disabled={hasFullAnalysis && filteredMapIds.length === 0} onClick={() => void mapFiltered()} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border border-cyan-600 bg-cyan-950/50 px-2 disabled:opacity-40`}>Map filtered ({filteredMapIds.length})</button><button disabled={selectedEnzymes.length === 0 && pendingMappingCount === 0} onClick={clearMap} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 disabled:opacity-40`}>Clear map ({selectedEnzymes.length})</button></div>{!specialCasesVisible && <div data-digest-quick-map="true" className="flex gap-1 overflow-x-auto">{QUICK.map(([value,label]) => <button key={value} aria-pressed={activeQuickMapGroups.has(value)} aria-busy={pendingGroups.current.has(value)} onClick={() => void toggleQuick(value)} className={`${mobile ? 'min-h-12 min-w-12' : ''} ${activeQuickMapGroups.has(value) ? 'border-cyan-400 bg-cyan-700' : 'border-slate-600 bg-slate-800'} rounded border px-2`}>{label}</button>)}</div>}</>}
         </div>
@@ -392,13 +424,20 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
             {digestEnzymes.some(id => id === 'DpnI' || id === 'MalI') && <p className="mb-2 text-xs text-amber-200">DpnI/MalI require methylated adenine at GATC. Ordinary unmethylated PCR products are not substrates.</p>}
             <div className="mb-2 flex gap-1 overflow-x-auto">{digestEnzymes.map((id) => <button key={id} onClick={() => toggleDigest(id)} className="rounded border border-amber-500 px-2">{id} ×</button>)}</div>
             {digestEnzymes.some(id => restrictionSpecialCase(id)) && <p className="mb-2 text-xs text-amber-200">Special-case simulation shows motif-based geometry, not cleavage of unmodified DNA.</p>}
-            <button onClick={() => onSimulateDigest(digestEnzymes)} disabled={digestLoading || digestEnzymes.length === 0 || Boolean(substrateError)} data-digest-mobile-run={mobile ? 'true' : undefined} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded bg-cyan-600 py-2 disabled:bg-slate-600 ${mobile ? 'min-h-12 min-w-12' : ''}`}>{digestLoading ? 'Digesting…' : `Run Digest (${digestEnzymes.length} enzyme${digestEnzymes.length === 1 ? '' : 's'})`}</button>
+            <button onClick={() => runDigest(excluded)} disabled={digestLoading || digestEnzymes.length === 0 || Boolean(substrateError)} data-digest-mobile-run={mobile ? 'true' : undefined} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded bg-cyan-600 py-2 disabled:bg-slate-600 ${mobile ? 'min-h-12 min-w-12' : ''}`}>{digestLoading ? 'Digesting…' : `Run Digest (${digestEnzymes.length} enzyme${digestEnzymes.length === 1 ? '' : 's'})`}</button>
             {digestSimulation?.source?.kind === 'molecular_revision' && <div>
-                <button type="button" onClick={saveDigest} disabled={currentSave?.pending || !!currentSave?.operationId} className="rounded border px-3 py-2 disabled:opacity-40">{currentSave?.pending ? 'Saving…' : 'Save digest & fragments'}</button>
-                {onUseInAssembly && digestSimulation && <div><p>Select physical fragments for Assembly (order can be edited there):</p>{digestSimulation.fragments.map(f => <label key={f.fragment_index}><input type="checkbox" aria-label={`Use digest fragment ${f.fragment_index}`} checked={assemblyIndices.includes(f.fragment_index)} onChange={e => setAssemblySelection({simulation:digestSimulation,indices:e.target.checked ? [...assemblyIndices,f.fragment_index] : assemblyIndices.filter(i => i !== f.fragment_index)})}/>{f.fragment_index}: {f.top_strand_sequence.length} bp</label>)}<button disabled={!assemblyIndices.length} onClick={() => onUseInAssembly(digestFragmentsForAssembly(digestSimulation,assemblyIndices,sequenceId,sequenceData.name))}>Use selected fragments in assembly</button></div>}
-                {currentSave?.operationId && <a className="ml-2 underline" href={resolveApiResourceUrl(`/api/molbio/restriction/digests/${encodeURIComponent(currentSave.operationId)}`)} target="_blank" rel="noreferrer">Open saved digest</a>}
+                <button type="button" onClick={saveDigest} disabled={currentSave?.pending || !!currentSave?.saved} className="rounded border px-3 py-2 disabled:opacity-40">{currentSave?.pending ? 'Saving…' : 'Save digest & fragments'}</button>
+                {onUseInAssembly && <div className="mt-2 space-y-1 text-xs"><p>Select physical fragments for Assembly (order can be edited there):</p>{digestSimulation.fragments.map(f => <label key={f.fragment_index} className="flex items-center gap-2"><input type="checkbox" aria-label={`Use digest fragment ${f.fragment_index}`} checked={assemblyIndices.includes(f.fragment_index)} onChange={e => setAssemblySelection({simulation:digestSimulation,indices:e.target.checked ? [...assemblyIndices,f.fragment_index] : assemblyIndices.filter(i => i !== f.fragment_index)})}/>{f.fragment_index}: {f.top_strand_sequence.length} bp</label>)}<button className="mt-1 rounded border px-2 py-1 disabled:opacity-40" disabled={!assemblyIndices.length} onClick={() => onUseInAssembly(digestFragmentsForAssembly(digestSimulation,assemblyIndices,sequenceId,sequenceData.name,currentSave?.saved))}>Use selected fragments in assembly</button></div>}
+                {currentSave?.saved && <button type="button" className="ml-2 underline" aria-expanded={savedOpen} onClick={() => setSavedOpen(open => !open)}>Open saved digest</button>}
+                {currentSave?.saved && savedOpen && <div data-saved-digest-fragments="true" className="mt-2 space-y-1 rounded border border-slate-700 p-2 text-xs">{currentSave.saved.outputs.map(output => <div key={output.output_edge_id} data-saved-digest-fragment={output.fragment_index} className="flex items-center justify-between gap-2"><span>#{output.fragment_index + 1} · {output.name} · {output.content_length} bp · {output.topology}</span>{onUseInAssembly && <button type="button" className="rounded border px-2" onClick={() => onUseInAssembly(digestFragmentsForAssembly(digestSimulation, [output.fragment_index], sequenceId, sequenceData.name, currentSave.saved))}>Use in assembly</button>}</div>)}</div>}
                 {currentSave?.error && <p role="alert">{currentSave.error}</p>}
             </div>}
+            {digestSimulation && cleavageSites.length > 0 && <div data-digest-sites="true" className="mt-2 space-y-1 rounded border border-slate-700 p-2 text-xs">
+                <div className="text-slate-300">Cleavage sites (uncheck to leave a site uncut):</div>
+                {cleavageSites.map(c => <label key={c.contributor_group_id} className="flex items-center gap-2"><input type="checkbox" aria-label={`Cut site ${c.contributor_group_id}`} checked={!excluded.includes(c.contributor_group_id)} onChange={e => setExcluded(e.target.checked ? excluded.filter(id => id !== c.contributor_group_id) : [...excluded, c.contributor_group_id])} />{c.contributing_enzyme_ids.join('/')} · cut after bp {c.top_boundary}</label>)}
+                <button type="button" disabled={digestLoading || JSON.stringify([...excluded].sort()) === JSON.stringify([...appliedExcluded].sort())} onClick={() => runDigest(excluded)} className="rounded border px-2 py-1 disabled:opacity-40">Re-digest with selected sites</button>
+            </div>}
+            {digestSimulation?.not_cuttable?.map(site => <p key={`${site.enzyme_id}:${site.site_start}`} className="mt-1 text-xs text-amber-200">{site.enzyme_id} site at {site.site_start + 1}: not cuttable on this fragment</p>)}
             {digestSimulation && <div data-digest-mobile-result={mobile ? 'true' : undefined} className="mt-2 space-y-1 rounded border border-cyan-700 p-2"><div>{digestSimulation.fragments.length} predicted sequence fragments</div>{[...(digestSimulation.warnings ?? []), ...(digestSimulation.limitations ?? [])].map(note => <p key={note} className="text-amber-200">{note}</p>)}{digestSimulation.fragments.map((fragment) => <div key={fragment.fragment_index} data-fragment-index={fragment.fragment_index} className="rounded bg-slate-800 p-2 text-xs"><strong>#{fragment.fragment_index + 1} · {fragment.reference_span_bp} bp</strong><div>Left: {endLabel(fragment.left_end)}</div><div>Right: {endLabel(fragment.right_end)}</div></div>)}</div>}
         </div>
     </div>;

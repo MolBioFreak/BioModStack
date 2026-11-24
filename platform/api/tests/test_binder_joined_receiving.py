@@ -5,6 +5,7 @@ The protein graph additionally runs real Nextflow with explicitly inert science.
 """
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 
@@ -23,6 +24,13 @@ from test_remote_lifecycle_gaps import store, receipt
 REPO = Path(__file__).resolve().parents[3]
 
 
+def ppiflow_source():
+    value = os.environ.get('BMS_TEST_PPIFLOW_SOURCE')
+    if not value:
+        pytest.skip('Set BMS_TEST_PPIFLOW_SOURCE to the full pinned source export')
+    return Path(value)
+
+
 def write_outputs(root, model, scratch, monkeypatch):
     """Reuse existing writer fixtures, keeping their inert provenance explicit."""
     root.mkdir(parents=True, exist_ok=True)
@@ -34,10 +42,9 @@ def write_outputs(root, model, scratch, monkeypatch):
             path.write_bytes(inert_cif(design='t_seq0'))
     elif model == 'ppiflow':
         import importlib
-        import os
         monkeypatch.syspath_prepend(str(REPO / 'tests'))
+        native_source = ppiflow_source()
         fixture = importlib.import_module('test_ppiflow_target_producer_mapping')
-        native_source = Path(os.environ['BMS_TEST_PPIFLOW_SOURCE'])
         native_io = fixture.native_io.__wrapped__(native_source)
         fixture.test_actual_parser_crop_dataset_writer_and_projection(
             scratch, native_source, native_io, False)
@@ -138,7 +145,8 @@ async def test_actual_join_offline_retry_sources(store, tmp_path, monkeypatch, m
     monkeypatch.setattr('services.nextflow.launch_nextflow_job', forbidden)
     monkeypatch.setattr('services.result_state_integrity.finalize_successful_job', forbidden)
     monkeypatch.setattr(materializer, 'to_allowed_relative', str)
-    monkeypatch.setattr('routers.jobs.get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr('services.job_submission.get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr('services.binder_continuation.get_inputs_dir', lambda: tmp_path / 'inputs')
 
     # The old unjoined helper rejects this actual archive before any publication.
     async with store() as session:
@@ -226,11 +234,10 @@ async def test_actual_join_offline_retry_sources(store, tmp_path, monkeypatch, m
     (False, 4, True, False), (False, 4, True, True)])
 async def test_actual_protein_graph_partial_samples_survive_return(store, tmp_path, monkeypatch,
                                                                   fail_after_one, expected, redesign, anchors):
-    import os
     import importlib
+    native = ppiflow_source()
     monkeypatch.syspath_prepend(str(REPO / 'tests'))
     graph = importlib.import_module('test_ppiflow_protein_partial')
-    native = Path(os.environ['BMS_TEST_PPIFLOW_SOURCE'])
     graph_root = tmp_path / 'graph'; graph_root.mkdir()
     monkeypatch.setenv('NXF_HOME', str(tmp_path / 'nextflow-home'))
     monkeypatch.setenv('NXF_OFFLINE', 'true')

@@ -177,7 +177,7 @@ async def test_rf3_export_filter_receipt_sqlite_api(tmp_path, monkeypatch):
     from test_rf_filter_stage_accounting import job
     from test_core_protein_candidates import setup
     from services import result_ingester, rf_filter_task_roster as roster
-    from routers.jobs import get_job
+    from routers.job_results import get_job
     test_native_rf3_export_to_prediction_cli(tmp_path, None)
     publication = tmp_path / 'results/best_designs'; publication.mkdir(parents=True)
     selected = next((tmp_path / 'out').glob('*.pdb'))
@@ -203,6 +203,8 @@ async def test_rf3_export_filter_receipt_sqlite_api(tmp_path, monkeypatch):
     roster.begin(owner, owner.params); roster.observe(owner, '[ab/123456] Submitted process > FilterRF3 (1)'); roster.finish(owner, 0)
     async def later_owner(*a, **k): return 17
     monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', later_owner)
+    # Primary publication now runs before the optional component; this Job's primary owner is RFD3.
+    monkeypatch.setattr('services.rfd3_generation_results._ingest_rfd3_generation_manifest', later_owner)
     factory, engine = await setup(tmp_path)
     try:
         async with factory() as db:

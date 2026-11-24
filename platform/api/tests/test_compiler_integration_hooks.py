@@ -195,10 +195,11 @@ async def test_local_md_completion_orders_native_validation_before_promotion(mon
     from services.md import completion
     from services import result_ingester, result_state_integrity
     events = []
-    job = SimpleNamespace(child_output_dir='original', provenance={
+    job = SimpleNamespace(child_output_dir='original', nextflow_run_id='unit', remote_attempt_id=None, provenance={
         'component_context_path':'private-context', 'component_retry_execution': {'output_dir':'generation-1'}})
     async def ingest(*args): events.append('ingest')
-    async def validate(current, session):
+    async def validate(current, session, *, expected_attempt):
+        assert expected_attempt == ('unit', None)
         assert current.child_output_dir == 'generation-1'
         events.append('native')
         if failure: raise ValueError('native rejection fixture')

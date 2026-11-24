@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import hashlib
 import json
 import re
@@ -11,6 +12,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from phase0_roots import build_root, container_dir, weights_root
 
 
 def sha(path: Path) -> str:
@@ -39,8 +42,8 @@ def atom_count(path: Path) -> int:
 
 def protenix_layout(repo: Path, obs: Path) -> None:
     base = obs / "runtime_inventory/protenix_layout_attempt2"
-    image = Path("/mnt/BioModStack/apptainer/protenix.sif")
-    checkpoint = Path("/mnt/BioModStack/weights/protenix/checkpoint/protenix-v2.pt")
+    image = container_dir() / "protenix.sif"
+    checkpoint = weights_root() / "protenix/checkpoint/protenix-v2.pt"
     image_sha = sha(image)
     checkpoint_sha = sha(checkpoint)
     wrapper = repo / "scripts/run_protenix_inference.py"
@@ -53,7 +56,7 @@ def protenix_layout(repo: Path, obs: Path) -> None:
     ).total_seconds()
     command = [
         "apptainer", "exec", "--nv", "--containall", "--writable-tmpfs",
-        "--env", "CUDA_VISIBLE_DEVICES=2", "--bind", f"{repo}:/workspace:ro",
+        "--env", f"CUDA_VISIBLE_DEVICES={os.environ.get('BMS_PROBE_CUDA_DEVICE', '0')}", "--bind", f"{repo}:/workspace:ro",
         "--bind", f"{base}:/evidence", str(image), "python3",
         "/workspace/scripts/run_protenix_inference.py", "--input", "/evidence/input.json",
         "--out_dir", "/evidence/output", "--model_name", "protenix-v2", "--seeds",
@@ -105,8 +108,8 @@ def protenix_layout(repo: Path, obs: Path) -> None:
 
 def protenix_composition(obs: Path) -> None:
     root = obs / "runtime_inventory"
-    image = Path("/mnt/BioModStack/apptainer/protenix.sif")
-    checkpoint = Path("/mnt/BioModStack/weights/protenix/checkpoint/protenix-v2.pt")
+    image = container_dir() / "protenix.sif"
+    checkpoint = weights_root() / "protenix/checkpoint/protenix-v2.pt"
     image_sha = sha(image)
     checkpoint_sha = sha(checkpoint)
     cases = {
@@ -155,8 +158,8 @@ def protenix_composition(obs: Path) -> None:
 
 def confornets(obs: Path) -> None:
     root = obs / "runtime_inventory/confornets_fixed"
-    image = Path("/mnt/BioModStack/apptainer/confornets-canonical-4e0ec2136f2625327b45317881e1309c7c218c3e5b1bef4a077e5ac56905d3c6.sif")
-    checkpoint = Path("/mnt/BioModStack/weights/openfold3/of3-p2-155k.pt")
+    image = container_dir() / "confornets-canonical-4e0ec2136f2625327b45317881e1309c7c218c3e5b1bef4a077e5ac56905d3c6.sif"
+    checkpoint = weights_root() / "openfold3/of3-p2-155k.pt"
     tasks = {"diversity": "diversity_retry", "mse": "mse", "transfer": "transfer"}
     report_tasks = {}
     for task, directory in tasks.items():
@@ -184,7 +187,7 @@ def confornets(obs: Path) -> None:
 
 def frustration(repo: Path, obs: Path) -> None:
     root = obs / "runtime_inventory/frustrampnn_fresh"
-    image = Path("/mnt/BioModStack/apptainer/frustrampnn.sif")
+    image = container_dir() / "frustrampnn.sif"
     command = "frustrampnn predict --pdb /evidence/input.pdb --checkpoint /opt/frustrampnn_weights/megascale.ckpt --output /evidence/frustration.csv --device cuda"
     (root / "run.meta").write_text(
         f"predict_rc=0\ncommand={command}\ncontainer_sha256={sha(image)}\n", encoding="utf-8"
@@ -232,7 +235,7 @@ def normalization(repo: Path, obs: Path) -> None:
 def usalign(obs: Path) -> None:
     root = obs / "runtime_inventory/usalign_probe"
     root.mkdir(parents=True, exist_ok=True)
-    binary = Path("/mnt/BioModStack/build/confornets/confornets_sandbox/opt/confornets/packages/USalign")
+    binary = build_root() / "confornets/confornets_sandbox/opt/confornets/packages/USalign"
     a = obs / "runtime_inventory/confornets_fixed/diversity_retry/raw/toy_benchmark/fs-4zrb_C-4zrb_H/seed_0/fs-4zrb_C-4zrb_H_step_1_confornet_0_sample_0.cif"
     b = obs / "runtime_inventory/confornets_fixed/diversity_retry/raw/toy_benchmark/fs-4zrb_C-4zrb_H/seed_0/fs-4zrb_C-4zrb_H_step_1_confornet_1_sample_1.cif"
     cases = []

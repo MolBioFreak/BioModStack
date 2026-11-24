@@ -42,7 +42,7 @@ async def declarations(request, session, *, lock=False):
     trigger = request.params.get('mutation_seed_refinement_trigger')
     if trigger is None:
         return []
-    from routers.jobs import _resolve_antibody_root_job
+    from services.binder_continuation import _resolve_antibody_root_job
     if (not isinstance(trigger, dict) or request.model_id not in {'boltz2', 'protenix'}
             or request.mode != 'complex' or not request.params.get('mutagenesis_variants')):
         raise ValueError('Mutation seed expansion requires its explicit seed-builder variant request')
@@ -73,7 +73,8 @@ async def declarations(request, session, *, lock=False):
             or source.execution_target_id != request.execution_target_id):
         raise ValueError('Mutation seed expansion root/source/placement mismatch')
     from database import Design
-    from routers.jobs import _resolve_design_structure_path, _mutagenesis_variant_job_params, _execution_plan_preview
+    from services.binder_continuation import _resolve_design_structure_path, _mutagenesis_variant_job_params
+    from services.job_requests import _execution_plan_preview
     import hashlib
     variants = request.params['mutagenesis_variants']
     if not isinstance(variants, list) or any(not isinstance(row, dict) or
@@ -103,7 +104,7 @@ async def declarations(request, session, *, lock=False):
         if not planned['admissible']:
             raise ValueError('A selected seed variant execution plan is unsupported')
         seed_plans.append(planned)
-    from routers.jobs import _build_antibody_iteration_job
+    from services.binder_continuation import _build_antibody_iteration_job
     from types import SimpleNamespace
     static = _build_antibody_iteration_job(root_job=root, source_job=source,
         action='ui_refinement', selection_dir=Path(source.output_dir), design_ids=[],
@@ -184,7 +185,7 @@ async def validate(coordinator, session):
 
 async def approve_derived(request, coordinator, session):
     """Called only after the native producer constructs the declared child."""
-    from routers.jobs import _execution_plan_preview, ApprovedExecutionPlan
+    from services.job_requests import _execution_plan_preview, ApprovedExecutionPlan
     declaration = await validate(coordinator, session)
     if (request.model_id, request.mode, request.execution_target_id) != (
             declaration['child_model'], declaration['child_mode'], coordinator.execution_target_id):
@@ -193,7 +194,7 @@ async def approve_derived(request, coordinator, session):
     from sqlalchemy import select
     from uuid import uuid5, NAMESPACE_URL
     from paths import get_inputs_dir
-    from routers.jobs import (_build_antibody_iteration_job, _resolve_design_structure_path,
+    from services.binder_continuation import (_build_antibody_iteration_job, _resolve_design_structure_path,
                               _locked_spec_from_design_pdb, _build_selection_manifest_item)
     import json
     selection = get_inputs_dir() / 'design_selections' / 'antibody' / str(uuid5(

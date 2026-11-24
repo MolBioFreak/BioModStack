@@ -25,12 +25,12 @@ def _src(tmp_path):
 def test_fampnn_fixed_positions_without_manifest(tmp_path):
     _run("prep_fampnn_constraints_from_spec.py", "--input_dir", _src(tmp_path), "--fixed_positions", "A1-2",
          "--out_csv", tmp_path / "f.csv")
-    assert (tmp_path / "f.csv").read_text().splitlines()[1] == '"d","A1-2",""'
+    assert (tmp_path / "f.csv").read_text().splitlines() == ['d,"A1,A2",']
 
 
 def test_fampnn_default_fixes_nothing(tmp_path):
     _run("prep_fampnn_constraints_from_spec.py", "--input_dir", _src(tmp_path), "--out_csv", tmp_path / "f.csv")
-    assert (tmp_path / "f.csv").read_text().splitlines()[1] == '"d","",""'
+    assert (tmp_path / "f.csv").read_text().splitlines() == ['d,,']
 
 
 def test_fampnn_explicit_positions_win_over_manifest(tmp_path):
@@ -38,7 +38,7 @@ def test_fampnn_explicit_positions_win_over_manifest(tmp_path):
     manifest.write_text(json.dumps({"sequence_fixed_positions_spec": "A3"}))
     _run("prep_fampnn_constraints_from_spec.py", "--input_dir", _src(tmp_path), "--manifest", manifest,
          "--fixed_positions", "A1", "--out_csv", tmp_path / "f.csv")
-    assert '"A1"' in (tmp_path / "f.csv").read_text().splitlines()[1]
+    assert (tmp_path / "f.csv").read_text().splitlines() == ['d,A1,']
 
 
 def _fixed(path):

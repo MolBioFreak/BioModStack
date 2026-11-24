@@ -20,7 +20,7 @@ RUN_BOLTZGEN_WRAPPER = SCRIPTS_DIR / "run_boltzgen_wrapper.py"
 
 
 @pytest.mark.parametrize('kind,expected', [
-    ('input_pdb', 'protein-anything'), ('ligand_pdb', 'protein-small_molecule'),
+    ('input_pdb', 'protein-anything'), ('ligand_pdb', 'protein-anything'),
     ('dna_structure', 'protein-anything'), ('target_pdb', 'protein-anything'),
     ('scaffold', 'protein-anything'),
 ])
@@ -89,7 +89,7 @@ def test_auto_preview_rejects_unsafe_declared_input(tmp_path, unsafe):
     root.mkdir()
     path = root / 'input.pdb'
     if unsafe == 'symlink':
-        target = root / 'target.pdb'
+        target = tmp_path / 'outside-target.pdb'
         _write_pdb(target, 'A', [1])
         path.symlink_to(target)
     elif unsafe == 'outside':

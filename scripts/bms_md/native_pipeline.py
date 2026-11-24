@@ -121,7 +121,9 @@ def run_native_stages(config: Mapping[str, Any], *, config_path: Path, output_di
         final_coordinates = prefix.with_suffix(".gro")
         # Reuse only the exact completed artifacts recorded by the existing ledger.
         recorded = ledger.snapshot()["stages"].get(name, {}).get("artifacts", [])
-        complete = bool(recorded) and ledger.is_complete(name, [Path(x["path"]) for x in recorded])
+        paths = [Path(item["path"]) for item in recorded]
+        # A historical internal preparation record has no authored stage TPR.
+        complete = tpr in paths and ledger.is_complete(name, paths)
         dump = None
         compiled_mdp: Mapping[str, Any] | None = None
         if not complete:

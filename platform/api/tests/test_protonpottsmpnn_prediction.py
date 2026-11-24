@@ -13,6 +13,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from database import Base, Design, Job, get_session
 from experiment_database import get_experiment_session
 from routers import jobs, protonpottsmpnn_prediction as route
+from services import job_submission
+from services import binder_continuation
+from services import job_requests
 from schemas import JobCreate
 from services.protonpottsmpnn_prediction import PredictionSelection, prediction_requests, source_components
 
@@ -57,7 +60,7 @@ def test_prediction_uses_exact_redesigned_sequences_fixed_target_and_requested_p
         assert child.params['iteration_source_design_ids'] == ['original-design']
         assert 'target_pdb' not in child.params
         assert 'input_pdb' not in child.params
-        replay = jobs.normalize_job_request(JobCreate.model_validate(child.model_dump(mode='json')))
+        replay = job_requests.normalize_job_request(JobCreate.model_validate(child.model_dump(mode='json')))
         assert replay.model_dump(mode='json') == child.model_dump(mode='json')
     assert RESULT == original
     assert COMPONENTS[0]['sequence'] == 'AA'
@@ -106,14 +109,15 @@ def test_retained_structure_uses_existing_sequence_source_parser(tmp_path, suffi
 
 @pytest_asyncio.fixture
 async def selected(tmp_path, monkeypatch):
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
     # Submission-only fixture: satisfy the existing checkpoint-presence owner
     # without reading live weights or pretending this is predictor inference.
     weights = tmp_path / 'protenix-weights'
     (weights / 'checkpoint').mkdir(parents=True)
     (weights / 'checkpoint' / 'protenix-v2.pt').write_bytes(b'inert submission fixture')
-    monkeypatch.setattr(jobs, '_resolve_protenix_weights_dir', lambda params: weights)
+    monkeypatch.setattr(job_submission, '_resolve_protenix_weights_dir', lambda params: weights)
     engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "prediction.db"}')
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)

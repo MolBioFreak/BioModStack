@@ -50,7 +50,7 @@ def pinned(tmp_path, monkeypatch):
     native.parent.chmod(0o500)
     layout.chmod(0o500)
     monkeypatch.setattr(bundle, 'get_weights_root', lambda: weights)
-    monkeypatch.setattr(model_registry, 'model_acquisition_plan', lambda _: {'artifacts': [dict(
+    monkeypatch.setattr(model_registry, 'model_acquisition_plan', lambda _, *, include_optional=False: {'artifacts': [dict(
         dependency=dependency, member_path=e['member_path'], manifest=e['manifest']) for e in entries]})
     return layout, native, obj
 

@@ -46,7 +46,7 @@ def source_components(path: Path) -> list[dict]:
 def prediction_requests(source: Job, root: Job, result: dict,
                         components: list[dict], request: PredictionSelection) -> list[JobCreate]:
     """Bind explicitly selected native IDs and sequences into normal JobCreate."""
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from services.binder_round_inputs import BOUND_INPUTS
 
     if len(set(request.design_ids)) != len(request.design_ids):
@@ -95,7 +95,7 @@ async def launch_prediction(job_id: str, request: PredictionSelection,
                             background_tasks: BackgroundTasks, session, experiment_session):
     from services.binder_continuation import resolve_root
     from services.protonpottsmpnn_design import prepared_source_path, read_result
-    from routers.jobs import submit_selected_child_jobs
+    from services.job_submission import submit_selected_child_jobs
 
     source, root = await resolve_root(session, job_id)
     if source.model_id != 'protonpottsmpnn' or source.mode != 'redesign':

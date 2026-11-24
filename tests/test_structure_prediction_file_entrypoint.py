@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize('source,predictor,accepted', [
     ('file', 'esmfold2', True),
     ('inline', 'esmfold2', True),
+    ('matching', 'esmfold2', True),
+    ('conflicting', 'esmfold2', False),
     ('sequence', 'esmfold2', True),
     ('missing', 'esmfold2', False),
     ('file', 'protenix', False),
@@ -27,7 +29,10 @@ def test_direct_entrypoint_native_input(tmp_path, source, predictor, accepted):
     params = {'pred_method': predictor, 'run_frustrampnn': False, 'job_id': 'entrypoint-fixture',
               'out_dir': str(tmp_path / 'out'), 'esmf_model_variant': 'full',
               'esmf_seed': 42, 'esmf_num_diffusion_samples': 1}
-    if source == 'file':
+    if source in {'matching', 'conflicting'}:
+        params['esmf_complex_components_file'] = str(component_file)
+        params['complex_components'] = components if source == 'matching' else components[:1]
+    elif source == 'file':
         params['esmf_complex_components_file'] = str(component_file)
     elif source == 'inline':
         params['esmf_complex_components'] = components
@@ -48,6 +53,8 @@ def test_direct_entrypoint_native_input(tmp_path, source, predictor, accepted):
     assert (run.returncode == 0) is accepted, output
     if accepted:
         assert 'Structure Prediction Workflow' in output
+    elif source == 'conflicting':
+        assert 'conflicting component sources' in output
     else:
         assert '--sequence_input is required' in output
     assert component_file.read_bytes() == original

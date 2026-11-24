@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job, get_session
 from routers import files, ngs_alignment_sessions as routes
+from services import binder_source_materialization
 from services import alignment_access, job_result_roots, ngs_alignment_sessions as service
 
 
@@ -23,7 +24,9 @@ async def native_http(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "get_results_dir", lambda: root)
     monkeypatch.setattr(job_result_roots, "get_results_dir", lambda: root)
     monkeypatch.setattr(files, "get_allowed_roots", lambda: {"bms_results": root})
+    monkeypatch.setattr(binder_source_materialization, "get_allowed_roots", lambda: {"bms_results": root})
     monkeypatch.setattr(files, "resolve_allowed_path", lambda value: root / Path(value).relative_to("bms_results"))
+    monkeypatch.setattr(binder_source_materialization, "resolve_allowed_path", lambda value: root / Path(value).relative_to("bms_results"))
     monkeypatch.setenv("BMS_RUNTIME_MODE", "dev")
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}")
     factory = async_sessionmaker(engine, expire_on_commit=False)

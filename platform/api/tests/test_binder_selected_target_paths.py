@@ -23,6 +23,8 @@ async def test_independent_target_path_from_api_cwd(selected, monkeypatch, path_
     api_cwd.mkdir()
     monkeypatch.chdir(api_cwd)
     monkeypatch.setenv('BMS_INPUTS', str(inputs))
+    import paths
+    monkeypatch.setattr(paths, 'get_inputs_dir', lambda: inputs)
     if path_kind == 'managed':
         target_path = 'inputs/native.pdb'
         # A cwd-local impostor must not win over the managed file owner.

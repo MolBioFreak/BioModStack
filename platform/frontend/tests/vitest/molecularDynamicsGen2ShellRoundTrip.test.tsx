@@ -60,12 +60,12 @@ vi.mock('../../src/components/OligoDesignerTemplate', () => ({ OligoDesignerTemp
 vi.mock('../../src/components/ProteinModificationTemplate', () => ({ ProteinModificationTemplate: () => null }));
 vi.mock('../../src/components/conformationalMapping/ConformationalMappingLauncher', () => ({ ConformationalMappingLauncher: () => null }));
 vi.mock('../../src/components/StructurePredictionTemplate', () => ({
-    StructurePredictionTemplate: ({ sourceSequenceId, mdDraftId }: { sourceSequenceId?: string | null; mdDraftId?: string | null }) => {
+    StructurePredictionTemplate: ({ sourceSequenceId, mdDraftId, initialValues }: { sourceSequenceId?: string | null; mdDraftId?: string | null; initialValues?: { source_sequence_id?: string } }) => {
         const navigate = useNavigate();
         return (
             <section data-mounted-structure-prediction>
                 <h1>Mounted Structure Prediction handoff</h1>
-                <p data-source-sequence-id>{sourceSequenceId}</p>
+                <p data-source-sequence-id>{sourceSequenceId ?? initialValues?.source_sequence_id}</p>
                 <button
                     type="button"
                     onClick={() => navigate(buildMolecularDynamicsPredictionReturnRoute(mdDraftId as string, { id: '66666666-6666-4666-8666-666666666666' }))}
@@ -118,6 +118,7 @@ let root: Root;
 let container: HTMLDivElement;
 let client: QueryClient;
 
+const detourSnapshots = new Map<string, unknown>();
 beforeEach(() => {
     apiMocks.get.mockReset();
     apiMocks.post.mockReset();
@@ -129,6 +130,8 @@ beforeEach(() => {
             return response({ schema: 'bms.md.chemistry-profile-inventory.v1', catalog_digest: hash('c'), profiles: [profile], selectable_profile_ids: [profile.id], count: 1, bounded: true });
         }
         if (url === '/api/user-sequences') return response([]);
+        if (url === `/api/user-sequences/${sequenceId}`) return response({ id: sequenceId, name: 'Candidate A', sequence: 'ACDEFG', description: null, length: 6, organism: null, uniprot_id: null, ncbi_id: null, is_preset: false, created_at: '2026-08-26T00:00:00Z', updated_at: null });
+        if (url.startsWith('/api/molecular-dynamics/prediction-detours/')) return response(detourSnapshots.get(url.split('/').pop()!));
         if (url === '/api/molecular-dynamics/prediction-jobs/66666666-6666-4666-8666-666666666666/source-candidates') {
             return response({
                 schema_version: 'bms.md.prediction-source-candidates.v1',
@@ -143,6 +146,7 @@ beforeEach(() => {
         if (url === '/api/user-sequences') {
             return response({ id: sequenceId, name: body.name, sequence: body.sequence, description: null, length: 6, organism: null, uniprot_id: null, ncbi_id: null, is_preset: false, created_at: '2026-08-26T00:00:00Z', updated_at: null });
         }
+        if (url === '/api/molecular-dynamics/prediction-detours') { detourSnapshots.set(draftId, structuredClone(body)); return response({ id: draftId }); }
         throw new Error(`unexpected POST ${url}`);
     });
     vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(draftId);
@@ -184,7 +188,7 @@ const click = async (label: string) => {
 
 const completeRoundTrip = async () => {
     await click('Open Structure Prediction');
-    await act(async () => { await vi.waitFor(() => expect(container.querySelector('[data-mounted-structure-prediction]')).not.toBeNull()); });
+    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); expect(container.querySelector('[data-mounted-structure-prediction]')).not.toBeNull(); });
     expect(container.querySelector('[data-source-sequence-id]')?.textContent).toBe(sequenceId);
     await click('Complete prediction and return');
     await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Molecular Dynamics')); });
@@ -223,7 +227,7 @@ describe('mounted JobSubmission same-route MD handoff ownership', () => {
         if (mode === 'compiled') expect(container.textContent).toContain('MDP editing is not applied');
         else expect(container.querySelector('[aria-label="nstxout-compressed"]')).toHaveProperty('value', '0');
     });
-    it('shows exactly De Novo Design and Molecular Dynamics as Experimental workflows', async () => {
+    it('shows exactly Oligo Designer and Molecular Dynamics as Experimental workflows', async () => {
         apiMocks.fetchTemplates.mockResolvedValueOnce({
             data: [
                 { id: 'protein_cad_experimental', name: 'Protein CAD Experimental', experimental: true, stages: [] },
@@ -240,7 +244,8 @@ describe('mounted JobSubmission same-route MD handoff ownership', () => {
 
         const cards = container.querySelector('.grid.grid-cols-2.gap-3');
         expect(cards?.children).toHaveLength(2);
-        expect(cards?.textContent).toContain('De Novo Design');
+        expect(cards?.textContent).toContain('Oligo Designer');
+        expect(cards?.textContent).not.toContain('De Novo Design');
         expect(cards?.textContent).toContain('Molecular Dynamics');
         expect(cards?.textContent).not.toContain('Protein CAD Experimental');
         expect(cards?.textContent).not.toContain('RFD3 Local Redesign');
@@ -459,6 +464,8 @@ describe('mounted JobSubmission same-route MD handoff ownership', () => {
             if (url === '/api/molecular-dynamics/prediction-jobs/66666666-6666-4666-8666-666666666666/source-candidates') {
                 return response({ schema_version: 'bms.md.prediction-source-candidates.v1', job: { id: '66666666-6666-4666-8666-666666666666', name: 'Round-trip prediction', status: 'completed', model_id: 'boltz2', mode: 'predict', created_at: null, started_at: null, completed_at: null, failure: null }, candidates: [], next_cursor: null });
             }
+            if (url === `/api/user-sequences/${sequenceId}`) return response({ id: sequenceId, name: 'Saved candidate', sequence: 'ACDEFG', description: null, length: 6, organism: null, uniprot_id: null, ncbi_id: null, is_preset: false, created_at: '2026-08-26T00:00:00Z', updated_at: null });
+            if (url.startsWith('/api/molecular-dynamics/prediction-detours/')) return response(detourSnapshots.get(url.split('/').pop()!));
             throw new Error(`unexpected GET ${url}`);
         });
         await renderShell();

@@ -9,15 +9,8 @@ from model_registry import selected_execution_metadata
 
 
 @pytest.fixture
-def current_project_store(monkeypatch, tmp_path, request):
-    # Reuse the real two-store fixture; its caller predates the added pytest request argument.
-    from types import SimpleNamespace
-    from tests import test_md_typed_launch as typed
-    original = typed.project_context_preview_store.__wrapped__
-    monkeypatch.setattr(typed, 'project_context_preview_store', SimpleNamespace(
-        __wrapped__=lambda patcher, root: original(patcher, root, request)))
-    yield from remote_project_store.__wrapped__(monkeypatch, tmp_path)
-
+def current_project_store(remote_project_store):
+    return remote_project_store
 
 
 @pytest.mark.parametrize('navigation', [None, '/designs/source?view=selected'])
@@ -26,10 +19,14 @@ def test_optional_navigation_is_not_scientific_authority(current_project_store, 
     from tests import test_md_typed_launch as typed
     from services.md import launch_contract
     from routers import jobs
+    from services import job_submission
     store = current_project_store
     monkeypatch.setenv('BMS_FEATURE_MOLECULAR_DYNAMICS', '1')
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *_: None)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', lambda *_: None)
     monkeypatch.setattr(launch_contract, 'get_chemistry_catalog', lambda: typed._Catalog())
+    # Navigation authority is independent of installed engine bytes.
+    monkeypatch.setattr(launch_contract, '_bound_engine_runtime_identity',
+        lambda: {'image_name': 'gromacs.sif', 'sif_sha256': 'a' * 64})
     source_ref = {'kind': 'design', 'id': store['expected_design_id']}
     if exact_candidate:
         from services.md.starting_structures import StartingStructureSourceRef

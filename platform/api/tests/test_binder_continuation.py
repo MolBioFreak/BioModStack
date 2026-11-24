@@ -12,6 +12,8 @@ from database import Base, Design, Job, get_session
 from experiment_database import get_experiment_session
 from test_project_workflow_setups import setup_store
 from routers import binder_continuation as route, jobs
+from services import job_submission
+from services import binder_continuation
 from services.binder_continuation import resolve_root, snapshot_selection
 
 PDB = ''.join(
@@ -24,13 +26,15 @@ PDB = ''.join(
 async def selected(tmp_path, monkeypatch, setup_store):
     # This fixture qualifies queue insertion/recovery, never inference or asset
     # installation. Keep the external checkpoint availability leaf inert.
-    monkeypatch.setattr(jobs, '_validate_protenix_checkpoint_requirements', lambda *args: None)
+    monkeypatch.setattr(job_submission, '_validate_protenix_checkpoint_requirements', lambda *args: None)
     import paths
     monkeypatch.setattr(paths, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(paths, 'get_results_dir', lambda: tmp_path / 'results')
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: tmp_path / 'inputs')
-    monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr(job_submission, 'get_results_dir', lambda: tmp_path / 'results')
     monkeypatch.setattr(jobs, '_resolve_design_structure_path', lambda path: Path(path))
+    monkeypatch.setattr(binder_continuation, '_resolve_design_structure_path', lambda path: Path(path))
     engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "selected.db"}')
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -234,8 +238,10 @@ def test_cif_snapshot_preserves_native_and_representable_insertion(tmp_path, mon
     writer = MMCIFIO()
     writer.set_structure(PDBParser(QUIET=True).get_structure('test', pdb))
     writer.save(str(cif))
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(jobs, '_resolve_design_structure_path', lambda path: Path(path))
+    monkeypatch.setattr(binder_continuation, '_resolve_design_structure_path', lambda path: Path(path))
     root = Job(id='root', name='root', params={})
     design = Design(id='design', name='design', job_id=root.id, pdb_path=str(cif))
     directory = snapshot_selection(root, root, [design])
@@ -483,7 +489,7 @@ async def test_fanout_queue_failure_rolls_back_all_jobs_without_changing_primary
     from sqlalchemy import select
     client, session, _, source, _ = selected
     await alternate_document_fixture(selected)
-    original = jobs.create_job
+    original = job_submission.submit_job
     calls = 0
     async def fail_second(request, tasks, session, **kwargs):
         nonlocal calls
@@ -492,7 +498,7 @@ async def test_fanout_queue_failure_rolls_back_all_jobs_without_changing_primary
             from fastapi import HTTPException
             raise HTTPException(422, 'native owner request failed')
         return await original(request, tasks, session, **kwargs)
-    monkeypatch.setattr(jobs, 'create_job', fail_second)
+    monkeypatch.setattr(job_submission, 'submit_job', fail_second)
     source_id = source.id
     before = (await session.get(Design, 'd1')).pdb_path
     response = await client.post('/api/binder-continuation/selected', json={

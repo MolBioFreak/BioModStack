@@ -128,7 +128,7 @@ def test_replay_actual_mounted_native_request(tmp_path, monkeypatch):
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
     monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
     for batch in (False, True):
-        from routers.jobs import _normalize_frustrampnn_settings
+        from services.job_requests import _normalize_frustrampnn_settings
         params = _normalize_frustrampnn_settings(request.model_id, request.mode, request.params)
         # Compiler-only scheduler placement fixture; no GPU query or execution.
         params['gpu_id'] = 0

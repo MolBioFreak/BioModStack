@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from pydantic import (
@@ -34,6 +34,7 @@ from services.molbio_ngs_evidence import attach_instrument_run_evidence
 from services.molbio_ngs_receipts import (
     build_molbio_revision_binding,
     consume_molbio_ngs_receipt,
+    receipt_reference_topology,
     validate_molbio_ngs_receipt,
 )
 from services.molbio_ngs_references import resolve_managed_reference_for_launch
@@ -48,7 +49,7 @@ from paths import (
     resolve_allowed_path,
 )
 from schemas import ExecutionPolicy, JobCreate, JobResponse
-from routers.jobs import JobExecutionPlanPreview
+from services.job_requests import JobExecutionPlanPreview
 from starlette.concurrency import run_in_threadpool
 from services import alignment_access, ont_raw_signal, ont_run_control, ont_submission_trust
 from services.ont_barcode_batches import (
@@ -153,6 +154,9 @@ ONT_REFERENCE_REQUIRED_WORKFLOWS = frozenset(
         "wf_clone_validation",
     }
 )
+# A reference here is still server-controlled, but the workflow also runs without
+# one: it assembles and annotates, and the expected-sequence checks are not run.
+ONT_REFERENCE_OPTIONAL_WORKFLOWS = frozenset({"wf_clone_validation"})
 
 ONT_COMPARISON_PANEL_WORKFLOWS = frozenset({"ont_plasmid_qc", "ont_construct_screening", "ont_fastq_qc"})
 
@@ -298,6 +302,26 @@ class OntNgsPreparedReview(BaseModel):
     preview: JobExecutionPlanPreview
 
 
+class OntRunBasecallingChoice(BaseModel):
+    """Live basecalling picked from the choices the protocol option listed; no model names."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    quality: str | None = Field(default=None, pattern=r"^[a-z]{2,12}$")
+    modified_bases: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9_]{1,40}$")]] | None = Field(default=None, max_length=8)
+    min_qscore: float | None = Field(default=None, ge=0, le=30)
+
+
+class OntRunAdaptiveSampling(BaseModel):
+    """Adaptive sampling run by MinKNOW: the mode, and files already uploaded to BMS."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    mode: Literal["enrich", "deplete", "barcode_balance"]
+    reference_path: str | None = Field(default=None, max_length=500)
+    bed_path: str | None = Field(default=None, max_length=500)
+
+
 class OntRunIntentRequest(BaseModel):
     """Bounded browser input: only server-issued option handles and metadata."""
 
@@ -307,6 +331,9 @@ class OntRunIntentRequest(BaseModel):
     option_receipt_id: str = Field(min_length=1, max_length=80)
     sample_id: str | None = Field(default=None, max_length=255)
     experiment_group: str | None = Field(default=None, max_length=255)
+    barcode_samples: list[dict[str, str]] | None = Field(default=None, max_length=96)
+    basecalling: OntRunBasecallingChoice | None = None
+    adaptive_sampling: OntRunAdaptiveSampling | None = None
 
 
 class OntIntentStartRequest(BaseModel):
@@ -437,7 +464,8 @@ async def _authorized_barcode_source(job_id: str, request: Request, session: Asy
         raise HTTPException(status_code=404, detail="Nanopore source job not found")
     if job.mode != "basecall_dna":
         raise HTTPException(status_code=422, detail="Source job is not a DNA barcode-basecalling job")
-    if str((job.params or {}).get("barcode_kit") or "").strip() != "SQK-RBK114-96":
+    from services.ont_ngs_contract import accepted_barcode_kits  # noqa: PLC0415
+    if str((job.params or {}).get("barcode_kit") or "").strip() not in accepted_barcode_kits():
         raise HTTPException(status_code=422, detail="Source job is not bound to the locked barcode kit")
     if job.status != "completed":
         raise HTTPException(status_code=409, detail="Source barcode job is not complete")
@@ -515,12 +543,16 @@ def _validate_ont_input_contract(canonical_id: str, params: dict[str, Any]) -> t
             f"accepted modes: {', '.join(spec.input_modes)}"
         )
 
-    if canonical_id in ONT_REFERENCE_REQUIRED_WORKFLOWS and not str(params.get("reference_fasta") or "").strip():
+    if (canonical_id in ONT_REFERENCE_REQUIRED_WORKFLOWS and canonical_id not in ONT_REFERENCE_OPTIONAL_WORKFLOWS
+            and not str(params.get("reference_fasta") or "").strip()):
         raise ValueError(f"workflow {canonical_id!r} requires reference_fasta for construct verification")
 
     if canonical_id == "ont_basecall_dna" and (input_mode == "fastq" or params.get("run_fastq_qc") or params.get("run_modkit")) and not str(params.get("reference_fasta") or "").strip():
         raise ValueError("DNA reference analysis requires reference_fasta")
 
+    if (canonical_id == "ont_basecall_rna" and params.get("run_modkit")
+            and str(params.get("modified_bases") or "none") != "none" and not str(params.get("reference_fasta") or "").strip()):
+        raise ValueError("RNA modification tables require reference_fasta")
     if input_mode == "fastq" and bool(params.get("run_modkit")):
         raise ValueError("modkit requires a BAM with meaningful MM/ML tags or POD5 basecalled with modified bases")
 
@@ -551,7 +583,7 @@ def _confine_submitted_path(value: Any, label: str, *, directory: bool, allow_re
             except ValueError:
                 continue
             raise ValueError(f"{label} points into protected job results and requires source authorization")
-    root_keys = ("inputs", "uploads", "downloads", "data") + (result_keys if allow_results else ())
+    root_keys = ("inputs", "uploads", "downloads", "data", "sequencer_runs") + (result_keys if allow_results else ())
     for root in (roots[key] for key in root_keys if key in roots):
         root_resolved = root.resolve()
         try:
@@ -704,7 +736,7 @@ async def _create_pipeline_job(
     *,
     commit: bool = True,
 ) -> JobResponse:
-    from routers.jobs import create_job  # noqa: PLC0415
+    from services.job_submission import submit_job  # noqa: PLC0415
 
     # Ordinary prepare projects context before review (including explicit None).
     # Preserve legacy internal callers which have not passed through that adapter.
@@ -714,7 +746,7 @@ async def _create_pipeline_job(
             job = job.model_copy(update={"launch_context_id": launch_context_id})
     token, token_digest = alignment_access.issue_alignment_access_token()
     with ont_submission_trust.trusted_ont_job_creation(token_digest):
-        created = await create_job(
+        created = await submit_job(
             job,
             background_tasks,
             session,
@@ -860,6 +892,26 @@ async def ont_get_instrument_run(run_id: str) -> dict[str, Any]:
     if record is None:
         raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}")
     return record
+
+
+@router.get("/runs/{run_id}/live")
+async def ont_get_instrument_run_live(run_id: str) -> dict[str, Any]:
+    """Live reads, basecalled yield and per-barcode output from MinKNOW. Read-only."""
+    try:
+        return await ont_run_control.get_instrument_run_live(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
+
+
+@router.post("/runs/{run_id}/handoff/barcode-basecall")
+async def ont_barcode_basecall_handoff(run_id: str) -> dict[str, Any]:
+    """Open a finished run in the ONT form: its POD5 folder, barcoding kit and sample names."""
+    try:
+        return await ont_run_control.build_barcode_basecall_handoff(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class OntRawSignalRetentionRequest(BaseModel):
@@ -1096,6 +1148,41 @@ async def ont_get_raw_signal_waveform(
         raise HTTPException(status_code=404, detail="unknown raw-signal waveform lookup") from exc
 
 
+@router.get("/raw-signal/sources")
+async def ont_list_raw_signal_sources(
+    experiment_group: str = Query(min_length=1, max_length=256),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Runs and imported files of one Project that hold raw signal. Reads BMS records only."""
+    return {"sources": await ont_raw_signal.list_signal_sources(session, experiment_group=experiment_group)}
+
+
+@router.get("/runs/{run_id}/generations/{observed_generation}/raw-signal/waveform-lookups")
+async def ont_list_raw_signal_waveform_lookups(
+    run_id: str, observed_generation: int, session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    return {"lookups": await ont_raw_signal.list_waveform_lookups(
+        session, run_id=run_id, observed_generation=observed_generation)}
+
+
+@router.get("/runs/{run_id}/generations/{observed_generation}/raw-signal/{representation_id}/reads")
+async def ont_list_raw_signal_reads(
+    run_id: str, observed_generation: int, representation_id: str,
+    offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=500),
+    q: str | None = Query(None, max_length=128, pattern=r"^[A-Za-z0-9_.-]*$"),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Read IDs held by one ready indexed BLOW5, sorted and paged."""
+    try:
+        return await ont_raw_signal.list_representation_reads(
+            session, run_id=run_id, observed_generation=observed_generation,
+            representation_id=representation_id, offset=offset, limit=limit, query=q)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="unknown raw-signal file") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/raw-signal/derivations/{job_id}/cancel", status_code=202)
 async def ont_cancel_raw_signal_derivation(
     job_id: str,
@@ -1191,7 +1278,8 @@ async def _prepare_ont_ngs_workflow(
                 raise ValueError(
                     "reference_fasta is server-controlled for reference-required NGS workflows; submit an immutable MolBio receipt"
                 )
-            if not receipt_id and request.managed_reference is None:
+            if (not receipt_id and request.managed_reference is None
+                    and canonical_id not in ONT_REFERENCE_OPTIONAL_WORKFLOWS):
                 raise ValueError(
                     f"workflow {canonical_id!r} requires a server-issued molbio_ngs_receipt_id or exact managed-reference authority"
                 )
@@ -1227,6 +1315,8 @@ async def _prepare_ont_ngs_workflow(
                     "expected_result_manifest_schema": expected_result_manifest_schema,
                 }
             )
+        if managed_launch is not None and managed_launch.topology in {"linear", "circular"}:
+            submitted["reference_topology"] = managed_launch.topology
         receipt_authority = None
         panel_receipt_authority = None
         if receipt_id:
@@ -1234,6 +1324,9 @@ async def _prepare_ont_ngs_workflow(
                 session, receipt_id=receipt_id
             )
             submitted["reference_fasta"] = receipt_authority.reference_snapshot_path
+            saved_topology = receipt_reference_topology(receipt_authority)
+            if saved_topology:
+                submitted["reference_topology"] = saved_topology
         if panel_receipt_id:
             if receipt_authority is None:
                 raise ValueError("comparison panel launch has no expected receipt authority")
@@ -1331,7 +1424,7 @@ async def ont_prepare_ngs_workflow(
     molbio_ngs_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> OntNgsPreparedReview:
     """Materialize stable selections without claiming receipts or inserting a Job."""
-    from routers.jobs import _execution_plan_preview
+    from services.job_requests import _execution_plan_preview
 
     job, retained, _, _ = await _prepare_ont_ngs_workflow(workflow_id, request, session, molbio_ngs_session)
     try:

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from database import Design, Job
 from routers import jobs
+from services import job_requests
 from schemas import JobCreate, JobResponse
 from services import binder_round as rounds
 from services.sequence_round_inputs import MODES, REQUEST, normalize_request
@@ -67,7 +68,7 @@ async def test_create_resubmit_retains_envelope_outside_generator_science(select
     request = JobCreate(name='general-sequence', model_id='protein_modification_experimental',
         mode='de_novo_design', params=params, sequence_design=envelope('fampnn', enabled=False))
     plain = request.model_copy(update={'sequence_design': None}, deep=True)
-    assert jobs.normalize_job_request(request).params == jobs.normalize_job_request(plain).params
+    assert job_requests.normalize_job_request(request).params == job_requests.normalize_job_request(plain).params
     response = await jobs.create_job(request, BackgroundTasks(), session)
     created = await session.get(Job, response.id)
     assert response.sequence_design.model_dump(mode='json') == envelope('fampnn', enabled=False)
@@ -120,7 +121,9 @@ async def test_caliby_native_cif_conformer_constraints_and_falsey_settings(selec
     design.pdb_path = str(cif)
     def no_conversion(*args):
         raise AssertionError('Native Caliby must not require a PDB derivative')
-    monkeypatch.setattr(jobs, '_cif_selection_pdb', no_conversion)
+    from services import binder_continuation, binder_source_materialization
+    monkeypatch.setattr(binder_source_materialization, '_cif_selection_pdb', no_conversion)
+    monkeypatch.setattr(binder_continuation, '_cif_selection_pdb', no_conversion)
     settings = {'fixed_pos_seq': 'A1', 'fixed_pos_scn': '', 'fixed_pos_override_seq': '',
                 'pos_restrict_aatype': '', 'symmetry_pos': ''}
     root.provenance = {REQUEST: envelope('caliby_experimental', input_settings=settings,
@@ -211,11 +214,14 @@ async def root_request(selected, model, *, remote=False):
     ('fampnn', 'fampnn_checkpoint_path', 'custom.pt')])
 async def test_model_owned_auxiliary_file_alias_reaches_child(selected, setup_store, monkeypatch, model, key, filename):
     from routers import files
+    from services import binder_source_materialization
     session, root, tmp = await root_request(selected, model)
     source = tmp / filename
     source.write_text('{"A": 0.0}\n' if model == 'proteinmpnn' else 'inert checkpoint transport fixture')
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: {'downloads': tmp})
+    monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: {'downloads': tmp})
     monkeypatch.setattr(jobs, 'resolve_allowed_path', files._allowed_lexical_path)
+    monkeypatch.setattr(job_requests, 'resolve_allowed_path', files._allowed_lexical_path)
     root.provenance = {REQUEST: envelope(model, params={key: 'downloads/' + filename})}
     await session.commit()
     async with setup_store() as experiments:
@@ -267,7 +273,7 @@ async def test_real_retained_plan_job_compiler_replay_failure_independence(selec
             assert child.params['design_chain'] == 'A'
         assert Path(metadata['source_binding']['path']).read_text() == PDB
         retained = JobCreate.model_validate(step['request'])
-        assert jobs.normalize_job_request(retained).model_dump() == retained.model_dump()
+        assert job_requests.normalize_job_request(retained).model_dump() == retained.model_dump()
         invocation = compile_job_nextflow_invocation(child, deepcopy(child.params), str(tmp / 'compiled'))
         assert invocation.entrypoint == ('workflows/caliby_native.nf' if model == 'caliby_experimental'
                                          else 'workflows/protein_sequence_design.nf')
@@ -455,19 +461,20 @@ async def test_actual_caliby_child_native_publication_and_round_readback(selecte
 @pytest.mark.parametrize('after_commit', [False, True])
 async def test_cancellation_and_concurrent_replay(selected, setup_store, monkeypatch, after_commit):
     session, root, _ = await root_request(selected, 'proteinmpnn')
-    name = 'submit_selected_child_jobs' if after_commit else 'create_job'
-    original = getattr(jobs, name)
+    from services import job_submission
+    name = 'submit_selected_child_jobs' if after_commit else 'submit_job'
+    original = getattr(job_submission, name)
     async def interrupted(*args, **kwargs):
         await original(*args, **kwargs)
         raise asyncio.CancelledError()
-    monkeypatch.setattr(jobs, name, interrupted)
+    monkeypatch.setattr(job_submission, name, interrupted)
     async with setup_store() as experiments:
         with pytest.raises(asyncio.CancelledError):
             await rounds.reconcile_round(session, experiments, 'root')
         children = list(await session.scalars(select(Job).where(Job.model_id == 'proteinmpnn')))
         assert len(children) == int(after_commit)
         await session.rollback()
-    monkeypatch.setattr(jobs, name, original)
+    monkeypatch.setattr(job_submission, name, original)
     factory = async_sessionmaker(session.bind, expire_on_commit=False)
     async def poll():
         async with factory() as core, setup_store() as experiments:

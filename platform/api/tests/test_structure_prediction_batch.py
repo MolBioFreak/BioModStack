@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sys
+
+import pytest
 from pathlib import Path
 
 
@@ -10,13 +12,8 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-from routers.jobs import (
-    _normalize_boltz_no_msa_quality_params,
-    _normalize_structure_geometry_params,
-    _normalize_structure_prediction_pred_method,
-    _validate_protenix_checkpoint_requirements,
-    _validate_protenix_template_requirements,
-)
+from services.job_submission import _validate_protenix_checkpoint_requirements, _validate_protenix_template_requirements
+from services.job_requests import _normalize_boltz_no_msa_quality_params, _normalize_structure_geometry_params, _normalize_structure_prediction_pred_method
 from fastapi import HTTPException
 from services.nextflow import _write_sequence_batch_payloads, build_nextflow_command
 
@@ -33,16 +30,16 @@ def test_normalize_structure_geometry_params_maps_legacy_flags() -> None:
     )
 
     assert params["boltz_target_geometry_mode"] == "conditioned"
-    assert params["protenix_target_geometry_mode"] == "conditioned"
+    assert "protenix_target_geometry_mode" not in params
     assert params["target_geometry_mode"] == "conditioned"
     assert params["boltz_anchor_target"] is True
-    assert params["protenix_anchor_target"] is True
+    assert params["protenix_anchor_target"] is False
     assert params["protenix_use_template"] is True
     assert params["target_template_threshold_angstrom"] == 2.5
     assert params["strict_target_rmsd"] == 1.25
 
 
-def test_normalize_boltz_no_msa_quality_params_clamps_unsafe_predict_settings() -> None:
+def test_normalize_boltz_no_msa_quality_params_preserves_explicit_native_settings() -> None:
     params = _normalize_boltz_no_msa_quality_params(
         "boltz2",
         "predict",
@@ -53,8 +50,8 @@ def test_normalize_boltz_no_msa_quality_params_clamps_unsafe_predict_settings() 
         },
     )
 
-    assert params["boltz_sampling_steps"] == 50
-    assert params["boltz_recycling_steps"] == 3
+    assert params["boltz_sampling_steps"] == 10
+    assert params["boltz_recycling_steps"] == 1
 
 
 def test_normalize_boltz_no_msa_quality_params_leaves_msa_runs_unchanged() -> None:
@@ -212,7 +209,11 @@ def test_build_nextflow_command_passes_boltz_max_parallel_samples(tmp_path: Path
     assert "--boltz_max_parallel_samples 1" in joined
 
 
-def test_write_sequence_batch_payloads_auto_inserts_binder_for_target_only_complex(tmp_path: Path) -> None:
+@pytest.mark.parametrize('name_params,expected_name', [
+    ({}, 'rbx1_scan binder'),
+    ({'sequence_batch_component_name': 'user binder'}, 'user binder'),
+])
+def test_write_sequence_batch_payloads_auto_inserts_binder_for_target_only_complex(tmp_path: Path, name_params, expected_name) -> None:
     manifest_path, batch_dir, complex_components = _write_sequence_batch_payloads(
         output_dir=str(tmp_path),
         params={
@@ -221,7 +222,7 @@ def test_write_sequence_batch_payloads_auto_inserts_binder_for_target_only_compl
                 {"name": "nb02", "sequence": "QVQLW"},
             ],
             "sequence_batch_prefix": "rbx1_scan",
-            "sequence_batch_component_id": "A",
+            **name_params,
         },
         complex_components=[
             {"type": "protein", "id": "A", "sequence": "TARGETSEQ", "name": "RCSB: 2LGV"},
@@ -248,6 +249,7 @@ def test_write_sequence_batch_payloads_auto_inserts_binder_for_target_only_compl
     variant_target = next(component for component in variant_payload["components"] if component["id"] == "A")
     variant_binder = next(component for component in variant_payload["components"] if component["id"] == "E")
     assert variant_target["sequence"] == "TARGETSEQ"
+    assert binder["name"] == variant_binder["name"] == expected_name
     assert variant_binder["sequence"] == "QVQLV"
     assert [component["id"] for component in variant_payload["components"] if component["type"] == "ion"] == ["B", "C", "D"]
 
@@ -256,7 +258,7 @@ def test_protenix_fixed_target_geometry_does_not_require_global_template_db() ->
     params = _normalize_structure_geometry_params(
         {
             "protenix_target_geometry_mode": "frozen",
-            "fixed_target_source_path": "/home/dalab/biomodstack/biomodstack/rcsb/2lgv.pdb",
+            "fixed_target_source_path": "/data/bms/rcsb/2lgv.pdb",
             "fixed_target_source_chains": "A",
         }
     )

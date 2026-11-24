@@ -48,7 +48,9 @@
     "nextflow": {
       "type": "object", "additionalProperties": false,
       "required": ["executable", "version", "build"],
-      "properties": {"executable": {"type": "string"}, "version": {"type": "string"}, "build": {"type": "string", "pattern": "^[0-9]+$"}}
+      "properties": {"executable": {"type": "string"}, "version": {"type": "string"}, "build": {"type": "string", "pattern": "^[0-9]+$"},
+        "launcher": {"type": "object", "additionalProperties": false, "required": ["url", "sha256"], "properties": {"url": {"type": "string"}, "sha256": {"$ref": "#/$defs/sha256"}}},
+        "framework": {"type": "object", "additionalProperties": false, "required": ["url", "sha256"], "properties": {"url": {"type": "string"}, "sha256": {"$ref": "#/$defs/sha256"}}}}
     },
     "containers": {
       "type": "object", "additionalProperties": false, "required": ["cache_dir", "images"],

@@ -17,16 +17,11 @@ if str(API_ROOT) not in sys.path:
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
-from routers.jobs import (
-    _awaiting_stage_to_resume_hint,
-    _dedupe_child_attempts,
-    _ensure_job_resume_identity,
-    _normalize_output_dir_reference,
-    _plan_output_dir_cleanup,
-    _reconcile_child_jobs_from_history,
-    _resume_defaults_from_awaiting_payload,
-    _should_spawn_antibody_refinement_on_resume,
-)
+from routers.jobs import _resume_defaults_from_awaiting_payload
+from routers.job_stages import _dedupe_child_attempts, _reconcile_child_jobs_from_history
+from services.job_submission import _ensure_job_resume_identity
+from services.binder_continuation import _awaiting_stage_to_resume_hint, _should_spawn_antibody_refinement_on_resume
+from services.job_control import _normalize_output_dir_reference, _plan_output_dir_cleanup
 from services.stage_review import (
     _compute_antibody_ca_rog,
     _rfantibody_cdr_refresh_required,
@@ -325,8 +320,8 @@ def test_nextflow_history_status_for_run_dir_matches_current_attempt() -> None:
 
 
 def test_plan_output_dir_cleanup_preserves_shared_resume_directory() -> None:
-    shared = "/mnt/BioModStack/bms_results/RBX1 beta large_20260314_235055"
-    unique = "/mnt/BioModStack/bms_results/RBX1 beta large_resumed_refinement_20260315_234903"
+    shared = "/data/bms/bms_results/RBX1 beta large_20260314_235055"
+    unique = "/data/bms/bms_results/RBX1 beta large_resumed_refinement_20260315_234903"
 
     deletable, preserved = _plan_output_dir_cleanup(
         [shared, unique, shared],
@@ -357,7 +352,7 @@ def test_plan_output_dir_cleanup_preserves_shared_resume_directory() -> None:
 
 
 def test_plan_output_dir_cleanup_preserves_shared_child_directory_once() -> None:
-    shared_child = "/mnt/BioModStack/bms_results/antibody_batch - RFA 1/10_20260314_235105"
+    shared_child = "/data/bms/bms_results/antibody_batch - RFA 1/10_20260314_235105"
 
     deletable, preserved = _plan_output_dir_cleanup(
         [shared_child, shared_child],

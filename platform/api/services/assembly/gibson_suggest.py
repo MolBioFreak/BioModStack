@@ -1,0 +1,564 @@
+"""Gibson/HiFi suggestions: cover a target with supplied-source regions and new DNA.
+
+Each proposal is a complete ``GibsonDesignRequest`` that the existing design route
+accepts unchanged. Matched regions become PCR fragments (or are reused as-is when
+they equal a supplied linear fragment); new DNA becomes plain synthesis fragments
+because the neighbouring PCR primers carry the overlap tails. The design is run for
+every variant, and its product must equal the target before the variant is offered.
+Sources are only read.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from .common import orient_fragment
+from .feature_mapping import region_positions, stored_to_features
+from .feature_types import Material
+from .gibson_overlap_plan import (
+    FEW_FRAGMENT_OVERLAP,
+    MANY_FRAGMENT_OVERLAP,
+    MIN_SYNTHESIS_FRAGMENT,
+    cut_stretch,
+    fragment_spans,
+    maximum_count,
+    minimum_count,
+    overlap_note,
+    scaled_overlap,
+    beyond_guidance_note,
+    tune_primer_overlap,
+)
+from .pydna_gibson import design_gibson
+from .region_match import Matcher, Piece, Source, cover_target, reverse_complement
+from .repeat_breakpoints import RepeatAnalysis, choose_boundaries
+from .gibson_recut import SYNTHESIS_LIMIT, SYNTHETIC_FLAG
+from .types import AssemblyError, AssemblyFragment, JunctionSpec
+
+SMALL_MATCH = 150  # matched pieces shorter than this may be absorbed into synthesis (variant 3)
+MAX_SYNTHESIS = 3000
+
+
+class TargetIn(BaseModel):
+    name: str = "target"
+    sequence: str
+    circular: bool = True
+    features: list[dict[str, Any]] | None = None
+
+
+class SourceIn(BaseModel):
+    id: str
+    name: str = ""
+    sequence: str
+    circular: bool = False
+    source_sequence_id: str | None = None
+    source_revision: int | None = None
+    features: list[dict[str, Any]] | None = None
+
+
+class SuggestRequest(BaseModel):
+    target: TargetIn
+    sources: list[SourceIn] = Field(default_factory=list)
+    min_match: int = Field(default=30, ge=12)
+    overlap: int | None = Field(default=None, ge=15, le=80)  # blank: follows NEB's guidance for the fragment count
+    target_tm: float = Field(default=58.0, ge=45.0, le=72.0)
+    min_anneal: int = Field(default=14, ge=10, le=30)
+    fixed_boundaries: list[int] | None = None
+    protected_feature_ids: list[str] | None = None
+    allow_synthesis: bool = True
+    max_pcr_length: int | None = Field(default=None, ge=100)
+    limit: int = Field(default=3, ge=1, le=3)
+    fragment_count: int | None = Field(default=None, ge=2, le=200)  # wanted fragments in total, best effort
+    max_synthesis_length: int | None = Field(default=None, ge=300, le=20000)  # each synthetic fragment, default 3000
+
+
+class SourceRef(BaseModel):
+    id: str
+    start: int
+    end: int
+    strand: int
+    wraps_origin: bool
+
+
+class FragmentOut(BaseModel):
+    id: str
+    name: str
+    preparation: str
+    orientation: str
+    source: SourceRef | None = None
+    sequence: str | None = None
+
+
+class FeatureReport(BaseModel):
+    kept: list[str] = Field(default_factory=list)
+    removed: list[str] = Field(default_factory=list)
+    clipped: list[str] = Field(default_factory=list)
+
+
+class JunctionOut(BaseModel):
+    left_id: str
+    right_id: str
+    overlap_length: int
+    overlap_sequence: str | None = None
+    overlap_tm: float | None = None
+    overlap_tm_2_4: float | None = None
+    overlap_gc: float | None = None
+    distribution: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class Proposal(BaseModel):
+    rank: int
+    summary: str
+    counts: dict[str, int]
+    fragments: list[FragmentOut]
+    design_request: dict[str, Any]
+    features: FeatureReport
+    notes: list[str] = Field(default_factory=list)
+    junctions: list[JunctionOut] = Field(default_factory=list)
+
+
+class SuggestResult(BaseModel):
+    proposals: list[Proposal]
+    diagnostics: list[str] = Field(default_factory=list)
+
+
+def _clean(sequence: str) -> str:
+    return re.sub(r"[^A-Za-z]", "", sequence).upper()
+
+
+@dataclass
+class Frag:
+    kind: str  # pcr | synthesis | existing
+    start: int
+    end: int
+    piece: Piece | None = None
+    sequence: str | None = None
+    source: SourceIn | None = None
+
+
+def _label(feature: dict[str, Any], index: int) -> tuple[str, str]:
+    return str(feature.get("id", index)), feature.get("name") or feature.get("type") or "feature"
+
+
+def _feature_spans(stored: list[dict[str, Any]] | None, sequence: str, circular: bool) -> list[tuple[str, str, list[int]]]:
+    material = Material(sequence=sequence, topology="circular" if circular else "linear", features=[])
+    spans = []
+    for index, feature in enumerate(stored_to_features(stored)):
+        key, name = _label((stored or [])[index], index)
+        positions = [p for segment in feature.segments for p in region_positions(segment, material)]
+        spans.append((key, name, positions))
+    return spans
+
+
+def _snap_protected(pieces: list[Piece], protected: list[tuple[int, int]], notes: list[str]) -> list[Piece]:
+    """A boundary inside a protected feature moves to the feature edge that gives the
+    feature to new DNA (a match is only ever shortened, never extended)."""
+    pieces = list(pieces)
+    for fs, fe in protected:
+        for i in range(len(pieces) - 1):
+            left, right = pieces[i], pieces[i + 1]
+            b = left.end
+            if not fs < b < fe or left.is_match == right.is_match:
+                continue
+            target_b = fs if left.is_match else fe
+            if not left.start < target_b < right.end:
+                continue
+            pieces[i], pieces[i + 1] = left.sub(left.start, target_b), right.sub(target_b, right.end)
+            notes.append(f"Boundary {b} moved to {target_b} to keep a protected feature whole")
+    return [p for p in pieces if p.end > p.start]
+
+
+MIN_PCR_PIECE = 100
+
+
+def _split(pieces: list[Piece], cuts: list[int], cap: int | None, analysis: RepeatAnalysis | None = None,
+           repeat_info: dict[str, Any] | None = None) -> list[Piece]:
+    """Cut matched pieces at fixed boundaries and into PCR-sized chunks. New DNA stays whole.
+
+    With a repeat analysis the chunk boundaries keep out of repeated sequence and keep the copies of a repeat in one PCR
+    product wherever a layout exists; otherwise the chunks are equal.
+    """
+    out: list[Piece] = []
+    for piece in pieces:
+        if not piece.is_match:
+            out.append(piece)
+            continue
+        edges = sorted({piece.start, piece.end, *(c for c in cuts if piece.start < c < piece.end)})
+        for a, b in zip(edges, edges[1:]):
+            inner = None
+            if analysis is not None and cap and b - a > cap:
+                plan = analysis.plan_segment(a, b, min_len=MIN_PCR_PIECE, max_len=cap)
+                if plan.valid is not None:
+                    inner = choose_boundaries(plan.valid, a, b, cap, min_piece=MIN_PCR_PIECE)
+                    if inner is not None and repeat_info is not None:
+                        repeat_info.setdefault("notes", []).extend(n for n in plan.notes if n not in repeat_info.get("notes", []))
+                        repeat_info["uncontained"] = repeat_info.get("uncontained", 0) + len(plan.uncontained)
+                        repeat_info["needed"] = max(repeat_info.get("needed", 0), plan.needed)
+                        if plan.uncontained:
+                            exact = analysis.smallest_max_len_keeping_repeats_whole(min_len=MIN_PCR_PIECE, start=max(cap + 1, plan.needed), segment=(a, b))
+                            if exact:
+                                repeat_info["exact"] = max(repeat_info.get("exact", 0), exact)
+            if inner is not None:
+                bounds = [a, *inner, b]
+                out.extend(piece.sub(x, y) for x, y in zip(bounds, bounds[1:]))
+                continue
+            count = -(-(b - a) // cap) if cap else 1
+            step = -(-(b - a) // count)
+            out.extend(piece.sub(x, min(x + step, b)) for x in range(a, b, step))
+    return out
+
+
+def _merge_new(frags: list[Frag], target: str) -> list[Frag]:
+    out: list[Frag] = []
+    for frag in frags:
+        if frag.kind == "synthesis" and out and out[-1].kind == "synthesis":
+            out[-1] = Frag("synthesis", out[-1].start, frag.end, sequence=target[out[-1].start:frag.end])
+        else:
+            out.append(frag)
+    return out
+
+
+def _fragments(pieces: list[Piece], target: str, sources: dict[str, SourceIn], variant: int) -> list[Frag]:
+    frags: list[Frag] = []
+    for piece in pieces:
+        if not piece.is_match:
+            frags.append(Frag("synthesis", piece.start, piece.end, sequence=piece.sequence))
+            continue
+        source = sources[piece.source or ""]
+        whole = not source.circular and piece.end - piece.start == len(source.sequence)
+        kind = "existing" if variant == 2 and whole else "pcr"
+        frags.append(Frag(kind, piece.start, piece.end, piece=piece, source=source))
+    if variant == 3:
+        for i, frag in enumerate(frags):
+            near_new = any(0 <= j < len(frags) and frags[j].kind == "synthesis"
+                           for j in (i - 1, i + 1))
+            if frag.kind == "pcr" and frag.end - frag.start < SMALL_MATCH and near_new:
+                frags[i] = Frag("synthesis", frag.start, frag.end, sequence=target[frag.start:frag.end])
+        frags = _merge_new(frags, target)
+    return frags
+
+
+def _split_synthetic(frags: list[Frag], target: str, req: SuggestRequest, notes: list[str]) -> list[Frag] | None:
+    """Cut synthetic stretches into overlapping fragments that fit the length limit and the wanted count.
+
+    Neighbouring synthetic fragments share their overlap inside the ordered sequences, so no primers are needed.
+    Cut windows are the cleanest near an even split (Tm, GC, complexity, uniqueness). Returns None when a stretch
+    cannot be cut within the limit.
+    """
+    n = len(target)
+    cap = req.max_synthesis_length or MAX_SYNTHESIS
+    overlap = req.overlap + req.overlap % 2
+    wanted = req.fragment_count
+    stretches = [i for i, frag in enumerate(frags) if frag.kind == "synthesis"]
+    if not stretches:
+        if wanted and wanted != len(frags):
+            notes.append(f"{wanted} fragments were asked for; this design has {len(frags)} because no part of it is synthetic")
+        return frags
+    closed = len(frags) == 1 and req.target.circular
+    counts: dict[int, int] = {}
+    ceilings: dict[int, int] = {}
+    limits: dict[int, int] = {}
+    for i in stretches:
+        frag = frags[i]
+        span = frag.end - frag.start
+        flanks = sum(1 for j in (i - 1, i + 1) if 0 <= j < len(frags) and frags[j].kind == "existing")
+        if closed or len(frags) == 1:
+            floor = 2
+        else:
+            floor = 1
+        limits[i] = cap - flanks * overlap
+        counts[i] = max(floor, minimum_count(span, closed, limits[i], overlap)) if span + flanks * overlap > cap or floor > 1 else 1
+        ceilings[i] = maximum_count(span, closed)
+        if counts[i] > ceilings[i]:
+            return None
+    fixed = len(frags) - len(stretches)
+    if wanted:
+        while fixed + sum(counts.values()) < wanted:
+            candidates = [i for i in stretches if counts[i] < ceilings[i]]
+            if not candidates:
+                break
+            longest = max(candidates, key=lambda i: (frags[i].end - frags[i].start) / counts[i])
+            counts[longest] += 1
+        total = fixed + sum(counts.values())
+        if total != wanted:
+            notes.append(f"{wanted} fragments were asked for; the closest this target allows within the {cap} bp limit "
+                         f"and a {MIN_SYNTHESIS_FRAGMENT} bp minimum per synthetic fragment is {total}")
+    out: list[Frag] = []
+    for i, frag in enumerate(frags):
+        count = counts.get(i, 1)
+        if frag.kind != "synthesis" or count == 1:
+            out.append(frag)
+            continue
+        cuts = cut_stretch(target, req.target.circular, frag.start, frag.end, count, overlap, closed=closed,
+                           max_length=limits[i])
+        if cuts is None:
+            return None
+        spans = fragment_spans(cuts, frag.start, frag.end, closed=closed, size=n)
+        out.extend(Frag("synthesis", a, b, sequence=None) for a, b in spans)
+    return out
+
+
+def _junction_specs(frags: list[Frag], target: str, req: SuggestRequest) -> list[dict[str, Any]]:
+    """Overlap lengths for joins whose overlap rides on primers, when a longer one avoids weak windows."""
+    n = len(target)
+    base = req.overlap + req.overlap % 2
+    count = len(frags)
+    pairs = [(i, i + 1) for i in range(count - 1)] + ([(count - 1, 0)] if req.target.circular and count > 1 else [])
+    specs: list[dict[str, Any]] = []
+    for i, j in pairs:
+        left, right = frags[i], frags[j]
+        pa, pb = left.kind == "pcr", right.kind == "pcr"
+        if not (pa or pb):
+            continue
+        distribution = "split" if pa and pb else "right" if pb else "left"
+        boundary = left.end % n if req.target.circular else left.end
+        length = tune_primer_overlap(target, req.target.circular, boundary, base, distribution)
+        if length != base:
+            specs.append({"after_fragment_id": f"f{i + 1}", "overlap": length, "distribution": None})
+    return specs
+
+
+def _build_request(frags: list[Frag], target: str, req: SuggestRequest) -> tuple[dict[str, Any], list[FragmentOut]]:
+    n = len(target)
+    overlap = req.overlap + req.overlap % 2
+    fragments, out = [], []
+    for i, frag in enumerate(frags):
+        fid = f"f{i + 1}"
+        entry: dict[str, Any] = {"id": fid, "preparation": "pcr" if frag.kind == "pcr" else "ready_linear"}
+        ref = None
+        if frag.kind == "synthesis":
+            a, b = frag.start, frag.end
+            if i > 0 and frags[i - 1].kind == "existing":
+                a -= overlap
+            if i + 1 < len(frags) and frags[i + 1].kind == "existing":
+                b += overlap
+            if req.target.circular and i == 0 and frags[-1].kind == "existing":
+                a -= overlap
+            if req.target.circular and i == len(frags) - 1 and frags[0].kind == "existing":
+                b += overlap
+            doubled = target + target if req.target.circular else target
+            sequence = doubled[a:b] if a >= 0 else (target + target)[n + a:n + b]
+            entry.update(name=f"Synthetic {i + 1}", sequence=sequence, orientation="forward",
+                         metadata={SYNTHETIC_FLAG: True, SYNTHESIS_LIMIT: req.max_synthesis_length or MAX_SYNTHESIS})
+            out.append(FragmentOut(id=fid, name=entry["name"], preparation="synthesis", orientation="forward",
+                                   sequence=sequence))
+        else:
+            piece, source = frag.piece, frag.source
+            assert piece is not None and source is not None
+            if frag.kind == "existing":
+                sequence, start, end, wraps = source.sequence, 0, len(source.sequence), False
+            else:
+                start, end, wraps = piece.region()
+                sequence = (source.sequence[start:] + source.sequence[:end]) if wraps else source.sequence[start:end]
+            orientation = "forward" if piece.strand == 1 else "reverse"
+            name = source.name or source.id
+            entry.update(name=name if frag.kind == "existing" else f"{name} {start + 1}-{end}",
+                         sequence=sequence, orientation=orientation)
+            if source.circular:
+                entry["circular"] = False
+            if source.source_sequence_id:
+                entry.update(source_sequence_id=source.source_sequence_id, source_revision=source.source_revision)
+                if frag.kind != "existing":
+                    entry.update(source_start=start, source_end=end, source_wraps_origin=wraps)
+            ref = SourceRef(id=source.id, start=start, end=end, strand=piece.strand, wraps_origin=wraps)
+            out.append(FragmentOut(id=fid, name=entry["name"], preparation=frag.kind, orientation=orientation,
+                                   source=ref, sequence=sequence if frag.kind == "existing" else None))
+        fragments.append(entry)
+    # pydna splits the overlap between two PCR neighbours, so an odd value comes out one nt short.
+    request = {"fragments": fragments, "circular": req.target.circular, "overlap": req.overlap + req.overlap % 2,
+               "target_tm": req.target_tm, "min_anneal": req.min_anneal}
+    return request, out
+
+
+def _same_product(a: str, b: str, circular: bool) -> bool:
+    return a == b or (circular and len(a) == len(b) and a in b + b)
+
+
+def _split_for_overlap(frags: list[Frag], target: str, req: SuggestRequest,
+                       notes: list[str]) -> tuple[SuggestRequest, list[Frag] | None]:
+    """Cut the synthetic stretches and settle the overlap, which follows the final fragment count unless it was set.
+
+    The count depends a little on the overlap (a longer overlap leaves less room under the synthesis limit), so the
+    first pass uses the few-fragment overlap and a second pass uses the larger one if that count calls for it.
+    """
+    if req.overlap is not None:
+        sized = req.model_copy(update={"overlap": req.overlap + req.overlap % 2})
+        return sized, _split_synthetic(frags, target, sized, notes)
+    overlap = FEW_FRAGMENT_OVERLAP
+    for attempt in range(2):
+        sized = req.model_copy(update={"overlap": overlap})
+        trial: list[str] = []
+        split = _split_synthetic(frags, target, sized, trial)
+        if split is None:
+            return sized, None
+        wanted = scaled_overlap(len(split))
+        if wanted == overlap or attempt == 1:
+            notes.extend(trial)
+            notes.append(overlap_note(overlap, len(split)))
+            return sized, split
+        overlap = wanted
+    raise AssertionError("unreachable")
+
+
+def _evaluate(request: dict[str, Any], target: str, circular: bool):
+    fragments = [AssemblyFragment(id=f["id"], name=f["name"], sequence=f["sequence"],
+                                  orientation=f["orientation"]) for f in request["fragments"]]
+
+    def run(chosen: list[dict[str, Any]] | None):
+        specs = [JunctionSpec(j["after_fragment_id"], j.get("overlap"), j.get("distribution")) for j in chosen or []] or None
+        result = design_gibson(fragments, preparations=[f["preparation"] for f in request["fragments"]],
+                               circular=circular, overlap=request["overlap"], target_tm=request["target_tm"],
+                               min_anneal=request["min_anneal"], junctions=specs, planner_fallback=False)
+        if not _same_product(result.candidates[0].product.sequence, target, circular):
+            raise AssemblyError("designed fragments do not reproduce the target")
+        return result
+
+    try:
+        return run(request.get("junctions"))
+    except AssemblyError:
+        if not request.get("junctions"):
+            raise
+        request.pop("junctions")  # the tuned overlaps did not assemble; offer the plain plan instead
+        return run(None)
+
+
+def _feature_report(req: SuggestRequest, cover_pieces: list[Piece], rotation: int, target: str,
+                    sources: dict[str, SourceIn]) -> FeatureReport:
+    report = FeatureReport()
+
+    def sort(name: str, positions: list[int], used: set[int]) -> None:
+        hit = sum(p in used for p in positions)
+        (report.kept if hit == len(positions) else report.clipped if hit else report.removed).append(name)
+
+    used: dict[str, set[int]] = {}
+    for piece in cover_pieces:
+        if piece.is_match:
+            used.setdefault(piece.source or "", set()).update(piece.forward_positions())
+    for source in sources.values():
+        if source.features:
+            for key, name, positions in _feature_spans(source.features, source.sequence, source.circular):
+                sort(f"{source.name or source.id}: {name} ({key})", positions, used.get(source.id, set()))
+    if req.target.features:
+        matched = {t for p in cover_pieces if p.is_match for t in range(p.start, p.end)}
+        n = len(target)
+        for key, name, positions in _feature_spans(req.target.features, target, req.target.circular):
+            rotated = [(p - rotation) % n for p in positions]
+            if any(p in matched for p in rotated):
+                sort(f"target: {name} ({key})", rotated, matched)
+    return report
+
+
+def suggest_gibson(req: SuggestRequest) -> SuggestResult:
+    target = _clean(req.target.sequence)
+    if not target:
+        raise AssemblyError("Target sequence is empty")
+    sources = {s.id: s.model_copy(update={"sequence": _clean(s.sequence)}) for s in req.sources}
+    matcher = Matcher([Source(s.id, s.sequence, s.circular) for s in sources.values()], req.min_match)
+    n = len(target)
+    cuts = [b % n for b in req.fixed_boundaries or []]
+    target_features = req.target.features or []
+    protected_ids = set(req.protected_feature_ids or [])
+    protected_spans = []
+    if protected_ids:
+        for key, _name, positions in _feature_spans(target_features, target, req.target.circular):
+            if key in protected_ids:
+                protected_spans.append(positions)
+    origin = min(cuts) if cuts and req.target.circular else None
+    # Repeat containment is judged before the fragment count is known, so it uses the larger overlap unless one was set.
+    repeat_overlap = req.overlap if req.overlap is not None else MANY_FRAGMENT_OVERLAP
+    repeat_overlap += repeat_overlap % 2
+    base = cover_target(target, [], circular=req.target.circular, origin=origin, matcher=matcher)
+    if (req.target.circular and req.max_pcr_length and not cuts and not protected_spans
+            and len(base.pieces) == 1 and base.pieces[0].is_match and base.pieces[0].end - base.pieces[0].start > req.max_pcr_length):
+        # One source covers the whole circular target, so where the construct starts is free: start it where the repeats can stay whole.
+        trial = RepeatAnalysis(target[base.rotation:] + target[:base.rotation], circular=True,
+                               overlap=repeat_overlap, min_anneal=req.min_anneal)
+        best = trial.plan(min_len=MIN_PCR_PIECE, max_len=req.max_pcr_length) if trial.has_repeats else None
+        if best is not None and best.restricts and best.origin:
+            base = cover_target(target, [], circular=True, origin=(base.rotation + best.origin) % n, matcher=matcher)
+    rotation = base.rotation
+    rotated = target[rotation:] + target[:rotation] if req.target.circular else target
+    notes: list[str] = []
+    ranges = [(min((p - rotation) % n for p in span), max((p - rotation) % n for p in span) + 1)
+              for span in protected_spans if span]
+    pieces = _snap_protected(base.pieces, ranges, notes)
+    shift = [(c - rotation) % n for c in cuts]
+    repeat_info: dict[str, Any] = {}
+    analysis = None
+    if req.max_pcr_length and any(p.is_match and p.end - p.start > req.max_pcr_length for p in pieces):
+        analysis = RepeatAnalysis(rotated, circular=req.target.circular, overlap=repeat_overlap, min_anneal=req.min_anneal)
+    pieces = _split(pieces, [c for c in shift if c], req.max_pcr_length, analysis, repeat_info)
+    notes.extend(n for n in repeat_info.get("notes", []) if n not in notes)
+    if not req.allow_synthesis and any(not p.is_match for p in pieces):
+        return SuggestResult(proposals=[], diagnostics=["Part of the target is not found in the supplied sources "
+                                                        "and synthesis is not allowed"])
+    diagnostics: list[str] = []
+    cap = req.max_synthesis_length or MAX_SYNTHESIS
+    if not any(p.is_match for p in pieces):
+        diagnostics.append("No supplied source matches the target; it is built from overlapping synthetic fragments")
+    features = _feature_report(req, pieces, rotation, target, sources)
+    if req.target.features and any(source.features for source in sources.values()):
+        notes.append("Feature report lists source coverage and target match coverage separately; "
+                     "the same annotation can appear in both roles, not as duplicate product features.")
+    scored = []
+    seen: set[str] = set()
+    for variant in (1, 2, 3):
+        frags = _fragments(pieces, rotated, sources, variant)
+        if not frags:
+            continue
+        variant_notes: list[str] = []
+        sized, frags = _split_for_overlap(frags, rotated, req, variant_notes)
+        if frags is None:
+            diagnostics.append(f"Variant {variant} not offered: a synthetic stretch cannot be cut into overlapping "
+                               f"fragments of at most {cap} bp")
+            continue
+        many = beyond_guidance_note(len(frags))
+        if many:
+            variant_notes.append(many)
+        request, outs = _build_request(frags, rotated, sized)
+        specs = _junction_specs(frags, rotated, sized)
+        if specs:
+            request["junctions"] = specs
+        if any(len(f.sequence or "") > cap for f in outs if f.preparation == "synthesis"):
+            diagnostics.append(f"Variant {variant} not offered: a synthetic fragment is longer than {cap} bp")
+            continue
+        key = repr([(f["preparation"], f["sequence"], f["orientation"]) for f in request["fragments"]])
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            result = _evaluate(request, rotated, req.target.circular)
+        except AssemblyError as exc:
+            if repeat_info.get("uncontained"):
+                diagnostics.append(
+                    f"Variant {variant} not offered: {' '.join(repeat_info['notes'])} Raise the PCR length limit to "
+                    f"{repeat_info.get('exact') or repeat_info['needed']} bp or more so those copies can share one PCR product. ({exc})"
+                )
+            else:
+                diagnostics.append(f"Variant {variant} not offered: {exc}")
+            continue
+        counts = {"pcr": sum(f.preparation == "pcr" for f in outs),
+                  "synthesis": sum(f.preparation == "synthesis" for f in outs),
+                  "existing": sum(f.preparation == "existing" for f in outs)}
+        synth_bp = sum(len(f.sequence or "") for f in outs if f.preparation == "synthesis")
+        tms = [p.tm for p in result.primers]
+        overlap_tms = [j.overlap_tm for j in result.candidates[0].product.junctions if j.overlap_tm is not None]
+        evidence = max((abs(t - req.target_tm) for t in tms), default=0.0)
+        bits = [f"{counts['pcr']} PCR", f"{counts['synthesis']} synthesis ({synth_bp} bp)", f"{counts['existing']} existing"]
+        if tms:
+            bits.append(f"primer Tm {min(tms):.1f}-{max(tms):.1f} C")
+        if overlap_tms:
+            bits.append(f"min overlap Tm {min(overlap_tms):.1f} C")
+        scored.append(((synth_bp, counts["pcr"] + counts["synthesis"], evidence), Proposal(
+            rank=0, summary=", ".join(bits), counts=counts, fragments=outs, design_request=request,
+            features=features, notes=[*notes, *variant_notes],
+            junctions=[JunctionOut(left_id=j.left_fragment_id, right_id=j.right_fragment_id, overlap_length=j.overlap_length,
+                                   overlap_sequence=j.overlap_sequence, overlap_tm=j.overlap_tm, overlap_tm_2_4=j.overlap_tm_2_4,
+                                   overlap_gc=j.overlap_gc, distribution=j.distribution, notes=list(j.notes))
+                       for j in result.candidates[0].product.junctions])))
+    scored.sort(key=lambda item: item[0])
+    proposals = [p.model_copy(update={"rank": i + 1}) for i, (_, p) in enumerate(scored[:req.limit])]
+    return SuggestResult(proposals=proposals, diagnostics=diagnostics)

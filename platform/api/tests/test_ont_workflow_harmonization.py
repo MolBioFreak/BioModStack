@@ -77,9 +77,9 @@ def test_fastq_does_not_invent_modification_probabilities(workflow):
 @pytest.mark.parametrize("workflow", ["ont_basecall_dna", "ont_plasmid_qc"])
 @pytest.mark.parametrize("mode,tandem", [("pod5", True), ("bam", True), ("fastq", False)])
 def test_native_workflow_graph_preview(tmp_path, workflow, mode, tandem):
-    launcher = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
-    if not launcher.is_file():
-        pytest.skip("installed Nextflow unavailable; no graph qualification")
+    jar = os.environ.get("BMS_TEST_NEXTFLOW_JAR")
+    if not jar:
+        pytest.skip("BMS_TEST_NEXTFLOW_JAR required for real offline Nextflow; no graph qualification")
     reads = tmp_path / ("pod5" if mode == "pod5" else f"reads.{mode}")
     if mode == "pod5":
         reads.mkdir()
@@ -87,9 +87,9 @@ def test_native_workflow_graph_preview(tmp_path, workflow, mode, tandem):
         reads.write_bytes(b"")  # Graph-only fixture, not claimed to be scientific input.
     reference = tmp_path / "reference.fa"
     reference.write_text(">ref\nACGT\n")
-    env = dict(os.environ, NXF_OFFLINE="true", NXF_DISABLE_CHECK_LATEST="true")
+    env = dict(os.environ, NXF_OFFLINE="true", NXF_DISABLE_CHECK_LATEST="true", NXF_HOME=str(tmp_path / "nxf-home"))
     result = subprocess.run([
-        str(launcher), "-log", str(tmp_path / "nextflow.log"), "run",
+        "java", "-jar", jar, "-log", str(tmp_path / "nextflow.log"), "run",
         str(ROOT / f"workflows/ngs/{workflow}.nf"), "-preview", "-offline",
         "-w", str(tmp_path / "work"), "--code_root", str(ROOT),
         "--out_dir", str(tmp_path / "out"),
@@ -104,3 +104,26 @@ def test_native_workflow_graph_preview(tmp_path, workflow, mode, tandem):
         assert "Creating process" in log and "ModkitAnalysis:ModkitPileup" in log
         assert "ModkitAnalysis:ModkitSummary" in log
         assert ("Pod5PlasmidQC" if mode == "pod5" else "BamPlasmidQC") in log
+
+
+def test_plain_methylation_request_selects_the_methylation_stage_like_the_form():
+    reads = dict(pod5_dir="/reads", reference_fasta="/reference.fa")
+    plain = normalize_ont_launch_params("ont_methylation_analysis", reads)
+    form = normalize_ont_launch_params(
+        "ont_methylation_analysis", dict(reads, run_modkit=True, modified_bases="5mC_5hmC 6mA"))
+    assert plain == form
+    assert plain["run_modkit"] is True and plain["modified_bases"] == "5mC_5hmC 6mA"
+    # Both choices stay independently settable, and other workflows keep their defaults.
+    off = normalize_ont_launch_params("ont_methylation_analysis", dict(reads, run_modkit=False, modified_bases="none"))
+    assert off["run_modkit"] is False and off["modified_bases"] == "none"
+    tagged = normalize_ont_launch_params("ont_methylation_analysis", dict(bam_path="/tagged.bam", reference_fasta="/reference.fa"))
+    assert tagged["run_modkit"] is True
+    assert normalize_ont_launch_params("ont_plasmid_qc", reads)["run_modkit"] is False
+
+
+def test_allow_multiple_pod5_runs_defaults_off_and_must_be_boolean():
+    reads = dict(pod5_dir="/reads", reference_fasta="/reference.fa")
+    assert normalize_ont_launch_params("ont_plasmid_qc", reads)["allow_multiple_pod5_runs"] is False
+    assert normalize_ont_launch_params("ont_plasmid_qc", dict(reads, allow_multiple_pod5_runs=True))["allow_multiple_pod5_runs"] is True
+    with pytest.raises(ValueError, match="allow_multiple_pod5_runs must be boolean"):
+        normalize_ont_launch_params("ont_plasmid_qc", dict(reads, allow_multiple_pod5_runs="yes"))

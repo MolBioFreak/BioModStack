@@ -46,10 +46,15 @@ from migrations.seal_ont_external_source_identity import migrate as seal_externa
 from services import ont_raw_signal, ont_raw_signal_worker, ont_run_control
 from services.ont_raw_signal_worker import OntRawSignalWorker
 
-QUALIFICATION_ROOT = Path("/mnt/BioModStack/ont-raw-signal-qualification/BFX6NB_1_JAN26-EL-Q2-01/subset-pod5")
+_QUALIFICATION_DIR = os.environ.get("BMS_TEST_ONT_QUALIFICATION_POD5_DIR")
+QUALIFICATION_ROOT = Path(_QUALIFICATION_DIR) if _QUALIFICATION_DIR else None
 QUALIFICATION_PARTITIONS = (
-    QUALIFICATION_ROOT / "14e84168825dc5524fd61c441b7a5ad31b71ea16796502fccba679b6448bda45.pod5",
-    QUALIFICATION_ROOT / "fdb1de8a28aad4ed732e9bf10f35faf75b4d1d8518a9385a5c4cceb1c2dc6cb5.pod5",
+    ()
+    if QUALIFICATION_ROOT is None
+    else (
+        QUALIFICATION_ROOT / "14e84168825dc5524fd61c441b7a5ad31b71ea16796502fccba679b6448bda45.pod5",
+        QUALIFICATION_ROOT / "fdb1de8a28aad4ed732e9bf10f35faf75b4d1d8518a9385a5c4cceb1c2dc6cb5.pod5",
+    )
 )
 
 
@@ -64,8 +69,11 @@ def _load_validator():
 
 def _write_mixed_pod5(path: Path) -> tuple[str, list[Any]]:
     reads = []
+    if not QUALIFICATION_PARTITIONS:
+        pytest.skip("BMS_TEST_ONT_QUALIFICATION_POD5_DIR not set (qualification subset pod5 directory)")
     for source in QUALIFICATION_PARTITIONS:
-        assert source.is_file(), source
+        if not source.is_file():
+            pytest.skip(f"qualification pod5 partition unavailable: {source.name}")
         with pod5.Reader(source) as reader:
             reads.append(next(reader.reads()).to_read())
     assert len({repr(read.run_info) for read in reads}) == 2
@@ -1536,18 +1544,11 @@ async def test_waveform_execute_rechecks_policy_command(monkeypatch: pytest.Monk
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
     monkeypatch.setenv("BMS_SUDO_PASSWORD", "do-not-forward")
     policy_digest = "d" * 64
-    admitted: list[tuple[str, str]] = []
 
     monkeypatch.setattr(
         ont_raw_signal_worker,
         "raw_signal_runtime_identity",
         lambda: {"image": f"sha256:{policy_digest}", "digest": policy_digest},
-        raising=False,
-    )
-    monkeypatch.setattr(
-        ont_raw_signal_worker,
-        "assert_local_raw_runtime_image",
-        lambda runtime, image: admitted.append((runtime, image)),
         raising=False,
     )
 
@@ -1573,7 +1574,6 @@ async def test_waveform_execute_rechecks_policy_command(monkeypatch: pytest.Monk
     receipt = await worker._execute(command, "lookup-1", "claim-1", waveform=True)
 
     assert receipt["returncode"] == 0
-    assert admitted == [("docker", f"sha256:{policy_digest}")]
 
     with pytest.raises(RuntimeError, match="network"):
         await worker._execute(
@@ -1649,8 +1649,9 @@ async def test_waveform_claim_uses_checked_in_runtime_identity(
             "container_runtime": "docker",
             "container_image": "environment-image",
             "container_digest": "a" * 64,
-            "disk_free_bytes": 100,
-            "required_free_bytes": 1,
+            # 64 MB free against a 20 GB whole-run floor: one indexed read still runs.
+            "disk_free_bytes": 64 * 1024 * 1024,
+            "required_free_bytes": 20 * 1024 * 1024 * 1024,
             "worker_uid": os.getuid(),
             "worker_gid": os.getgid(),
         },
@@ -1665,12 +1666,6 @@ async def test_waveform_claim_uses_checked_in_runtime_identity(
             "policy_sha256": "c" * 64,
         },
     )
-    admitted: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        ont_raw_signal,
-        "assert_local_raw_runtime_image",
-        lambda runtime, image: admitted.append((runtime, image)),
-    )
     lease_calls: list[tuple[int, int, int]] = []
     monkeypatch.setattr(
         ont_raw_signal.fcntl,
@@ -1684,7 +1679,6 @@ async def test_waveform_claim_uses_checked_in_runtime_identity(
     assert claimed is not None
     _lookup, command, _output, source = claimed
 
-    assert admitted == [("docker", f"sha256:{policy_digest}")]
     assert f"sha256:{policy_digest}" in command
     assert "environment-image" not in command
     assert "--fd-socket" in command
@@ -2385,11 +2379,9 @@ def test_conversion_pin_rejects_intermediate_root_symlink_replacement(tmp_path: 
 def test_mixed_run_end_to_end_conversion(tmp_path: Path) -> None:
     source_path = tmp_path / "mixed.pod5"
     acquisition_id, _reads = _write_mixed_pod5(source_path)
-    # Runtime integration consumes the released immutable image, never builds
-    # or retags an installation from inside an offline test.
-    policy = json.loads(ont_raw_signal.RAW_SIGNAL_RUNTIME_POLICY_PATH.read_text())
-    image_id = policy["runtime_id"]
-    ont_raw_signal.assert_local_raw_runtime_image("docker", image_id)
+    # Runtime integration uses the image already on this machine; it never
+    # builds or retags one from inside an offline test.
+    image_id = ont_raw_signal.raw_signal_runtime_identity()["image"]
     assert image_id.startswith("sha256:")
     with tempfile.TemporaryDirectory(prefix="ont-") as short_stage:
         job, snapshot = _job(Path(short_stage))
@@ -2720,7 +2712,7 @@ def test_conversion_uses_runtime_and_native_validation_not_legacy_qualification_
     assert ont_raw_signal._qualification_gate(snapshot) == "conversion_capacity_gate_failed"
 
 
-def test_raw_runtime_identity_is_bound_to_checked_in_policy_and_rejects_env_drift(
+def test_raw_runtime_identity_uses_the_local_image_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     policy = json.loads(
@@ -2728,51 +2720,16 @@ def test_raw_runtime_identity_is_bound_to_checked_in_policy_and_rejects_env_drif
             encoding="utf-8"
         )
     )
-    image_id = policy["runtime_id"]
-    monkeypatch.setenv(ont_raw_signal.BLOW5_CONTAINER_ENV, image_id)
-    monkeypatch.setenv(
-        ont_raw_signal.BLOW5_CONTAINER_DIGEST_ENV,
-        image_id.removeprefix("sha256:"),
+    # A locally built image has an id the repository cannot know in advance.
+    local = "sha256:" + "c" * 64
+    monkeypatch.setattr(
+        ont_raw_signal, "local_image_identity", lambda env_name, runtime: (local, "c" * 64)
     )
     identity = ont_raw_signal.raw_signal_runtime_identity()
-    assert identity["image"] == image_id
-    assert identity["digest"] == image_id.removeprefix("sha256:")
-
-    monkeypatch.setenv(ont_raw_signal.BLOW5_CONTAINER_DIGEST_ENV, "0" * 64)
-    with pytest.raises(RuntimeError, match="raw-signal runtime policy"):
-        ont_raw_signal.raw_signal_runtime_identity()
-
-
-@pytest.mark.parametrize("runtime,prefix", [("docker", "sha256:"), ("podman", ""), ("podman", "sha256:")])
-def test_raw_runtime_admission_inspects_exact_local_image_id(
-    monkeypatch: pytest.MonkeyPatch, runtime: str, prefix: str,
-) -> None:
-    inspected: list[list[str]] = []
-    monkeypatch.setenv("HOME", "/operator/home")
-    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
-    monkeypatch.setenv("BMS_SUDO_PASSWORD", "do-not-forward")
-    monkeypatch.setattr(ont_raw_signal.shutil, "which", lambda runtime: f"/usr/bin/{runtime}")
-
-    def inspect(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        assert _kwargs["env"]["HOME"] == "/operator/home"
-        assert _kwargs["env"]["XDG_RUNTIME_DIR"] == "/run/user/1000"
-        assert "BMS_SUDO_PASSWORD" not in _kwargs["env"]
-        inspected.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout=prefix + "a" * 64 + "\n", stderr="")
-
-    monkeypatch.setattr(ont_raw_signal.subprocess, "run", inspect)
-    ont_raw_signal.assert_local_raw_runtime_image(runtime, "sha256:" + "a" * 64)
-    assert inspected == [[runtime, "image", "inspect", "--format", "{{.Id}}", "sha256:" + "a" * 64]]
-
-
-@pytest.mark.parametrize("observed", ["b" * 64, "a" * 63, "sha256:" + "b" * 64, "mutable:tag"])
-def test_raw_runtime_admission_rejects_diverged_podman_identity(monkeypatch: pytest.MonkeyPatch, observed: str) -> None:
-    monkeypatch.setattr(ont_raw_signal.shutil, "which", lambda runtime: f"/usr/bin/{runtime}")
-    monkeypatch.setattr(ont_raw_signal.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(command, 0, stdout=observed, stderr=""))
-    with pytest.raises(RuntimeError, match="absent or diverged"):
-        ont_raw_signal.assert_local_raw_runtime_image("podman", "sha256:" + "a" * 64)
-
-
+    assert identity["image"] == local != policy["runtime_id"]
+    assert identity["digest"] == "c" * 64
+    assert identity["tools"] == policy["tools"]
+    assert len(identity["policy_sha256"]) == 64
 def test_every_raw_container_command_uses_pull_never(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

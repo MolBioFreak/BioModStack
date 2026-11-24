@@ -41,11 +41,15 @@ def test_p4_matrix_rejects_unsupported_combinations() -> None:
         normalize_ont_launch_params("ont_basecall_dna", {"dorado_basecall_mode": "duplex", "duplex_pairs": "/tmp/p.txt", "modified_bases": "6mA"})
     with pytest.raises(ValueError, match="only supported"):
         normalize_ont_launch_params("ont_basecall_rna", {"barcode_kit": "SQK-RBK114-96"})
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        normalize_ont_launch_params("ont_basecall_dna", {"dorado_quality_mode": "hac", "barcode_kit": "SQK-RBK114-96", "modified_bases": "6mA"})
+    # A barcoded run may call modifications; methylation tables are then made per barcode.
+    barcoded = normalize_ont_launch_params("ont_basecall_dna", {"dorado_quality_mode": "hac", "barcode_kit": "SQK-RBK114-96", "modified_bases": "6mA"})
+    assert barcoded["barcode_kit"] == "SQK-RBK114-96" and barcoded["modified_bases"] == "6mA"
+    with pytest.raises(ValueError, match="per-barcode"):
+        normalize_ont_launch_params("ont_basecall_dna", {"dorado_quality_mode": "hac", "barcode_kit": "SQK-RBK114-96", "modified_bases": "6mA", "run_modkit": True, "reference_fasta": "/tmp/r.fa"})
+    # The methylation workflow calls the preselected modifications and runs modkit unless switched off.
     methylation = normalize_ont_launch_params("ont_methylation_analysis", {})
-    assert methylation["modified_bases"] == "none"
-    assert methylation["run_modkit"] is False
+    assert methylation["modified_bases"] == "5mC_5hmC 6mA"
+    assert methylation["run_modkit"] is True
 
 
 def test_public_ont_paths_are_existing_confined_and_non_symlinked(tmp_path: Path, monkeypatch) -> None:

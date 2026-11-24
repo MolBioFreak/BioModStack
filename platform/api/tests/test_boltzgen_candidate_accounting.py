@@ -88,7 +88,7 @@ async def test_filter_publication_ingestion_finalization_and_replay(tmp_path):
             assert summary['unevaluable_count'] == 1
             assert summary['expected_publication_count'] == summary['published_count'] == 1
             assert summary['requested_count'] is None
-            from routers.jobs import get_job
+            from routers.job_results import get_job
             response = (await get_job(job.id, db)).model_dump(mode='json')
             assert response['result_summary']['generated_count'] == 3
             assert response['result_summary']['rejected_count'] == 1

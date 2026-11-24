@@ -60,7 +60,6 @@ def test_every_terminal_branch_contributes_typed_designs_without_placeholder() -
     required_branch_authorities = {
         "early_sequence_prediction",
         "rfd3_only",
-        "af2_terminal",
         "boltz_terminal",
         "rf3_terminal",
         "protenix_terminal",

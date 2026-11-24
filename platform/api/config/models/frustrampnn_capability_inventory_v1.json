@@ -2,9 +2,9 @@
   "schema_name": "frustrampnn_capability_inventory",
   "schema_version": 1,
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-  "content_sha256": "2d8325aab53098fae160890c5e40b76e2be88674ed2b5f86626720accaeb2af1",
+  "content_sha256": "e20e68d80440dd5f068d95f78ac371c8e83925defd6be26d9e50322c285ad618",
   "runtime_identity": {
-    "image_path": "/mnt/BioModStack/apptainer/frustrampnn.sif",
+    "image_path": "$BMS_CONTAINER_DIR/frustrampnn.sif",
     "image_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
     "executable_path": "/opt/venv/bin/frustrampnn",
     "executable_sha256": "32089d959f619c08a550c0e7d0fc7b66b508d009ec3179d007f13773a170212f",
@@ -23,7 +23,7 @@
       "command": [
         "apptainer",
         "exec",
-        "/mnt/BioModStack/apptainer/frustrampnn.sif",
+        "$BMS_CONTAINER_DIR/frustrampnn.sif",
         "/opt/venv/bin/frustrampnn",
         "predict",
         "--help"
@@ -49,7 +49,7 @@
       "command": [
         "apptainer",
         "exec",
-        "/mnt/BioModStack/apptainer/frustrampnn.sif",
+        "$BMS_CONTAINER_DIR/frustrampnn.sif",
         "/opt/venv/bin/frustrampnn",
         "--version"
       ],

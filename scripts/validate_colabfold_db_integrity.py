@@ -27,7 +27,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--db-root",
         required=True,
-        help="Directory containing ColabFold MMseqs DB prefixes, e.g. /mnt/BioModStack/colabfold_db",
+        help="Directory containing ColabFold MMseqs DB prefixes, e.g. /data/bms/colabfold_db",
     )
     parser.add_argument(
         "--family",

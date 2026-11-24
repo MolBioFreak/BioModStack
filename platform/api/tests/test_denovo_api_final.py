@@ -13,6 +13,11 @@ from sqlalchemy import select
 from database import Job, Design, ExecutionTarget, get_session
 from experiment_database import get_experiment_session
 from routers import jobs, files
+from services import binder_source_materialization
+from services import job_submission
+from services import binder_continuation
+from services import job_control
+from services import job_requests
 from paths import resolve_allowed_path
 from services.remote_execution import executor
 from test_project_manager_adapters import stores
@@ -27,8 +32,11 @@ async def api(stores, monkeypatch):
     roots = {'inputs': root / 'inputs', 'bms_results': root / 'results'}
     monkeypatch.setattr(paths, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: roots)
-    monkeypatch.setattr(jobs, 'get_allowed_roots', lambda: roots)
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: root / 'inputs')
+    monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: roots)
+    monkeypatch.setattr(job_submission, 'get_allowed_roots', lambda: roots)
+    monkeypatch.setattr(job_requests, 'get_allowed_roots', lambda: roots)
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: root / 'inputs')
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: root / 'inputs')
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: root / 'results')
     app = FastAPI()
     app.include_router(jobs.router, prefix='/api/jobs')
@@ -235,7 +243,7 @@ async def test_http_deleted_cleanup_owner_invisible_but_referenced(api, monkeypa
         hidden = await session.get(Job, 'deleting')
         assert hidden is not None, 'permanent deletion erased outstanding stop custody'
         assert hidden.params['permanent_delete_cleanup'] is True
-        assert str(out) in await jobs._load_remaining_output_dir_refs(session, set())
+        assert str(out) in await job_control._load_remaining_output_dir_refs(session, set())
     assert (out / 'retained.txt').exists()
     # Existing cleanup owner drains the same hidden row after stop completion.
     async with core() as session:

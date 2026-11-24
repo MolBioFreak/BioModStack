@@ -140,7 +140,10 @@ def test_worker_pause_receiver_and_boot_lease_fences(retained,tmp_path,monkeypat
         'output_directory':str(tmp_path), 'working_directory':str(tmp_path),
         'files':[dict(relative_path='inputs/component-context.json', size_bytes=path.stat().st_size,
                       sha256=hashlib.sha256(path.read_bytes()).hexdigest())]}
-    monkeypatch.setattr(worker,'status',lambda _:dict(attempt_id='attempt',boot_id=boot,state='running'))
+    state = worker.base_status(envelope, 'running')
+    worker.atomic_json(worker.status_path(tmp_path), state)
+    monkeypatch.setattr(worker, 'process_matches', lambda *_: True)
+    monkeypatch.setattr(worker, 'workflow_activity', lambda *_a, **_kw: pytest.fail('pause scanned activity'))
     worker.atomic_json(worker.envelope_path(tmp_path),envelope)
     kwargs=dict(attempt_id='attempt',expected_boot_id=boot,lease_id='original-lease',operation_id='pause-one')
     state=worker.md_production_control(tmp_path,**kwargs)
@@ -351,7 +354,7 @@ def test_worker_resume_receiver_single_spawn_and_explicit_uncertainty(retained,t
                       sha256=hashlib.sha256(path.read_bytes()).hexdigest())]}
     worker.atomic_json(worker.envelope_path(tmp_path),envelope)
     worker.atomic_json(worker.status_path(tmp_path),dict(attempt_id='attempt',boot_id=boot,state='paused',quiescent=True))
-    monkeypatch.setattr(worker,'status',lambda path:worker.load_json(worker.status_path(path)))
+    monkeypatch.setattr(worker,'status',lambda path, **kwargs:worker.load_json(worker.status_path(path)))
     spawns=[]
     def spawn(*args,**kwargs): spawns.append(args[0]); raise OSError('inert uncertain spawn response')
     monkeypatch.setattr(worker.subprocess,'Popen',spawn)
@@ -392,9 +395,16 @@ async def test_remote_controller_to_actual_worker_pause_resume(store,retained,mo
     worker.atomic_json(worker.envelope_path(attempt),envelope)
     worker.atomic_json(worker.status_path(attempt),dict(attempt_id='attempt',job_id='parent',boot_id=boot,
         state='paused',quiescent=True,generation=0))
-    monkeypatch.setattr(worker,'status',lambda path:worker.load_json(worker.status_path(path)))
+    monkeypatch.setattr(worker,'status',lambda path, **kwargs:worker.load_json(worker.status_path(path)))
+    # Cold scheduler import probes metadata; keep it separate from supervisor launches.
+    with monkeypatch.context() as metadata:
+        metadata.setattr(worker.subprocess, 'run', lambda *a, **kw: SimpleNamespace(returncode=0, stdout=''))
+        from services import gpu_orchestrator
     spawns=[]
-    monkeypatch.setattr(worker.subprocess,'Popen',lambda *args,**kwargs:spawns.append(args[0]))
+    def spawn(command, **kwargs):
+        assert command[2:] == ['supervise', '--attempt-dir', str(attempt)]
+        spawns.append(command)
+    monkeypatch.setattr(worker.subprocess,'Popen',spawn)
     target=ExecutionTarget(id='vast:fixture',provider='vast',provider_instance_id='fixture',
         state='ready',active=True,host='inert.invalid',port=22,username='inert',remote_root=str(attempt),
         host_key_sha256='d'*64,leased_job_id='parent',lease_acquired_at=epoch,

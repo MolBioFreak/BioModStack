@@ -6,6 +6,8 @@ from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from routers import jobs
+from services import job_submission
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.fixture
@@ -15,14 +17,14 @@ def resume_paths(tmp_path, monkeypatch):
     retained = root / 'retained'
     retained.mkdir()
     (retained / 'result.txt').write_text('retained evidence')
-    monkeypatch.setattr(jobs, 'get_results_dir', lambda: root)
+    monkeypatch.setattr(job_submission, 'get_results_dir', lambda: root)
     return root, retained
 
 
 def test_managed_resume_path_is_read_only_and_optional(resume_paths):
     root, retained = resume_paths
-    assert jobs._managed_resume_output_dir(None) is None
-    assert jobs._managed_resume_output_dir(str(retained)) == str(retained)
+    assert job_submission._managed_resume_output_dir(None) is None
+    assert job_submission._managed_resume_output_dir(str(retained)) == str(retained)
     assert (retained / 'result.txt').read_text() == 'retained evidence'
     assert sorted(p.name for p in root.iterdir()) == ['retained']
 
@@ -63,16 +65,15 @@ async def test_invalid_resume_is_named_422_before_admission(resume_paths, monkey
     path = invalid_path(case, root, retained)
     app = FastAPI()
     app.include_router(jobs.router, prefix='/api/jobs')
-    class NoDatabase:
-        def __getattr__(self, name):
-            raise AssertionError('Invalid resume reached database: ' + name)
     async def session():
-        yield NoDatabase()
+        # Real session metadata is allowed; no bind means any SQL still fails.
+        async with AsyncSession() as unbound:
+            yield unbound
     app.dependency_overrides[jobs.get_session] = session
     app.dependency_overrides[jobs.get_experiment_session] = session
     def no_launch(*args, **kwargs):
         raise AssertionError('Invalid resume reached workflow launch admission')
-    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', no_launch)
+    monkeypatch.setattr(job_submission, '_raise_if_workflow_launches_disabled', no_launch)
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
         result = await client.post(endpoint, json={'name': 'resume refusal',
             'model_id': 'boltz_cp_experimental', 'mode': 'predict',

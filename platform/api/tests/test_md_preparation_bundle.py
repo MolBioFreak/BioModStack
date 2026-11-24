@@ -228,17 +228,9 @@ def test_gromacs_runner_stages_position_restraint_include_from_bundle(
         },
     )
 
-    class Ledger:
-        def is_complete(self, stage, required):
-            return False
+    from scripts.bms_md.runner import StageLedger
 
-        def mark_running(self, stage, command):
-            pass
-
-        def mark_completed(self, stage, required, **kwargs):
-            self.required = required
-
-    ledger = Ledger()
+    ledger = StageLedger(tmp_path / "ledger.json")
     output = tmp_path / "replica"
     _consume_preparation_bundle(
         {"chemistry": {"profile_id": "fixture", "profile_sha256": "a" * 64}},
@@ -248,4 +240,35 @@ def test_gromacs_runner_stages_position_restraint_include_from_bundle(
     )
 
     assert (output / "system" / "posre.itp").read_text(encoding="utf-8") == "posre.itp\n"
-    assert output / "system" / "posre.itp" in ledger.required
+    assert ledger.is_complete("preparation", [output / "system" / "posre.itp"])
+
+
+@pytest.mark.parametrize("settings,message", [
+    ({"box_type": "dodecahedron"}, "octahedron"), ({"salt_molar": 2.01}, "salt_molar"),
+    ({"neutralize": False}, "neutralization"),
+])
+def test_amber_builder_rejects_unsupported_settings_before_io(tmp_path, settings, message):
+    from scripts.bms_md.chemistry.prepare import build_preparation_bundle
+
+    with pytest.raises(ValueError, match=message):
+        build_preparation_bundle(source_structure=tmp_path / "absent", destination=tmp_path / "bundle",
+                                 profile_id="amber_ff19sb_opc_protein_v1", profile_sha256="a" * 64,
+                                 runtime_lock=tmp_path / "lock", **settings)
+
+
+def test_native_module_hands_authored_box_to_amber_builder(tmp_path, monkeypatch):
+    # Run just the module's Python handoff; an invalid box must stop before source I/O.
+    module = (REPO_ROOT / "modules/experimental/molecular_dynamics/prepare.nf").read_text()
+    handoff = module.split("python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    monkeypatch.chdir(tmp_path)
+    image = tmp_path / "inert.sif"
+    image.touch()
+    monkeypatch.setenv("BMS_MD_PREPARATION_SIF", str(image))
+    Path("normalized_config.json").write_text(json.dumps({
+        "schema": "bms.md.job.v3", "input": {"structure": "absent.pdb"},
+        "chemistry": {"profile_id": "amber_ff19sb_opc_protein_v1", "profile_sha256": "a" * 64},
+        "preparation": {"box_type": "cubic", "padding_nm": 1, "salt_molar": 0, "neutralize": True},
+    }))
+    with pytest.raises(ValueError, match="octahedron"):
+        exec(handoff, {})
+    assert not Path("preparation_bundle").exists()

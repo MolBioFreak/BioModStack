@@ -27,6 +27,8 @@ from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, StrictInt, StrictFloat, model_validator, model_serializer
 from sqlalchemy import select
 
+from scripts.bms_md.chemistry.prepare import profile_preparation_owner
+
 from database import Design, Job, MdRun
 from schemas import CandidateRef
 from paths import get_allowed_roots, get_inputs_dir, to_allowed_relative
@@ -282,10 +284,19 @@ class MdGuidedNativeInput(_ClosedModel):
     chemistry_profile_id: str
     chemistry_profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     catalog_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
-    box_type: Literal["cubic", "triclinic", "dodecahedron", "octahedron"] = "dodecahedron"
+    box_type: Literal["cubic", "triclinic", "dodecahedron", "octahedron"] = Field(
+        default_factory=lambda data: "octahedron" if profile_preparation_owner(data["chemistry_profile_id"]) == "amber" else "dodecahedron",
+    )
     padding_nm: float = Field(default=1.0, gt=0)
     salt_molar: float = Field(default=0.15, ge=0)
     neutralize: bool = True
+
+    @model_serializer(mode="wrap")
+    def input_wire(self, handler):
+        data = handler(self)
+        if "box_type" not in self.model_fields_set:
+            data.pop("box_type", None)
+        return data
 
 
 class MdPreparedNativeInput(_ClosedModel):
@@ -1684,39 +1695,71 @@ async def _resolve_retained_source(source_ref: StartingStructureSourceRef, sessi
         raise _error("MD_STARTING_STRUCTURE_FORBIDDEN", "The retained source belongs to a different selection.", 404)
     original = provenance.get("original_snapshot") or {}
     snapshot = provenance.get("snapshot") or {}
-    path = Path(str(original.get("path") or snapshot.get("structure") or ""))
-    if not path.is_absolute():
-        path = root / path
-    try:
-        resolved = path.resolve(strict=True)
-        resolved.relative_to(root / "inputs")
-    except (OSError, ValueError) as exc:
-        raise _error("MD_STARTING_STRUCTURE_FORBIDDEN", "The retained source is not Job-owned.", 404) from exc
-    if path.is_symlink():
-        raise _error("MD_STARTING_STRUCTURE_UNSAFE", "The retained source is symlinked.", 409)
-    result = ResolvedStartingStructure(source_ref=source_ref, path=resolved, label=resolved.name,
-                                      source_provenance=provenance, producer_job_id=provenance.get("source_job_id"),
-                                      design_id=provenance.get("design_id"))
-    digest = original.get("sha256") if original else snapshot.get("structure_sha256")
-    result.suffix = str(provenance.get("original_suffix") or resolved.suffix)
-    if result.suffix.endswith(('.gz', '.zst', '.bcif')):
-        descriptor = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        result.descriptor = descriptor
+
+    def retained_path(raw: str | None) -> Path:
+        path = root / (raw or '')
         try:
-            if hashlib.sha256(_read_encoded_source(result)).hexdigest() != digest:
-                raise _error("MD_STARTING_STRUCTURE_CHANGED", "The retained document bytes changed.", 409)
-            return result
-        except Exception:
-            result.close()
-            raise
-    verified = open_resolved_structure_snapshot(result, expected_sha256=str(digest or read_resolved_structure(result).sha256))
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(root / 'inputs')
+        except (OSError, ValueError) as exc:
+            raise _error('MD_STARTING_STRUCTURE_FORBIDDEN', 'The retained source is not Job-owned.', 404) from exc
+        if path != resolved or not path.is_file():
+            raise _error('MD_STARTING_STRUCTURE_UNSAFE', 'The retained source is not a regular Job-owned file.', 409)
+        return path
+
+    selected_path = retained_path(snapshot.get('structure')) if snapshot else None
+    original_path = retained_path(original.get('path')) if original else None
+    path = selected_path or original_path
+    if path is None:
+        raise _error('MD_STARTING_STRUCTURE_NOT_FOUND', 'The retained source is unavailable.', 404)
+    if selected_path and original_path and selected_path.samefile(original_path):
+        raise _error('MD_STARTING_STRUCTURE_UNSAFE', 'The retained sources are not independent files.', 409)
+    result = ResolvedStartingStructure(source_ref=source_ref, path=path, label=path.name,
+                                      source_provenance=provenance, producer_job_id=provenance.get('source_job_id'),
+                                      design_id=provenance.get('design_id'))
     try:
-        # Keep the verified descriptor alive through preparation and preview.
-        result.descriptor = os.dup(verified.handle.fileno())
-        result.suffix = resolved.suffix
-    finally:
-        verified.handle.close()
-    return result
+        if original_path:
+            # The digest is for the stored bytes, including any compression.
+            with os.fdopen(os.open(original_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as handle:
+                if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                    raise _error('MD_STARTING_STRUCTURE_UNSAFE', 'The retained original is not a regular file.', 409)
+                raw = handle.read(MAX_STARTING_STRUCTURE_BYTES + 1)
+            if (len(raw) > MAX_STARTING_STRUCTURE_BYTES or hashlib.sha256(raw).hexdigest() != original.get('sha256')
+                    or original.get('bytes', len(raw)) != len(raw)):
+                raise _error('MD_STARTING_STRUCTURE_CHANGED', 'The retained original bytes changed.', 409)
+            copy = tempfile.TemporaryFile(mode='w+b')
+            result.retained_handles = [copy]
+            copy.write(raw)
+            copy.seek(0)
+            result.source_provenance = {**provenance, 'original_sha256': original['sha256']}
+            if selected_path:
+                result.original_runtime_path = f'/proc/self/fd/{copy.fileno()}'
+            else:
+                # Original-only record: resolve_source may explicitly derive a member.
+                result.descriptor = os.dup(copy.fileno())
+                result.suffix = provenance.get('original_suffix') or original_path.suffix
+                copy.close()
+                result.retained_handles = None
+                return result
+        # Consume the published selected file itself, never a reconstruction of it.
+        digest = snapshot.get('structure_sha256') or provenance.get('source_sha256')
+        if not digest and not original:
+            digest = read_resolved_structure(result).sha256  # historical record
+        selected = open_verified_structure_snapshot(path, expected_sha256=digest)
+        try:
+            if (snapshot.get('structure_bytes', selected.size_bytes) != selected.size_bytes
+                    or any(provenance.get(key) not in (None, selected.sha256)
+                           for key in ('consumed_sha256', 'source_sha256'))):
+                raise _error('MD_STARTING_STRUCTURE_CHANGED', 'The retained selected bytes changed.', 409)
+            result.descriptor = os.dup(selected.handle.fileno())
+            result.suffix = selected.canonical_suffix
+            result.source_provenance = {**result.source_provenance, 'consumed_sha256': selected.sha256}
+        finally:
+            selected.handle.close()
+        return result
+    except Exception:
+        result.close()
+        raise
 
 
 def _read_encoded_source(resolved: ResolvedStartingStructure) -> bytes:
@@ -1748,6 +1791,8 @@ async def resolve_source(source_ref: StartingStructureSourceRef, session: Any) -
             resolved.close()
             raise _error("MD_STARTING_STRUCTURE_MODEL_INVALID", "Conflicting selected model numbers.")
         member = source_ref.model_number
+    if source_ref.snapshot_job_id and (resolved.source_provenance or {}).get("snapshot"):
+        return resolved  # already the verified consumed file, including historical selected-only records
     suffix = resolved.suffix or ''.join(Path(resolved.label).suffixes[-2:])
     encoded = suffix.lower().endswith(('.gz', '.zst', '.bcif'))
     if member is None and not encoded:
@@ -1776,6 +1821,12 @@ async def resolve_source(source_ref: StartingStructureSourceRef, session: Any) -
             original_bytes = original.data
             original_digest = original.sha256
         selected = select_structure_model(original.data, original.format, member) if member is not None else original.data
+        selected_digest = hashlib.sha256(selected).hexdigest()
+        if source_ref.snapshot_job_id and any(
+            digest and digest != selected_digest for digest in
+            ((resolved.source_provenance or {}).get(key) for key in ('consumed_sha256', 'source_sha256'))
+        ):
+            raise _error('MD_STARTING_STRUCTURE_CHANGED', 'The recovered member differs from the consumed bytes.', 409)
         original_handle = tempfile.TemporaryFile(mode="w+b")
         resolved.retained_handles = [original_handle]
         derivative = tempfile.TemporaryFile(mode="w+b")
@@ -1789,7 +1840,7 @@ async def resolve_source(source_ref: StartingStructureSourceRef, session: Any) -
         resolved.original_runtime_path = f"/proc/self/fd/{original_handle.fileno()}"
         resolved.source_provenance = {**(resolved.source_provenance or {}),
             "original_sha256": original_digest, "original_format": original.format,
-            "model_number": member, "consumed_sha256": hashlib.sha256(selected).hexdigest()}
+            "model_number": member, "consumed_sha256": selected_digest}
         return resolved
     except StartingStructureError:
         resolved.close()

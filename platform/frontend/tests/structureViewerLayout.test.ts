@@ -26,12 +26,24 @@ function themeTokenBlocks() {
     const blocks: { name: string; tokens: Record<string, string> }[] = [];
     const re = /(?:^|\n)((?:\[data-theme="[^"]+"\]|:root)(?:,\s*\n\[data-theme="[^"]+"\])*)\s*\{([\s\S]*?)\n\}/g;
     for (const match of css.matchAll(re)) {
-        const tokens = Object.fromEntries([...match[2].matchAll(/(--[a-z0-9-]+):\s*(#[0-9a-fA-F]{6})\s*;/g)].map(decl => [decl[1], decl[2]]));
+        const tokens = Object.fromEntries([...match[2].matchAll(/(--[a-z0-9-]+):\s*(#[0-9a-fA-F]{6}|var\(--[a-z0-9-]+\))\s*;/g)].map(decl => [decl[1], decl[2]]));
         for (const selector of match[1].split(',')) blocks.push({ name: selector.trim(), tokens });
     }
     const root = blocks.find(block => block.name === ':root')?.tokens;
     assert.ok(root, 'default theme parsed');
-    return blocks.map(block => ({ name: block.name, tokens: { ...root, ...block.tokens } }));
+    // A token declared as var(--other) resolves against the same theme's final values, as the cascade does.
+    return blocks.map(block => {
+        const merged: Record<string, string> = { ...root, ...block.tokens };
+        const resolve = (value: string | undefined, depth = 0): string | undefined => {
+            const alias = value?.match(/^var\((--[a-z0-9-]+)\)$/);
+            return alias && depth < 8 ? resolve(merged[alias[1]], depth + 1) : value;
+        };
+        const tokens = Object.fromEntries(Object.entries(merged).flatMap(([name, value]) => {
+            const resolved = resolve(value);
+            return resolved && resolved.startsWith('#') ? [[name, resolved]] : [];
+        }));
+        return { name: block.name, tokens };
+    });
 }
 
 function chromeRule(selector: string, property: string): string {

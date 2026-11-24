@@ -2,13 +2,13 @@
 
 **Inventory schema:** `frustrampnn_capability_inventory` version `1`
 
-**Inventory content SHA-256:** `2d8325aab53098fae160890c5e40b76e2be88674ed2b5f86626720accaeb2af1`
+**Inventory content SHA-256:** `e20e68d80440dd5f068d95f78ac371c8e83925defd6be26d9e50322c285ad618`
 
 ## Pinned runtime identity
 
 | Identity | Pinned value |
 |---|---|
-| Image | `/mnt/BioModStack/apptainer/frustrampnn.sif` |
+| Image | `$BMS_CONTAINER_DIR/frustrampnn.sif` |
 | Verified image SHA-256 | `c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da` |
 | Executable | `/opt/venv/bin/frustrampnn` |
 | Executable SHA-256 | `32089d959f619c08a550c0e7d0fc7b66b508d009ec3179d007f13773a170212f` |
@@ -25,7 +25,7 @@ The checkpoint digest is reused from the authoritative `FRUSTRAMPNN_RUNTIME_IDEN
 The option surface was read directly from the pinned image with:
 
 ```text
-apptainer exec /mnt/BioModStack/apptainer/frustrampnn.sif /opt/venv/bin/frustrampnn predict --help
+apptainer exec $BMS_CONTAINER_DIR/frustrampnn.sif /opt/venv/bin/frustrampnn predict --help
 ```
 
 The pinned help output reports:
@@ -45,7 +45,7 @@ The pinned help output reports:
 The installed version was read with:
 
 ```text
-apptainer exec /mnt/BioModStack/apptainer/frustrampnn.sif /opt/venv/bin/frustrampnn --version
+apptainer exec $BMS_CONTAINER_DIR/frustrampnn.sif /opt/venv/bin/frustrampnn --version
 ```
 
 No model inference was run; both evidence commands only requested CLI metadata.

@@ -8,7 +8,7 @@ No live robot motion was performed. No BMS runtime/container changes were perfor
 
 ## Local BMS repository state
 
-Repository: `/home/dalab/biomodstack/biomodstack`
+Repository: `<repo-root>`
 
 Command run:
 
@@ -37,14 +37,14 @@ Interpretation: at this checkout, there is no tracked local diff in the relevant
 Intended robot repo:
 
 ```text
-/home/molbiofreak/bioxp_re
+<robot-repo>
 ```
 
 Attempted read-only capture from this sandbox:
 
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=8 bioxp \
-  'cd /home/molbiofreak/bioxp_re && git status --short --branch && git diff -- src/bioxp/usb_driver.py src/bioxp/api.py tests || true'
+  'cd <robot-repo> && git status --short --branch && git diff -- src/bioxp/usb_driver.py src/bioxp/api.py tests || true'
 ```
 
 Result:
@@ -56,7 +56,7 @@ ssh: Could not resolve hostname bioxp: Name or service not known
 Interpretation: robot-local backup/quarantine cannot be truthfully completed from this sandbox using the `bioxp` alias. Before modifying robot code, a robot-local backup-bin artifact must be created on the robot host, including at minimum:
 
 ```text
-/home/molbiofreak/bioxp_re/backup_bin/oem_homing_iteration_<timestamp>/
+<robot-repo>/backup_bin/oem_homing_iteration_<timestamp>/
   MANIFEST.md
   usb_driver.py
   api.py

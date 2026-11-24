@@ -6,7 +6,7 @@
 
 **Architecture:** The robot-local FastAPI/runtime remains the single hardware owner. BMS is a thin proxy/operator surface only. The new attempt starts with no-USB/no-motion source models and proof artifacts, then moves through dry-run, shadow/readback, stepwise supervised live validation, and only finally full OEM-equivalent runtime exposure.
 
-**Tech Stack / Surfaces:** Python/FastAPI robot runtime under `/home/molbiofreak/bioxp_re`, decompiled OEM C# assets under `/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup`, BMS proxy/frontend under `/home/dalab/biomodstack/biomodstack`, pytest, robot-local JSON/JSONL artifacts, optional BMS read-only cards.
+**Tech Stack / Surfaces:** Python/FastAPI robot runtime under `<robot-repo>`, decompiled OEM C# assets under `OEM-source/BioXP_SSD_Backup`, BMS proxy/frontend under `<repo-root>`, pytest, robot-local JSON/JSONL artifacts, optional BMS read-only cards.
 
 ---
 
@@ -175,7 +175,7 @@ The robot repo may contain many dirty tracked and untracked changes. Before any 
 Required robot backup artifact:
 
 ```text
-/home/molbiofreak/bioxp_re/backup_bin/oem_parity_fresh_attempt_<timestamp>/
+<robot-repo>/backup_bin/oem_parity_fresh_attempt_<timestamp>/
   MANIFEST.md
   git_status.txt
   git_head.txt
@@ -228,7 +228,7 @@ Do not skip phases. A later phase may be split into smaller PRs, but it may not 
 1. On robot, capture repo state:
 
 ```bash
-cd /home/molbiofreak/bioxp_re
+cd <robot-repo>
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 DEST=backup_bin/oem_parity_fresh_attempt_$TS
 mkdir -p "$DEST"
@@ -268,13 +268,13 @@ old homing routes quarantined as legacy_partial_guarded_reconstruction
 **Inputs:**
 
 ```text
-/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup/decompiled_src/BioXPControlLib/ClassControlInterface.cs
-/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup/decompiled_src/BioXPControlLib/ControlLib.cs
-/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup/decompiled_src_genbotapp/GenBotApp/BioXPMainWindow.cs
-/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup/decompiled_src_bioxpcommon/BioXPCommonLib/ClassBioXPSettings.cs
-/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup/decompiled_src_can/BioXPControlLib/ClassPipette.cs
-/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup/decompiled_src_can/BioXPControlLib/ClassPipetteCollection.cs
-/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup/decompiled_src_vision/CVisionLib/ClassFrameGrabber.cs
+OEM-source/BioXP_SSD_Backup/decompiled_src/BioXPControlLib/ClassControlInterface.cs
+OEM-source/BioXP_SSD_Backup/decompiled_src/BioXPControlLib/ControlLib.cs
+OEM-source/BioXP_SSD_Backup/decompiled_src_genbotapp/GenBotApp/BioXPMainWindow.cs
+OEM-source/BioXP_SSD_Backup/decompiled_src_bioxpcommon/BioXPCommonLib/ClassBioXPSettings.cs
+OEM-source/BioXP_SSD_Backup/decompiled_src_can/BioXPControlLib/ClassPipette.cs
+OEM-source/BioXP_SSD_Backup/decompiled_src_can/BioXPControlLib/ClassPipetteCollection.cs
+OEM-source/BioXP_SSD_Backup/decompiled_src_vision/CVisionLib/ClassFrameGrabber.cs
 ```
 
 **Files:**
@@ -858,7 +858,7 @@ blockers
 **Files:**
 
 - Create: `docs/oem/bioxp_oem_parity_compliance_matrix_<date>.md`
-- Create artifact folder: `/mnt/BioModStack/bms_results/bioxp_oem_parity/<timestamp>/`
+- Create artifact folder: `<bms-data-root>/bms_results/bioxp_oem_parity/<timestamp>/`
 
 **Compliance statuses:**
 
@@ -937,7 +937,7 @@ docs/oem/bioxp_oem_parity_fresh_attempt_phase_plan_20260609.md
 On robot:
 
 ```bash
-cd /home/molbiofreak/bioxp_re
+cd <robot-repo>
 PYTHONPATH=src .venv/bin/python -m py_compile \
   src/bioxp/oem_parity_types.py \
   src/bioxp/oem_homing_spec.py \

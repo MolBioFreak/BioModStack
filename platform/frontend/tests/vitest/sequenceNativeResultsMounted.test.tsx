@@ -90,6 +90,7 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); api.defaults.adapter = adapter; vi.unstubAllGlobals(); document.body.replaceChildren(); });
 const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); };
 const calls: string[] = [];
+async function until(ready: () => boolean) { const deadline = Date.now() + 4000; while (!ready() && Date.now() < deadline) await flush(); }
 async function mount(mode: string, generic: 'empty' | 'error' = 'empty', options: { zero?: boolean; structuresOff?: boolean; nativeError?: boolean; topOnly?: boolean; prefixed?: boolean; missingSource?: boolean } = {}) {
     const caliby = ['ensemble_design', 'sidechain_pack'].includes(mode);
     const job = { id: 'fixture-job', name: 'INERT native results', model_id: caliby ? 'caliby_experimental' : 'ligandmpnn', mode, status: 'completed', params: {}, design_count: 0, created_at: '2026-01-01T00:00:00Z' };
@@ -123,22 +124,35 @@ async function mount(mode: string, generic: 'empty' | 'error' = 'empty', options
         return { data, status: 200, statusText: 'OK', headers: {}, config };
     };
     await act(async () => root.render(<MemoryRouter initialEntries={['/designs/fixture-job']}><QueryClientProvider client={client}><ThemeProvider><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></ThemeProvider></QueryClientProvider></MemoryRouter>)); await flush();
+    // ResultsViewer lazy-loads its workspace; wait for the native publication to render.
+    await until(() => /native records|Native results could not be loaded/.test(container.textContent ?? ''));
     return doc;
+}
+// Records render through the shared native workbench: select the row to open its inspector.
+async function openRecord() {
+    const findTab = () => Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Data table');
+    await until(() => !!findTab());
+    const tab = findTab()!; expect(tab).toBeDefined();
+    await act(async () => tab.click()); await flush();
+    await until(() => !!container.querySelector('tbody button'));
+    const row = container.querySelector('tbody button') as HTMLButtonElement;
+    await act(async () => row.click()); await flush();
+    return Array.from(container.querySelectorAll('section')).find(node => node.getAttribute('aria-label') === 'Native initial-generation results')!;
 }
 
 it.each(['ensemble_design', 'sidechain_pack', 'ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'])('reopens emitted %s records/settings without Designs and passes exact governed CIF to the shared viewer', async mode => {
     const doc = await mount(mode);
     expect(container.textContent).toContain('1 native records');
     expect(container.textContent).not.toContain('0 designs');
-    const article = container.querySelector('article')!;
+    const article = await openRecord();
     if (mode === 'ensemble_design') { expect(article.textContent).toContain('explicit-group'); expect(article.textContent).toContain('state-conditioning'); expect(article.textContent).toContain('-1.25'); }
-    else if (mode === 'sidechain_pack') { expect(article.textContent).not.toContain('input_seq'); expect(article.querySelector('dt')?.textContent).toBe('state_id'); }
-    else { expect(article.textContent).toContain('batch 7'); expect(article.textContent).toContain('design 11'); expect(article.textContent).toContain('ligand_interface_sequence_recoveryNot reported'); expect(article.textContent).toContain('sequence_recovery0'); expect(container.textContent).toContain('temperatureNot reported'); }
+    else if (mode === 'sidechain_pack') { expect(article.textContent).not.toContain('input_seq'); }
+    else { expect(article.textContent).toContain('batch_idx7'); expect(article.textContent).toContain('design_idx11'); expect(article.textContent).toContain('ligand_interface_sequence_recoveryNot reported'); expect(article.textContent).toContain('sequence_recovery0'); expect(container.textContent).toContain('temperatureNot reported'); }
     const button = Array.from(article.querySelectorAll('button')).find(b => b.textContent?.startsWith('View CIF'))!;
     await act(async () => button.click());
     const expected = doc.records[0].structure?.download_url ?? doc.records[0].artifacts.find((a: any) => a.kind === 'structure').download_url;
     expect(JSON.parse(container.querySelector('[data-testid="native-cif-viewer"]')!.textContent!)).toMatchObject({ structureUrl: expected.replace('/download/', '/stream/'), format: 'cif', artifactJobId: 'fixture-job' });
-    expect(article.querySelector('a')?.getAttribute('href')).toBe(expected);
+    expect(Array.from(article.querySelectorAll('a')).map(a => a.getAttribute('href'))).toContain(expected);
     expect(container.querySelector('a[download]')).not.toBeNull();
 });
 it.each(['ensemble_design', 'ligand_aware'])('shows %s independently of a failed generic Design query', async mode => {
@@ -148,14 +162,14 @@ it.each(['ensemble_design', 'sidechain_pack', 'dna_aware'])('retains settings/fi
     await mount(mode, 'error', { zero: true }); expect(container.textContent).toContain('0 native records'); expect(container.textContent).toContain('No native records were emitted'); expect(container.querySelector('a[download]')).not.toBeNull(); expect(container.querySelector('article')).toBeNull();
 });
 it('retains LigandMPNN sequence and missing measurements when structure writing is off', async () => {
-    await mount('metal_aware', 'empty', { structuresOff: true }); expect(container.textContent).toContain('Structure writing was off'); expect(container.textContent).toContain('designed_sequenceAG'); expect(container.textContent).toContain('Not reported'); expect(container.textContent).not.toContain('View CIF'); expect(container.querySelector('article a')?.textContent).toContain('.fa');
+    await mount('metal_aware', 'empty', { structuresOff: true }); expect(container.textContent).toContain('Structure writing was off'); expect(container.textContent).toContain('designed_sequenceAG'); expect(container.textContent).toContain('Not reported'); expect(container.textContent).not.toContain('View CIF'); const inspector = await openRecord(); expect(Array.from(inspector.querySelectorAll('a')).some(a => a.textContent?.includes('.fa'))).toBe(true);
 });
 it('reports native read failure without substituting empty generic Designs', async () => {
     await mount('sidechain_pack', 'empty', { nativeError: true }); expect(container.textContent).toContain('native publication unavailable'); expect(container.textContent).not.toContain('0 native records'); expect(container.textContent).not.toContain('0 designs');
 });
 it.each([['ensemble_design', false], ['sidechain_pack', true], ['ligand_aware', false], ['dna_aware', true]] as const)('resolves %s top-level governed handles with explicit prefix=%s', async (mode, prefixed) => {
     const doc = await mount(mode, 'error', { topOnly: true, prefixed, missingSource: true });
-    const article = container.querySelector('article')!;
+    const article = await openRecord();
     const button = Array.from(article.querySelectorAll('button')).find(b => b.textContent?.startsWith('View CIF'))!;
     expect(button).toBeDefined(); await act(async () => button.click());
     expect(JSON.parse(container.querySelector('[data-testid="native-cif-viewer"]')!.textContent!).structureUrl).toBe(doc.artifacts.find((a: any) => a.relative_path.endsWith('.cif')).stream_url);

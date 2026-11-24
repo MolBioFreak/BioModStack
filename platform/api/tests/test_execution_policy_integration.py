@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from database import Job, ExecutionTarget
 from schemas import JobCreate, ExecutionPolicy
 from routers import jobs
+from services import job_submission
 from services.remote_execution import executor as ex
 from services.gpu_orchestrator import GPUOrchestrator
 from test_core_protein_scientific_admission import admission, request
@@ -33,7 +34,7 @@ def test_unknown_and_scientific_lane_rejected():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("value", ["manual", "automatic"])
 async def test_admit_readback_clone_and_retry_persist_policy(admission, value):
-    created = await jobs._create_job(request(execution_policy={"remote_result_policy": value}), BackgroundTasks(), admission)
+    created = await job_submission._create_job(request(execution_policy={"remote_result_policy": value}), BackgroundTasks(), admission)
     assert created.execution_policy.remote_result_policy == value
     assert "remote_result_policy" not in created.params
     admission.expire_all()
@@ -46,7 +47,7 @@ async def test_admit_readback_clone_and_retry_persist_policy(admission, value):
         params=deepcopy(source.provenance["core_protein_requested_params"]),
         execution_policy=created.execution_policy,
     )
-    cloned = await jobs._create_job(clone_request, BackgroundTasks(), admission)
+    cloned = await job_submission._create_job(clone_request, BackgroundTasks(), admission)
     assert cloned.execution_policy.remote_result_policy == value
     source.status = source.queue_status = "failed"
     await admission.commit()

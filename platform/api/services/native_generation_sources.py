@@ -100,7 +100,7 @@ async def prepare_native_sources(job, session):
     if model not in {'rfd4_proteina', 'complexa', 'laproteina'}:
         return
     from paths import resolve_allowed_path, get_allowed_roots, to_allowed_relative
-    from routers.files import (materialize_structure, get_governed_ngs_result_roots,
+    from services.binder_source_materialization import (materialize_structure_source, governed_ngs_result_roots,
         _sha256_regular_file_nofollow, _under_persisted_ngs_root, _reject_governed_ngs_artifact)
     from services.binder_source_materialization import (resolve_structure_source,
         materialize_source_bytes, structure_suffix)
@@ -121,7 +121,7 @@ async def prepare_native_sources(job, session):
         missing = set(slots) - bindings.keys()
         if missing:
             raise ValueError('Missing native source bindings: ' + ', '.join(sorted(missing)))
-        governed = await get_governed_ngs_result_roots(session)
+        governed = await governed_ngs_result_roots(session)
         roots = list(get_allowed_roots().values())
         inputs = resolve_allowed_path('inputs') / 'native-generation'
         inputs.mkdir(parents=True, exist_ok=True)
@@ -186,7 +186,7 @@ async def prepare_native_sources(job, session):
                 source = binding.model_copy(update={'output_format': 'pdb'}) if model == 'complexa' else binding
                 path, identity = await resolve_structure_source(source, session)
                 if source.path is None or not (path.parent.name.startswith('structure-') and source.expected_sha256):
-                    prepared = await materialize_structure(source, session, governed_roots=governed)
+                    prepared = await materialize_structure_source(source, session, governed_roots=governed)
                     source = StructureSourceRequest.model_validate(prepared['source_structure'])
                     path, identity = await resolve_structure_source(source, session)
                 if _under_persisted_ngs_root(path, governed):

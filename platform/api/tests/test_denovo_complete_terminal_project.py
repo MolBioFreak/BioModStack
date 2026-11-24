@@ -17,6 +17,7 @@ from experiment_models import (
 )
 from experiment_services import load_workflow_plan_authority, reconcile_run_group
 from routers import project_manager as pm
+from services.global_experiments import launch_contexts
 from services.global_experiments.launch_contexts import claim_launch_context, consume_launch_context
 from services.rfd4_proteina_results import publish_native_generation, read_published_generation_page
 from test_denovo_project_http import request_for
@@ -76,7 +77,7 @@ async def _bound_terminal(client, experiments, core_store, tmp_path, model, stat
         context, token = await claim_launch_context(session, prepared['launch_context_id'])
         context, binding = await consume_launch_context(session, launch_context_id=context.launch_context_id,
             claim_token=token, canonical_job_id=job.id, canonical_batch_id=None)
-        await pm._project_bound_job(session, core, context, job, binding)
+        await launch_contexts._project_bound_job(session, core, context, job, binding)
         assert context.canonical_job_id == job.id
         durable = await session.get(ExperimentRunAttempt, attempt['attempt_id'])
         assert durable.external_binding_receipt_json

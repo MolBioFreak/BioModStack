@@ -31,13 +31,11 @@ user_params:
     label: Prediction Method
     type: enum
     required: true
-    default: af2
+    default: boltz
     enum:
-      - af2
       - boltz
       - rf3
     enum_labels:
-      af2: AlphaFold2 (Most accurate)
       boltz: Boltz-2 (Fast, good for complexes)
       rf3: RosettaFold3 (Alternative)
     description: Choose your structure prediction tool.

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { PipetteValue } from './BioXpPipetteResults';
+import { BioXpUnknownTipGuard } from './BioXpUnknownTipGuard';
 
 import {
     bioXpErrorText,
@@ -29,17 +30,13 @@ type Props = {
 const OPERATIONS: BioXpPipetteApplicationOperation[] = ['load_tip', 'move_to_waste', 'detect_fluid', 'plunger_up', 'plunger_down'];
 
 const PHYSICAL_ACTION_IDS = [
-    'route.liquid_tip_liquid_tip_post.08698e28',
     'oem.z.scriptmove_to',
-    'route.liquid_fluid_detection_liquid_fluid_detection_post.a12feee3',
     'oem.z.lift_pipette',
     'oem.z.lower_pipette',
 ] as const;
 
 const PHYSICAL_CONTROLS = [
-    'Assign source tip type / location (host only)',
     'Move to waste physically',
-    'Detect fluid physically',
     'Lift pipette head (Z)',
     'Lower pipette head (Z)',
 ] as const;
@@ -77,6 +74,9 @@ function DirectLiquidEvidence({ owner }: { owner: Pick<ReturnType<typeof useRead
     </div>;
 }
 
+/** 201 is the OEM code for an unknown tip type. */
+export const tipTypeLabel = (value: number | null | undefined) => typeof value === 'number' && [10, 50, 200].includes(value) ? `${value} µL` : 'unknown';
+
 /** Compact status: one row per channel, one read button, debug fields in a single fold. */
 export function BioXpPipetteControlPanel({ generation = 0, connected = true, pipettes, freshness }: Props) {
     const readback = useReadBioXpPipetteReadback(generation, connected);
@@ -89,7 +89,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                     <h3 className="font-semibold">Pipettes</h3>
-                    <p className="text-xs text-slate-400">Tip type in software: {pipettes?.tip_type ?? 'unknown'} · last report {age}{returned ? ' · hardware read' : ''}</p>
+                    <p className="text-xs text-slate-400">Tip type: {tipTypeLabel(pipettes?.tip_type)}{pipettes?.tip_used === true ? ' · used tip (wet route to waste)' : pipettes?.tip_used === false ? ' · clean tip' : ''} · last report {age}{returned ? ' · hardware read' : ''}</p>
                 </div>
                 <div className="flex items-center gap-3 text-xs">
                     <label><input type="checkbox" checked={includeData} onChange={(event) => setIncludeData(event.target.checked)} /> Include data sweep</label>
@@ -98,6 +98,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                     </button>
                 </div>
             </div>
+            <BioXpUnknownTipGuard generation={generation} connected={connected} pipettes={pipettes} />
             <table aria-label="Pipette channels" className="mt-2 w-full text-left text-xs [&_td]:px-2 [&_td]:py-1 [&_th]:px-2 [&_th]:py-1">
                 <thead className="text-slate-400"><tr><th>Channel</th><th>Software</th><th>Tip (record)</th><th>Tip (hardware)</th><th>Pressure (raw)</th><th>Liquid µL</th></tr></thead>
                 <tbody>{([0, 1, 2, 3] as const).map((channelId) => <ChannelRow key={channelId} channelId={channelId}
@@ -127,28 +128,6 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
     );
 }
 
-/** Software tip type: records the type for offsets and volumes; never picks up a tip. */
-export function BioXpSoftwareTipType({ connected = true, pipettes, actions = [], catalogLoading = false, invokePending = false, invokeAction }: {
-    connected?: boolean; pipettes?: Pipettes; actions?: BioXpOperatorActionSpec[]; catalogLoading?: boolean; invokePending?: boolean;
-    invokeAction?: (actionId: string, inputs: Record<string, unknown>) => void;
-}) {
-    const [selected, setSelected] = useState<10 | 50 | 200 | 201>(50);
-    const action = actions.find((row) => row.informational_method === 'POST' && row.informational_path === '/liquid/pipette/tip-type');
-    return <div className="rounded border border-slate-700 p-3 text-sm" data-software-tip-type-control>
-        <h4 className="font-semibold">Tip type in software</h4>
-        <p className="text-xs text-slate-400">Currently {pipettes?.tip_type ?? 'unknown'}. Sets which tip offset and volume limits apply. Does not pick up a tip.</p>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-            <label>Tip type<select aria-label="Software tip type" value={selected} onChange={(event) => setSelected(Number(event.target.value) as 10 | 50 | 200 | 201)} className="ml-2 rounded bg-slate-900 px-2 py-1">
-                {[10, 50, 200, 201].map((value) => <option key={value} value={value}>{value === 201 ? '200 µL (201)' : `${value} µL`}</option>)}
-            </select></label>
-            <button type="button" disabled={!connected || catalogLoading || invokePending || !action?.enabled || !invokeAction}
-                title={action?.disabled_reason ?? action?.unavailable_reason ?? undefined}
-                onClick={() => { if (action?.enabled && invokeAction) invokeAction(action.action_id, { tip_type: selected }); }}
-                className="rounded bg-cyan-800 px-3 py-1 text-white disabled:opacity-50">Set tip type</button>
-        </div>
-    </div>;
-}
-
 /** Robot-owned primitives and the no-motion planner; kept for service work. */
 export function BioXpPipetteAdvancedTools({ visible = true, generation = 0, connected = true, actions = [], catalogLoading = false, invokePending = false, invokeAction }: {
     visible?: boolean; generation?: number; connected?: boolean; actions?: BioXpOperatorActionSpec[]; catalogLoading?: boolean; invokePending?: boolean;
@@ -168,9 +147,7 @@ export function BioXpPipetteAdvancedTools({ visible = true, generation = 0, conn
     const actionById = (actionId: string) => actions.find((action) => action.action_id === actionId);
     const inputsFor = (control: typeof PHYSICAL_CONTROLS[number]): Record<string, unknown> => {
         switch (control) {
-            case 'Assign source tip type / location (host only)': return { action: 'load' };
             case 'Move to waste physically': return { location_id: 'WASTE_BIN' };
-            case 'Detect fluid physically': return { dry_run: false };
             case 'Lift pipette head (Z)': return { location_id: plungerLocation };
             case 'Lower pipette head (Z)': return { location_id: plungerLocation, overpress: false };
         }
@@ -196,7 +173,7 @@ export function BioXpPipetteAdvancedTools({ visible = true, generation = 0, conn
                     const enabled = actionById(actionId)?.enabled === true;
                     const reason = actionById(actionId)?.disabled_reason ?? actionById(actionId)?.unavailable_reason ?? 'Robot-owned physical primitive.';
                     return <button key={label} type="button" data-physical-pipette-control disabled={!connected || catalogLoading || invokePending || !enabled}
-                        title={enabled ? label === 'Assign source tip type / location (host only)' ? 'Host-only source type/location assignment; no physical pickup' : 'Robot-owned physical primitive' : reason}
+                        title={enabled ? 'Robot-owned physical primitive' : reason}
                         onClick={() => { if (invokeAction && enabled) invokeAction(actionId, inputsFor(label)); }}
                         className={enabled ? 'rounded border border-amber-600 bg-amber-800 px-2 py-2 text-amber-50 hover:bg-amber-700 disabled:opacity-35' : 'rounded border border-slate-700 bg-slate-900 px-2 py-2 text-slate-500'}>{label}</button>;
                 })}

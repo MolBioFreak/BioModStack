@@ -1,6 +1,6 @@
 {
   "producer_commit": "83a9676a343b1c62b3ef6ddc1d322ccf818f43a4",
-  "source": "/home/dalab/.hermes/profiles/fresh/robot-audit/bioxp-traffic-95-20261002/job-observation-native-latest.json",
+  "source": "audit/bioxp-traffic-95/job-observation-native-latest.json",
   "sha256": "1cae2954caa8698483dd080d5f458c66304c4af744a3999ef0c64dc9816b3639",
   "capture": {
     "bytes": 19537,

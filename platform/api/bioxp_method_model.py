@@ -4,6 +4,7 @@ import json
 from bioxp_workflow_authoring import discovery
 
 SCHEMA = 'bms.bioxp-method.v1'
+from bioxp_holder_endpoints import HOLDER_TARGETS
 EXPRESSION_OPS = ('literal', 'param', 'arg', 'loop_index', 'loop_item', 'add', 'sub', 'mul', 'div', 'eq', 'ne', 'lt', 'le', 'gt', 'ge', 'and', 'or', 'not')
 
 
@@ -25,6 +26,14 @@ def liquid_detection_schema():
             'search_speed_native': {'type': 'integer', 'minimum': 1, 'default': 300},
             'start_mode': {'enum': [0, 1], 'default': 0},
             'sensing': {'enum': ['hybrid', 'pressure', 'capacitive'], 'default': 'hybrid'}}}
+
+
+def workflow_pressure_streaming(method):
+    """Resolve the saved preference without materializing a default in the draft."""
+    choice = method.get('workflow_pressure_streaming', True)
+    if type(choice) is not bool:
+        raise ValueError('workflow_pressure_streaming must be a boolean')
+    return choice
 
 
 def validate_method(raw):
@@ -67,6 +76,10 @@ def method_schema():
                 'id': {'type': 'string'}, 'parameters': {'type': 'array', 'items': {'$ref': '#/$defs/parameter'}},
                 'steps': {'type': 'array', 'items': {'$ref': '#/$defs/node'}}}}},
             'steps': {'type': 'array', 'items': {'$ref': '#/$defs/node'}}, 'deck_plan': deck_schema(),
+            'on_error': {'enum': ['stop', 'pause_for_operator'], 'description': (
+                'If omitted, recoverable pipetting steps hold for the operator; other steps stop.')},
+            'workflow_pressure_streaming': {'type': 'boolean', 'default': True,
+                'description': 'Capture pipette pressure during workflow execution.'},
             'tip_policy': {}, 'editor_state': {}},
         '$defs': {'expression': expression, 'value': {'description': 'Raw JSON or {expr: versioned typed AST}; no executable text'},
             'parameter': {'type': 'object', 'required': ['id', 'type'], 'properties': {
@@ -200,6 +213,10 @@ def method_catalog():
         'effects': 'Group-of-four pickup; unneeded tips go straight back into their rack wells'})
     for entry in actions:
         if entry['action'] == 'move':
+            entry['inputs']['properties']['target'] = {'enum': HOLDER_TARGETS, 'title': 'Bulk reagent holder position',
+                'description': 'XY-only named holder row/well, moved at travel height. Replaces location_id, well and position_flag.'}
+            entry['inputs']['anyOf'] = [{'required': list(entry['inputs'].get('required', []))}, {'required': ['target']}]
+            entry['inputs']['required'] = []
             entry['inputs']['properties']['movement'] = {'enum': ['full', 'fast'], 'title': 'Movement',
                 'description': 'Omitted is full (move, stop and report each). Consecutive fast moves run as one sequence at travel height; position_flag is not used.'}
         if entry['action'] in {'plate_move', 'move_cover', 'plate_catch', 'plate_release', 'plate_press', 'gripper_catch', 'gripper_release', 'gripper_press'}:

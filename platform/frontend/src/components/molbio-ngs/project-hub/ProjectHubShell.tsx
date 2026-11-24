@@ -56,9 +56,10 @@ function PlasmidMap({ plasmid, size = 88 }: { plasmid: ProjectHubPlasmidSummary;
             to={plasmid.reopen_href}
             data-testid="plasmid-mini-map"
             aria-label={`Open full DNA sequence map for ${plasmid.name}, ${plasmid.length_bp.toLocaleString()} bp`}
-            className="shrink-0 rounded-full outline-none focus:ring-2 focus:ring-accent"
+            className="block shrink-0 rounded-full outline-none focus:ring-2 focus:ring-accent"
         >
-            <svg width={size} height={size} viewBox="0 0 100 100" role="img" aria-label={`Miniature circular map for ${plasmid.name}`}>
+            <svg width={size} height={size} viewBox="0 0 100 100" role="img" aria-label={`Miniature circular map for ${plasmid.name}`} className="block overflow-hidden">
+                <title>{plasmid.name}</title>
                 <circle cx="50" cy="50" r={radius} fill="none" stroke="currentColor" strokeWidth="8" className="text-border-primary" />
                 {plasmid.map_segments.map((segment, index) => {
                     const rawSpan = segment.end >= segment.start
@@ -83,8 +84,8 @@ function PlasmidMap({ plasmid, size = 88 }: { plasmid: ProjectHubPlasmidSummary;
                     );
                 })}
                 <circle cx="50" cy="50" r="27" className="fill-surface-secondary" />
-                <text x="50" y="49" textAnchor="middle" className="fill-content text-[8px] font-bold">{plasmid.name}</text>
-                <text x="50" y="59" textAnchor="middle" className="fill-content-muted text-[5px]">{plasmid.length_bp.toLocaleString()} bp</text>
+                <text x="50" y="52" textAnchor="middle" className="fill-content text-[9px] font-bold">{plasmid.length_bp.toLocaleString()}</text>
+                <text x="50" y="63" textAnchor="middle" className="fill-content-muted text-[7px]">bp</text>
             </svg>
         </Link>
     );
@@ -181,11 +182,11 @@ function PlasmidCard({ plasmid, canMutate, onEdit, onCompare, onDetails, onAttac
             <div className="flex items-start gap-3">
                 <PlasmidMap plasmid={plasmid} />
                 <div className="min-w-0 flex-1 pt-1">
-                    <h3 className="truncate text-xl font-bold text-content">{plasmid.name}</h3>
-                    <p className="text-xs text-content-secondary">{plasmid.description || 'No description recorded'}</p>
+                    <h3 className="text-base font-bold text-content [overflow-wrap:anywhere]">{plasmid.name}</h3>
+                    <p className="text-xs text-content-secondary [overflow-wrap:anywhere]">{plasmid.description || 'No description recorded'}</p>
                     <p className="mt-1 text-xs text-content-muted">Current sequence · revision {plasmid.revision_number}</p>
+                    <span className={`mt-2 inline-flex rounded-full border px-2 py-1 text-[10px] font-semibold capitalize ${unavailable ? 'border-danger/40 bg-danger/10 text-danger' : 'border-success/40 bg-success/10 text-success'}`}>{plasmid.availability}</span>
                 </div>
-                <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold capitalize ${unavailable ? 'border-danger/40 bg-danger/10 text-danger' : 'border-success/40 bg-success/10 text-success'}`}>{plasmid.availability}</span>
             </div>
             {unavailable && <p role="alert" className="mt-3 rounded-lg border border-danger/40 bg-danger/10 p-3 text-xs font-semibold text-danger">{plasmid.unavailable_reason ?? 'Molecular member unavailable'}</p>}
             <div className="mt-3 flex min-h-12 flex-wrap content-start gap-1.5">
@@ -234,7 +235,6 @@ function Overview({ model, canMutate, onEdit, onAttach, onNavigate }: { model: P
                 <section className={`${PANEL} p-4`}><h3 className="font-semibold text-content">Recent project activity</h3><div className="mt-3 space-y-3">{model.activity.slice(0, 2).map((event) => <div key={event.id} className="flex gap-3 text-xs"><span className="mt-1 text-accent">●</span><div><strong className="block text-content">{event.summary}</strong><span className="text-content-muted">{formatDate(event.occurred_at)}</span></div></div>)}{model.activity.length === 0 && <EmptyInline title="No project activity yet" />}</div></section>
                 <section className={`${PANEL} p-4`}><h3 className="font-semibold text-content">Sequencing</h3><div className="mt-3"><EmptyInline title={model.sequence_data.items.length ? `${model.sequence_data.items.length} sequencing records attached` : 'No sequencing data attached'} detail={model.sequence_data.items.length ? 'Open Sequence Data to inspect project-linked ONT evidence.' : 'This project currently contains molecular sequence data only.'} /></div></section>
             </div>
-            <TechnicalDetails model={model} />
         </>
     );
 }
@@ -258,7 +258,6 @@ function PlasmidsTab({ model, canMutate, onEdit, selectedPlasmidId }: { model: P
             <div data-testid="project-plasmid-stacked-records" className="grid gap-3 lg:hidden">{model.plasmids.map((plasmid) => <article key={plasmid.sequence_id} className={`${PANEL} p-4`}><div className="flex items-center gap-3"><PlasmidMap plasmid={plasmid} size={62} /><div><h3 className="font-semibold text-content">{plasmid.name}</h3><p className="text-xs text-content-secondary">{plasmid.length_bp.toLocaleString()} bp · {plasmid.feature_count} features · Revision {plasmid.revision_number}</p></div></div><div className="mt-3 flex gap-2"><Link className={PRIMARY} to={plasmid.reopen_href}>Open sequence</Link><button type="button" className={BUTTON} disabled={!canMutate || plasmid.availability === 'unavailable'} onClick={(event) => onEdit(plasmid, event.currentTarget)}>Edit info</button></div></article>)}</div>
             <div className="mt-4"><h2 className="text-xl font-bold text-content">Feature summaries</h2><p className="text-sm text-content-secondary">Readable annotations from each current sequence revision.</p></div>
             <div className="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-4">{model.plasmids.map((plasmid) => <section key={plasmid.sequence_id} className={`${PANEL} p-4`}><h3 className="font-semibold text-content">{plasmid.name}</h3><div className="mt-2 flex flex-wrap gap-1.5">{plasmid.feature_labels.map((label) => <span key={label} className="rounded-md border border-border-primary bg-surface px-2 py-1 text-[10px] text-content-secondary">{label}</span>)}</div></section>)}</div>
-            <TechnicalDetails model={model} />
         </>
     );
 }
@@ -286,40 +285,48 @@ function SequenceDataTab({ model }: { model: ProjectHubReadModel }) {
                 ['Clone assessment', 'Clone summary, wf-clone report, and junction review.'],
                 ['Viewer evidence', 'IGV views with best, worst, and anomalous read subsets.'],
             ].map(([title, detail]) => <section key={title} className={`${PANEL} p-4`}><strong className="text-content">{title}</strong><p className="mt-2 text-xs leading-relaxed text-content-secondary">{detail}</p></section>)}</div>
-            <TechnicalDetails model={model} />
         </>
     );
 }
 
-const EXPERIMENT_LANES: Array<{ kind: ProjectHubExperimentKind; label: string; description: string; empty: string; action: string }> = [
-    { kind: 'pcr', label: 'PCR', description: 'Primer design, amplification plans, and saved PCR products.', empty: 'No saved PCR yet', action: 'Start PCR' },
-    { kind: 'restriction_digest', label: 'Restriction digests', description: 'Saved enzyme selections, fragments, and digest simulations.', empty: 'No saved restriction digests yet', action: 'New digest' },
-    { kind: 'alignment', label: 'Alignments', description: 'Pairwise or multi-sequence alignments saved from Mol Bio Toolkit.', empty: 'No saved alignments yet', action: 'New alignment' },
-    { kind: 'ligation', label: 'Ligation assemblies', description: 'Saved ligation work and its source-to-product construct lineage.', empty: 'No saved ligation assemblies yet', action: 'New ligation' },
-    { kind: 'gibson', label: 'Gibson assemblies', description: 'Saved Gibson designs with every input construct and output product.', empty: 'No saved Gibson assemblies yet', action: 'New Gibson assembly' },
-    { kind: 'golden_gate', label: 'Golden Gate assemblies', description: 'Saved Golden Gate designs with source and derived-construct lineage.', empty: 'No saved Golden Gate assemblies yet', action: 'New Golden Gate assembly' },
-    { kind: 'sequence_change', label: 'Sequence changes', description: 'Saved edits, annotations, and resulting sequence revisions.', empty: 'No later sequence changes yet', action: 'Edit sequence' },
+const EXPERIMENT_LANES: Array<{ kind: ProjectHubExperimentKind; label: string; description: string; empty: string }> = [
+    { kind: 'pcr', label: 'PCR', description: 'Primer design, amplification plans, and saved PCR products.', empty: 'No saved PCR yet' },
+    { kind: 'restriction_digest', label: 'Restriction digests', description: 'Saved enzyme selections, fragments, and digest simulations.', empty: 'No saved restriction digests yet' },
+    { kind: 'alignment', label: 'Alignments', description: 'Pairwise or multi-sequence alignments saved from Mol Bio Toolkit.', empty: 'No saved alignments yet' },
+    { kind: 'ligation', label: 'Ligation assemblies', description: 'Saved ligation work and its source-to-product construct lineage.', empty: 'No saved ligation assemblies yet' },
+    { kind: 'gibson', label: 'Gibson assemblies', description: 'Saved Gibson designs with every input construct and output product.', empty: 'No saved Gibson assemblies yet' },
+    { kind: 'golden_gate', label: 'Golden Gate assemblies', description: 'Saved Golden Gate designs with source and derived-construct lineage.', empty: 'No saved Golden Gate assemblies yet' },
+    { kind: 'sequence_change', label: 'Other saved operations', description: 'Other saved molecular operations. Use sequence History to inspect edit revisions.', empty: 'No other saved operations yet' },
 ];
 
 function ExperimentsTab({ model, selectedPlasmidId, onNavigate }: { model: ProjectHubReadModel; selectedPlasmidId: string | null; onNavigate: ProjectHubShellProps['onNavigate'] }) {
     const saved = model.experiments.filter((item) => item.persistence === 'saved');
     const visible = selectedPlasmidId ? saved.filter((item) => item.plasmid_sequence_ids.includes(selectedPlasmidId)) : saved;
+    const selected = model.plasmids.find((plasmid) => plasmid.sequence_id === selectedPlasmidId);
+    const toolkitHref = selected?.reopen_href ?? `/designer?${new URLSearchParams({
+        workspace_id: model.identity.workspace_id,
+        global_experiment_id: model.identity.global_experiment_id,
+        domain_experiment_id: model.identity.domain_experiment_id,
+        state_revision_id: model.identity.selected_state_revision_id,
+    })}`;
+    const partialOperations = Boolean(model.pages && model.pages.operations.total_count > model.experiments.length);
+    const partialMembers = Boolean(model.pages && model.pages.members.total_count > model.plasmids.length);
     return (
         <>
-            <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-xl font-bold text-content">Mol Bio experiments</h2><p className="text-sm text-content-secondary">Saved Mol Bio Toolkit work performed on Project DNA sequences.</p></div><Link className={PRIMARY} to="/molbio">+ Start experiment</Link></div>
+            <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-xl font-bold text-content">Mol Bio experiments</h2><p className="text-sm text-content-secondary">Saved Mol Bio Toolkit work performed on Project DNA sequences.</p></div><Link className={PRIMARY} to={toolkitHref}>Open Mol Bio Toolkit</Link></div>
             <div className="mt-4 flex flex-wrap gap-2"><button type="button" aria-pressed={!selectedPlasmidId} onClick={() => onNavigate({ plasmid: null })} className={`${BUTTON} ${!selectedPlasmidId ? 'border-accent bg-accent/10 text-accent' : ''}`}>All DNA sequences</button>{model.plasmids.map((plasmid) => <button key={plasmid.sequence_id} type="button" aria-pressed={selectedPlasmidId === plasmid.sequence_id} onClick={() => onNavigate({ plasmid: plasmid.sequence_id })} className={`${BUTTON} ${selectedPlasmidId === plasmid.sequence_id ? 'border-accent bg-accent/10 text-accent' : ''}`}>{plasmid.name}</button>)}</div>
+            {(partialOperations || partialMembers) && <p role="status" className="mt-3 text-xs text-content-muted">Filters and counts apply to this page. Use the Project section pages below to browse more saved work or DNA sequences.</p>}
             <div className="mt-3 grid gap-3 md:grid-cols-2 2xl:grid-cols-4">{EXPERIMENT_LANES.map((lane) => {
                 const items = visible.filter((item) => item.kind === lane.kind);
-                return <section key={lane.kind} className={`${PANEL} flex min-h-48 flex-col p-4`}><span className="text-[10px] font-semibold uppercase tracking-wide text-accent">{items.length} saved</span><h3 className="mt-1 font-semibold text-content">{lane.label}</h3><p className="mt-2 text-xs leading-relaxed text-content-secondary">{lane.description}</p><div className="mt-3 space-y-2">{items.length ? items.map((item) => <ExperimentItem key={item.id} item={item} model={model} />) : <EmptyInline title={lane.empty} />}</div><Link className={`${BUTTON} mt-auto`} to="/molbio">{lane.action}</Link></section>;
+                return <section key={lane.kind} className={`${PANEL} flex min-h-48 flex-col p-4`}><span className="text-[10px] font-semibold uppercase tracking-wide text-accent">{items.length} saved{partialOperations ? ' on this page' : ''}</span><h3 className="mt-1 font-semibold text-content">{lane.label}</h3><p className="mt-2 text-xs leading-relaxed text-content-secondary">{lane.description}</p><div className="mt-3 space-y-2">{items.length ? items.map((item) => <ExperimentItem key={item.id} item={item} model={model} />) : <EmptyInline title={partialOperations ? 'No matching saved work on this page' : lane.empty} />}</div></section>;
             })}</div>
             <section className={`${PANEL} mt-4 p-4`}>
                 <h2 className="text-lg font-bold text-content">Sequence revision history</h2>
                 <p className="text-sm text-content-secondary">Open a DNA sequence at its latest editable revision, then choose History inside Mol Bio Toolkit to inspect or reopen an older immutable version.</p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                    {model.plasmids.map((plasmid) => <Link key={plasmid.sequence_id} className={BUTTON} to={plasmid.reopen_href}>Open latest {plasmid.name}</Link>)}
+                    {(selected ? [selected] : model.plasmids).map((plasmid) => <Link key={plasmid.sequence_id} className={BUTTON} to={plasmid.reopen_href}>Open latest {plasmid.name}</Link>)}
                 </div>
             </section>
-            <TechnicalDetails model={model} />
         </>
     );
 }
@@ -338,7 +345,7 @@ function ExperimentItem({ item, model }: { item: ProjectHubExperimentSummary; mo
 }
 
 function ResultsTab({ model }: { model: ProjectHubReadModel }) {
-    return <><div><h2 className="text-xl font-bold text-content">Results</h2><p className="text-sm text-content-secondary">Persisted project outcomes and exact native result links.</p></div><div className="mt-4 grid gap-3 md:grid-cols-2">{model.results.length ? model.results.map((result) => <article key={result.id} className={`${PANEL} p-4`}><span className="text-[10px] font-semibold uppercase tracking-wide text-accent">{result.type}</span><h3 className="mt-1 font-semibold text-content">{result.plasmid_name}</h3><p className="mt-2 text-sm text-content-secondary">{result.summary ?? 'No readable summary recorded.'}</p><p className="mt-2 text-xs text-content-muted">{result.owner} · {result.status} · {formatDate(result.created_at)}</p><Link className={`${BUTTON} mt-3`} to={result.reopen_href}>Open result</Link></article>) : <EmptyInline title="No results yet" detail="Saved scientific outcomes will appear here." />}</div><TechnicalDetails model={model} /></>;
+    return <><div><h2 className="text-xl font-bold text-content">Results</h2><p className="text-sm text-content-secondary">Persisted project outcomes and exact native result links.</p></div><div className="mt-4 grid gap-3 md:grid-cols-2">{model.results.length ? model.results.map((result) => <article key={result.id} className={`${PANEL} p-4`}><span className="text-[10px] font-semibold uppercase tracking-wide text-accent">{result.type}</span><h3 className="mt-1 font-semibold text-content">{result.plasmid_name}</h3><p className="mt-2 text-sm text-content-secondary">{result.summary ?? 'No readable summary recorded.'}</p><p className="mt-2 text-xs text-content-muted">{result.owner} · {result.status} · {formatDate(result.created_at)}</p><Link className={`${BUTTON} mt-3`} to={result.reopen_href}>Open result</Link></article>) : <EmptyInline title="No results yet" detail="Saved scientific outcomes will appear here." />}</div></>;
 }
 
 function ActivityTab({ model }: { model: ProjectHubReadModel }) {

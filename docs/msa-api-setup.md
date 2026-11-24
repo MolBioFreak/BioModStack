@@ -36,3 +36,42 @@ Prepared MSA inputs are transferred as mandatory workflow inputs independently o
 Offline HTTP fixtures and relocated input tests prove client/control/packaging behavior, not a real provider result or scientific inference. Live checks must record the source revision, public/approved input, actual provider ticket, validated artifact digest and observed model consumption. Never label generated test fixtures as a live result. Ambiguous submission cannot be retried as a new paid/public job merely to make a test pass.
 
 Provider references: https://github.com/sokrypton/ColabFold ; https://neurosnap.ai/service/mmseqs2%20MSA%20Generation ; https://neurosnap.ai/api/service/mmseqs2%20MSA%20Generation ; https://neurosnap.ai/blog/post/66b00dacec3f2aa9b4be703a .
+
+## MSA hub
+
+The top bar has an "MSA" button in place of the old "MSA Server" button. It opens a hub with two parts.
+
+Remote providers is always shown. It lists every provider in `PROVIDER_DESCRIPTORS` (`platform/api/services/msa_provider_credentials.py`) with its readiness message. A provider that needs a key gets a key field with Save and Clear. The field is never pre-filled; the hub shows "Key saved" or "Set by environment" instead. Adding a provider is one new descriptor entry plus its transport in `biomodstack_msa_api.py`.
+
+Local MSA server is shown only when the installation turns on the `local_msa` feature. It holds the legacy local MMseqs2 server settings and start/stop controls unchanged.
+
+### Saved keys
+
+A key saved from the hub is written to `<BMS config dir>/msa-providers/<provider id>.key`, mode 0600 inside a 0700 directory, written atomically. Lookup order for a provider that needs a key:
+
+1. the file named by the provider's environment variable (`BMS_NEUROSNAP_API_KEY_FILE` for Neurosnap);
+2. the key saved from the hub.
+
+An environment setting always wins, even when the file it names is unusable, so a deployment-owned setting is never silently replaced. A key is never returned by any route, logged, or copied into job parameters or provenance.
+
+### Routes
+
+- `GET /api/msa/providers` returns the readiness document plus `items`, one row per provider: `id`, `label`, `needs_key`, `configured`, `source` (`environment`, `saved` or null), `ready`, `message`.
+- `PUT /api/msa/providers/{id}/credential` with body `{"api_key": "..."}` saves or replaces a key.
+- `DELETE /api/msa/providers/{id}/credential` clears a saved key.
+
+Save and clear are accepted from the local machine only, like the Tools screen's install routes. An unknown provider id answers 404 and an empty key 422.
+
+### ColabFold
+
+ColabFold needs no key. Public searches are sent from one computer per installation, and that computer has to be declared. In the hub, the ColabFold row has a "Use this computer for searches" button; the command line equivalent is `python scripts/manage_msa_providers.py --enable-colabfold`. Either writes `<BMS config dir>/msa-controller.json` for the current machine. Nothing is submitted by enabling it. "Turn off for this computer" or `--disable-colabfold` removes the file.
+
+The declaration is tied to `/etc/machine-id`. After moving an installation to another computer or reinstalling its operating system, ColabFold shows as off; press the button again and the existing file is rebound to the new machine, keeping its state directory.
+
+A deployment that wants the file somewhere else sets `BMS_MSA_CONTROLLER_CONFIG` to an absolute path; the hub and the command then act on that file.
+
+A job whose alignments are already in the provider cache replays them whether or not searches are enabled. A job that needs a fresh ColabFold search is refused before queueing while they are off.
+
+### Local MSA switch
+
+`local_msa` is an installation feature, off by default. Turn it on with `"features": {"local_msa": true}` in the install profile or `BMS_FEATURE_LOCAL_MSA=1`. When it is off the local server is not started, `POST /api/msa/server/start` answers that local MSA is not enabled for this installation, and the hub shows no local controls. The local server code and `scripts/lib/local_msa` remain in the repository for installations that run their own search.

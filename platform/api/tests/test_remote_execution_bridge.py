@@ -229,8 +229,8 @@ def test_transport_rejects_shell_unsafe_target_fields() -> None:
     [
         ("missing:java\n", "Remote readiness prerequisite is missing: java"),
         (
-            "occupied:/mnt/BioModStack/dev/apptainer\n",
-            "Remote readiness path is occupied: /mnt/BioModStack/dev/apptainer",
+            "occupied:/data/bms/dev/apptainer\n",
+            "Remote readiness path is occupied: /data/bms/dev/apptainer",
         ),
     ],
 )

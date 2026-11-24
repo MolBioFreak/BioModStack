@@ -79,7 +79,7 @@ def test_literal_nextflow_filter_publication(tmp_path, budget):
         async def persist_and_project():
             from test_boltzgen_candidate_accounting import setup, make_job
             from services.result_state_integrity import finalize_successful_job
-            from routers.jobs import get_job
+            from routers.job_results import get_job
             factory, engine = await setup(tmp_path)
             try:
                 async with factory() as db:

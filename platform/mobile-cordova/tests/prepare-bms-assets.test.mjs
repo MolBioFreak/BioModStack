@@ -6,6 +6,15 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import * as prepareAssets from '../scripts/prepare-bms-assets.mjs';
 
+const MANAGED_RUNTIME = {
+  apiImageId: 'sha256:' + 'a1'.repeat(32),
+  webImageId: 'sha256:' + 'b2'.repeat(32),
+  dataRoot: '/srv/bms-data',
+};
+const validateSelection = (payload, environment, origin) => (
+  prepareAssets.validateTailnetSelectionPayload(payload, environment, origin, MANAGED_RUNTIME)
+);
+
 import {
   buildBundleDescriptor,
   buildMobileShellCss,
@@ -121,8 +130,8 @@ function exactCurrentSelectionReceipt(environment) {
     pid,
     cgroup: `0::/system.slice/docker-${marker.repeat(64)}.scope`,
     image_id: name === 'biomodstack-api'
-      ? 'sha256:74bf34e32e2f5d0f72d3f6d117c1b4877c169e7a62c0da06ea05b75d5e0cd12c'
-      : 'sha256:7e79b645349216a2457cd2f64af53beb26d9041c7911ed8438d6708239017c3e',
+      ? MANAGED_RUNTIME.apiImageId
+      : MANAGED_RUNTIME.webImageId,
     cmdline: name === 'biomodstack-api'
       ? '/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000'
       : '/docker-entrypoint.sh nginx -g daemon off;',
@@ -131,7 +140,7 @@ function exactCurrentSelectionReceipt(environment) {
     process_reports: [containerProcessReport(name, marker, pid)],
     readonly_rootfs: false,
     mounts: name === 'biomodstack-api' ? [{
-      type: 'bind', source: '/mnt/BioModStack', destination: '/var/lib/biomodstack',
+      type: 'bind', source: MANAGED_RUNTIME.dataRoot, destination: '/var/lib/biomodstack',
       mode: 'rw', rw: true, propagation: 'rprivate',
     }] : [],
   });
@@ -157,8 +166,8 @@ function exactCurrentSelectionReceipt(environment) {
     listener_inode_owners: { [inode]: [pid] },
     container_host_pids: [pid],
     runtime_image_id: name === 'biomodstack-api'
-      ? 'sha256:74bf34e32e2f5d0f72d3f6d117c1b4877c169e7a62c0da06ea05b75d5e0cd12c'
-      : 'sha256:7e79b645349216a2457cd2f64af53beb26d9041c7911ed8438d6708239017c3e',
+      ? MANAGED_RUNTIME.apiImageId
+      : MANAGED_RUNTIME.webImageId,
     runtime_cmdline: name === 'biomodstack-api'
       ? '/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000'
       : '/docker-entrypoint.sh nginx -g daemon off;',
@@ -186,7 +195,7 @@ function exactCurrentSelectionReceipt(environment) {
     serve_root_proxy: environment === 'development' ? 'http://127.0.0.1:5173' : 'http://127.0.0.1:18081',
     runtime_mode: environment === 'development' ? 'dev' : 'container',
     runtime_target: environment === 'development' ? 'dev' : 'prod',
-    tailnet_origin: 'https://compute-node.taileb3a90.ts.net',
+    tailnet_origin: 'https://node.example.ts.net',
     project_root: '/srv/selector',
     project_revision: runtimeRevision,
     selector_revision: 'a'.repeat(40),
@@ -223,10 +232,10 @@ function exactCurrentSelectionReceipt(environment) {
         status: 200, payload: null,
       },
       tailnet_frontend: {
-        url: 'https://compute-node.taileb3a90.ts.net/',
+        url: 'https://node.example.ts.net/',
         final_url: environment === 'production'
-          ? 'https://compute-node.taileb3a90.ts.net/bms/'
-          : 'https://compute-node.taileb3a90.ts.net/',
+          ? 'https://node.example.ts.net/bms/'
+          : 'https://node.example.ts.net/',
         status: 200, payload: null,
       },
       local_api: {
@@ -234,8 +243,8 @@ function exactCurrentSelectionReceipt(environment) {
         final_url: 'http://127.0.0.1:8000/api/health', status: 200, payload: { ...healthPayload },
       },
       tailnet_api: {
-        url: 'https://compute-node.taileb3a90.ts.net/api/health',
-        final_url: 'https://compute-node.taileb3a90.ts.net/api/health',
+        url: 'https://node.example.ts.net/api/health',
+        final_url: 'https://node.example.ts.net/api/health',
         status: 200,
         payload: { ...healthPayload, build: { ...build }, liveness: { ...healthPayload.liveness }, readiness: { ...healthPayload.readiness } },
       },
@@ -399,6 +408,7 @@ test('normalizeConfig fills in phone-friendly mobile viewport defaults while pre
     uiUpdateManifestPath: '/api/mobile-ui/channels/phone/manifest',
     shellApiVersion: 1,
     bundledUiVersion: 'bundled',
+    managedRuntime: null,
   });
   assert.ok(config.mobileMinimumScale < config.mobileInitialScale);
 });
@@ -530,7 +540,7 @@ test('buildShimScript rewrites same-origin absolute /api URLs so Molstar can loa
     console,
     navigator: {},
     window: {
-      __BMS_CORDOVA_RUNTIME__: { apiBaseUrl: 'https://compute-node.taileb3a90.ts.net' },
+      __BMS_CORDOVA_RUNTIME__: { apiBaseUrl: 'https://node.example.ts.net' },
       location: {
         origin: 'https://localhost',
         href: 'https://localhost/index.html',
@@ -551,8 +561,8 @@ test('buildShimScript rewrites same-origin absolute /api URLs so Molstar can loa
   context.window.fetch('https://example.test/static/model.pdb');
 
   assert.deepEqual(calls, [
-    'https://compute-node.taileb3a90.ts.net/api/health',
-    'https://compute-node.taileb3a90.ts.net/api/designs/123/pdb?download=1#viewer',
+    'https://node.example.ts.net/api/health',
+    'https://node.example.ts.net/api/designs/123/pdb?download=1#viewer',
     'https://example.test/static/model.pdb',
   ]);
 });
@@ -654,8 +664,8 @@ test('remote-live loader preserves a compatible downloaded bundle and activates 
     fetch: async () => ({ ok: false, status: 503, json: async () => ({ detail: 'blocked' }) }),
     window: {
       __BMS_CORDOVA_RUNTIME__: {
-        apiBaseUrl: 'https://compute-node.taileb3a90.ts.net',
-        remoteUiUrl: 'https://compute-node.taileb3a90.ts.net/',
+        apiBaseUrl: 'https://node.example.ts.net',
+        remoteUiUrl: 'https://node.example.ts.net/',
       },
     },
   };
@@ -675,7 +685,7 @@ test('remote-live loader preserves a compatible downloaded bundle and activates 
   assert.equal(elements.filter((element) => element.tagName === 'script').length, 0);
   await assert.rejects(
     context.window.__BMS_CORDOVA_SELECT_AND_BOOT_REMOTE_UI__(
-      'https://compute-node.taileb3a90.ts.net',
+      'https://node.example.ts.net',
       'development',
     ),
     /blocked/,
@@ -688,7 +698,7 @@ test('remote-live loader preserves a compatible downloaded bundle and activates 
     json: async () => exactCurrentSelectionReceipt('development'),
   });
   await context.window.__BMS_CORDOVA_SELECT_AND_BOOT_REMOTE_UI__(
-    'https://compute-node.taileb3a90.ts.net',
+    'https://node.example.ts.net',
     'development',
   );
   assert.equal(elements.filter((element) => element.tagName === 'iframe').length, 0);
@@ -702,11 +712,11 @@ test('remote-live loader preserves a compatible downloaded bundle and activates 
 test('selection response contract accepts exact development and production receipts and rejects cross-environment identities', () => {
   const receipt = exactCurrentSelectionReceipt;
 
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
-    receipt('development'), 'development', 'https://compute-node.taileb3a90.ts.net',
+  assert.doesNotThrow(() => validateSelection(
+    receipt('development'), 'development', 'https://node.example.ts.net',
   ));
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
-    receipt('production'), 'production', 'https://compute-node.taileb3a90.ts.net',
+  assert.doesNotThrow(() => validateSelection(
+    receipt('production'), 'production', 'https://node.example.ts.net',
   ));
   // The managed launcher execs `python -m uvicorn` directly (no uv/script shim).
   const moduleDevelopment = receipt('development');
@@ -715,8 +725,8 @@ test('selection response contract accepts exact development and production recei
     report.cmdline = report.argv.join(' ');
   }
   moduleDevelopment.api_listeners = moduleDevelopment.development_api_listener.listener_reports;
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
-    moduleDevelopment, 'development', 'https://compute-node.taileb3a90.ts.net',
+  assert.doesNotThrow(() => validateSelection(
+    moduleDevelopment, 'development', 'https://node.example.ts.net',
   ));
   const reloadDevelopment = receipt('development');
   const reloadRoot = reloadDevelopment.development_api_listener.source_root;
@@ -732,8 +742,8 @@ test('selection response contract accepts exact development and production recei
   );
   reloadReport.cmdline = reloadReport.argv.join(' ');
   reloadDevelopment.api_listeners = reloadDevelopment.development_api_listener.listener_reports;
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
-    reloadDevelopment, 'development', 'https://compute-node.taileb3a90.ts.net',
+  assert.doesNotThrow(() => validateSelection(
+    reloadDevelopment, 'development', 'https://node.example.ts.net',
   ));
 
   const unapprovedDevelopment = receipt('development');
@@ -741,8 +751,8 @@ test('selection response contract accepts exact development and production recei
   unapprovedReport.argv.push('--proxy-headers');
   unapprovedReport.cmdline = unapprovedReport.argv.join(' ');
   unapprovedDevelopment.api_listeners = unapprovedDevelopment.development_api_listener.listener_reports;
-  assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
-    unapprovedDevelopment, 'development', 'https://compute-node.taileb3a90.ts.net',
+  assert.throws(() => validateSelection(
+    unapprovedDevelopment, 'development', 'https://node.example.ts.net',
   ));
   const reorderedMount = receipt('production');
   const mount = reorderedMount.managed_api_runtime.containers[0].mounts[0];
@@ -754,27 +764,27 @@ test('selection response contract accepts exact development and production recei
   reorderedMount.container_runtime.containers.find(
     (item) => item.name === 'biomodstack-api',
   ).mounts[0] = { ...reordered };
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
-    reorderedMount, 'production', 'https://compute-node.taileb3a90.ts.net',
+  assert.doesNotThrow(() => validateSelection(
+    reorderedMount, 'production', 'https://node.example.ts.net',
   ));
   const fractionalTimestamp = receipt('production');
   fractionalTimestamp.health.local_api.payload.build.build_time = '2026-07-27T05:29:07.904235Z';
   fractionalTimestamp.health.tailnet_api.payload.build.build_time = '2026-07-27T05:29:07.904235Z';
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
-    fractionalTimestamp, 'production', 'https://compute-node.taileb3a90.ts.net',
+  assert.doesNotThrow(() => validateSelection(
+    fractionalTimestamp, 'production', 'https://node.example.ts.net',
   ));
 
   const multiWorker = receipt('production');
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
-    multiWorker, 'production', 'https://compute-node.taileb3a90.ts.net',
+  assert.doesNotThrow(() => validateSelection(
+    multiWorker, 'production', 'https://node.example.ts.net',
   ));
   const swappedWorkerMap = structuredClone(multiWorker);
   swappedWorkerMap.managed_frontend_listener.listener_pid_map = [
     { container_pid: 1, host_pid: 203 },
     { container_pid: 27, host_pid: 202 },
   ];
-  assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
-    swappedWorkerMap, 'production', 'https://compute-node.taileb3a90.ts.net',
+  assert.throws(() => validateSelection(
+    swappedWorkerMap, 'production', 'https://node.example.ts.net',
   ));
 
   const rogueWebOwner = structuredClone(multiWorker);
@@ -798,8 +808,8 @@ test('selection response contract accepts exact development and production recei
   rogueWebListener.listener_inode_owners[180801].push(999);
   rogueWebListener.listener_reports.push(rogueWebReport);
   rogueWebOwner.frontend_listeners = rogueWebListener.listener_reports;
-  assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
-    rogueWebOwner, 'production', 'https://compute-node.taileb3a90.ts.net',
+  assert.throws(() => validateSelection(
+    rogueWebOwner, 'production', 'https://node.example.ts.net',
   ));
 
   const rogueProxyOwner = structuredClone(multiWorker);
@@ -818,8 +828,8 @@ test('selection response contract accepts exact development and production recei
   proxy.listener_inode_owners[180811].push(999);
   proxy.listener_reports.push(rogueProxyReport);
   rogueProxyOwner.tailnet_production_proxy_listeners = proxy.listener_reports;
-  assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
-    rogueProxyOwner, 'production', 'https://compute-node.taileb3a90.ts.net',
+  assert.throws(() => validateSelection(
+    rogueProxyOwner, 'production', 'https://node.example.ts.net',
   ));
 
   for (const mutation of [
@@ -1006,8 +1016,8 @@ test('selection response contract accepts exact development and production recei
   ]) {
     const malformed = receipt('production');
     mutation(malformed);
-    assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
-      malformed, 'production', 'https://compute-node.taileb3a90.ts.net',
+    assert.throws(() => validateSelection(
+      malformed, 'production', 'https://node.example.ts.net',
     ));
   }
   for (const mutation of [
@@ -1022,23 +1032,23 @@ test('selection response contract accepts exact development and production recei
   ]) {
     const malformed = receipt('development');
     mutation(malformed);
-    assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
-      malformed, 'development', 'https://compute-node.taileb3a90.ts.net',
+    assert.throws(() => validateSelection(
+      malformed, 'development', 'https://node.example.ts.net',
     ));
   }
 });
 
 test('selection receipt requires both mobile update routes on the independent publisher', () => {
   const receipt = exactCurrentSelectionReceipt('development');
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
-    receipt, 'development', 'https://compute-node.taileb3a90.ts.net',
+  assert.doesNotThrow(() => validateSelection(
+    receipt, 'development', 'https://node.example.ts.net',
   ));
 
   for (const path of ['/api/mobile-ui', '/api/mobile-apk']) {
     const coupled = exactCurrentSelectionReceipt('development');
     coupled.serve_handlers[path].Proxy = `http://127.0.0.1:18000${path}`;
-    assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
-      coupled, 'development', 'https://compute-node.taileb3a90.ts.net',
+    assert.throws(() => validateSelection(
+      coupled, 'development', 'https://node.example.ts.net',
     ));
   }
 });
@@ -1109,10 +1119,10 @@ print(json.dumps(closures, sort_keys=True))
     production.workflow_adapter_listener,
     exactCurrentSelectionReceipt('production').workflow_adapter_listener,
   );
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.doesNotThrow(() => validateSelection(
     JSON.parse(JSON.stringify(production)),
     'production',
-    'https://compute-node.taileb3a90.ts.net',
+    'https://node.example.ts.net',
   ));
 
   const development = exactCurrentSelectionReceipt('development');
@@ -1137,10 +1147,10 @@ print(json.dumps(closures, sort_keys=True))
     development,
     exactCurrentSelectionReceipt('development'),
   );
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.doesNotThrow(() => validateSelection(
     development,
     'development',
-    'https://compute-node.taileb3a90.ts.net',
+    'https://node.example.ts.net',
   ));
 });
 
@@ -1182,7 +1192,7 @@ test('buildPreflight assets expose endpoint, manual update, and rollback control
 });
 
 test('selection contract follows the API health verdict instead of mirroring its internal detail fields', () => {
-  const origin = 'https://compute-node.taileb3a90.ts.net';
+  const origin = 'https://node.example.ts.net';
   const evolved = exactCurrentSelectionReceipt('development');
   for (const probe of ['local_api', 'tailnet_api']) {
     const payload = evolved.health[probe].payload;
@@ -1196,7 +1206,7 @@ test('selection contract follows the API health verdict instead of mirroring its
     payload.readiness.checks.restriction_products = { ready: true, required: true, status: 'evidence_unavailable' };
     payload.readiness.checks.telemetry_collection.future_sample_count = 0;
   }
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(evolved, 'development', origin));
+  assert.doesNotThrow(() => validateSelection(evolved, 'development', origin));
 
   for (const mutation of [
     (value) => { value.health.local_api.payload.status = 'degraded'; },
@@ -1211,7 +1221,7 @@ test('selection contract follows the API health verdict instead of mirroring its
     const malformed = structuredClone(evolved);
     mutation(malformed);
     assert.throws(
-      () => prepareAssets.validateTailnetSelectionPayload(malformed, 'development', origin),
+      () => validateSelection(malformed, 'development', origin),
       /mismatched runtime identity/,
       mutation.toString(),
     );
@@ -1314,7 +1324,7 @@ test('connection report is healthy only when every required capability is availa
 
 test('capability probe reports selector runtime UI and APK channels independently', async () => {
   assert.equal(typeof prepareAssets.probeConnectionCapabilities, 'function');
-  const origin = 'https://compute-node.taileb3a90.ts.net';
+  const origin = 'https://node.example.ts.net';
   const responses = new Map([
     [`${origin}/api/tailnet-environment/status`, {
       ok: false,
@@ -1434,7 +1444,7 @@ function mountPreflightForUiUpdate({ pluginStatus, manifestDescriptor }) {
   const statusNode = { dataset: {}, textContent: '' };
   const labelNode = { dataset: {}, textContent: '' };
   const inputs = {
-    '[data-role="api-base-url"]': { value: 'https://compute-node.taileb3a90.ts.net', addEventListener() {} },
+    '[data-role="api-base-url"]': { value: 'https://node.example.ts.net', addEventListener() {} },
     '[data-role="tailnet-environment"]': { value: '', addEventListener() {} },
     '[data-role="ui-update-channel"]': { value: 'phone', addEventListener() {} },
     '[data-role="mobile-scale"]': { value: '0.55', addEventListener() {} },
@@ -1466,11 +1476,11 @@ function mountPreflightForUiUpdate({ pluginStatus, manifestDescriptor }) {
     channel: 'phone',
     version: manifestDescriptor.version,
     descriptor: manifestDescriptor,
-    files: [{ path: 'index.html', url: 'https://compute-node.taileb3a90.ts.net/api/mobile-ui/files/phone/x/index.html' }],
+    files: [{ path: 'index.html', url: 'https://node.example.ts.net/api/mobile-ui/files/phone/x/index.html' }],
   };
   const window = {
-    __BMS_CORDOVA_RUNTIME__: { apiBaseUrl: 'https://compute-node.taileb3a90.ts.net', uiUpdateChannel: 'phone' },
-    __BMS_CORDOVA_UI_BOOT_STATUS__: { source: 'preflight', descriptor: { version: 'https://compute-node.taileb3a90.ts.net/', shellApiVersion: 1, entryCss: [], entryJs: [] } },
+    __BMS_CORDOVA_RUNTIME__: { apiBaseUrl: 'https://node.example.ts.net', uiUpdateChannel: 'phone' },
+    __BMS_CORDOVA_UI_BOOT_STATUS__: { source: 'preflight', descriptor: { version: 'https://node.example.ts.net/', shellApiVersion: 1, entryCss: [], entryJs: [] } },
     location: { replace: () => { calls.reloads += 1; }, reload() {} },
     addEventListener() {},
     cordova: {
@@ -1555,4 +1565,32 @@ test('Update UI downloads when the channel publishes a different bundle or none 
     assert.equal(calls.installs, 1, JSON.stringify(pluginStatus));
     assert.match(statusNode.textContent, /Installed UI 0\.4\.14/);
   }
+});
+
+test('production selection trusts only the identity this install embedded at build time', () => {
+  const production = exactCurrentSelectionReceipt('production');
+  const origin = 'https://node.example.ts.net';
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(production, 'production', origin, MANAGED_RUNTIME));
+  for (const missing of [null, undefined, {}, { ...MANAGED_RUNTIME, apiImageId: 'mutable:latest' }, { ...MANAGED_RUNTIME, dataRoot: 'relative' }]) {
+    assert.throws(() => prepareAssets.validateTailnetSelectionPayload(production, 'production', origin, missing), /mismatched runtime identity/);
+  }
+  for (const other of [{ ...MANAGED_RUNTIME, apiImageId: 'sha256:' + 'c3'.repeat(32) }, { ...MANAGED_RUNTIME, webImageId: 'sha256:' + 'c3'.repeat(32) }, { ...MANAGED_RUNTIME, dataRoot: '/srv/other' }]) {
+    assert.throws(() => prepareAssets.validateTailnetSelectionPayload(production, 'production', origin, other), /mismatched runtime identity/);
+  }
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(exactCurrentSelectionReceipt('development'), 'development', origin));
+});
+
+test('the managed runtime comes from the launcher receipt or the environment, never from constants', async () => {
+  const receipt = [
+    'BMS_MANAGED_API_IMAGE_ID=' + MANAGED_RUNTIME.apiImageId,
+    'BMS_MANAGED_WEB_IMAGE_ID=' + MANAGED_RUNTIME.webImageId,
+    'BMS_HOST_DATA=' + MANAGED_RUNTIME.dataRoot + '/',
+    'BMS_STATE_DIR=/ignored',
+  ].join('\n');
+  assert.deepEqual(prepareAssets.parseManagedRuntimeReceipt(receipt), MANAGED_RUNTIME);
+  assert.equal(prepareAssets.parseManagedRuntimeReceipt('BMS_HOST_DATA=/srv/x'), null);
+  assert.deepEqual(await prepareAssets.readManagedRuntimeReceipt({
+    BMS_MANAGED_API_IMAGE_ID: MANAGED_RUNTIME.apiImageId, BMS_MANAGED_WEB_IMAGE_ID: MANAGED_RUNTIME.webImageId, BMS_HOST_DATA: MANAGED_RUNTIME.dataRoot,
+  }), MANAGED_RUNTIME);
+  assert.equal(await prepareAssets.readManagedRuntimeReceipt({ BMS_CORE_RUNTIME_ENV: '/nonexistent/core-runtime.env' }), null);
 });

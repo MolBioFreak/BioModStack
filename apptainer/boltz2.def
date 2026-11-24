@@ -24,9 +24,10 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     python3.10 -m venv /opt/venv
     . /opt/venv/bin/activate
 
-    # install PyTorch nightly with CUDA 12.8 for RTX 5090 (sm_120) support
-    # CUDA 12.8 nightly builds include sm_120 support for Blackwell architecture
-    uv pip install --compile --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    # PyTorch release built for CUDA 12.8 (covers RTX 50-series, sm_120).
+    # A fixed release is used because nightly builds are withdrawn after a few
+    # weeks, which makes a definition that names them impossible to rebuild.
+    uv pip install --compile --no-cache-dir torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
 
     # install boltz-community pinned to a reviewed community fork commit
     # while keeping the BioModStack external contract stable. The fork still

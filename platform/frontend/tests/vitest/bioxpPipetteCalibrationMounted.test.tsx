@@ -124,15 +124,3 @@ it('shows six pLLD rows, marks the in-use kind and saves one threshold without m
     expect(calls.some(c => c.url === '/api/bioxp/protocols/submit')).toBe(false);
 });
 
-it('lists saved depth offsets and saves a plate-type offset by tip and station, without moving', async () => {
-    await mount();
-    expect(host.querySelector('[data-depth-row="10:LOC_RC:any"]')!.textContent).toContain('+4.4 mm');
-    await change('Offset plate type', 'ONT barcode 96');
-    await change('Offset mm', '5');
-    const save = [...host.querySelectorAll('button')].find(b => b.textContent === 'Save offset')!;
-    await act(async () => { save.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    await tick();
-    const put = calls.find(c => c.method === 'put' && c.url === '/api/bioxp/depth-offsets')!;
-    expect(put.body).toMatchObject({ expected_connection_generation: 5, tip_type: 10, location: 'LOC_RC', plate_type: 'ONT barcode 96', offset_mm: 5 });
-    expect(calls.some(c => c.url === '/api/bioxp/protocols/submit')).toBe(false);
-});

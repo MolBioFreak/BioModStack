@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from scripts.bms_md.contract import normalize_job_config, prepare_verified_worker_inputs, verify_input_snapshots
 from scripts.bms_md.native_config import parse_mdp, render_mdp
+from services import job_submission
 from services.md import launch_contract as contract
 from services.md.starting_structures import MdNativeLaunchIntent, compile_native_job_intent
 from test_md_job_v2_contract import _catalog, ONE_AKI_FIXTURE
@@ -63,7 +64,7 @@ def _spec(root, **kwargs):
 def native_files(tmp_path, monkeypatch):
     root = _files(tmp_path / "inputs")
     monkeypatch.setenv("BMS_FEATURE_MOLECULAR_DYNAMICS", "1")
-    monkeypatch.setattr(contract, "_bound_engine_runtime_identity", lambda engine: {"image_name": "gromacs.sif", "sif_sha256": "a" * 64})
+    monkeypatch.setattr(contract, "_bound_engine_runtime_identity", lambda: {"image_name": "gromacs.sif", "sif_sha256": "a" * 64})
     return root
 
 
@@ -146,6 +147,7 @@ def test_guided_preparation_uses_native_protocol_without_smoke_caps():
     normalized = contract.normalize_md_job_spec(params={"md_job_spec": spec}, job_id="guided-native", resolve_runtime_path=lambda value: value, chemistry_catalog=catalog)
     assert normalized["stages"] == spec["stages"]
     assert normalized["replicas"] == 12
+    assert normalized["preparation"]["box_type"] == "dodecahedron"
     assert normalized["preparation"]["neutralize"] is False
     assert normalized["chemistry"]["resolved_preparation"] == profile["v1_preparation"]
     assert normalize_job_config(normalized) == normalized
@@ -170,10 +172,12 @@ def test_native_envelope_and_existing_ownership_rules(native_files, change):
 def native_client(native_files, tmp_path, monkeypatch):
     from database import get_session
     from routers import molecular_dynamics, jobs
+    from services import job_requests
     import paths
     roots = {"inputs": native_files, "bms_results": tmp_path / "results"}
     monkeypatch.setattr(paths, "get_allowed_roots", lambda: roots)
-    monkeypatch.setattr(jobs, "get_allowed_roots", lambda: roots, raising=False)
+    monkeypatch.setattr(job_submission, "get_allowed_roots", lambda: roots, raising=False)
+    monkeypatch.setattr(job_requests, "get_allowed_roots", lambda: roots, raising=False)
     app = FastAPI()
     app.include_router(molecular_dynamics.router)
     async def unused_session():
@@ -202,7 +206,7 @@ def test_http_preview_launch_materializes_exact_native_document(native_client, n
             resolve_runtime_path=kwargs["_md_input_resolver"],
         ))
         raise ReachedMaterializer
-    monkeypatch.setattr(jobs, "create_job", receiving_create)
+    monkeypatch.setattr(job_submission, "submit_job", receiving_create)
     request = {"schema_version": "bms.md.launch-request.v1", "intent": intent, "preview_digest": preview["preview_digest"]}
     stale = copy.deepcopy(request)
     stale["intent"]["replicas"] += 1
@@ -235,6 +239,8 @@ def test_preview_binds_relative_includes_and_preserves_path_authority(native_cli
 async def test_native_launch_reaches_real_job_create_and_scratch_persistence(native_files, tmp_path, monkeypatch, mode):
     from database import Base, Job, MdRun
     from routers import jobs, molecular_dynamics as md
+    from services.md import native_launch
+    from services import job_requests
     from services import gpu_orchestrator
     from services.md.starting_structures import MdLaunchPreviewRequest, MdLaunchRequest
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -245,9 +251,11 @@ async def test_native_launch_reaches_real_job_create_and_scratch_persistence(nat
     results.mkdir()
     roots = {"inputs": native_files, "bms_results": results}
     monkeypatch.setattr(paths, "get_allowed_roots", lambda: roots)
-    monkeypatch.setattr(jobs, "get_allowed_roots", lambda: roots, raising=False)
+    monkeypatch.setattr(job_submission, "get_allowed_roots", lambda: roots, raising=False)
+    monkeypatch.setattr(job_requests, "get_allowed_roots", lambda: roots, raising=False)
     monkeypatch.setattr(jobs, "get_results_dir", lambda: results)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(gpu_orchestrator, "estimate_vram", lambda *_args, **_kwargs: 0)
     for name, directory in {"BMS_DATA": "data", "BMS_RESULTS_DIR": "results", "BMS_WORK": "work", "BMS_STATE_DIR": "state", "BMS_SCHEDULER_STATE_DIR": "scheduler"}.items():
         monkeypatch.setenv(name, str(tmp_path / directory))
@@ -261,6 +269,7 @@ async def test_native_launch_reaches_real_job_create_and_scratch_persistence(nat
             if mode == "guided":
                 intent, catalog, _profile = _guided_intent()
                 monkeypatch.setattr(md, "get_chemistry_catalog", lambda: catalog)
+                monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: catalog)
                 monkeypatch.setattr(contract, "get_chemistry_catalog", lambda: catalog)
             preview = await md.preview_typed_md_launch(MdLaunchPreviewRequest.model_validate({
                 "schema_version": "bms.md.launch-preview-request.v1", "intent": intent,
@@ -278,3 +287,54 @@ async def test_native_launch_reaches_real_job_create_and_scratch_persistence(nat
             verify_input_snapshots(job.params["md_job_spec"])
     finally:
         await engine.dispose()
+
+
+@pytest.mark.parametrize("field,value,message", [
+    ("box_type", None, None), ("box_type", "octahedron", None),
+    ("box_type", "cubic", "octahedron"), ("box_type", "triclinic", "octahedron"),
+    ("box_type", "dodecahedron", "octahedron"), ("salt_molar", 2.01, "salt_molar"),
+    ("neutralize", False, "neutralization"), ("salt_molar", 2, None), ("salt_molar", 0, None),
+])
+def test_amber_native_preview_settings(native_client, monkeypatch, field, value, message):
+    from services.md import native_launch
+    from services.md.chemistry_catalog import ChemistryCatalog, RuntimeProbeResult
+    from test_md_job_v2_contract import CATALOG_DIR
+
+    catalog = ChemistryCatalog(config_dir=CATALOG_DIR, probe=lambda: RuntimeProbeResult(
+        runtime_id="md-preparation-v1", runtime_version="1", available=True,
+        asset_ids=frozenset({"amber/ff19SB", "water/opc", "ions/opc-monovalent-pinned"}),
+        checked_at="2026-07-31T06:55:37Z",
+        sif_sha256="625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b",
+    ))
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: catalog)
+    intent, _, _ = _guided_intent()
+    view = catalog.view()
+    profile = view.get_profile("amber_ff19sb_opc_protein_v1")
+    intent["input"].update(chemistry_profile_id=profile["id"], chemistry_profile_sha256=profile["profile_sha256"],
+                           catalog_digest=view.catalog_digest, box_type="octahedron", neutralize=True)
+    if value is None:
+        del intent["input"][field]
+    else:
+        intent["input"][field] = value
+    wire = MdNativeLaunchIntent.model_validate(intent).model_dump(mode="json")["input"]
+    assert ("box_type" in wire) == ("box_type" in intent["input"])
+    assert wire.get("box_type") == intent["input"].get("box_type")
+    response = native_client.post("/api/molecular-dynamics/launch-preview", json={
+        "schema_version": "bms.md.launch-preview-request.v1", "intent": intent})
+    if message:
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "MD_PREPARATION_UNSUPPORTED"
+        assert message in response.json()["detail"]["message"]
+    else:
+        assert response.status_code == 200, response.text
+        assert response.json()["effective_request"]["preparation"][field] == ("octahedron" if value is None else value)
+
+
+@pytest.mark.parametrize("field,value", [("ntmpi", True), ("ntmpi", 1.0), ("ntmpi", 2),
+                                        ("ntomp", 8.0), ("ntomp", False), ("ntomp", 0), ("ntomp", 129)])
+def test_native_resource_ints_do_not_coerce(native_files, field, value):
+    spec = _spec(native_files)
+    spec["execution"][field] = value
+    with pytest.raises(contract.MDLaunchError) as error:
+        contract.normalize_md_job_spec(params={"md_job_spec": spec}, job_id="threads", resolve_runtime_path=str)
+    assert (error.value.status_code, error.value.code) == (422, "MD_RESOURCE_CONTRACT_VIOLATION")

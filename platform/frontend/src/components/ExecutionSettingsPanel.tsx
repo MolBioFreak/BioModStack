@@ -2,15 +2,14 @@ import { useQuery } from '@tanstack/react-query';
 
 type Scalar = string | number | boolean | null;
 type Setting = {key: string; scope: string; requested: Scalar; effective: Scalar;
-    origin: 'request' | 'workflow_default' | 'runner_default' | 'compute_tier'};
-type Receipt = {model: 'esmfold2' | 'openmm'; artifact_sha256: string; settings: Setting[];
+    origin: 'request' | 'workflow_default' | 'runner_default'};
+type Receipt = {model: 'esmfold2'; artifact_sha256: string; settings: Setting[];
     sources: {scope: string; sha256: string; size_bytes: number | null}[]};
 type Projection = {status: 'ok' | 'unavailable'; reason: string | null; receipts: Receipt[]};
 const keys = new Set(['seed','model_variant','local_files_only','num_loops','num_sampling_steps',
     'num_diffusion_samples','msa_format','msa_max_sequences','msa_remove_insertions',
-    'pdb_include_dna_rna','chain_id','cdr_only','force_field','max_iterations',
-    'energy_tolerance','restraint_mode','antibody_chain','fix_structure']);
-const origins = {request:'Request',workflow_default:'Workflow default',runner_default:'Runner default',compute_tier:'Compute tier'};
+    'pdb_include_dna_rna','chain_id']);
+const origins = {request:'Request',workflow_default:'Workflow default',runner_default:'Runner default'};
 const scalar = (v: unknown): v is Scalar => v === null || typeof v === 'string' || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v));
 const digest = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 export function parseExecutionSettings(value: unknown): Projection {
@@ -18,7 +17,7 @@ export function parseExecutionSettings(value: unknown): Projection {
     if (!v || !['ok','unavailable'].includes(v.status) || !Array.isArray(v.receipts)) throw Error('Invalid execution receipt');
     if (v.status === 'unavailable' && v.receipts.length) throw Error('Invalid unavailable receipt');
     for (const r of v.receipts) {
-        if (!['esmfold2','openmm'].includes(r.model) || !digest(r.artifact_sha256) || !Array.isArray(r.settings) || !Array.isArray(r.sources)) throw Error('Invalid execution receipt');
+        if (r.model !== 'esmfold2' || !digest(r.artifact_sha256) || !Array.isArray(r.settings) || !Array.isArray(r.sources)) throw Error('Invalid execution receipt');
         for (const s of r.settings) {
             if (!keys.has(s.key) || typeof s.scope !== 'string' || !Object.hasOwn(origins,s.origin) || !scalar(s.requested) || !scalar(s.effective)) throw Error('Invalid execution setting');
         }

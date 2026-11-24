@@ -1,5 +1,7 @@
 """Real isolated DB authority tests; all remote effects are mocked."""
 from datetime import datetime
+import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7,6 +9,7 @@ import pytest
 from fastapi import BackgroundTasks
 from database import Job, ExecutionTarget
 from services.remote_execution import executor as ex
+from services.remote_execution.contracts import RemoteAttemptStatus, RemoteResultManifest, RemoteFileRecord
 from test_remote_lifecycle_gaps import store, preparing, lifecycle_invocation
 
 
@@ -20,7 +23,7 @@ async def terminal(store, tmp_path):
         Path(j.output_dir).mkdir()
         (Path(j.output_dir) / 'untouched').write_text('science')
         j.provenance = {'remote_execution_receipt': {'state': 'failed', 'exit_code': 1,
-            'result_manifest_sha256': 'd' * 64}}
+            'result_manifest_sha256': 'd' * 64, 'remote_attempt_dir': '/attempt'}}
         (await s.get(ExecutionTarget, 'target')).leased_job_id = 'successor'
         await s.commit()
 
@@ -32,7 +35,8 @@ async def test_diagnostic_archive_never_mutates_science_or_successor_lease(store
     async def prove(*a, **kw):
         pass
     async def status(*a):
-        return SimpleNamespace(state='failed', exit_code=1, result_manifest_sha256='d' * 64)
+        return RemoteAttemptStatus(job_id='job', attempt_id='attempt',
+            state='failed', exit_code=1, result_manifest_sha256='d' * 64)
     async def collect(*a):
         if race in {'receipt', 'attempt'}:
             async with store() as other:
@@ -48,7 +52,13 @@ async def test_diagnostic_archive_never_mutates_science_or_successor_lease(store
         incoming = tmp_path / 'incoming'
         incoming.mkdir()
         (incoming / 'log').write_text('diagnostic')
-        return SimpleNamespace(), incoming
+        data = (incoming / 'log').read_bytes()
+        manifest = RemoteResultManifest(job_id='job', attempt_id='attempt', exit_code=1,
+            source_revision='a' * 40, source_tree='b' * 40, execution_envelope_sha256='c' * 64,
+            completed_at=datetime(2025, 1, 1), artifacts=[RemoteFileRecord(
+                relative_path='log', sha256=hashlib.sha256(data).hexdigest(),
+                size_bytes=len(data), mode=0o644, role='log')])
+        return manifest, incoming
     monkeypatch.setattr(ex, '_prove_pull_endpoint', prove)
     monkeypatch.setattr(ex, 'remote_status', status)
     monkeypatch.setattr(ex, 'collect_remote_results', collect)
@@ -129,7 +139,15 @@ async def test_launch_cache_progress_is_durable_and_fenced_without_ssh_transacti
     async def noop(*a, **kw):
         pass
     b = SimpleNamespace(attempt_id='attempt', envelope_sha256='hash', remote_attempt_dir='/attempt',
-        envelope=SimpleNamespace(source_revision='rev', source_tree='tree'))
+        envelope=SimpleNamespace(source_revision='rev', source_tree='tree',
+            environment={'BMS_TARGET_RESOURCES': json.dumps({
+                'required': {'cpus': 1, 'memory_bytes': 1024, 'scratch_bytes': 0}, 'gpu_ids': []})}))
+    # Admission/transport are inert here; the real DB progress fence is under test.
+    async def admit(*args, **kwargs):
+        return {'devices': []}
+    monkeypatch.setattr('services.remote_execution.targets.admit_target_resources', admit)
+    monkeypatch.setattr('services.remote_execution.bundle.bind_resource_admission',
+        lambda bundle, *args, **kwargs: bundle)
     monkeypatch.setattr(ex, 'get_ready_target', ready)
     monkeypatch.setattr(ex.RemoteConnection, 'from_target', lambda *_: None)
     monkeypatch.setattr(ex, '_verify_remote_runner', noop)

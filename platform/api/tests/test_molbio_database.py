@@ -220,6 +220,8 @@ async def test_initialization_applies_ordered_migrations_and_sqlite_invariants(t
             "0006_project_plasmid_metadata",
             "0007_restriction_digest_results",
             "0008_revision_digest_index",
+            "0009_operation_edge_revision_indexes",
+            "0010_digest_child_features",
         ]
         async with engine.connect() as connection:
             foreign_keys = (await connection.execute(text("PRAGMA foreign_keys"))).scalar_one()
@@ -239,8 +241,8 @@ async def test_initialization_applies_ordered_migrations_and_sqlite_invariants(t
             "status": "healthy",
             "quick_check": "ok",
             "foreign_key_violations": 0,
-            "migration_count": 8,
-            "latest_migration": "0008_revision_digest_index",
+            "migration_count": 10,
+            "latest_migration": "0010_digest_child_features",
             "migrations_current": True,
             "database_schema_current": True,
             "database_schema_issue_count": 0,
@@ -325,8 +327,8 @@ async def test_api_health_aggregates_molbio_diagnostics(monkeypatch: pytest.Monk
             "status": "healthy",
             "quick_check": "ok",
             "foreign_key_violations": 0,
-            "migration_count": 8,
-            "latest_migration": "0008_revision_digest_index",
+            "migration_count": 10,
+            "latest_migration": "0010_digest_child_features",
             "migrations_current": True,
             "database_schema_current": True,
             "database_schema_issue_count": 0,
@@ -339,7 +341,7 @@ async def test_api_health_aggregates_molbio_diagnostics(monkeypatch: pytest.Monk
     monkeypatch.setattr(api_main, "molbio_health", healthy)
     payload = await api_main.health_check()
     assert payload["status"] == "healthy"
-    assert payload["molbio"]["latest_migration"] == "0008_revision_digest_index"
+    assert payload["molbio"]["latest_migration"] == "0010_digest_child_features"
 
     async def degraded(*, deep):
         assert deep is False
@@ -683,7 +685,7 @@ async def test_existing_database_migration_adds_restricting_sequence_parent_fore
     try:
         await init_molbio_db(engine=engine)
         assert (await get_applied_molbio_migrations(engine=engine))[-1] == (
-            "0008_revision_digest_index"
+            "0010_digest_child_features"
         )
     finally:
         await engine.dispose()

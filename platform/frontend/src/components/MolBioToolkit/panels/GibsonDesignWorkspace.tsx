@@ -5,7 +5,11 @@ import {
     type AssemblyFragmentInput,
     type GibsonDesignRequest,
     type GibsonDesignResponse,
+    type GibsonJunctionDistribution,
+    type GibsonJunctionInput,
+    type SavedGibsonDesignRequest,
 } from '../../../lib/api';
+import { buildAssemblyPrimersCsv, buildFragmentsFasta } from '../utils/exportData';
 import type { SequenceData } from '../types';
 
 interface GibsonDesignWorkspaceProps {
@@ -15,9 +19,26 @@ interface GibsonDesignWorkspaceProps {
     saveDescription: string;
     sequenceName: string;
     initialCircular: boolean;
+    restored?: SavedGibsonDesignRequest | null;
     onSaved?: () => void;
     onLoadProduct: (sequenceData: SequenceData, savedSequenceId?: string | null) => void;
 }
+
+/** Mapped product site when the server supplies one; otherwise "needs review" (never 0/0). */
+function primerProductSite(primer: GibsonDesignResponse['primers'][number]): { start: number; end: number; binding_status?: 'needs_review' } {
+    const site = primer.product_site;
+    return site ? { start: site.start, end: site.end } : { start: 0, end: 0, binding_status: 'needs_review' };
+}
+
+type JunctionEdit = { overlap: string; distribution: '' | GibsonJunctionDistribution };
+const DISTRIBUTION_LABEL: Record<string, string> = {
+    split: 'split between both primers',
+    left: 'on left primer',
+    right: 'on right primer',
+    homology: 'shared homology, no tail needed',
+};
+/** Fragments of this length or shorter are carried as linkers on their neighbours' primers. */
+const LINKER_MAX = 40;
 
 function errorMessage(error: unknown): string {
     const value = error as {
@@ -42,6 +63,7 @@ export function GibsonDesignWorkspace({
     saveDescription,
     sequenceName,
     initialCircular,
+    restored,
     onLoadProduct,
     onSaved,
 }: GibsonDesignWorkspaceProps) {
@@ -52,7 +74,38 @@ export function GibsonDesignWorkspace({
     const [result, setResult] = useState<GibsonDesignResponse | null>(null);
     const [loading, setLoading] = useState<'design' | 'save' | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [junctionEdits, setJunctionEdits] = useState<Record<string, JunctionEdit>>({});
     const requestScopeRef = useRef('');
+
+    // One row per join between consecutive fragments longer than 40 nt, plus the circular closure.
+    const junctionRows = useMemo(() => {
+        const main = fragments.filter((fragment) => fragment.sequence.length > LINKER_MAX);
+        const rows: Array<{ left: AssemblyFragmentInput; right: AssemblyFragmentInput }> = [];
+        main.forEach((left, index) => {
+            const right = main[index + 1] ?? (circular ? main[0] : undefined);
+            if (right) rows.push({ left, right });
+        });
+        return rows;
+    }, [circular, fragments]);
+    const prep = (fragmentId: string) => preparations[fragmentId] || 'pcr';
+    // Only rows the user changed from Auto/default are sent.
+    const junctions = useMemo<GibsonJunctionInput[]>(() => junctionRows.flatMap(({ left }) => {
+        const edit = junctionEdits[left.id];
+        if (!edit) return [];
+        const overlapText = edit.overlap.trim();
+        const overlapValue = overlapText === '' ? null : Number(overlapText);
+        const distribution = edit.distribution || null;
+        return overlapValue === null && distribution === null ? [] : [{ after_fragment_id: left.id, overlap: overlapValue, distribution }];
+    }), [junctionEdits, junctionRows]);
+    const editJunction = (fragmentId: string, patch: Partial<JunctionEdit>) => setJunctionEdits((current) => ({
+        ...current,
+        [fragmentId]: { ...(current[fragmentId] ?? { overlap: '', distribution: '' }), ...patch },
+    }));
+    const distributionOption = (value: GibsonJunctionDistribution, left: AssemblyFragmentInput, right: AssemblyFragmentInput) => {
+        const label = value === 'split' ? 'Split between both primers' : value === 'left' ? 'On left primer' : 'On right primer';
+        const blocker = (value !== 'right' && prep(left.id) !== 'pcr') ? left : (value !== 'left' && prep(right.id) !== 'pcr') ? right : null;
+        return { value, disabled: blocker !== null, label: blocker ? `${label} (${blocker.name} is ready linear: no primers)` : label };
+    };
 
     const payload = useMemo<GibsonDesignRequest>(() => ({
         fragments: fragments.map((fragment) => ({
@@ -63,13 +116,49 @@ export function GibsonDesignWorkspace({
         overlap,
         target_tm: targetTm,
         min_anneal: minAnneal,
-    }), [circular, fragments, minAnneal, overlap, preparations, targetTm]);
+        ...(junctions.length > 0 ? { junctions } : {}),
+    }), [circular, fragments, junctions, minAnneal, overlap, preparations, targetTm]);
     const requestScope = JSON.stringify({ ...payload, fragments: payload.fragments.map((fragment) => ({ ...fragment, name: undefined, source_name: undefined })) });
     requestScopeRef.current = requestScope;
 
     useEffect(() => {
         setCircular(initialCircular);
     }, [initialCircular]);
+
+    // A reopened saved design restores its settings for editing; calculating again makes a new result.
+    useEffect(() => {
+        if (!restored) return;
+        if (typeof restored.circular === 'boolean') setCircular(restored.circular);
+        if (typeof restored.overlap === 'number') setOverlap(restored.overlap);
+        if (typeof restored.target_tm === 'number') setTargetTm(restored.target_tm);
+        if (typeof restored.min_anneal === 'number') setMinAnneal(restored.min_anneal);
+        setJunctionEdits(Object.fromEntries((restored.junctions ?? []).map((junction) => [junction.after_fragment_id, {
+            overlap: junction.overlap == null ? '' : String(junction.overlap),
+            distribution: junction.distribution ?? '',
+        } satisfies JunctionEdit])));
+    }, [restored]);
+
+    const download = (content: string, filename: string, type: string) => {
+        const url = URL.createObjectURL(new Blob([content], { type }));
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        anchor.click();
+        URL.revokeObjectURL(url);
+    };
+    const exportName = (saveName.trim() || sequenceName || 'gibson-design').replace(/[^A-Za-z0-9._-]+/g, '_');
+    const downloadPrimers = () => {
+        if (!result) return;
+        download(buildAssemblyPrimersCsv(result.primers.map((primer) => ({
+            id: primer.id, name: `${primer.fragment_name} ${primer.direction === 'forward' ? 'F' : 'R'}`, direction: primer.direction,
+            full_sequence: primer.full_sequence, annealing_sequence: primer.annealing_sequence, tail_sequence: primer.tail_sequence,
+            tm: primer.tm, tm_model: primer.tm_model ?? '', warnings: primer.warnings,
+        }))), `${exportName}-primers.csv`, 'text/csv');
+    };
+    const downloadFragments = () => {
+        if (!result) return;
+        download(buildFragmentsFasta(result.designed_fragments.map((fragment) => ({ id: fragment.id, name: fragment.name, sequence: fragment.sequence }))), `${exportName}-fragments.fasta`, 'text/plain');
+    };
 
     useEffect(() => {
         setResult(null);
@@ -83,8 +172,8 @@ export function GibsonDesignWorkspace({
     }, [requestScope]);
 
     const runDesign = async () => {
-        if (fragments.length < 2) {
-            setError('Add at least two ordered fragments before designing.');
+        if (fragments.length < 1) {
+            setError('Add a fragment before designing.');
             return;
         }
         previewController.current?.abort();
@@ -141,10 +230,10 @@ export function GibsonDesignWorkspace({
                 name: `${primer.fragment_name} ${primer.direction}`,
                 sequence: primer.full_sequence,
                 sequenceType: 'dna' as const,
-                start: 0,
-                end: 0,
+                ...primerProductSite(primer),
                 strand: primer.direction === 'forward' ? 1 as const : -1 as const,
                 tm: primer.tm,
+                ...(primerProductSite(primer).binding_status ? { binding_warning: 'No mapped binding site; review before use.' } : {}),
                 notes: {
                     fragment_id: primer.fragment_id,
                     annealing_sequence: primer.annealing_sequence,
@@ -222,10 +311,47 @@ export function GibsonDesignWorkspace({
                 </label>
             </div>
 
+            {junctionRows.length > 0 && (
+                <div data-junction-editor className="space-y-2 rounded-xl border border-slate-700 bg-slate-900/60 p-3">
+                    <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Junction overlaps</div>
+                    <p className="text-xs text-slate-400">Build bottom-up: order your parts, then set each junction&apos;s overlap; a part of 40 nt or less is carried as a linker on its neighbours&apos; primers.</p>
+                    {junctionRows.map(({ left, right }) => {
+                        const edit = junctionEdits[left.id];
+                        return (
+                            <div key={left.id} data-junction-row={left.id} className="grid items-center gap-2 text-xs sm:grid-cols-[minmax(0,1fr)_110px_minmax(0,1.3fr)]">
+                                <div className="min-w-0 break-words text-slate-200">{left.name} → {right.name}</div>
+                                <input
+                                    type="number"
+                                    min={15}
+                                    max={80}
+                                    aria-label={`Overlap after ${left.name} (nt)`}
+                                    placeholder={String(overlap)}
+                                    value={edit?.overlap ?? ''}
+                                    onChange={(event) => editJunction(left.id, { overlap: event.target.value })}
+                                    className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs"
+                                />
+                                <select
+                                    aria-label={`Overlap distribution after ${left.name}`}
+                                    value={edit?.distribution ?? ''}
+                                    onChange={(event) => editJunction(left.id, { distribution: event.target.value as '' | GibsonJunctionDistribution })}
+                                    className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs"
+                                >
+                                    <option value="">Auto</option>
+                                    {(['split', 'left', 'right'] as const).map((value) => {
+                                        const option = distributionOption(value, left, right);
+                                        return <option key={value} value={value} disabled={option.disabled}>{option.label}</option>;
+                                    })}
+                                </select>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+
             <button
                 type="button"
                 onClick={() => void runDesign()}
-                disabled={loading !== null || fragments.length < 2}
+                disabled={loading !== null || fragments.length < 1}
                 className="w-full rounded-lg bg-violet-600 px-3 py-2 font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
             >
                 {loading === 'design' ? 'Designing…' : 'Design & Simulate'}
@@ -256,6 +382,8 @@ export function GibsonDesignWorkspace({
                         >
                             Load preview
                         </button>
+                        <button type="button" onClick={downloadPrimers} disabled={result.primers.length === 0} className="rounded-lg bg-slate-700 px-3 py-2 text-xs font-medium text-white hover:bg-slate-600 disabled:opacity-40">Download primers CSV</button>
+                        <button type="button" onClick={downloadFragments} disabled={result.designed_fragments.length === 0} className="rounded-lg bg-slate-700 px-3 py-2 text-xs font-medium text-white hover:bg-slate-600 disabled:opacity-40">Download fragments FASTA</button>
                     </div>
 
                     {result.warnings.length > 0 && (
@@ -274,13 +402,16 @@ export function GibsonDesignWorkspace({
                                     <div key={primer.id} className="rounded border border-slate-800 bg-slate-950/70 p-3">
                                         <div className="flex items-center justify-between gap-2">
                                             <div className="font-medium text-slate-200">{primer.fragment_name} {primer.direction === 'forward' ? 'F' : 'R'}</div>
-                                            <div className="text-xs text-slate-500">Tm {primer.tm.toFixed(1)} °C</div>
+                                            <div className="text-xs text-slate-500">Tm {primer.tm.toFixed(1)} °C{primer.tm_model ? ` (${primer.tm_model})` : ''}</div>
                                         </div>
                                         <div className="mt-2 break-all font-mono text-xs text-cyan-300">{primer.full_sequence}</div>
                                         <div className="mt-2 grid gap-1 text-[11px] sm:grid-cols-2">
                                             <div><span className="text-slate-500">Tail:</span> <span className="break-all font-mono text-violet-300">{primer.tail_sequence || '—'}</span></div>
                                             <div><span className="text-slate-500">Anneal:</span> <span className="break-all font-mono text-emerald-300">{primer.annealing_sequence}</span></div>
                                         </div>
+                                        {!primer.product_site && <div className="mt-2 text-[11px] text-amber-300">Binding site needs review</div>}
+                                        {primer.template_site && <div className="mt-1 text-[11px] text-slate-500">template {primer.template_site.start + 1}–{primer.template_site.end} ({primer.template_site.strand === -1 ? '−' : '+'})</div>}
+                                        {primer.product_site && <div className="mt-1 text-[11px] text-slate-500">product {primer.product_site.start + 1}–{primer.product_site.end} ({primer.product_site.strand === -1 ? '−' : '+'})</div>}
                                         {primer.warnings.length > 0 && (
                                             <div className="mt-2 text-[11px] text-amber-300">{primer.warnings.join(' • ')}</div>
                                         )}
@@ -295,7 +426,8 @@ export function GibsonDesignWorkspace({
                         {result.selected_product.junctions.map((junction, index) => (
                             <div key={`${junction.left_fragment_id}:${junction.right_fragment_id}:${index}`} className="rounded border border-slate-800 bg-slate-950/70 px-3 py-2">
                                 <div className="text-xs font-medium text-slate-200">{junction.left_fragment_name} → {junction.right_fragment_name}</div>
-                                <div className="mt-1 text-xs text-slate-400">{junction.overlap_length} nt overlap</div>
+                                <div className="mt-1 text-xs text-slate-400">{junction.overlap_length} nt overlap{typeof junction.overlap_tm === 'number' ? ` • overlap Tm ${junction.overlap_tm.toFixed(1)} °C` : ''}{typeof junction.overlap_gc === 'number' ? ` • GC ${junction.overlap_gc.toFixed(1)} %` : ''}{junction.distribution ? ` • ${DISTRIBUTION_LABEL[junction.distribution] ?? junction.distribution}` : ''}</div>
+                                {junction.notes.length > 0 && <div className="mt-1 text-[11px] text-amber-300">{junction.notes.join(' • ')}</div>}
                                 <div className="mt-1 break-all font-mono text-[11px] text-slate-500">{junction.overlap_sequence}</div>
                             </div>
                         ))}

@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from database import Base, Job, ConformationalMappingSource
 from routers import conformational_mapping as cm
+from services.conformational_mapping import submission
 from services.conformational_mapping import global_adapter
 from tests.test_conformational_mapping_routing import _request_params
 
@@ -45,8 +46,9 @@ async def test_submission_stages_science_not_checkpoint(tmp_path, monkeypatch, w
     monkeypatch.setattr(cm,'get_results_dir',lambda:results)
     monkeypatch.setattr(global_adapter,'get_results_dir',lambda:results)
     monkeypatch.setattr(cm,'get_weights_root',lambda:weights)
+    monkeypatch.setattr(submission,'get_weights_root',lambda:weights)
     identity = controls['confornets']['backend_identity']
-    monkeypatch.setattr(cm,'_server_confornets_identity',lambda:dict(identity))
+    monkeypatch.setattr(submission,'_server_confornets_identity',lambda:dict(identity))
     monkeypatch.setattr(global_adapter,'_server_confornets_identity',lambda:dict(identity))
     monkeypatch.setattr(cm,'_runtime_registry',lambda _:dict(identity))
     monkeypatch.setattr(global_adapter,'_runtime_registry',lambda _:dict(identity))

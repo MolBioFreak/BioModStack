@@ -158,7 +158,7 @@ def test_unconfigured_caller_selected_image_remains_denied(installed_runtime, tm
         from pathlib import Path
         from services.frustrampnn import runtime
         for candidate in (Path(sys.argv[1]) / "unconfigured/frustrampnn.sif",
-                          Path("/mnt/BioModStack/apptainer/frustrampnn.sif"),
+                          Path("/data/bms/apptainer/frustrampnn.sif"),
                           Path(sys.argv[2]) / "other.sif"):
             try:
                 runtime.validate_configured_container_path(candidate)

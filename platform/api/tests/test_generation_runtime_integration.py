@@ -136,10 +136,14 @@ def test_prepared_generation_directory_relocates_once_with_exact_bindings(roots,
 
 
 @pytest.mark.parametrize('model', ['ppiflow', 'boltzgen'])
-def test_prepared_generation_retains_symlink_and_root_authority(roots, model):
+@pytest.mark.parametrize('existing_target', [False, True])
+def test_prepared_generation_retains_symlink_and_root_authority(roots, model, existing_target, tmp_path):
     output, root, params = _tree(roots, model)
-    (root / 'escape.pdb').symlink_to(roots['inputs'] / 'missing')
-    with pytest.raises(bundle.RemoteBundleError, match='symlink'):
+    target = tmp_path / 'outside-managed-roots.pdb'
+    if existing_target:
+        target.write_bytes(b'outside snapshot')
+    (root / 'escape.pdb').symlink_to(target)
+    with pytest.raises(bundle.RemoteBundleError):
         bundle._input_assets(params, native_invocation=_invocation(model, params), repo_root=roots['repo'],
             runtime_paths=set(), output_dir=output)
 

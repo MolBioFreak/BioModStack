@@ -148,6 +148,39 @@ async function render(options: { selectedReadId?: string; onViewerSessionChange?
 }
 
 describe('OntSignalIdealComparison', () => {
+    it('shows the comparison state in words and keeps digests and IDs under Technical details', async () => {
+        await render();
+        await act(async () => { findButton('Preview').click(); await Promise.resolve(); }); await settle();
+        await act(async () => { findButton('Generate and compare').click(); await Promise.resolve(); }); await settle();
+        const visible = Array.from(container.querySelector('section')!.children).filter((child) => child.tagName !== 'DETAILS').map((child) => child.textContent).join(' ');
+        expect(visible).toContain('Comparison: waiting to start');
+        expect(visible).toContain('Simulates chr7 495–565, reverse strand.');
+        expect(visible).not.toMatch(/[0-9a-f]{64}/);
+        expect(visible).not.toContain('comparison_requested');
+        expect(visible).not.toContain('reference-7');
+        const technical = Array.from(container.querySelectorAll('details')).find((item) => item.querySelector('summary')?.textContent === 'Comparison records')!;
+        expect(technical.textContent).toContain('b'.repeat(64));
+        expect(technical.textContent).toContain('comparison-1 · requested: comparison_requested');
+    });
+
+    it('saves the on-screen read and region before previewing, so Generate needs no second Preview', async () => {
+        const saved = { ...viewer, selected_read_id: 'read-42', contig: 'chr7', locus_start: 500, locus_end: 560, revision: 5 };
+        mocks.update.mockResolvedValueOnce(saved);
+        mocks.preview.mockResolvedValue({ ...preview, viewer_session_revision: 5 });
+        const onViewerSessionChange = await render();
+        await act(async () => { findButton('Preview').click(); await Promise.resolve(); }); await settle();
+        expect(mocks.update).toHaveBeenCalledWith('viewer-1', expect.objectContaining({
+            expected_revision: 4, selected_read_id: 'read-42', contig: 'chr7', locus_start: 500, locus_end: 560,
+        }), expect.any(AbortSignal));
+        expect(mocks.preview).toHaveBeenCalledWith(expect.objectContaining({ expected_viewer_revision: 5, reference_start: 500, reference_end: 560 }));
+        expect(onViewerSessionChange).toHaveBeenCalledWith(saved);
+        // The parent passes the saved session back; the preview stays and Generate is available.
+        await act(async () => root.render(<OntSignalIdealComparison datasetId="dataset-1" viewerSession={saved as never}
+            selectedReadId="read-42" contig="chr7" start={500} end={560} mappingJobId="ref-map-1" mappingArtifactId="mapping-artifact-1"
+            renderParams={renderParams as never} onViewerSessionChange={onViewerSessionChange as never} />)); await settle();
+        expect(findButton('Generate and compare').disabled).toBe(false);
+    });
+
     it('restores the saved comparison after its mapping artifact arrives later', async () => {
         mocks.fetchJob.mockResolvedValue(comparisonJob({ state: 'ready' }));
         const mount = async (mappingArtifactId: string | null) => {
@@ -158,10 +191,10 @@ describe('OntSignalIdealComparison', () => {
             await settle();
         };
         await mount(null);
-        expect(container.textContent).toContain('Comparison comparison-1');
+        expect(container.querySelector('[data-comparison-job="comparison-1"]')).not.toBeNull();
         await mount('mapping-artifact-1');
         expect(mocks.fetchJob).toHaveBeenCalledTimes(2);
-        expect(container.textContent).toContain('Comparison comparison-1');
+        expect(container.querySelector('[data-comparison-job="comparison-1"]')).not.toBeNull();
         expect((container.querySelector('[aria-label="Simulation seed"]') as HTMLInputElement).value).toBe('19');
     });
 

@@ -7,7 +7,7 @@ const read = (path: string) => readFileSync(path, 'utf8');
 const consumers: Record<string, RegExp> = {
   'JobBrowser.tsx': /fetchJobs\(\{[\s\S]*?limit: PAGE_SIZE,[\s\S]*?summary: true[\s\S]*?\}, undefined, signal\)/u,
   'ReferenceSelector.tsx': /fetchJobs\(\{ limit: 500, summary: true \}, undefined, signal\)/u,
-  'BatchComparePane.tsx': /fetchJobs\(\{ limit: 500, summary: true \}, undefined, signal\)/u,
+  'BatchComparePane.tsx': /fetchJobs\(\{ limit: 500, summary: true(?:, include_children: nativeMetrics)? \}, undefined, signal\)/u,
   'Dashboard.tsx': /fetchJobs\(\{ limit: 100, offset,[\s\S]*?summary: true \},\s*queryClient\.getQueryData/u,
   'LigandSelector.tsx': /fetchJobs\(\{ status: 'completed', limit: 50, summary: true \}\)/u,
   'DesignBrowser.tsx': /fetchJobs\(\{ limit: 500, summary: true \}, undefined, signal\)/u,

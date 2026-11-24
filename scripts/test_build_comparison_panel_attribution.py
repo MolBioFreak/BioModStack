@@ -195,3 +195,53 @@ def test_duplicate_qnames_remain_distinct_occurrences_and_rows(tmp_path: Path, m
         ("same", 2, module._occurrence_id(2)),
     ]
     assert evidence["classified_read_count"] == 2
+
+
+def _classify(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reads: list[list[tuple[int, str, int, int]]], *, mapq: int = 20, margin: int = 10):
+    """Each read is a list of (flag, reference, mapq, score); an empty list is an unmapped read."""
+    module = _module()
+    fastq = tmp_path / "reads.fastq"
+    fastq.write_text("".join(f"@r{index}\nACGT\n+\n!!!!\n" for index in range(len(reads))), encoding="utf-8")
+    normalized, occurrence_map = tmp_path / "normalized.fastq", tmp_path / "occurrence_map.json"
+    metadata = module.prepare_occurrences(fastq, normalized, occurrence_map)
+    lines = []
+    for ordinal, records in enumerate(reads, start=1):
+        name = module._occurrence_id(ordinal)
+        if not records:
+            lines.append(f"{name}\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\t!!!!")
+        for flag, reference, record_mapq, score in records:
+            lines.append(f"{name}\t{flag}\t{reference}\t1\t{record_mapq}\t4M\t*\t0\t0\tACGT\t!!!!\tAS:i:{score}")
+    class Result:
+        stdout = "\n".join(lines)
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
+    panel = {"entries": [{"id": "background", "role": "host"}, {"id": "decoy", "role": "plasmid_decoy"}]}
+    return module._summarize_sam("samtools", tmp_path / "unused.bam", mapq, margin, panel, normalized, occurrence_map,
+                                 source_fastq_sha256=metadata["source_fastq_sha256"])
+
+
+def test_competitors_are_compared_before_the_mapq_filter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    E, B, D = "expected_plasmid", "panel__background", "panel__decoy"
+    evidence = _classify(tmp_path, monkeypatch, [
+        [(0, E, 60, 100), (256, B, 0, 95)],    # near tie: the runner-up is a MAPQ 0 secondary
+        [(0, E, 60, 100), (256, B, 0, 100)],   # exact tie
+        [(0, E, 60, 100), (256, B, 0, 90)],    # exactly at the margin: not a tie under the documented <
+        [(0, E, 60, 100), (256, B, 0, 60)],    # unique winner, distant runner-up
+        [(0, B, 5, 100)],                      # low-confidence winner, no competitor
+        [(0, E, 60, 100), (2048, B, 60, 99)],  # supplementary piece is not a competing reference
+        [(0, B, 1, 100), (256, D, 0, 100)],    # tie between two panel references
+        [],                                    # no hit
+    ])
+    rows = [(row["category"], row["role"], row["accepted_references"]) for row in evidence["rows"]]
+    assert rows == [
+        ("ambiguous_multimapping", "ambiguous", ["expected_plasmid", "background"]),
+        ("ambiguous_multimapping", "ambiguous", ["expected_plasmid", "background"]),
+        ("expected_plasmid_unique", "intended", ["expected_plasmid"]),
+        ("expected_plasmid_unique", "intended", ["expected_plasmid"]),
+        ("unclassified", "unclassified", []),
+        ("expected_plasmid_unique", "intended", ["expected_plasmid"]),
+        ("ambiguous_multimapping", "ambiguous", ["background", "decoy"]),
+        ("unclassified", "unclassified", []),
+    ]
+    # Every read is counted once, and the reference counts follow the rows.
+    assert sum(evidence["categories"].values()) == evidence["input_read_count"] == 8
+    assert evidence["reference_counts"] == {"expected_plasmid": 5, "background": 3, "decoy": 1}

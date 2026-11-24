@@ -8,6 +8,7 @@ import shutil
 import pytest
 from fastapi import HTTPException
 from routers import files
+from services import binder_source_materialization
 import paths
 from scripts.lib import portable_inputs as portable
 from test_denovo_remote_inputs import roots, compile_cad, place
@@ -18,6 +19,7 @@ def test_managed_import_uses_existing_read_authority(tmp_path, monkeypatch):
     root.mkdir()
     monkeypatch.setattr(paths, 'get_allowed_roots', lambda: {'inputs': root})
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: {'inputs': root})
+    monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: {'inputs': root})
     source = root / 'native.json'
     raw = '[ {"name":"native", "future":false, "sequences":[]} ]\n'
     source.write_text(raw)

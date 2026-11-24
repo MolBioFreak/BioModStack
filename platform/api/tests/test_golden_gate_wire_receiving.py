@@ -28,7 +28,7 @@ def fixture(name) -> dict[str, Any]:
             sequence='AATG'+A+'GGAG'+B, topology='circular')), enzyme=binding('BsaI'),
             windows=[dict(start=20,end=22),dict(start=60,end=61),dict(start=90,end=91)],
             preparation=dict(kind='synthesis',clamp='TT',spacer='A'),
-            search=dict(ranking_mode='lexicographic',unique_classes=False,exclude_palindromes=False))
+            search=dict(ranking_mode='lexicographic',exclude_palindromes=False))
     elif name == 'edited':
         body['sources'][1]['source'].update(sequence='GGTCTC'+B[6:], features=[])
         body['target']['exact_sequence'] = None

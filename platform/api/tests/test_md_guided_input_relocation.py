@@ -114,9 +114,20 @@ def test_guided_worker_validation_reaches_real_preparation_consumer(tmp_path, mo
     assert not (tmp_path / 'prepared').exists()
 
 
+def test_guided_validation_accepts_contained_exact_alias(tmp_path, monkeypatch):
+    _, bindings, binding, archived, _ = stage_worker(tmp_path, 'protein')
+    target = Path(bindings['bindings'][1]['path'])
+    other = target.with_name('other.pdb')
+    target.rename(other)
+    target.symlink_to(other)
+    output = tmp_path / 'normalized_config.json'
+    validate(monkeypatch, archived, binding, output)
+    assert Path(json.loads(output.read_text())['input']['structure']).read_bytes() == other.read_bytes()
+
+
 @pytest.mark.parametrize('damage, message', [
     ('digest', 'digest/size mismatch'), ('outside', 'outside approved roots'),
-    ('symlink', 'symlink'), ('ambiguous', 'Ambiguous portable input binding'),
+    ('symlink', 'outside approved roots'), ('ambiguous', 'Ambiguous portable input binding'),
 ])
 def test_guided_validation_keeps_portable_checks(tmp_path, monkeypatch, damage, message):
     _, bindings, binding, archived, _ = stage_worker(tmp_path, 'protein')
@@ -129,7 +140,7 @@ def test_guided_validation_keeps_portable_checks(tmp_path, monkeypatch, damage, 
         shutil.copyfile(target, outside)
         entry['path'] = str(outside)
     elif damage == 'symlink':
-        other = target.with_name('other.pdb')
+        other = tmp_path / 'outside-alias.pdb'
         target.rename(other)
         target.symlink_to(other)
     else:

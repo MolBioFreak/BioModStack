@@ -1,20 +1,22 @@
-import { useEffect, useRef, useState } from 'react';
+import type { HolderTarget } from '../lib/bioxpWorkflowDeck';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useBioXpWorkflowMutationOwner } from './BioXpWorkflowMutationOwner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import './BioXpMethodsWorkspace.css';
 import { liquidClassEditorSchema, methodParameterSchema, methodTipPolicySchema } from '../lib/bioxpMethodEditorSchema';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
-import { bioXpErrorText } from '../lib/bioxpClient';
+import { bioXpErrorText, useBioXpOperatorUpdates, isActiveBioXpWorkflow, type BioXpWorkflowJob, type BioXpWorkflowJobSummary } from '../lib/bioxpClient';
 import { methodsGet, methodsPost, methodsSave, methodRows, newMethod, definiteMethodRefusal, type MethodValue, type MethodRecord, type MethodCollection, type MethodCatalog, type MethodCompile, type MethodRun } from '../lib/bioxpMethods';
 import { canonicalWorkflowJobId } from '../lib/bioxpSavedWorkflowRun';
 import { BioXpCopyId } from './BioXpCopyId';
-import { BioXpMethodPlanSummary, methodStepFindings, occurrenceSteps } from './BioXpMethodPlanSummary';
+import { BioXpMethodPlanSummary, BioXpMethodPlanNotes, methodGeneralNoteCount, methodStepFindings, occurrenceSteps } from './BioXpMethodPlanSummary';
+import { BioXpChoiceList } from './BioXpChoiceList';
 import { MethodFields, object, duplicateNode, methodBindingsSchema } from './BioXpMethodFields';
 import { BioXpWorkflowJobMonitor } from './BioXpWorkflowJobMonitor';
-import { BioXpMethodPreview, BioXpMethodProgress, BioXpMethodApplicationFields } from './BioXpMethodPreview';
+import { BioXpMethodPreview, methodOccurrence, BioXpMethodProgress, BioXpMethodApplicationFields } from './BioXpMethodPreview';
 import { BioXpMethodProcedures } from './BioXpMethodProcedures';
-import { BioXpMethodDeckWorkbench } from './BioXpMethodDeckWorkbench';
+import { BioXpMethodDeckWorkbench, type BioXpMethodView } from './BioXpMethodDeckWorkbench';
 import { buildMethodRunRequest } from '../lib/bioxpMethodRunRequest';
 import { BioXpWorkflowProfilesContext, publishedTipProfiles, pinLabwareProfile } from './BioXpWorkflowProfiles';
 import { RepairWorkspaceContext, RepairWorkspaceClassEditor } from './repairWorkspaceClasses';
@@ -54,7 +56,8 @@ function writeRuns(runs: RunEntry[]): string | null {
 }
 const when = (iso: unknown) => { const d = typeof iso === 'string' && iso ? new Date(iso) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleString() : 'start time not recorded'; };
 const plainContext = (context: unknown) => Object.entries(object(context)).filter(([, v]) => v !== null && v !== undefined && typeof v !== 'object').map(([k, v]) => `${k.replaceAll('_', ' ')} ${String(v)}`).join(', ');
-export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, visible = true }: { generation: number; connected: boolean; controlsEnabled: boolean; visible?: boolean }) {
+export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, visible = true, holderTargets = [] }: { generation: number; connected: boolean; controlsEnabled: boolean; visible?: boolean; holderTargets?: HolderTarget[] }) {
+    useBioXpOperatorUpdates(generation, connected && visible);
     const [tab, updateTab] = useState('Methods');
     const tabRef = useRef(tab); tabRef.current = tab;
     const setTab = (next: string) => { if (next !== tabRef.current) editVersion.current++; tabRef.current = next; updateTab(next); };
@@ -77,6 +80,19 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
     const [check, setCheck] = useState<{ result: MethodCompile; input: MethodValue } | null>(null);
     const [checkError, setCheckError] = useState<string | null>(null);
     const [previewOpen, setPreviewOpen] = useState(false);
+    const [view, setView] = useState<BioXpMethodView>('deck');
+    const [menu, setMenu] = useState<'' | 'open' | 'new' | 'advanced'>('');
+    const [advancedHost, setAdvancedHost] = useState<HTMLDivElement | null>(null);
+    const toolbar = useRef<HTMLDivElement>(null);
+    // An open menu sits under its button and closes on a click anywhere outside the toolbar.
+    useLayoutEffect(() => {
+        if (!menu) return;
+        const bar = toolbar.current, panel = bar?.querySelector<HTMLElement>(`[data-menu="${menu}"]`), owner = bar?.querySelector<HTMLElement>(`[data-menu-button="${menu}"]`);
+        if (bar && panel && owner) panel.style.left = `${Math.max(8, Math.min(owner.offsetLeft, bar.clientWidth - panel.offsetWidth - 8))}px`;
+        const away = (event: PointerEvent) => { if (!bar?.contains(event.target as Node)) setMenu(''); };
+        document.addEventListener('pointerdown', away);
+        return () => document.removeEventListener('pointerdown', away);
+    }, [menu]);
     const checkSeq = useRef(0);
     const { busy, setBusy, busyRef } = useBioXpWorkflowMutationOwner();
     const [storageBusy, setStorageBusy] = useState(false), storageLock = useRef(false);
@@ -90,6 +106,8 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
     const [ack, setAck] = useState(false);
     const [history, setHistory] = useState<RunEntry[]>(readRuns);
     const [run, setRun] = useState<RunEntry | null>(() => history[0] ?? null);
+    const explicitRunSelection = useRef(false);
+    useEffect(() => { explicitRunSelection.current = false; }, [generation]);
     const historyRef = useRef(history); historyRef.current = history;
     // Synchronous: the original identity is in browser storage before the POST starts.
     const remember = (entry: RunEntry) => { const next = [entry, ...historyRef.current.filter(r => r.jobId !== entry.jobId)].slice(0, MAX_RUNS); historyRef.current = next; const warning = writeRuns(next); setRunMessage(warning); setHistory(next); };
@@ -118,6 +136,26 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
     const library = useQuery({ queryKey: ['bioxp', 'methods', collection, search, offset], queryFn: () => methodsGet<unknown>(collection, { search, offset, limit: 25 }), retry: false, enabled: visible && tab !== 'Runs' });
     const revisions = useQuery({ queryKey: ['bioxp', 'methods', collection, selected, 'revisions'], queryFn: () => methodsGet<unknown>(`${collection}/${enc(selected)}/revisions`), retry: false, enabled: !!selected });
     const runs = useQuery({ queryKey: ['bioxp', 'methods', 'runs', generation, search, offset], queryFn: () => methodsGet<unknown>('runs', { expected_connection_generation: generation, search, offset, limit: 25 }), retry: false, enabled: visible && tab === 'Runs' && connected });
+    const discovery = useQuery({ queryKey: ['bioxp', 'methods', 'active-runs', generation],
+        queryFn: () => methodsGet<{ rows: BioXpWorkflowJobSummary[] }>('runs', { expected_connection_generation: generation, limit: 100 }),
+        enabled: visible && connected && generation > 0, retry: false,
+        refetchInterval: visible && connected ? 10_000 : false, refetchIntervalInBackground: false });
+    useEffect(() => {
+        if (explicitRunSelection.current || busy) return;
+        const observed = object(liveObservation).job_id === run?.jobId ? liveObservation : accepted;
+        if (run?.generation === generation && observed && isActiveBioXpWorkflow(observed as BioXpWorkflowJob)) return;
+        const active = discovery.data?.rows.filter(isActiveBioXpWorkflow) ?? [];
+        if (run?.generation === generation && active.some(job => job.job_id === run.jobId)) return;
+        const job = active[0];
+        if (!job) return;
+        setRun({ jobId: job.job_id, key: job.command?.idempotency_key ?? '', generation,
+            snapshot: {}, name: job.protocol_id || 'Robot job', startedAt: job.created_at });
+        setAccepted(null); setLiveObservation(null); setReport(null);
+    }, [discovery.data, generation, busy, run, liveObservation, accepted]);
+    const runContext = useQuery({ queryKey: ['bioxp', 'methods', 'run-context', generation, run?.jobId],
+        queryFn: () => methodsGet<MethodValue>(`runs/${enc(run!.jobId)}/context`, { expected_connection_generation: generation }),
+        enabled: visible && connected && !!run && !run.refused, retry: false, staleTime: Infinity,
+        refetchOnWindowFocus: false, refetchOnReconnect: false });
     const starters = useQuery({ queryKey: ['bioxp', 'methods', 'liquid-starters'], queryFn: () => methodsGet<unknown>('liquid-classes/starters'), enabled: visible && tab !== 'Runs', retry: false, staleTime: Infinity });
     const presets = useQuery({ queryKey: ['bioxp', 'methods', 'presets'], queryFn: () => methodsGet<unknown>('presets', { limit: 100 }), retry: false });
     const rootSchema = schemas(schema.data ?? {}) as Schema;
@@ -141,10 +179,10 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
             void library.refetch();
         });
     }
-    async function open() {
+    async function open(id = selected, exactRevision = revision) {
         const version = editVersion.current, lane = collection;
         await storage(async () => {
-            const exact = await methodsGet<MethodRecord>(`${lane}/${enc(selected)}${revision ? `/revisions/${enc(revision)}` : ''}`);
+            const exact = await methodsGet<MethodRecord>(`${lane}/${enc(id)}${exactRevision ? `/revisions/${enc(exactRevision)}` : ''}`);
             if (version !== editVersion.current) { setNotice('Open completed after an edit; editable draft retained. Open again explicitly.'); return; }
             saveTargets.current[saveTarget] = exact;
             (lane === 'liquid-classes' ? setLiquid : setDraft)(clone(exact.method));
@@ -152,9 +190,7 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
                 setValues(workspaceHydrate(exact.method).inputs);
             }
             if (lane === 'liquid-classes') setSavedLiquid(exact); else setSavedMethod(exact); editVersion.current++;
-            setNotice(`Opened exact revision ${exact.revision}.`);
-            // Bring the stage pages and deck into view; presentation only.
-            setTimeout(() => document.querySelector<HTMLElement>('.bioxp-page-navigation')?.scrollIntoView?.({ block: 'start' }), 0);
+            setNotice(`Opened exact revision ${exact.revision}.`); setMenu('');
         });
     }
     const compileInput = (method = activeDraft): MethodValue => ({ method: clone(method), bindings: clone(bindings), dependencies: clone(dependencies), initial_state: clone(initialState) });
@@ -171,6 +207,21 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
         enabled: connected && visible && tab === 'Methods' && hasContent,
         staleTime: Infinity, retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
     });
+    // Holder rows/wells for the map come from the robot catalog's deck destinations (robot-owned XY).
+    // One cached read per connection; live dashboard updates are shared by the cockpit.
+    const holderCatalog = useQuery({
+        queryKey: ['bioxp', 'method-holder-targets', generation],
+        queryFn: async () => {
+            const response = object((await api.get('/api/bioxp/operator-controls/catalog', { timeout: 12000 })).data);
+            const actions = object(response.canonical ?? response).actions;
+            const deck = Array.isArray(actions) ? actions.map(object).find(a => a.action_id === 'oem.deck.move_to_location') : undefined;
+            const options = deck && Array.isArray(deck.destination_options) ? deck.destination_options as HolderTarget[] : [];
+            return options.filter(option => option.xy != null);
+        },
+        enabled: connected && visible && tab === 'Methods' && holderTargets.length === 0,
+        staleTime: Infinity, retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
+    });
+    const mapHolderTargets = holderTargets.length ? holderTargets : holderCatalog.data ?? [];
     const checkKey = tab === 'Methods' && visible && hasContent ? JSON.stringify(compileInput()) : '';
     useEffect(() => {
         if (!checkKey) return;
@@ -195,7 +246,7 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
             const key = crypto.randomUUID(), jobId = await canonicalWorkflowJobId(key);
             if (authority.current.generation !== currentGeneration || !authority.current.connected) throw new Error('Connection changed before submission; nothing submitted.');
             attempt = { jobId, key, generation: currentGeneration, snapshot: frozen, name: String(object(frozen.method).name || 'Untitled method'), startedAt: new Date().toISOString(), saved: pinned ? { id: pinned.id, revision: pinned.revision } : null };
-            setRun(attempt); remember(attempt); setAccepted(null); setReport(null);
+            explicitRunSelection.current = false; setRun(attempt); setTab('Runs'); remember(attempt); setAccepted(null); setReport(null);
             const request = buildMethodRunRequest(frozen, pinned, basis, key, currentGeneration);
             const result = await methodsPost<MethodRun>(request.path, request.body);
             if (result.job_id !== jobId) throw new Error('Returned identity differs; reconcile original canonical identity, no retry.');
@@ -230,81 +281,129 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
         setSavedMethod(null);
         setCheck(null);
         setNotice('Editable scaffold, not a validated recipe. Set up named labware, then author amounts, timing, placement and reaction settings. No robot action was sent.');
+        setMenu(''); setView('deck');
     };
-    return <section aria-label="Methods workspace" className="bioxp-methods">
-        <nav role="tablist" aria-label="Workflow tools">{['Methods', 'Liquid classes', 'Runs'].map((name, index, names) => <button key={name} id={`method-tab-${index}`} type="button" role="tab" tabIndex={tab === name ? 0 : -1} aria-selected={tab === name} aria-controls={name === 'Runs' ? 'method-runs-panel' : 'method-editor-panel'} onKeyDown={e => { const next = e.key === 'ArrowRight' ? (index + 1) % names.length : e.key === 'ArrowLeft' ? (index + names.length - 1) % names.length : e.key === 'Home' ? 0 : e.key === 'End' ? names.length - 1 : null; if (next !== null) { e.preventDefault(); setTab(names[next]); e.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`#method-tab-${next}`)?.focus(); } }} onClick={() => setTab(name)}>{name}</button>)}</nav>
-        {error && <p role="alert">{error} No automatic execution retry.</p>}{notice?.tab === tab && <p role="status">{notice.text}</p>}
-        {(catalog.isError || schema.isError) && <p role="status">Authoring catalog/schema unavailable. Existing raw values are retained; no robot connection is required for these reads.</p>}
-        <div role="tabpanel" id="method-editor-panel" aria-labelledby={`method-tab-${['Methods', 'Liquid classes', 'Runs'].indexOf(tab)}`} hidden={tab === 'Runs'}>
-            <div className="bioxp-method-titlebar"><label className="bioxp-method-name">Method<input aria-label="Method name" placeholder="Name your method" value={String(activeDraft.name ?? '')} onChange={e => setActive({ ...activeDraft, name: e.target.value })} /></label><div className="bioxp-method-file-actions"><button type="button" disabled={storageBusy} onClick={() => { delete saveTargets.current[saveTarget]; if (tab !== 'Liquid classes') setValues({ bindings: {}, dependencies: {}, initialState: {} }); setActive(tab === 'Liquid classes' ? { schema: 'bms.bioxp-liquid-class.v1', name: '' } : newMethod()); if (tab === 'Liquid classes') setSavedLiquid(null); else setSavedMethod(null); }}>New</button>
-                {tab !== 'Liquid classes' && <button type="button" disabled={storageBusy || !ex.some(sample => object(sample.method).name === 'PCR')} onClick={() => { const sample = ex.find(sample => object(sample.method).name === 'PCR'); if (sample) createExperiment(sample); }}>New PCR</button>}
+    const libraryRows = methodRows<MethodRecord>(library.data);
+    const showHeldRun = useCallback(() => setTab('Runs'), []);
+    const runSentence = unchangedSinceSave ? `Runs saved revision ${savedMethod!.revision}.` : savedMethod ? 'Runs the current edited draft; the saved revision is unchanged. Save keeps these edits for later.' : 'Runs the current draft. Save is optional; an exact copy is kept with the run.';
+    const runBlocked = !connected ? 'Connect to the robot first.' : !ack ? 'Tick “Acknowledge live robot execution” first.' : busy ? 'A robot request is in progress.' : undefined;
+    const generalNotes = useMemo(() => check ? methodGeneralNoteCount(check.result, object(check.input.method)) : 0, [check]);
+    const checkLeft = <section aria-label="Method findings" className="bioxp-method-findings">
+        {checkError && <p role="status">Preview unavailable right now ({checkError}). Your draft is unchanged; Run still works.</p>}
+        {!check && !checkError && <p role="status">{hasContent ? 'Preparing preview…' : 'Add a step or set up the deck to see a preview.'}</p>}
+        {check && <BioXpMethodPlanSummary result={check.result} method={object(check.input.method)} stale={!freshCheck} />}
+        <section aria-label="Run method" className="bioxp-method-run"><h4>Run</h4><p>{runSentence}</p></section>
+    </section>;
+    const checkRight = check ? <BioXpMethodPlanNotes result={check.result} method={object(check.input.method)} /> : null;
+    const toggle = (name: 'open' | 'new' | 'advanced') => setMenu(menu === name ? '' : name);
+    const observedRun = object(object(liveObservation).job_id === run?.jobId ? liveObservation : accepted);
+    const runStatus = run?.refused ? 'not started' : observedRun.job_id === run?.jobId && typeof observedRun.status === 'string' ? observedRun.status : '';
+    const observedWorkflow = object(object(object(observedRun.execution).runtime_state).workflow);
+    const progress = methodOccurrence(observedWorkflow, runContext.data?.job_id === run?.jobId ? runContext.data : undefined);
+    const reported = [runStatus, progress.label ?? progress.occurrence, observedWorkflow.attempt != null ? `Attempt ${observedWorkflow.attempt}` : null,
+        observedWorkflow.phase !== 'waiting' ? null : observedWorkflow.gate === 'error_hold' ? 'Held after error' : observedWorkflow.gate === 'review' ? 'Waiting for operator review' : observedWorkflow.gate ? `Waiting: ${String(observedWorkflow.gate).replaceAll('_', ' ')}` : null,
+        observedWorkflow.held_reason, object(observedWorkflow.requested_control).action === 'pause' ? 'Pause requested' : null].filter(Boolean).join(' · ');
+    return <section aria-label="Methods workspace" className={`bioxp-methods${menu ? ' has-menu' : ''}`}>
+        <div className="bxw-toolbar" ref={toolbar} onKeyDown={e => { if (e.key === 'Escape' && menu) { e.stopPropagation(); setMenu(''); } }}>
+            <nav role="tablist" aria-label="Workflow tools">{['Methods', 'Liquid classes', 'Runs'].map((name, index, names) => <button key={name} id={`method-tab-${index}`} type="button" role="tab" tabIndex={tab === name ? 0 : -1} aria-selected={tab === name} aria-controls={name === 'Runs' ? 'method-runs-panel' : 'method-editor-panel'} onKeyDown={e => { const next = e.key === 'ArrowRight' ? (index + 1) % names.length : e.key === 'ArrowLeft' ? (index + names.length - 1) % names.length : e.key === 'Home' ? 0 : e.key === 'End' ? names.length - 1 : null; if (next !== null) { e.preventDefault(); setTab(names[next]); e.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`#method-tab-${next}`)?.focus(); } }} onClick={() => setTab(name)}>{name === 'Runs' ? 'Run' : name}</button>)}</nav>
+            <div className="bxw-tools" hidden={tab === 'Runs'}>
+                {tab === 'Methods' && <label>On step error <select aria-label="Method error policy" value={String(activeDraft.on_error ?? '')} onChange={e => {
+                    const next = { ...activeDraft }; if (e.target.value) next.on_error = e.target.value; else delete next.on_error; setActive(next);
+                }}><option value="">Default (hold on recoverable pipetting errors)</option><option value="stop">Stop</option><option value="pause_for_operator">Hold for operator</option></select></label>}
+                {tab === 'Methods' && <label title="Automatically requests pressure streaming during workflow pipette strokes. This is separate from liquid detection. Editing does not control the robot or change runs already started.">
+                    <input type="checkbox" checked={activeDraft.workflow_pressure_streaming !== false} onChange={e => setActive({ ...activeDraft, workflow_pressure_streaming: e.target.checked })} />Record pipette pressure traces
+                </label>}
+                <input className="bxw-name" aria-label="Method name" placeholder="Name your method" value={String(activeDraft.name ?? '')} onChange={e => setActive({ ...activeDraft, name: e.target.value })} />
+                <span className="bxw-chip">{saved ? `revision ${saved.revision}${tab !== 'Liquid classes' && !unchangedSinceSave ? ' · edited' : ''}` : 'unsaved draft'}</span>
+                {run && runStatus && <button type="button" className={`bxw-chip is-run${runStatus === 'completed' ? ' is-done' : ''}`} title="Show this run" onClick={() => setTab('Runs')}>Last run: {reported}</button>}
+                <button type="button" data-menu-button="open" aria-expanded={menu === 'open'} onClick={() => toggle('open')}>Open {menu === 'open' ? '▴' : '▾'}</button>
+                <button type="button" data-menu-button="new" aria-expanded={menu === 'new'} onClick={() => toggle('new')}>New {menu === 'new' ? '▴' : '▾'}</button>
                 <button type="button" disabled={storageBusy} onClick={() => void save()}>Save</button>
-                <select aria-label="Library entry" value={selected} onChange={e => setSelected(e.target.value)}><option value="">Open a saved method…</option>{methodRows<MethodRecord>(library.data).map(row => <option key={row.id} value={row.id}>{row.name} · r{row.revision}</option>)}</select>
-                <button type="button" disabled={!selected || storageBusy} onClick={() => void open()}>Open</button>
-                {tab !== 'Liquid classes' && <button type="button" aria-expanded={previewOpen} onClick={() => setPreviewOpen(!previewOpen)}>Preview</button>}
-                {tab !== 'Liquid classes' && <button type="button" disabled={!freshCheck} onClick={() => download({ method: currentInput.method, compilation: freshCheck!.result }, `${String(draft.name || 'method')}-plan.json`)}>Export plan</button>}
-            </div></div>
-            <details className="bioxp-method-library"><summary>Library tools</summary><details><summary>Import, export & copy</summary>
-                <button type="button" disabled={storageBusy} onClick={() => { delete saveTargets.current[saveTarget]; setActive({ ...clone(activeDraft), ...(Array.isArray(activeDraft.steps) ? { steps: (activeDraft.steps as MethodValue[]).map(duplicateNode), ...(Array.isArray(activeDraft.procedures) ? { procedures: (activeDraft.procedures as MethodValue[]).map(p => ({ ...p, ...(Array.isArray(p.steps) ? { steps: (p.steps as MethodValue[]).map(duplicateNode) } : {}) })) } : {}) } : {}) }); if (tab === 'Liquid classes') setSavedLiquid(null); else setSavedMethod(null); setNotice('Duplicated as an unsaved draft with new step identities.'); }}>Duplicate</button>
-                <button type="button" onClick={() => download(collection === 'library' ? workspaceSnapshot(activeDraft, { bindings, dependencies, initialState }) : activeDraft, `${String(activeDraft.name || 'method')}.json`)}>Export draft JSON</button>
-                <label>Import JSON<input aria-label="Import JSON" disabled={storageBusy} type="file" accept="application/json,.json" onChange={e => { const file = e.target.files?.[0], version = editVersion.current; if (file) void storage(async () => { const value = JSON.parse(await file.text()); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Import must contain an object.'); if (version !== editVersion.current) { setNotice('Import completed after an edit or tab change; editable draft retained. Import again explicitly.'); return; } const hydrated = workspaceHydrate(value); delete saveTargets.current[saveTarget]; setActive(hydrated.method); if (collection === 'library') setValues(hydrated.inputs); if (collection === 'liquid-classes') setSavedLiquid(null); else setSavedMethod(null); setNotice('Imported into a new unsaved draft; existing identities were not overwritten.'); }); }} /></label>
-            </details>
-            <details><summary>Library revisions & comparison</summary><label>Search<input aria-label="Library search" value={search} onChange={e => { setSearch(e.target.value); setOffset(0); }} /></label>
-                <select aria-label="Revision" value={revision} onChange={e => setRevision(e.target.value)}><option value="">Latest exact read</option>{methodRows<MethodRecord>(revisions.data).map(row => <option key={row.revision} value={row.revision}>{row.revision}</option>)}</select>
-                <button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 25))}>Previous library page</button><button type="button" disabled={methodRows(library.data).length < 25} onClick={() => setOffset(offset + 25)}>Next library page</button>
-                <label>Compare from revision<input aria-label="Compare from revision" value={fromRevision} onChange={e => setFromRevision(e.target.value)} /></label><button type="button" disabled={!selected || !revision || !fromRevision || storageBusy} onClick={() => void storage(async () => setDiff(await methodsGet(`${collection}/${enc(selected)}/diff`, { from_revision: fromRevision, to_revision: revision })))}>Revision diff</button>
-                <button type="button" disabled={!selected || storageBusy} onClick={() => void storage(async () => download(await methodsGet(`${collection}/${enc(selected)}/export`, revision ? { revision } : undefined), 'method-export.json'))}>Export saved revision</button>
+                {tab !== 'Liquid classes' && <>
+                    <button type="button" aria-expanded={previewOpen} onClick={() => { if (!previewOpen) setView('check'); setPreviewOpen(!previewOpen); }}>Preview</button>
+                    <button type="button" disabled={!freshCheck} onClick={() => download({ method: currentInput.method, compilation: freshCheck!.result }, `${String(draft.name || 'method')}-plan.json`)}>Export plan</button>
+                    <button type="button" data-menu-button="advanced" aria-expanded={menu === 'advanced'} onClick={() => toggle('advanced')}>Advanced {menu === 'advanced' ? '▴' : '▾'}</button>
+                    <span className="bxw-end">
+                        <div className="bxw-views" role="group" aria-label="Workflow view">{(['deck', 'steps', 'check'] as const).map((id, i) => <button key={id} type="button" aria-pressed={view === id} onClick={() => setView(id)}>{i + 1} {id[0].toUpperCase() + id.slice(1)}{id === 'check' && check && !check.result.document ? <small className="is-warn">not runnable</small> : id === 'check' && generalNotes > 0 ? <small>{generalNotes} note{generalNotes === 1 ? '' : 's'}</small> : null}</button>)}</div>
+                        <label className="bxw-ack"><input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} />Acknowledge live robot execution</label>
+                        <button type="button" className="bxw-run" disabled={busy || !connected || !ack} title={runBlocked ?? runSentence} onClick={() => void submit()}>Run</button>
+                    </span>
+                </>}
+            </div>
+            <section className="bxw-menu bxw-menu-open" data-menu="open" aria-label="Open a saved method" hidden={menu !== 'open'}>
+                <header><b>Saved {tab === 'Liquid classes' ? 'liquid classes' : 'methods'} <small>{libraryRows.length} on this page</small></b>
+                    <span><button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 25))}>Previous library page</button><button type="button" disabled={libraryRows.length < 25} onClick={() => setOffset(offset + 25)}>Next library page</button>
+                        <input aria-label="Library search" placeholder="Search saved methods" value={search} onChange={e => { setSearch(e.target.value); setOffset(0); }} /><button type="button" className="bxw-x" aria-label="Close menu" onClick={() => setMenu('')}>×</button></span></header>
+                <div className="bxw-menu-cols">
+                    <div><h5>Method</h5><BioXpChoiceList className="bxc-rows" label="Library entry" value={selected} options={libraryRows.map(row => ({ value: row.id, label: row.name, detail: `r${row.revision}` }))} onChange={id => { setSelected(id); setRevision(''); }} onCommit={id => { setSelected(id); setRevision(''); void open(id, ''); }} />{libraryRows.length === 0 && <small>Nothing saved yet.</small>}</div>
+                    <div><h5>Revisions of the selected method</h5>{selected ? <BioXpChoiceList className="bxc-pills" label="Revision" value={revision} options={[{ value: '', label: 'Latest exact read' }, ...methodRows<MethodRecord>(revisions.data).map(row => ({ value: String(row.revision), label: String(row.revision) }))]} onChange={setRevision} /> : <small>Pick a method to list its revisions.</small>}</div>
+                </div>
+                <footer><button type="button" className="primary" disabled={!selected || storageBusy} onClick={() => void open()}>Open</button>
+                    <button type="button" disabled={storageBusy} onClick={() => { delete saveTargets.current[saveTarget]; setActive({ ...clone(activeDraft), ...(Array.isArray(activeDraft.steps) ? { steps: (activeDraft.steps as MethodValue[]).map(duplicateNode), ...(Array.isArray(activeDraft.procedures) ? { procedures: (activeDraft.procedures as MethodValue[]).map(p => ({ ...p, ...(Array.isArray(p.steps) ? { steps: (p.steps as MethodValue[]).map(duplicateNode) } : {}) })) } : {}) } : {}) }); if (tab === 'Liquid classes') setSavedLiquid(null); else setSavedMethod(null); setNotice('Duplicated as an unsaved draft with new step identities.'); setMenu(''); }}>Duplicate</button>
+                    <button type="button" onClick={() => download(collection === 'library' ? workspaceSnapshot(activeDraft, { bindings, dependencies, initialState }) : activeDraft, `${String(activeDraft.name || 'method')}.json`)}>Export draft JSON</button>
+                    <button type="button" disabled={!selected || storageBusy} onClick={() => void storage(async () => download(await methodsGet(`${collection}/${enc(selected)}/export`, revision ? { revision } : undefined), 'method-export.json'))}>Export saved revision</button>
+                    <label className="bxw-file">Import JSON<input aria-label="Import JSON" disabled={storageBusy} type="file" accept="application/json,.json" onChange={e => { const file = e.target.files?.[0], version = editVersion.current; if (file) void storage(async () => { const value = JSON.parse(await file.text()); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Import must contain an object.'); if (version !== editVersion.current) { setNotice('Import completed after an edit or tab change; editable draft retained. Import again explicitly.'); return; } const hydrated = workspaceHydrate(value); delete saveTargets.current[saveTarget]; setActive(hydrated.method); if (collection === 'library') setValues(hydrated.inputs); if (collection === 'liquid-classes') setSavedLiquid(null); else setSavedMethod(null); setNotice('Imported into a new unsaved draft; existing identities were not overwritten.'); setMenu(''); }); }} /></label>
+                    <span className="bxw-end"><label>Compare from revision<input aria-label="Compare from revision" placeholder="number" value={fromRevision} onChange={e => setFromRevision(e.target.value)} /></label><button type="button" disabled={!selected || !revision || !fromRevision || storageBusy} onClick={() => void storage(async () => setDiff(await methodsGet(`${collection}/${enc(selected)}/diff`, { from_revision: fromRevision, to_revision: revision })))}>Revision diff</button></span>
+                </footer>
                 {diff !== undefined && <section aria-label="Revision changes"><h4>Changes</h4><ul>{methodRows<MethodValue>(object(diff).changes).map((c, i) => <li key={i}>{String(c.op)} {String(c.path)}</li>)}</ul></section>}
-            </details></details>
-            {String(activeDraft.schema).startsWith('bms.bioxp-workflow-draft.') && <button type="button" disabled={storageBusy} onClick={() => void storage(async () => { const migrated = await methodsPost<MethodValue>('migrate', { method: clone(activeDraft) }); setActive(object(migrated.method ?? migrated)); setNotice('Migrated into an editable method; original legacy content is retained by the migration contract. Save explicitly to create a revision.'); })}>Migrate legacy draft</button>}
-            {tab === 'Liquid classes' ? <><label>Source starter variant<select aria-label="Source starter variant" value="" onChange={e => { const entry = methodRows<MethodValue>(starters.data)[Number(e.target.value)]; if (entry) { delete saveTargets.current['liquid-classes']; setActive({ ...clone(entry), name: String(entry.name ?? entry.id) }); setSavedLiquid(null); } }}><option value="">Choose an exact source context…</option>{methodRows<MethodValue>(starters.data).map((entry, i) => <option key={String(entry.id)} value={i}>{String(entry.name || entry.id)} · revision {String(entry.revision)}{plainContext(entry.context) ? ` · ${plainContext(entry.context)}` : ''}</option>)}</select></label><button type="button" disabled={storageBusy} onClick={() => void storage(async () => download(await methodsGet('liquid-classes/source'), 'Cavro-source-catalog.json'))}>Export original source catalog</button>{plainContext(liquid.context) && <p>Context: {plainContext(liquid.context)}</p>}<p>Requested, resolved, emitted and reported-applied are separate values. Blank source values are not zero. T10 design intent does not establish adapter or consumable support.</p><RepairWorkspaceClassEditor catalog={catalog.data} schema={schema.data?.liquid_class_schema ? object(schema.data.liquid_class_schema) as Schema : liquidClassEditorSchema} value={liquid} onChange={setActive} />
-                <button type="button" onClick={() => { delete saveTargets.current['liquid-classes']; setLiquid(clone(liquid)); setSavedLiquid(null); setNotice('Selected class content pinned into a new draft; original revision is unchanged. Applied status is not inferred.'); }}>Pin selected current entry as new class</button>
-            </> : <>
-                <details className="bioxp-method-start"><summary>Start from a workflow</summary><section aria-label="New experiment" className="bioxp-new-experiment">
-                    <label>Workflow kind<select aria-label="Workflow kind" value={workflowKind} onChange={e => { setWorkflowKind(e.target.value); setSeparation(''); }}><option value="">Choose workflow…</option>{ex.map(sample => <option key={String(sample.id)} value={String(sample.id)}>{String(sample.name ?? object(sample.method).name)}</option>)}</select></label>
-                    {variants.length > 0 && <label>Purification approach<select aria-label="Purification approach" value={separation} onChange={e => setSeparation(e.target.value)}><option value="">Choose separation explicitly…</option><option value="external">Operator / external separation</option>{variants.map(variant => <option key={String(variant.id)} value={String(variant.id)}>{String(variant.label)}</option>)}</select></label>}
-                    <button type="button" disabled={storageBusy || !starter || variants.length > 0 && !separation} onClick={() => { const sample = variants.find(v => v.id === separation) ?? starter; if (sample) createExperiment(sample); }}>New experiment</button>
+            </section>
+            <section className="bxw-menu bxw-menu-new" data-menu="new" aria-label="New method" hidden={menu !== 'new'}>
+                <button type="button" disabled={storageBusy} onClick={() => { delete saveTargets.current[saveTarget]; if (tab !== 'Liquid classes') setValues({ bindings: {}, dependencies: {}, initialState: {} }); setActive(tab === 'Liquid classes' ? { schema: 'bms.bioxp-liquid-class.v1', name: '' } : newMethod()); if (tab === 'Liquid classes') setSavedLiquid(null); else setSavedMethod(null); setMenu(''); setView('deck'); }}>New</button>
+                {tab !== 'Liquid classes' && <><button type="button" disabled={storageBusy || !ex.some(sample => object(sample.method).name === 'PCR')} onClick={() => { const sample = ex.find(sample => object(sample.method).name === 'PCR'); if (sample) createExperiment(sample); }}>New PCR</button>
+                <section aria-label="New experiment" className="bioxp-new-experiment">
+                    <h5>Start from a workflow · {ex.length}</h5>
+                    <BioXpChoiceList className="bxc-rows" label="Workflow kind" value={workflowKind} options={ex.map(sample => ({ value: String(sample.id), label: String(sample.name ?? object(sample.method).name), detail: 'outline' }))} onChange={id => { setWorkflowKind(id); setSeparation(''); }} />
+                    {variants.length > 0 && <><h5>Purification approach</h5><BioXpChoiceList className="bxc-rows" label="Purification approach" value={separation} options={[{ value: 'external', label: 'Operator / external separation' }, ...variants.map(variant => ({ value: String(variant.id), label: String(variant.label) }))]} onChange={setSeparation} /></>}
                     {variants.find(v => v.id === separation) && <p>{String(variants.find(v => v.id === separation)?.description)}</p>}
-                    <small>Choose a starting structure; amounts and processing settings stay yours to author.</small>
-                </section></details>
+                    <button type="button" className="primary" disabled={storageBusy || !starter || variants.length > 0 && !separation} title={!starter ? 'Pick a workflow first.' : variants.length > 0 && !separation ? 'Pick a purification approach first.' : undefined} onClick={() => { const sample = variants.find(v => v.id === separation) ?? starter; if (sample) createExperiment(sample); }}>New experiment</button>
+                    <small>An outline carries the steps only. Amounts, wells, temperatures and times stay yours to author.</small>
+                </section></>}
+            </section>
+            {tab !== 'Liquid classes' && <section className="bxw-menu bxw-menu-advanced" data-menu="advanced" aria-label="Advanced" hidden={menu !== 'advanced'}>
+                <header><b>Advanced</b><button type="button" className="bxw-x" aria-label="Close menu" onClick={() => setMenu('')}>×</button></header>
+                <div ref={setAdvancedHost} />
                 <details ref={examplesRef} className="bioxp-method-fixtures"><summary>Examples & software fixtures</summary>
-                <label>Scientific example<select aria-label="Scientific example" disabled={storageBusy} value="" onChange={e => { const sample = ex[Number(e.target.value)]; if (sample) { delete saveTargets.current[saveTarget]; setActive(clone(object(sample.method ?? sample))); setValues({ bindings: clone(object(sample.bindings)), dependencies: clone(object(sample.dependencies)), initialState: clone(object(sample.initial_state)) }); setSavedMethod(null); } }}><option value="">Choose a skeleton…</option>{ex.map((sample, i) => <option key={i} value={i}>{String(sample.name ?? object(sample.method).name ?? i)}</option>)}</select></label>
-                <label>Bound software fixture<select aria-label="Bound software fixture" disabled={storageBusy} value="" onChange={e => { const fixture = object(ex[Number(e.target.value)]?.bound_fixture); if (fixture.method) { delete saveTargets.current[saveTarget]; setActive(clone(object(fixture.method))); setValues({ bindings: clone(object(fixture.bindings)), dependencies: clone(object(fixture.dependencies)), initialState: clone(object(fixture.initial_state)) }); setSavedMethod(null); setNotice(String(fixture.fixture_provenance ?? 'Software fixture only; not scientific or physical qualification.')); } }}><option value="">Choose explicit test inputs…</option>{ex.map((sample, i) => sample.bound_fixture ? <option key={i} value={i}>{String(sample.name ?? object(sample.method).name ?? i)} · software fixture only</option> : null)}</select></label>
-                </details>
-                <RepairWorkspaceContext.Provider value={{ method: activeDraft, dependencies, entries: methodRows<MethodValue>(starters.data), pin: entry => { const existing = dependencies.liquid_classes; if (existing !== undefined && !Array.isArray(existing)) { setNotice('Selected exact content retained in Transfer. Existing non-array dependencies are unchanged.'); return; } setDependencies({ ...dependencies, liquid_classes: [...(Array.isArray(existing) ? existing : []).filter(row => object(row).id !== entry.id || object(row).revision !== entry.revision), clone(entry)] }); } }}>
-                <BioXpWorkflowProfilesContext.Provider value={{ profiles: [...(Array.isArray(plates.data?.profiles) ? plates.data!.profiles as MethodValue[] : []), ...publishedTipProfiles(methodRows<MethodValue>(starters.data))], custodyObjects: Array.isArray(object(object(catalog.data?.authoring).custody).objects) ? object(object(catalog.data?.authoring).custody).objects as MethodValue[] : [], loading: starters.isLoading, error: starters.isError, pin: profile => { if (dependencies.labware_profiles !== undefined && !Array.isArray(dependencies.labware_profiles)) setNotice('Profile identity assigned. Retained null/expression profile dependencies were not replaced; edit Dependencies explicitly to pin its source metadata.'); editVersion.current++; setValues(previous => ({ ...previous, dependencies: pinLabwareProfile(previous.dependencies, profile) })); } }}>
-                <BioXpMethodDeckWorkbench onShowExamples={() => { const panel = examplesRef.current; if (panel) { panel.open = true; panel.scrollIntoView({ block: 'center' }); panel.querySelector<HTMLSelectElement>('select')?.focus(); } }} key={`method-${authoringEpoch}`} method={activeDraft} onChange={setActive} bindings={bindings} onBindingsChange={setBindings} catalog={catalog.data ?? {}} rootSchema={rootSchema} findings={methodStepFindings(check?.result, check ? object(check.input.method) : draft)} preview={freshCheck?.result} initialState={methodInitialState(freshCheck?.result.simulation, currentInput.initial_state)} dependencies={dependencies} recordedAlignment={typeof headReference.data === 'number' ? headReference.data : null} onRefreshAlignment={() => void headReference.refetch()} executionInput={currentInput} executionContext={{ pinned: unchangedSinceSave && savedMethod ? { id: savedMethod.id, revision: savedMethod.revision } : null, basis: savedMethod ? { id: savedMethod.id, revision: savedMethod.revision, edited: !unchangedSinceSave } : null, generation }} />
-                </BioXpWorkflowProfilesContext.Provider></RepairWorkspaceContext.Provider>
+<label>Scientific example<select aria-label="Scientific example" disabled={storageBusy} value="" onChange={e => { const sample = ex[Number(e.target.value)]; if (sample) { delete saveTargets.current[saveTarget]; setActive(clone(object(sample.method ?? sample))); setValues({ bindings: clone(object(sample.bindings)), dependencies: clone(object(sample.dependencies)), initialState: clone(object(sample.initial_state)) }); setSavedMethod(null); } }}><option value="">Choose a skeleton…</option>{ex.map((sample, i) => <option key={i} value={i}>{String(sample.name ?? object(sample.method).name ?? i)}</option>)}</select></label>
+<label>Bound software fixture<select aria-label="Bound software fixture" disabled={storageBusy} value="" onChange={e => { const fixture = object(ex[Number(e.target.value)]?.bound_fixture); if (fixture.method) { delete saveTargets.current[saveTarget]; setActive(clone(object(fixture.method))); setValues({ bindings: clone(object(fixture.bindings)), dependencies: clone(object(fixture.dependencies)), initialState: clone(object(fixture.initial_state)) }); setSavedMethod(null); setNotice(String(fixture.fixture_provenance ?? 'Software fixture only; not scientific or physical qualification.')); } }}><option value="">Choose explicit test inputs…</option>{ex.map((sample, i) => sample.bound_fixture ? <option key={i} value={i}>{String(sample.name ?? object(sample.method).name ?? i)} · software fixture only</option> : null)}</select></label>
+</details>
                 <details><summary>Parameters, expressions and bindings</summary><MethodFields label="Parameters" schema={properties.parameters ?? methodParameterSchema} rootSchema={rootSchema} value={activeDraft.parameters ?? []} onChange={v => setActive({ ...activeDraft, parameters: v })} /><MethodFields label="Bindings" schema={methodBindingsSchema(activeDraft, catalog.data ?? {})} value={bindings} onChange={v => setBindings(object(v))} />
-                    <select aria-label="Parameter preset" value="" onChange={e => void storage(async () => { const preset = await methodsGet<MethodRecord>(`presets/${enc(e.target.value)}`); setBindings(clone(object(preset.method.bindings))); setDependencies(clone(object(preset.method.dependencies))); })}><option value="">Load preset…</option>{methodRows<MethodRecord>(presets.data).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-                    <button type="button" disabled={storageBusy} onClick={() => void storage(async () => { const preset = await methodsSave('presets', { schema: 'bms.bioxp-method-preset.v1', name: String(activeDraft.name), bindings: clone(bindings), dependencies: clone(dependencies) }, null); await methodsGet(`presets/${enc(preset.id)}/revisions/${preset.revision}`); await presets.refetch(); setNotice('Parameter preset saved.'); })}>Save parameter preset</button>
-                </details>
+<select aria-label="Parameter preset" value="" onChange={e => void storage(async () => { const preset = await methodsGet<MethodRecord>(`presets/${enc(e.target.value)}`); setBindings(clone(object(preset.method.bindings))); setDependencies(clone(object(preset.method.dependencies))); })}><option value="">Load preset…</option>{methodRows<MethodRecord>(presets.data).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+<button type="button" disabled={storageBusy} onClick={() => void storage(async () => { const preset = await methodsSave('presets', { schema: 'bms.bioxp-method-preset.v1', name: String(activeDraft.name), bindings: clone(bindings), dependencies: clone(dependencies) }, null); await methodsGet(`presets/${enc(preset.id)}/revisions/${preset.revision}`); await presets.refetch(); setNotice('Parameter preset saved.'); })}>Save parameter preset</button>
+</details>
                 <details><summary>Procedures and pinned dependencies</summary><BioXpMethodProcedures catalog={catalog.data ?? {}} rootSchema={rootSchema} value={activeDraft.procedures} onChange={v => setActive({ ...activeDraft, procedures: v })} /><MethodFields label="Dependencies" value={dependencies} onChange={v => setDependencies(object(v))} /></details>
                 <details><summary>Tip policy and initial assumptions</summary><MethodFields label="Tip policy" schema={properties.tip_policy ?? methodTipPolicySchema} rootSchema={rootSchema} value={activeDraft.tip_policy} onChange={v => setActive({ ...activeDraft, tip_policy: v })} /><MethodFields label="Initial assumptions" value={initialState} onChange={setInitialState} /><p>Planned contents are not observed robot state.</p></details>
                 <details onToggle={e => { if (e.currentTarget.open) setAdvancedMethodVisited(true); }}><summary>All method fields and advanced controls</summary>{advancedMethodVisited && <MethodFields label="Method" schema={rootSchema} value={activeDraft} onChange={v => setActive(object(v))} />}</details>
-                <section aria-label="Method findings" className="bioxp-method-findings">
-                    {checkError && <p role="status">Preview unavailable right now ({checkError}). Your draft is unchanged; Run still works.</p>}
-                    {!check && !checkError && <p role="status">{hasContent ? 'Preparing preview…' : 'Add a step or set up the deck to see a preview.'}</p>}
-                    {check && <BioXpMethodPlanSummary result={check.result} method={object(check.input.method)} stale={!freshCheck} />}
-                    {previewOpen && check && <details open><summary>Step-by-step preview</summary><BioXpMethodApplicationFields value={check.result.resolved} /><BioXpMethodPreview result={check.result} initialState={check.input.initial_state} custodyDestinations={Array.isArray(object(object(catalog.data?.authoring).custody).destinations) ? object(object(catalog.data?.authoring).custody).destinations as MethodValue[] : []} /></details>}
-                </section>
-                <section aria-label="Run method" className="bioxp-method-run"><p>{unchangedSinceSave ? `Runs saved revision ${savedMethod!.revision}.` : savedMethod ? 'Runs the current edited draft; the saved revision is unchanged. Save keeps these edits for later.' : 'Runs the current draft. Save is optional; an exact copy is kept with the run.'}</p>
-                <label><input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} />Acknowledge live robot execution</label><button type="button" disabled={busy || !connected || !ack} onClick={() => void submit()}>Run</button></section>
+                {String(activeDraft.schema).startsWith('bms.bioxp-workflow-draft.') && <button type="button" disabled={storageBusy} onClick={() => void storage(async () => { const migrated = await methodsPost<MethodValue>('migrate', { method: clone(activeDraft) }); setActive(object(migrated.method ?? migrated)); setNotice('Migrated into an editable method; original legacy content is retained by the migration contract. Save explicitly to create a revision.'); })}>Migrate legacy draft</button>}
+            </section>}
+        </div>
+        {error && <p role="alert">{error} No automatic execution retry.</p>}{notice?.tab === tab && <p role="status">{notice.text}</p>}
+        {(catalog.isError || schema.isError) && <p role="status">Authoring catalog/schema unavailable. Existing raw values are retained; no robot connection is required for these reads.</p>}
+        <div role="tabpanel" id="method-editor-panel" aria-labelledby={`method-tab-${['Methods', 'Liquid classes', 'Runs'].indexOf(tab)}`} hidden={tab === 'Runs'}>
+            {tab === 'Liquid classes' ? <>{String(activeDraft.schema).startsWith('bms.bioxp-workflow-draft.') && <button type="button" disabled={storageBusy} onClick={() => void storage(async () => { const migrated = await methodsPost<MethodValue>('migrate', { method: clone(activeDraft) }); setActive(object(migrated.method ?? migrated)); setNotice('Migrated into an editable method; original legacy content is retained by the migration contract. Save explicitly to create a revision.'); })}>Migrate legacy draft</button>}<label>Source starter variant<select aria-label="Source starter variant" value="" onChange={e => { const entry = methodRows<MethodValue>(starters.data)[Number(e.target.value)]; if (entry) { delete saveTargets.current['liquid-classes']; setActive({ ...clone(entry), name: String(entry.name ?? entry.id) }); setSavedLiquid(null); } }}><option value="">Choose an exact source context…</option>{methodRows<MethodValue>(starters.data).map((entry, i) => <option key={String(entry.id)} value={i}>{String(entry.name || entry.id)} · revision {String(entry.revision)}{plainContext(entry.context) ? ` · ${plainContext(entry.context)}` : ''}</option>)}</select></label><button type="button" disabled={storageBusy} onClick={() => void storage(async () => download(await methodsGet('liquid-classes/source'), 'Cavro-source-catalog.json'))}>Export original source catalog</button>{plainContext(liquid.context) && <p>Context: {plainContext(liquid.context)}</p>}<p>Requested, resolved, emitted and reported-applied are separate values. Blank source values are not zero. T10 design intent does not establish adapter or consumable support.</p><RepairWorkspaceClassEditor catalog={catalog.data} schema={schema.data?.liquid_class_schema ? object(schema.data.liquid_class_schema) as Schema : liquidClassEditorSchema} value={liquid} onChange={setActive} />
+                <button type="button" onClick={() => { delete saveTargets.current['liquid-classes']; setLiquid(clone(liquid)); setSavedLiquid(null); setNotice('Selected class content pinned into a new draft; original revision is unchanged. Applied status is not inferred.'); }}>Pin selected current entry as new class</button>
+            </> : <>
+                <RepairWorkspaceContext.Provider value={{ method: activeDraft, dependencies, entries: methodRows<MethodValue>(starters.data), pin: entry => { const existing = dependencies.liquid_classes; if (existing !== undefined && !Array.isArray(existing)) { setNotice('Selected exact content retained in Transfer. Existing non-array dependencies are unchanged.'); return; } setDependencies({ ...dependencies, liquid_classes: [...(Array.isArray(existing) ? existing : []).filter(row => object(row).id !== entry.id || object(row).revision !== entry.revision), clone(entry)] }); } }}>
+                <BioXpWorkflowProfilesContext.Provider value={{ profiles: [...(Array.isArray(plates.data?.profiles) ? plates.data!.profiles as MethodValue[] : []), ...publishedTipProfiles(methodRows<MethodValue>(starters.data))], custodyObjects: Array.isArray(object(object(catalog.data?.authoring).custody).objects) ? object(object(catalog.data?.authoring).custody).objects as MethodValue[] : [], loading: starters.isLoading, error: starters.isError, pin: profile => { if (dependencies.labware_profiles !== undefined && !Array.isArray(dependencies.labware_profiles)) setNotice('Profile identity assigned. Retained null/expression profile dependencies were not replaced; edit Dependencies explicitly to pin its source metadata.'); editVersion.current++; setValues(previous => ({ ...previous, dependencies: pinLabwareProfile(previous.dependencies, profile) })); } }}>
+                <BioXpMethodDeckWorkbench holderTargets={mapHolderTargets} view={view} onView={setView} advancedHost={advancedHost} checkLeft={checkLeft} checkRight={checkRight} onShowExamples={() => { setMenu('advanced'); const panel = examplesRef.current; if (panel) { panel.open = true; setTimeout(() => panel.querySelector<HTMLSelectElement>('select')?.focus(), 0); } }} key={`method-${authoringEpoch}`} method={activeDraft} onChange={setActive} bindings={bindings} onBindingsChange={setBindings} catalog={catalog.data ?? {}} rootSchema={rootSchema} findings={methodStepFindings(check?.result, check ? object(check.input.method) : draft)} preview={freshCheck?.result} initialState={methodInitialState(freshCheck?.result.simulation, currentInput.initial_state)} dependencies={dependencies} recordedAlignment={typeof headReference.data === 'number' ? headReference.data : null} onRefreshAlignment={() => void headReference.refetch()} executionInput={currentInput} executionContext={{ pinned: unchangedSinceSave && savedMethod ? { id: savedMethod.id, revision: savedMethod.revision } : null, basis: savedMethod ? { id: savedMethod.id, revision: savedMethod.revision, edited: !unchangedSinceSave } : null, generation }} />
+                </BioXpWorkflowProfilesContext.Provider></RepairWorkspaceContext.Provider>
+                {previewOpen && check && <details open className="bxw-preview"><summary>Step-by-step preview</summary><BioXpMethodApplicationFields value={check.result.resolved} /><BioXpMethodPreview result={check.result} initialState={check.input.initial_state} custodyDestinations={Array.isArray(object(object(catalog.data?.authoring).custody).destinations) ? object(object(catalog.data?.authoring).custody).destinations as MethodValue[] : []} /></details>}
             </>}
         </div>
         <div role="tabpanel" id="method-runs-panel" aria-labelledby="method-tab-2" hidden={tab !== 'Runs'}><h3>Runs</h3>
-            <section aria-label="Run history"><h4>Started from this browser</h4>{history.length === 0 && <p>No runs started here yet.</p>}<ul>{history.map(entry => <li key={entry.jobId}><button type="button" aria-pressed={run?.jobId === entry.jobId} onClick={() => { setRun(entry); setAccepted(null); reportGeneration.current = generation; setReport(reportCache.current[`${generation}:${entry.jobId}`] ?? null); }}>{entry.name} · {when(entry.startedAt)}{entry.refused ? ' · not started' : ''}</button></li>)}</ul></section>
+            <section aria-label="Run history"><h4>Started from this browser</h4>{history.length === 0 && <p>No runs started here yet.</p>}<ul>{history.map(entry => <li key={entry.jobId}><button type="button" aria-pressed={run?.jobId === entry.jobId} onClick={() => { explicitRunSelection.current = true; setRun(entry); setAccepted(null); reportGeneration.current = generation; setReport(reportCache.current[`${generation}:${entry.jobId}`] ?? null); }}>{entry.name} · {when(entry.startedAt)}{entry.refused ? ' · not started' : ''}</button></li>)}</ul></section>
             <details><summary>Recent robot jobs</summary><label>Search recent jobs<input aria-label="Run search" value={search} onChange={e => { setSearch(e.target.value); setOffset(0); }} /></label><button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 25))}>Previous run page</button><button type="button" disabled={offset >= 75 || methodRows(runs.data).length < 25} onClick={() => setOffset(Math.min(75, offset + 25))}>Next run page</button><button type="button" onClick={() => void runs.refetch()}>Refresh runs</button>
-            <ul>{methodRows<MethodRun & { created_at?: string }>(runs.data).map(job => <li key={job.job_id}><button type="button" onClick={() => { const known = history.find(h => h.jobId === job.job_id); setRun(known ?? { jobId: job.job_id, key: '', generation, snapshot: object(job.method_snapshot), name: String(object(object(job.method_snapshot).method).name || 'Robot job'), startedAt: String(job.created_at ?? '') }); setAccepted(job); reportGeneration.current = generation; setReport(reportCache.current[`${generation}:${job.job_id}`] ?? null); }}>{history.find(h => h.jobId === job.job_id)?.name ?? String(object(object(job.method_snapshot).method).name || 'Robot job')} · {when(job.created_at)} · {job.status}</button></li>)}</ul><small>Latest jobs window from the robot, not complete history.</small></details></div>
-        {run && <section aria-label="Immutable method run"><h3>{run.name}</h3><p>Started {when(run.startedAt)}{run.saved ? ` · saved revision ${run.saved.revision}` : ' · unsaved draft'} <BioXpCopyId label="job ID" value={run.jobId} /> <BioXpCopyId label="request key" value={run.key} /></p>{runMessage && <p role="status">{runMessage}</p>}<p>An exact copy of this method is kept with the run; later edits never change it.</p>
-            {run.refused ? <p>Definite pre-admission refusal; nothing started for this submission. No nonexistent-job polling.</p> : <BioXpWorkflowJobMonitor onObserved={setLiveObservation} methodsFacade visible={visible && (tab === 'Runs' || tab === 'Methods')} jobId={run.jobId} generation={generation} connected={connected} controlsEnabled={controlsEnabled} busyRef={busyRef} onBusyChange={setBusy} submitting={busy} pending acceptedJob={accepted} />}
-            {object(liveObservation).job_id === run.jobId && <BioXpMethodProgress report={object(object(object(liveObservation).execution).runtime_state)} />}
+            <ul>{methodRows<MethodRun & { created_at?: string }>(runs.data).map(job => <li key={job.job_id}><button type="button" onClick={() => { explicitRunSelection.current = true; const known = history.find(h => h.jobId === job.job_id); setRun(known ?? { jobId: job.job_id, key: '', generation, snapshot: object(job.method_snapshot), name: String(object(object(job.method_snapshot).method).name || 'Robot job'), startedAt: String(job.created_at ?? '') }); setAccepted(job); reportGeneration.current = generation; setReport(reportCache.current[`${generation}:${job.job_id}`] ?? null); }}>{history.find(h => h.jobId === job.job_id)?.name ?? String(object(object(job.method_snapshot).method).name || 'Robot job')} · {when(job.created_at)} · {job.status}</button></li>)}</ul><small>Latest jobs window from the robot, not complete history.</small></details>
+        {discovery.isError && <p role="status">Robot run discovery unavailable: {bioXpErrorText(discovery.error)}</p>}
+        {run && <section aria-label="Immutable method run"><h3>{String(object(runContext.data?.method).name || run.name)}</h3><p>Started {when(run.startedAt)}{run.saved ? ` · saved revision ${run.saved.revision}` : Object.keys(run.snapshot).length ? ' · unsaved draft' : ' · robot run'} <BioXpCopyId label="job ID" value={run.jobId} /> <BioXpCopyId label="request key" value={run.key} /></p>{runMessage && <p role="status">{runMessage}</p>}<p>{runContext.data?.method === null ? 'No authored method snapshot was recorded for this robot job.' : 'An exact copy of this method is kept with the run; later edits never change it.'}</p>{runContext.isError && <p role="status">Original method context unavailable; native progress remains visible.</p>}
+            {run.refused ? <p>Definite pre-admission refusal; nothing started for this submission. No nonexistent-job polling.</p> : <BioXpWorkflowJobMonitor onHeld={showHeldRun} recoveryReport={visibleReport} onObserved={setLiveObservation} methodsFacade visible={visible && (tab === 'Runs' || tab === 'Methods')} jobId={run.jobId} generation={generation} connected={connected} controlsEnabled={controlsEnabled} busyRef={busyRef} onBusyChange={setBusy} submitting={busy} pending acceptedJob={accepted} />}
+            {object(liveObservation).job_id === run.jobId && <BioXpMethodProgress report={object(object(object(liveObservation).execution).runtime_state)} context={runContext.data?.job_id === run.jobId ? runContext.data : undefined} />}
             <button type="button" disabled={storageBusy} onClick={() => void storage(async () => { const original = await methodsPost<MethodValue>(`runs/${enc(run.jobId)}/clone`, {}, { expected_connection_generation: generation }); delete saveTargets.current.library; setDraft(clone(object(original.method))); setMethodValues({ bindings: clone(object(original.bindings)), dependencies: clone(object(original.dependencies)), initialState: clone(original.initial_state) }); setSavedMethod(null); setTab('Methods'); editVersion.current++; setNotice('Original immutable method cloned as an unsaved draft. No execution submitted.', 'Methods'); })}>Clone original method</button>
             <button type="button" disabled={storageBusy} onClick={() => { const jobId = run.jobId, requestedGeneration = generation; void storage(async () => { const result = await methodsGet<MethodValue>(`runs/${enc(jobId)}/report`, { expected_connection_generation: requestedGeneration }); if (result.job_id !== undefined && result.job_id !== jobId) throw new Error('Report identity differs from the requested job; previous report retained.'); const addressed = { ...result, job_id: jobId }; reportCache.current[`${requestedGeneration}:${jobId}`] = addressed; if (reportIdentity.current.jobId !== jobId || reportIdentity.current.generation !== requestedGeneration) return; reportGeneration.current = requestedGeneration; setReport(addressed); }); }}>Load method report</button>
             {visibleReport && <><h4>Report</h4><BioXpMethodProgress report={visibleReport} /><BioXpMethodApplicationFields value={report} /><button type="button" onClick={() => download(report, `${String(report!.job_id)}-report.json`)}>Export report</button>
                 <label>Exact recovery occurrence<select aria-label="Exact recovery occurrence" value={occurrence} onChange={e => { setOccurrence(e.target.value); setNativeAction(''); }}><option value="">Select original occurrence…</option>{reportProvenance(report).map((p: unknown, index: number) => <option key={String(object(p).occurrence_id)} value={String(object(p).occurrence_id)}>Step {index + 1}: {occurrenceSteps({ provenance: reportProvenance(report) } as MethodCompile, object(object(report?.method_snapshot).method)).get(String(object(p).occurrence_id))?.label ?? String(object(p).step_id ?? 'step')}</option>)}</select></label>
                 <label>Exact native action<select aria-label="Recovery native action" value={nativeAction} onChange={e => setNativeAction(e.target.value)}><option value="">Whole authored occurrence (review partial children)</option>{reportProvenance(report).filter(p => p.occurrence_id === occurrence).flatMap(p => Array.isArray(p.native_action_ids) ? p.native_action_ids : []).map((action, index) => <option key={String(action)} value={String(action)}>Robot action {index + 1}</option>)}</select></label>
-                <p>Unspecified recovery assumptions retain the original snapshot. Select null or edit explicitly to override; current next-draft assumptions are separate.</p><MethodFields label="Recovery initial assumptions" value={recoveryInitialState} onChange={setRecoveryInitialState} />{recoveryEvidence && <p role="status">Recovery draft prepared from the original run.</p>}<button type="button" disabled={storageBusy || !occurrence} onClick={() => void recovery()}>Create recovery draft</button><p>New draft only, never Continue-as-retry. Review partial effects, generated setup and excluded actions explicitly; no automatic lift, load or aspiration replay.</p></>}
+                <p>Unspecified recovery assumptions retain the original snapshot. Select null or edit explicitly to override; current next-draft assumptions are separate.</p><MethodFields label="Recovery initial assumptions" value={recoveryInitialState} onChange={setRecoveryInitialState} />{recoveryEvidence && <p role="status">Recovery draft prepared from the original run.</p>}<button type="button" disabled={storageBusy || !occurrence} onClick={() => void recovery()}>Create recovery draft</button><p>Whole original method for editing, not a runnable suffix or a physical inventory. New draft only, never Continue-as-retry. Review partial effects, generated setup and excluded actions explicitly; no automatic lift, load or aspiration replay.</p></>}
         </section>}
+        </div>
     </section>;
 }

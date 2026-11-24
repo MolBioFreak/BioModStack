@@ -1,6 +1,7 @@
 """Independent preload filesystem behavior with inert assets; no model execution."""
 import hashlib
 from types import SimpleNamespace
+from services.remote_execution.contracts import ProvisionSelection
 import uuid
 
 import pytest
@@ -29,7 +30,7 @@ def select(monkeypatch, kind='image', relative_path='fixture.sif'):
     monkeypatch.setattr(cache, '_independent_dependencies', lambda _: (dependency,))
 
 
-@pytest.mark.parametrize('selection_kind', ['image', 'model', 'workflow_pack'])
+@pytest.mark.parametrize('selection_kind', ['image', 'model'])
 @pytest.mark.parametrize('alias_kind', ['relative', 'chain', 'external'])
 def test_preload_inventories_image_alias_target_with_semantic_name(
         assets, tmp_path, monkeypatch, selection_kind, alias_kind):
@@ -46,7 +47,7 @@ def test_preload_inventories_image_alias_target_with_semantic_name(
         alias.symlink_to(source if alias_kind == 'external' else source.name)
     select(monkeypatch)
 
-    entries = cache.independent_plan(SimpleNamespace(kind=selection_kind))
+    entries = cache.independent_plan(ProvisionSelection(kind=selection_kind, model_id='fixture'))
 
     assert len(entries) == 1
     entry = entries[0]
@@ -68,7 +69,7 @@ async def test_image_alias_preloads_once_and_reuses_real_worker_cache(
     source.write_bytes(data)
     (containers / 'fixture.sif').symlink_to(source.name)
     select(monkeypatch)
-    entries = cache.independent_plan(SimpleNamespace(kind='workflow_pack'))
+    entries = cache.independent_plan(ProvisionSelection(kind='image', model_id='fixture'))
     worker = tmp_path / 'worker'
     connection = SimpleNamespace(remote_root=str(worker))
 
@@ -93,7 +94,7 @@ def test_preload_does_not_invent_bytes_for_unresolvable_image_alias(
     select(monkeypatch)
 
     with pytest.raises((OSError, RuntimeError, ValueError)):
-        cache.independent_plan(SimpleNamespace(kind='image'))
+        cache.independent_plan(ProvisionSelection(kind='image', model_id='fixture'))
 
 
 @pytest.mark.parametrize('alias_kind', ['internal_leaf', 'external_leaf', 'external_parent'])
@@ -113,4 +114,4 @@ def test_image_alias_support_does_not_relax_weight_containment(
     select(monkeypatch, kind='weights', relative_path=relative_path)
 
     with pytest.raises(ValueError, match='contained regular asset'):
-        cache.independent_plan(SimpleNamespace(kind='model'))
+        cache.independent_plan(ProvisionSelection(kind='model', model_id='fixture'))

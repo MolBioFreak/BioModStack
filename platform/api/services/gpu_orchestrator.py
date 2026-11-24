@@ -59,11 +59,8 @@ from services.resource_usage_evidence import (
     GLOBAL_DISPATCH_AUTHORITY_PARAM,
     GLOBAL_RESOURCE_ADMISSION_PARAM,
     ResourceUsageEvidenceError,
-    attach_dispatch_materialization_authority,
     attach_pre_spawn_nonexecution_receipt,
     materialize_scheduler_dispatch_authority,
-    validate_dispatch_materialization_authority,
-    validate_resource_admission_handoff,
 )
 from services.stage_review import (
     has_stage_gate,
@@ -176,6 +173,7 @@ async def _persist_pre_spawn_launch_failure(
         update(Job)
         .where(
             Job.id == str(job.id),
+            Job.started_at == getattr(job, "started_at", None),
             Job.status == original["status"],
             Job.queue_status == original["queue_status"],
             Job.completed_at == original["completed_at"],
@@ -196,8 +194,7 @@ async def _persist_pre_spawn_launch_failure(
         .execution_options(synchronize_session=False)
     )
     if int(transition.rowcount or 0) != 1:
-        await session.rollback()
-        await session.refresh(job)
+        await session.commit()
         return None
     await session.commit()
     await session.refresh(job)
@@ -247,7 +244,6 @@ VRAM_PROFILES = {
     'boltz_batch': {'base': 6000, 'scale': 25}, # Boltz-2 batch mode
     'boltzgen': {'base': 5000, 'scale': 20},    # BoltzGen design
     'rf3': {'base': 10000, 'scale': 55},        # RosettaFold3 (high VRAM)
-    'af2': {'base': 12000, 'scale': 65},        # AlphaFold2 (highest VRAM)
     'rfdiffusion': {'base': 5000, 'scale': 25}, # RFdiffusion
     'rfantibody': {'base': 6000, 'scale': 25},  # RFantibody antibody generation
     'rfantibody_child': {'base': 6000, 'scale': 25},  # RFantibody child (same as parent)
@@ -260,7 +256,6 @@ VRAM_PROFILES = {
     'mpnn': {'base': 2000, 'scale': 5},         # Alias for ProteinMPNN
     'protonpottsmpnn': {'base': 2000, 'scale': 5},  # CUDA preparation estimate, not measured VRAM.
     'ligandmpnn': {'base': 2500, 'scale': 8},   # LigandMPNN (ligand-aware sequence design)
-    'thermompnn': {'base': 2000, 'scale': 5},   # ThermoMPNN (stability-focused)
     'frustrampnn': {'base': 2500, 'scale': 8},  # FrustraMPNN (frustration analysis)
     # ──────────────────────────────────────────────────────────────────────────
     # PROTENIX VARIANTS - measured from docs: 6GB@500tok → 78GB@4000tok
@@ -269,8 +264,6 @@ VRAM_PROFILES = {
     'protenix_esm': {'base': 6000, 'scale': 60},      # Protenix ESM2-3B (no-MSA, heavier)
     'protenix_mini_esm': {'base': 5000, 'scale': 50}, # Protenix mini ESM (lighter no-MSA)
     # ──────────────────────────────────────────────────────────────────────────
-    'diffdock': {'base': 4000, 'scale': 12},    # DiffDock
-    'unidock': {'base': 3000, 'scale': 8},      # Uni-Dock
     'msa_batch': {'base': 3000, 'scale': 2},    # MSA Generation (GPU streaming, LOW VRAM)
     'antibody_child': {'base': 6000, 'scale': 25},  # Antibody validation (Boltz + scoring) ~6-8GB
     'maturation_child': {'base': 18500, 'scale': 25},  # PPIFlow child jobs need one-per-24/32GB GPU, not startup VRAM
@@ -284,7 +277,6 @@ VRAM_PROFILES = {
 
 # Models that need heavy GPUs (exclude 5060 Ti)
 HEAVY_MODELS = {
-    'af2',
     'rfdiffusion',
     'rf3',
     'maturation_child',
@@ -678,7 +670,7 @@ def _recover_rfantibody_parent_after_child_wait(job: Any, child_wait_success: Di
 
 
 async def _commit_reconciled_job_mutations(session: Any) -> int:
-    """Publish worker recovery mutations only if the row remains active.
+    """Publish worker recovery mutations only if the observed running attempt is unchanged.
 
     Completion polling works on ORM snapshots that can be stale while an operator
     cancels a job or opens a review gate.  Expunge those snapshots and replay their
@@ -688,7 +680,7 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
     from sqlalchemy import inspect, update
     from database import Job, MdRun
 
-    pending: list[tuple[str, dict[str, Any]]] = []
+    pending: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
     for candidate in list(session.dirty):
         if not isinstance(candidate, Job):
             continue
@@ -720,11 +712,21 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
             values["params"] = release_scheduler_gpu_assignment(getattr(candidate, "params", {}))
             values["assigned_gpu"] = None
         if values:
-            pending.append((str(candidate.id), values))
+            observed = {}
+            for key in (
+                "params", "assigned_gpu", "started_at", "nextflow_run_id",
+                "remote_attempt_id", "retry_count", "execution_target_id",
+            ):
+                attribute = state.attrs[key]
+                observed[key] = (
+                    attribute.history.deleted[0]
+                    if attribute.history.deleted else attribute.value
+                )
+            pending.append((str(candidate.id), values, observed))
         session.expunge(candidate)
 
     applied = 0
-    for job_id, values in pending:
+    for job_id, values, observed in pending:
         transition = await session.execute(
             update(Job)
             .where(
@@ -732,6 +734,7 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
                 Job.status == "running",
                 Job.queue_status == "running",
                 Job.awaiting_input.is_(False),
+                *(getattr(Job, key) == value for key, value in observed.items()),
             )
             .values(**values)
         )
@@ -874,6 +877,137 @@ def _reconcile_terminal_history_without_process(
             f"(no process found, age: {age_seconds:.0f}s): {unresolved_reason}"
         )
 
+    return True
+
+
+async def _finalize_recovered_success(
+    job: Any,
+    session: Any,
+    result_output_dir: Optional[str],
+    *,
+    snapshot_history: bool,
+    gate_present: bool,
+    age_seconds: float,
+    stale_fail_after_seconds: float,
+) -> bool:
+    """Complete a recovered run whose Nextflow history is OK; return whether it completed.
+
+    finalize_successful_job commits the terminal state itself: its result is used and
+    nothing is stamped here. A run with no finalizer (a review gate, or no result
+    directory and no required results) is stamped here, once.
+
+    ``snapshot_history`` is True for the per-cycle history snapshot caller and False
+    for the run-directory history reread. The two route MD jobs and report MD rejection
+    differently, and only the snapshot caller publishes at once and runs the MD-analysis
+    and refinement hooks.
+    """
+    model_id = str(getattr(job, "model_id", "") or "").strip().lower()
+    mode = str(getattr(job, "mode", "") or "").strip().lower()
+    is_md = model_id == "molecular_dynamics"
+    md_parent = is_md and mode == "simulate" and getattr(job, "parent_job_id", None) is None
+
+    def fail(stage: str, message: str) -> None:
+        job.status = "failed"
+        job.queue_status = "failed"
+        job.current_stage = stage
+        job.stage_progress = None
+        job.error_message = message
+        job.completed_at = datetime.utcnow()
+
+    if snapshot_history:
+        # A top-level MD run always meets its barrier; MD children need a result directory.
+        md_finalizer = md_parent or (is_md and mode in {"simulate", "analyze"} and bool(result_output_dir))
+    else:
+        md_finalizer = is_md and mode == "simulate"
+        if md_finalizer and not result_output_dir:
+            fail("MD Completion Blocked", "MD completion barrier requires a job-owned result directory")
+            return False
+    if not md_finalizer and not result_output_dir and _job_requires_result_output_for_terminal_history(job):
+        found = "workflow completed" if snapshot_history else "terminal workflow history found"
+        fail(
+            "Result Ingestion Failed",
+            f"{found} but no job-specific output directory was available "
+            "for required result ingestion and validation",
+        )
+        return False
+
+    finalization = None
+    stamp = gate_present or getattr(job, "awaiting_input", False) or not (md_finalizer or result_output_dir)
+    if stamp:
+        pass
+    elif md_finalizer:
+        from services.nextflow import _finalize_local_md_job
+
+        try:
+            await _finalize_local_md_job(job, session, result_output_dir)
+        except Exception as exc:
+            if not snapshot_history:
+                raise
+            if md_parent:
+                fail("MD Completion Blocked", f"{getattr(exc, 'code', 'md_completion_invalid')}: {exc}")
+                logger.warning("[COMPLETION] MD barrier rejected %s: %s", job.name, exc)
+            else:
+                fail("MD Result Validation Failed", f"MD history completion validation failed: {exc}")
+            await _commit_reconciled_job_mutations(session)
+            return False
+        # The MD finalizer leaves completion uncommitted in this session.
+        if snapshot_history and md_parent:
+            job.completed_at = datetime.utcnow()
+        stamp = not snapshot_history
+    else:
+        from services.result_state_integrity import finalize_successful_job
+
+        finalization = await finalize_successful_job(job, result_output_dir, session)
+        if not finalization.completed:
+            logger.warning(
+                f"[COMPLETION] Reconciled workflow {job.name} finished, "
+                "but result ingestion/validation failed"
+            )
+            return False
+
+    if stamp and snapshot_history:
+        job.queue_status = "completed"
+        if job.status == "running":
+            job.status = "completed"
+        job.current_stage = "Complete"
+        job.stage_progress = None
+        job.error_message = None
+        job.completed_at = datetime.utcnow()
+    elif stamp:
+        _reconcile_terminal_history_without_process(
+            job,
+            history_status="OK",
+            gate_present=gate_present,
+            age_seconds=age_seconds,
+            stale_fail_after_seconds=stale_fail_after_seconds,
+        )
+        if job.status != "completed":
+            return False
+
+    if snapshot_history:
+        # Publish uncommitted completion before hooks that can issue queries/commits in this session.
+        if session.dirty:
+            await _commit_reconciled_job_mutations(session)
+        if is_md and mode == "analyze" and getattr(job, "parent_job_id", None):
+            from services.nextflow import reconcile_md_analysis_parent_if_current
+
+            await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session, child=job)
+            await session.commit()
+    try:
+        if finalization is not None:
+            logger.info(
+                f"[COMPLETION] Ingested and validated {finalization.design_count} designs "
+                f"for reconciled job {job.name}"
+            )
+        from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+
+        schedule_viewer_minimum_analyses_for_job(str(job.id))
+        if snapshot_history:
+            from services.nextflow import maybe_trigger_mutation_seed_refinement
+
+            await maybe_trigger_mutation_seed_refinement(job, session)
+    except Exception as hook_err:
+        logger.warning(f"[COMPLETION] Post-ingestion completion hook failed for {job.name}: {hook_err}")
     return True
 
 
@@ -1107,7 +1241,17 @@ def _pending_job_reservation_mb(job: "JobInfo", observed_live_by_model: Dict[str
     return max(1, min(peak_estimate, startup_reserve))
 
 
-def _running_job_reservation_mb(job: Any, live_vram_mb: Optional[int]) -> int:
+def _running_job_gpu_floor_mb(job: Any) -> int:
+    from native_components import job_gpu_capacity_requirements
+    try:
+        declared = job_gpu_capacity_requirements(getattr(job, "model_id", None), _normalize_job_params(getattr(job, "params", None)))
+    except (ValueError, OSError):
+        # An unavailable authority cannot release an already-running reservation.
+        return max(1, int(getattr(job, "vram_estimate_mb", 0) or 1))
+    return declared.get("gpu_memory_mb", 0)
+
+
+def _running_job_reservation_mb(job: Any, live_vram_mb: Optional[int], *, gpu_floor_mb: int | None = None) -> int:
     """
     Return the scheduler reservation to account for an already-running job.
 
@@ -1116,14 +1260,10 @@ def _running_job_reservation_mb(job: Any, live_vram_mb: Optional[int]) -> int:
     """
     peak_estimate = max(1, int(getattr(job, "vram_estimate_mb", 0) or 1))
     profile = _scheduler_profile(_effective_job_model_type(job))
-    from native_components import job_gpu_capacity_requirements
-    try:
-        declared = job_gpu_capacity_requirements(getattr(job, "model_id", None), _normalize_job_params(getattr(job, "params", None)))
-    except (ValueError, OSError):
-        # An unavailable authority cannot release an already-running reservation.
-        return peak_estimate
-    if declared.get("gpu_memory_mb"):
-        return max(peak_estimate, declared["gpu_memory_mb"])
+    if gpu_floor_mb is None:
+        gpu_floor_mb = _running_job_gpu_floor_mb(job)
+    if gpu_floor_mb:
+        return max(peak_estimate, gpu_floor_mb)
     startup_reserve = _profile_startup_reserve(profile, peak_estimate)
     live_surge = int(profile.get("live_surge_mb", 0))
     startup_grace = int(profile.get("startup_grace_seconds", 30))
@@ -1325,43 +1465,43 @@ async def _claim_job_for_gpu(
     gpu_uuid: str | None = None,
 ) -> Dict[str, Any] | None:
     """Atomically claim a queued job before crossing into the launch boundary."""
-    from sqlalchemy import update
-    from database import Job
     from services.execution_ownership import attach_scheduler_gpu_assignment
 
     original = _normalize_job_params(getattr(job, "params", None))
     try:
         scheduler_params = attach_scheduler_gpu_assignment(original, int(gpu_id))
-        handoff = validate_resource_admission_handoff(
-            original.get(GLOBAL_RESOURCE_ADMISSION_PARAM)
-        )
+        handoff = original.get(GLOBAL_RESOURCE_ADMISSION_PARAM)
         raw_dispatch = original.get(GLOBAL_DISPATCH_AUTHORITY_PARAM)
         if (handoff is None) != (raw_dispatch is None):
             raise ResourceUsageEvidenceError(
                 "resource admission and dispatch authority must be paired"
             )
         if handoff is not None:
-            prepared = validate_dispatch_materialization_authority(
-                raw_dispatch,
-                expected_handoff=handoff,
-            )
             if not isinstance(gpu_uuid, str) or not gpu_uuid:
                 raise ResourceUsageEvidenceError(
                     "live scheduler GPU UUID is unavailable"
                 )
-            assigned_dispatch = materialize_scheduler_dispatch_authority(
-                prepared,
+            scheduler_params[GLOBAL_DISPATCH_AUTHORITY_PARAM] = materialize_scheduler_dispatch_authority(
+                raw_dispatch,
                 handoff=handoff,
                 gpu_index=int(gpu_id),
                 gpu_uuid=gpu_uuid,
             )
-            scheduler_params = attach_dispatch_materialization_authority(
-                scheduler_params,
-                assigned_dispatch,
-            )
     except (ExecutionOwnershipError, ResourceUsageEvidenceError) as exc:
         logger.warning("[CLAIM SKIPPED] %s: %s", getattr(job, "id", ""), exc)
         return None
+    return await _claim_local_job(session, job, gpu_id, vram_estimate_mb, scheduler_params)
+
+
+async def _claim_local_job(session, job, gpu_id, vram_estimate_mb, scheduler_params, *, conditions=()):
+    """Publish the exclusive Job owner before either local handoff."""
+    from sqlalchemy import update, func
+    from database import Job
+
+    if cancellation_intent_requested(job):
+        return None
+    original = _normalize_job_params(job.params)
+    started_at = datetime.utcnow()
     provenance = dict(getattr(job, 'provenance', None) or {})
     pending = provenance.get('component_checkpoint_resume')
     checkpoint_values = {}
@@ -1372,7 +1512,15 @@ async def _claim_job_for_gpu(
     transition = await session.execute(
         update(Job)
         .where(
-            *([Job.provenance == provenance] if pending else []),
+            *conditions,
+            (Job.provenance == provenance if getattr(job, "provenance", None) is not None
+             else func.json_extract(Job.provenance, '$').is_(None)),
+            Job.execution_target_id.is_(None),
+            Job.model_id == getattr(job, "model_id", None),
+            Job.mode == getattr(job, "mode", None),
+            Job.batch_id == getattr(job, "batch_id", None),
+            Job.sequence_length == getattr(job, "sequence_length", None),
+            Job.vram_estimate_mb == getattr(job, 'vram_estimate_mb', None),
             Job.id == str(job.id),
             Job.status == "queued",
             Job.queue_status == "queued",
@@ -1386,32 +1534,22 @@ async def _claim_job_for_gpu(
         .values(
             status="running",
             queue_status="running",
-            started_at=datetime.utcnow(),
-            assigned_gpu=int(gpu_id),
+            started_at=started_at,
+            assigned_gpu=gpu_id,
             vram_estimate_mb=int(vram_estimate_mb),
             params=scheduler_params,
             **checkpoint_values,
         )
-        .execution_options(synchronize_session=False)
+        .execution_options(synchronize_session="fetch")
     )
     if int(transition.rowcount or 0) != 1:
-        await session.rollback()
-        await session.refresh(job)
         return None
-    if checkpoint_values:
-        job.provenance = checkpoint_values['provenance']
-    job.params = scheduler_params
-    job.assigned_gpu = int(gpu_id)
-    job.vram_estimate_mb = int(vram_estimate_mb)
-    job.status = "running"
-    job.queue_status = "running"
-    job.started_at = job.started_at or datetime.utcnow()
     return scheduler_params
 
 
-def _reservation_shortfall_mb(job: Any, live_vram_mb: Optional[int]) -> int:
+def _reservation_shortfall_mb(job: Any, live_vram_mb: Optional[int], *, gpu_floor_mb: int | None = None) -> int:
     """Measured device use already includes only *attributed* live bytes."""
-    reservation = _running_job_reservation_mb(job, live_vram_mb)
+    reservation = _running_job_reservation_mb(job, live_vram_mb, gpu_floor_mb=gpu_floor_mb)
     return max(0, reservation - (live_vram_mb or 0))
 
 
@@ -1491,13 +1629,14 @@ async def _reserve_remote_capacity(
                 indices = _normalize_pinned_gpus((owner.params or {}).get("pinned_gpus")
                     or (owner.params or {}).get("bcp_gpu_ids")) or (
                     [owner.assigned_gpu] if owner.assigned_gpu is not None else [])
-            if owner.vram_estimate_mb == 0:
+            if owner.vram_estimate_mb == 0 or not indices:
                 continue
+            gpu_floor_mb = _running_job_gpu_floor_mb(owner)
             for index in set(indices):
                 counts[index] = counts.get(index, 0) + 1
                 live = _remote_attributed_vram_mb(owner, target, telemetry, index)
                 floor = int((assignment.get("admission_snapshot") or {}).get("required_per_gpu_mb") or 0)
-                reserve = max(_reservation_shortfall_mb(owner, live), max(0, floor - (live or 0)))
+                reserve = max(_reservation_shortfall_mb(owner, live, gpu_floor_mb=gpu_floor_mb), max(0, floor - (live or 0)))
                 shortfall[index] = shortfall.get(index, 0) + reserve
         requirements = job_gpu_capacity_requirements(job.model_id, _normalize_job_params(job.params))
         info = JobInfo(id=str(job.id), name=job.name or str(job.id),
@@ -2788,13 +2927,10 @@ class GPUOrchestrator:
             # Multiple MSA jobs in parallel can cause DRAM pressure.
             # Concurrency is configurable via scheduler global.msa_concurrency_limit.
             # ═══════════════════════════════════════════════════════════════════
-            running_msa_count_result = await session.execute(
-                select(func.count()).where(
-                    Job.model_id == 'msa_batch',
-                    Job.queue_status == 'running'
-                )
-            )
-            running_msa_count = running_msa_count_result.scalar() or 0
+            msa_count_query = select(func.count()).select_from(Job).where(
+                Job.model_id == 'msa_batch', Job.queue_status.in_(('running', 'cancelling', 'canceling'))
+            ).correlate(None)
+            running_msa_count = await session.scalar(msa_count_query)
             msa_concurrency_limit = config.get("global", {}).get("msa_concurrency_limit", 1)
             try:
                 msa_concurrency_limit = max(1, int(msa_concurrency_limit))
@@ -3059,49 +3195,23 @@ class GPUOrchestrator:
             gpu_jobs = [j for j in pending_jobs if j.vram_estimate_mb != 0]
             
             for job in cpu_only_jobs:
-                try:
-                    provenance = dict(job.provenance or {})
-                    pending = provenance.get('component_checkpoint_resume')
-                    if pending:
-                        from sqlalchemy import update
-                        import uuid
-                        claimed_provenance = {**provenance, 'component_checkpoint_resume': {
-                            **pending, 'continuation_lease_id': uuid.uuid4().hex}}
-                        claim = await session.execute(update(Job).where(Job.id == job.id,
-                            Job.status == 'queued', Job.queue_status == 'queued',
-                            Job.provenance == provenance, Job.paused.is_(False),
-                            Job.assigned_gpu.is_(None), Job.nextflow_run_id.is_(None)
-                        ).values(provenance=claimed_provenance, queue_status='running').execution_options(synchronize_session=False))
-                        if claim.rowcount != 1:
-                            await session.rollback()
-                            continue
-                        job.provenance = claimed_provenance
-                        await session.commit()
-                    await self.launch_nextflow_job(
-                        job_id=job.id,
-                        model_id=job.model_id,
-                        mode=job.mode,
-                        params={**job.params},  # No gpu_id injected
-                        output_dir=job.child_output_dir or job.output_dir
-                    )
-                    if pending or job.model_id in {'family_msa_protein', 'family_msa_nucleic'}:
-                        await session.refresh(job)
-                    if (not pending and job.model_id not in {'family_msa_protein', 'family_msa_nucleic'}) or (
-                        job.status not in {'awaiting_input', 'completed', 'failed', 'cancelled'}
-                        and job.queue_status != 'cancelling'
-                    ):
-                        job.queue_status = "running"
-                        job.assigned_gpu = None
-                        job.started_at = datetime.utcnow()
-                    logger.info(f"[LAUNCH CPU] {job.name} (no GPU, vram_estimate=0)")
-                except Exception as e:
-                    logger.error(f"[LAUNCH CPU FAILED] {job.name}: {e}")
-                    job.queue_status = "failed"
-                    job.error_message = str(e)
-            
-            if cpu_only_jobs:
+                conditions = (msa_count_query.scalar_subquery() < msa_concurrency_limit,) if job.model_id == 'msa_batch' else ()
+                params = await _claim_local_job(session, job, None, 0, _normalize_job_params(job.params),
+                                                conditions=conditions)
                 await session.commit()
-            
+                if params is None:
+                    continue
+                try:
+                    await self.launch_nextflow_job(
+                        job_id=job.id, model_id=job.model_id, mode=job.mode, params=dict(params),
+                        output_dir=job.child_output_dir or job.output_dir,
+                    )
+                    logger.info("[LAUNCH CPU] %s", job.name)
+                except Exception as exc:
+                    logger.error("[LAUNCH CPU FAILED] %s: %s", job.name, exc)
+                    # Use the claimed snapshot, not a refreshed successor.
+                    await _persist_pre_spawn_launch_failure(session, job, error=exc, completed_at=datetime.utcnow())
+
             pending_jobs = gpu_jobs
             if not pending_jobs:
                 return  # Only CPU jobs were queued
@@ -3148,159 +3258,25 @@ class GPUOrchestrator:
                     gpu_memory_mb=capacity_requirements.get("gpu_memory_mb", 0),
                 ))
             
-            # 3. Get GPU state
-            gpu_stats = self.get_gpu_stats()
-            if not gpu_stats:
-                logger.warning("[ORCHESTRATOR] No GPU stats available; skipping scheduling cycle")
-                return
-
-            # ═══════════════════════════════════════════════════════════════════════
-            # Live-aware VRAM projection and running-job metadata
-            # ═══════════════════════════════════════════════════════════════════════
-            running_jobs_result = await session.execute(
-                select(Job).where(
-                    Job.queue_status == 'running',
-                    Job.execution_target_id.is_(None),
-                    Job.assigned_gpu.isnot(None),
-                    Job.vram_estimate_mb.isnot(None)
-                )
-            )
-            running_jobs = running_jobs_result.scalars().all()
-
-            live_vram_by_job = _collect_live_vram_by_job_for_scheduler(running_jobs, gpu_stats)
-            observed_live_by_model: Dict[str, List[int]] = {}
-            running_jobs_per_gpu: Dict[int, int] = {}
-            running_by_model: Dict[str, int] = {}
-            gpu_last_launch_at: Dict[int, datetime] = {}
-            for rj in running_jobs:
-                effective_model = _effective_job_model_type(rj)
-                running_by_model[effective_model] = running_by_model.get(effective_model, 0) + 1
-                if rj.assigned_gpu is not None and job_uses_assigned_gpu(rj):
-                    running_jobs_per_gpu[rj.assigned_gpu] = running_jobs_per_gpu.get(rj.assigned_gpu, 0) + 1
-                    started_at = getattr(rj, "started_at", None)
-                    if isinstance(started_at, datetime):
-                        previous = gpu_last_launch_at.get(rj.assigned_gpu)
-                        if previous is None or started_at > previous:
-                            gpu_last_launch_at[rj.assigned_gpu] = started_at
-                live_vram = live_vram_by_job.get(rj.id)
-                if live_vram and live_vram > 0:
-                    observed_live_by_model.setdefault(effective_model, []).append(live_vram)
-
-            for job_info in job_infos:
-                job_info.scheduler_reservation_mb = _pending_job_reservation_mb(job_info, observed_live_by_model)
-
-            reservation_shortfall_by_gpu: Dict[int, int] = {}
-            for rj in running_jobs:
-                gpu_idx = rj.assigned_gpu
-                if gpu_idx is None or not job_uses_assigned_gpu(rj):
-                    continue
-                live_vram = live_vram_by_job.get(rj.id)
-                shortfall = _reservation_shortfall_mb(rj, live_vram)
-                if shortfall > 0:
-                    reservation_shortfall_by_gpu[gpu_idx] = reservation_shortfall_by_gpu.get(gpu_idx, 0) + shortfall
-
-            if reservation_shortfall_by_gpu:
-                logger.debug(f"[ORCHESTRATOR] Reservation shortfall by GPU: {reservation_shortfall_by_gpu}")
-
-            gpu_states = []
-            for g in gpu_stats:
-                effective_used = g.memory_used_mb + reservation_shortfall_by_gpu.get(g.index, 0)
-                gpu_states.append(GPUState(
-                    index=g.index,
-                    name=g.name,
-                    memory_used_mb=effective_used,
-                    memory_total_mb=g.memory_total_mb,
-                    memory_free_mb=g.memory_total_mb - effective_used,
-                    utilization=g.utilization,
-                    temperature=g.temperature
-                ))
-
-            # ═══════════════════════════════════════════════════════════════════════
-            # CONCURRENCY LIMITS: Filter jobs by per-model concurrent limits
-            # ═══════════════════════════════════════════════════════════════════════
-            concurrency_limits = config.get("concurrency_limits", {})
-            if concurrency_limits:
-                # Precompute auto limits
-                auto_limits = {}
-                for model_id, limit in concurrency_limits.items():
-                    if isinstance(limit, str) and limit.lower() == "auto":
-                        auto_limit = _compute_auto_limit(
-                            model_id,
-                            job_infos,
-                            gpu_states,
-                            config,
-                            running_jobs_per_gpu=running_jobs_per_gpu,
-                        )
-                        auto_limits[model_id] = auto_limit
-
-                # Filter pending jobs based on limits
-                pending_by_id = {job.id: job for job in pending_jobs}
-                filtered_infos = []
-                skipped_by_limit = {}
-                for job_info in job_infos:
-                    limit = concurrency_limits.get(job_info.model_type)
-                    if isinstance(limit, str) and limit.lower() == "auto":
-                        limit = auto_limits.get(job_info.model_type)
-                    if isinstance(limit, str):
-                        limit = None
-                    if limit is not None:
-                        running_count = running_by_model.get(job_info.model_type, 0)
-                        if running_count >= limit:
-                            skipped_by_limit[job_info.model_type] = skipped_by_limit.get(job_info.model_type, 0) + 1
-                            continue
-                        filtered_for_model = len([j for j in filtered_infos if j.model_type == job_info.model_type])
-                        if running_count + filtered_for_model >= limit:
-                            skipped_by_limit[job_info.model_type] = skipped_by_limit.get(job_info.model_type, 0) + 1
-                            continue
-                    filtered_infos.append(job_info)
-
-                if skipped_by_limit:
-                    logger.info(f"[CONCURRENCY] Skipped jobs due to limits: {skipped_by_limit}")
-
-                job_infos = filtered_infos
-                pending_jobs = [pending_by_id[j.id] for j in job_infos]
-
-                if not job_infos:
-                    return  # All jobs blocked by concurrency limits
-            
-            # 4. Run bin-packing
-            assignments = pack_jobs_to_gpus(
-                job_infos,
-                gpu_states,
-                target_fill,
-                config,
-                running_jobs_per_gpu=running_jobs_per_gpu,
-                gpu_last_launch_at=gpu_last_launch_at,
-            )
-            
-            if not assignments:
-                return  # No jobs could be packed
-            
-            # ═══════════════════════════════════════════════════════════════════════
-            # CRITICAL: Limit launches per cycle to prevent RAM/VRAM overload
-            # When many jobs queue at once (e.g., 40 FAMPNN children), launching them
-            # all simultaneously causes system RAM exhaustion before GPU allocation.
-            # Limit to 3 per cycle (~9 seconds), allowing VRAM to allocate before more.
-            # ═══════════════════════════════════════════════════════════════════════
-            max_launches_per_cycle = config.get("global", {}).get("max_launches_per_cycle", 3)
-            assignments = assignments[:max_launches_per_cycle]
-            
-            if len(assignments) < len(job_infos):
-                logger.info(f"[ORCHESTRATOR] Throttled to {len(assignments)}/{len(job_infos)} launches this cycle")
-
-            # 5. Launch assigned jobs with stagger to prevent GPU initialization OOM
-            used_quick_enable_gpu_ids = set()
-            for i, (job_info, gpu_id) in enumerate(assignments):
-                # Find the actual Job object
-                job = next((j for j in pending_jobs if j.id == job_info.id), None)
-                if not job:
-                    continue
-                
-                # Stagger launches to prevent GPU memory racing (0.5 second delay between)
-                # Reduced from 2.0s for faster throughput
-                if i > 0:
-                    await asyncio.sleep(0.5)
-                
+            from sqlalchemy import text
+            candidates = {j.id: j for j in pending_jobs}
+            launch_limit = config.get("global", {}).get("max_launches_per_cycle", 3)
+            launched = 0
+            await session.commit()
+            while job_infos and launched < launch_limit:
+                # The writer lock covers the reservation read, placement and Job CAS,
+                # never a stagger, launcher or worker. No speculative budget ledger.
+                await session.execute(text("BEGIN IMMEDIATE"))
+                eligible = job_infos
+                if any(info.model_type == 'msa_batch' for info in eligible):
+                    if await session.scalar(msa_count_query) >= msa_concurrency_limit:
+                        eligible = [info for info in eligible if info.model_type != 'msa_batch']
+                assignments = await self._pack_local_gpu_jobs(session, eligible, config, target_fill)
+                if not assignments:
+                    break
+                job_info, gpu_id = assignments[0]
+                job = candidates[job_info.id]
+                job_infos = [info for info in job_infos if info.id != job_info.id]
                 original_params = _normalize_job_params(getattr(job, "params", None))
                 claim_gpu_uuid = (
                     _scheduler_gpu_uuid(int(gpu_id))
@@ -3314,10 +3290,12 @@ class GPUOrchestrator:
                     int(job_info.vram_estimate_mb),
                     gpu_uuid=claim_gpu_uuid,
                 )
+                await session.commit()
                 if scheduler_params is None:
                     logger.info("[LAUNCH SKIPPED] %s lost its queued-to-running claim", job.name)
                     continue
-                await session.commit()
+                launched += 1
+                claim_started_at = job.started_at
                 try:
                     await self.launch_nextflow_job(
                         job_id=job.id,
@@ -3327,22 +3305,11 @@ class GPUOrchestrator:
                         output_dir=job.child_output_dir or job.output_dir
                     )
 
-                    # The adapter may have appended an execution receipt in a
-                    # separate session. Refresh before publishing scheduler state
-                    # so this session cannot overwrite that receipt.
-                    await session.refresh(job)
-                    if str(job.status or "").strip().lower() not in {
-                        "completed",
-                        "failed",
-                        "cancelled",
-                        "awaiting_input",
-                    }:
-                        job.queue_status = "running"
-                        job.started_at = datetime.utcnow()
-
                     if _gpu_quick_enable(gpu_id, config):
-                        used_quick_enable_gpu_ids.add(gpu_id)
-                    
+                        def consume_quick_enable(latest):
+                            latest.setdefault('overrides', {}).setdefault(str(gpu_id), {})['quick_enable'] = False
+                        mutate_scheduler_config(consume_quick_enable)
+                        consume_quick_enable(config)
                     logger.info(f"[LAUNCH] {job.name} on GPU {gpu_id}")
                     
                 except Exception as e:
@@ -3351,8 +3318,6 @@ class GPUOrchestrator:
                     # lock. A cancellation or input gate that committed first
                     # remains authoritative; one that starts later serializes
                     # after this terminal publication.
-                    await session.rollback()
-                    from sqlalchemy import text
 
                     await session.execute(text("BEGIN IMMEDIATE"))
                     failed_result = await session.execute(
@@ -3361,7 +3326,8 @@ class GPUOrchestrator:
                         .execution_options(populate_existing=True)
                     )
                     job = failed_result.scalar_one_or_none()
-                    if job is None:
+                    if job is None or job.started_at != claim_started_at:
+                        await session.commit()
                         continue
                     published = await _persist_pre_spawn_launch_failure(
                         session,
@@ -3375,16 +3341,101 @@ class GPUOrchestrator:
                             job.id,
                         )
 
-            if used_quick_enable_gpu_ids:
-                def consume_quick_enable_tokens(latest_config: Dict[str, Any]) -> None:
-                    overrides = latest_config.setdefault("overrides", {})
-                    for gpu_id in used_quick_enable_gpu_ids:
-                        overrides.setdefault(str(gpu_id), {})["quick_enable"] = False
+                    await session.commit()
+                if job_infos and launched < launch_limit:
+                    await asyncio.sleep(0.5)
 
-                mutate_scheduler_config(consume_quick_enable_tokens)
-            
-            await session.commit()
-    
+    async def _pack_local_gpu_jobs(self, session, job_infos, config, target_fill):
+        from sqlalchemy import select
+        from database import Job
+
+        # 3. Get GPU state
+        gpu_stats = self.get_gpu_stats()
+        if not gpu_stats:
+            logger.warning("[ORCHESTRATOR] No GPU stats available; skipping scheduling cycle")
+            return []
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # Live-aware VRAM projection and running-job metadata
+        # ═══════════════════════════════════════════════════════════════════════
+        running_jobs_result = await session.execute(
+            select(Job).execution_options(populate_existing=True).where(
+                Job.queue_status.in_(('running', 'cancelling', 'canceling')),
+                Job.execution_target_id.is_(None),
+                Job.assigned_gpu.isnot(None),
+                Job.vram_estimate_mb.isnot(None)
+            )
+        )
+        running_jobs = running_jobs_result.scalars().all()
+
+        live_vram_by_job = _collect_live_vram_by_job_for_scheduler(running_jobs, gpu_stats)
+        observed_live_by_model: Dict[str, List[int]] = {}
+        running_jobs_per_gpu: Dict[int, int] = {}
+        running_by_model: Dict[str, int] = {}
+        gpu_last_launch_at: Dict[int, datetime] = {}
+        for rj in running_jobs:
+            effective_model = _effective_job_model_type(rj)
+            running_by_model[effective_model] = running_by_model.get(effective_model, 0) + 1
+            if rj.assigned_gpu is not None and job_uses_assigned_gpu(rj):
+                running_jobs_per_gpu[rj.assigned_gpu] = running_jobs_per_gpu.get(rj.assigned_gpu, 0) + 1
+                started_at = getattr(rj, "started_at", None)
+                if isinstance(started_at, datetime):
+                    previous = gpu_last_launch_at.get(rj.assigned_gpu)
+                    if previous is None or started_at > previous:
+                        gpu_last_launch_at[rj.assigned_gpu] = started_at
+            live_vram = live_vram_by_job.get(rj.id)
+            if live_vram and live_vram > 0:
+                observed_live_by_model.setdefault(effective_model, []).append(live_vram)
+
+        for job_info in job_infos:
+            job_info.scheduler_reservation_mb = _pending_job_reservation_mb(job_info, observed_live_by_model)
+
+        reservation_shortfall_by_gpu: Dict[int, int] = {}
+        for rj in running_jobs:
+            gpu_idx = rj.assigned_gpu
+            if gpu_idx is None or not job_uses_assigned_gpu(rj):
+                continue
+            live_vram = live_vram_by_job.get(rj.id)
+            shortfall = _reservation_shortfall_mb(rj, live_vram)
+            if shortfall > 0:
+                reservation_shortfall_by_gpu[gpu_idx] = reservation_shortfall_by_gpu.get(gpu_idx, 0) + shortfall
+
+        if reservation_shortfall_by_gpu:
+            logger.debug(f"[ORCHESTRATOR] Reservation shortfall by GPU: {reservation_shortfall_by_gpu}")
+
+        gpu_states = []
+        for g in gpu_stats:
+            effective_used = g.memory_used_mb + reservation_shortfall_by_gpu.get(g.index, 0)
+            gpu_states.append(GPUState(
+                index=g.index,
+                name=g.name,
+                memory_used_mb=effective_used,
+                memory_total_mb=g.memory_total_mb,
+                memory_free_mb=g.memory_total_mb - effective_used,
+                utilization=g.utilization,
+                temperature=g.temperature
+            ))
+
+        limits = config.get("concurrency_limits", {})
+        allowed = []
+        auto_limits = {model: _compute_auto_limit(model, job_infos, gpu_states, config,
+                       running_jobs_per_gpu=running_jobs_per_gpu)
+                       for model, limit in limits.items() if str(limit).lower() == 'auto'}
+        for info in job_infos:
+            limit = auto_limits.get(info.model_type, limits.get(info.model_type))
+            if isinstance(limit, (float, int)) and running_by_model.get(info.model_type, 0) >= limit:
+                continue
+            allowed.append(info)
+        # 4. Run bin-packing
+        return pack_jobs_to_gpus(
+            allowed,
+            gpu_states,
+            target_fill,
+            config,
+            running_jobs_per_gpu=running_jobs_per_gpu,
+            gpu_last_launch_at=gpu_last_launch_at,
+        )
+
     async def _reconcile_remote_job(self, remote_id: str) -> None:
         """One control task per Job; a slow sibling cannot block its target."""
         from services.remote_execution.executor import reconcile_remote_job
@@ -3703,7 +3754,7 @@ class GPUOrchestrator:
                                         await _commit_reconciled_job_mutations(session)
                                         from services.nextflow import reconcile_md_analysis_parent_if_current
 
-                                        await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session)
+                                        await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session, child=job)
                                         await session.commit()
                                     except Exception as exc:
                                         logger.warning("[COMPLETION] MD analysis failure reconciliation deferred for %s: %s", job.name, exc)
@@ -3717,106 +3768,17 @@ class GPUOrchestrator:
                                 if has_stage_gate(job) or getattr(job, "awaiting_input", False):
                                     reconciled += 1
                                     continue
-                                finalization = None
-                                is_md_parent = (
-                                    str(getattr(job, "model_id", "") or "").strip().lower() == "molecular_dynamics"
-                                    and str(getattr(job, "mode", "") or "").strip().lower() == "simulate"
-                                    and getattr(job, "parent_job_id", None) is None
-                                )
-                                if is_md_parent:
-                                    from services.nextflow import _finalize_local_md_job
-
-                                    try:
-                                        await _finalize_local_md_job(job, session, result_output_dir)
-                                        job.completed_at = datetime.utcnow()
-                                    except Exception as exc:
-                                        job.status = "failed"
-                                        job.queue_status = "failed"
-                                        job.current_stage = "MD Completion Blocked"
-                                        job.stage_progress = None
-                                        job.error_message = f"{getattr(exc, 'code', 'md_completion_invalid')}: {exc}"
-                                        job.completed_at = datetime.utcnow()
-                                        await _commit_reconciled_job_mutations(session)
-                                        logger.warning("[COMPLETION] MD barrier rejected %s: %s", job.name, exc)
-                                        reconciled += 1
-                                        continue
-                                elif (str(getattr(job, 'model_id', '')).lower() == 'molecular_dynamics'
-                                      and str(getattr(job, 'mode', '')).lower() in {'simulate', 'analyze'}
-                                      and result_output_dir):
-                                    from services.nextflow import _finalize_local_md_job
-                                    try:
-                                        await _finalize_local_md_job(job, session, result_output_dir)
-                                    except Exception as exc:
-                                        job.status = 'failed'
-                                        job.queue_status = 'failed'
-                                        job.current_stage = 'MD Result Validation Failed'
-                                        job.stage_progress = None
-                                        job.error_message = f'MD history completion validation failed: {exc}'
-                                        job.completed_at = datetime.utcnow()
-                                        await _commit_reconciled_job_mutations(session)
-                                        reconciled += 1
-                                        continue
-                                elif result_output_dir:
-                                    from services.result_state_integrity import finalize_successful_job
-
-                                    finalization = await finalize_successful_job(job, result_output_dir, session)
-                                    if not finalization.completed:
-                                        logger.warning(
-                                            f"[COMPLETION] Reconciled workflow {job.name} finished, "
-                                            "but result ingestion/validation failed"
-                                        )
-                                        reconciled += 1
-                                        continue
-                                else:
-                                    from services.result_state_integrity import job_expects_design_results
-
-                                    if job_expects_design_results(job):
-                                        job.status = "failed"
-                                        job.queue_status = "failed"
-                                        job.current_stage = "Result Ingestion Failed"
-                                        job.stage_progress = None
-                                        job.error_message = (
-                                            "workflow completed but no job-specific output directory was available "
-                                            "for required result ingestion and validation"
-                                        )
-                                        job.completed_at = datetime.utcnow()
-                                        reconciled += 1
-                                        continue
-                                    job.queue_status = "completed"
-                                    if job.status == "running":
-                                        job.status = "completed"
-                                    job.current_stage = "Complete"
-                                    job.stage_progress = None
-                                    job.error_message = None
-                                    job.completed_at = datetime.utcnow()
-
-                                # The no-output non-result path above mutates the ORM job directly.
-                                # Publish it before hooks that can issue queries/commits in this session.
-                                if session.dirty:
-                                    await _commit_reconciled_job_mutations(session)
-                                if (
-                                    str(getattr(job, "model_id", "") or "").strip().lower() == "molecular_dynamics"
-                                    and str(getattr(job, "mode", "") or "").strip().lower() == "analyze"
-                                    and getattr(job, "parent_job_id", None)
+                                if not await _finalize_recovered_success(
+                                    job,
+                                    session,
+                                    result_output_dir,
+                                    snapshot_history=True,
+                                    gate_present=False,
+                                    age_seconds=age_seconds,
+                                    stale_fail_after_seconds=stale_fail_after_seconds,
                                 ):
-                                    from services.nextflow import reconcile_md_analysis_parent_if_current
-
-                                    await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session)
-                                    await session.commit()
-                                try:
-                                    if finalization is not None:
-                                        logger.info(
-                                            f"[COMPLETION] Ingested and validated {finalization.design_count} designs "
-                                            f"for reconciled top-level job {job.name}"
-                                        )
-                                    from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
-                                    from services.nextflow import maybe_trigger_mutation_seed_refinement
-                                    schedule_viewer_minimum_analyses_for_job(str(job.id))
-                                    await maybe_trigger_mutation_seed_refinement(job, session)
-                                except Exception as ingest_err:
-                                    logger.warning(
-                                        f"[COMPLETION] Post-ingestion completion hook failed for {job.name}: {ingest_err}"
-                                    )
+                                    reconciled += 1
+                                    continue
                                 if history_note:
                                     logger.info(
                                         f"[COMPLETION] {job.name} completed (no process found, "
@@ -3870,74 +3832,24 @@ class GPUOrchestrator:
                             else:
                                 history_status = nextflow_history_status(job)
                                 gate_present = has_stage_gate(job)
-                                result_output_dir = job.child_output_dir or job.output_dir
-                                is_md_parent = job.model_id == "molecular_dynamics" and job.mode == "simulate"
-                                if history_status == "OK" and is_md_parent and not result_output_dir:
-                                    job.status = "failed"
-                                    job.queue_status = "failed"
-                                    job.current_stage = "MD Completion Blocked"
-                                    job.stage_progress = None
-                                    job.error_message = "MD completion barrier requires a job-owned result directory"
-                                    job.completed_at = datetime.utcnow()
-                                    reconciled += 1
-                                    continue
-                                if (
-                                    history_status == "OK"
-                                    and _job_requires_result_output_for_terminal_history(job)
-                                    and not result_output_dir
-                                ):
-                                    job.status = "failed"
-                                    job.queue_status = "failed"
-                                    job.current_stage = "Result Ingestion Failed"
-                                    job.stage_progress = None
-                                    job.error_message = (
-                                        "terminal workflow history found but no job-specific output directory was "
-                                        "available for required result ingestion and validation"
+                                if history_status == "OK":
+                                    await _finalize_recovered_success(
+                                        job,
+                                        session,
+                                        job.child_output_dir or job.output_dir,
+                                        snapshot_history=False,
+                                        gate_present=gate_present,
+                                        age_seconds=age_seconds,
+                                        stale_fail_after_seconds=stale_fail_after_seconds,
                                     )
-                                    job.completed_at = datetime.utcnow()
-                                    reconciled += 1
-                                    continue
-                                finalization = None
-                                if (
-                                    history_status == "OK"
-                                    and not gate_present
-                                    and not getattr(job, "awaiting_input", False)
-                                    and result_output_dir
-                                ):
-                                    if job.model_id == "molecular_dynamics" and job.mode == "simulate":
-                                        from services.nextflow import _finalize_local_md_job
-
-                                        await _finalize_local_md_job(job, session, result_output_dir)
-                                    else:
-                                        from services.result_state_integrity import finalize_successful_job
-
-                                        finalization = await finalize_successful_job(job, result_output_dir, session)
-                                        if not finalization.completed:
-                                            reconciled += 1
-                                            continue
-                                reconciled_now = _reconcile_terminal_history_without_process(
+                                elif not _reconcile_terminal_history_without_process(
                                     job,
                                     history_status=history_status,
                                     gate_present=gate_present,
                                     age_seconds=age_seconds,
                                     stale_fail_after_seconds=stale_fail_after_seconds,
-                                )
-                                if not reconciled_now:
+                                ):
                                     continue
-                                if history_status == "OK" and job.status == "completed":
-                                    try:
-                                        if finalization is not None:
-                                            logger.info(
-                                                f"[COMPLETION] Ingested and validated {finalization.design_count} designs "
-                                                f"for terminal OK job {job.name}"
-                                            )
-                                        from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
-
-                                        schedule_viewer_minimum_analyses_for_job(str(job.id))
-                                    except Exception as ingest_err:
-                                        logger.warning(
-                                            f"[COMPLETION] Terminal OK post-ingestion hook failed for {job.name}: {ingest_err}"
-                                        )
 
                             reconciled += 1
                 

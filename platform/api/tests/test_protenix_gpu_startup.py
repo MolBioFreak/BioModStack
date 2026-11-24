@@ -59,6 +59,12 @@ def preprocess_input(filename, **kw):
     return filename
 ''')
     (fake / 'runner/inference.py').write_text("def infer_predict(*args): print('PREDICT')\n")
+    for package in ['protenix', 'protenix/data', 'protenix/data/inference']:
+        (fake / package).mkdir()
+        (fake / package / '__init__.py').write_text('')
+    (fake / 'protenix/data/inference/json_to_feature.py').write_text(
+        'class SampleDictToFeatures:\n'
+        '    def build_full_atom_array(self): raise AssertionError("not exercised by startup fixture")\n')
     inputs = tmp_path / 'inputs'
     inputs.mkdir()
     for name in ['a.json', 'b.json']:

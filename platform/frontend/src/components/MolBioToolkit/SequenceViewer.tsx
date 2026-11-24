@@ -4,12 +4,13 @@
  * Replaces OVE Editor with clean, modern implementation.
  */
 
-import { SeqViz } from "seqviz";
+import { Circular, Linear, SeqViz, type SeqVizProps } from "seqviz";
 import './SequenceViewer.css';
 import { isSequenceAnnotation } from './featureCatalog';
 import { restrictionSpecialCase } from '../../lib/restrictionSpecialCases';
 import {
     useCallback,
+    useContext,
     useEffect,
     useMemo,
     useRef,
@@ -49,6 +50,117 @@ function isSeqVizRenderTarget(target: EventTarget | null): target is Element {
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR PALETTES
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * SeqViz cuts the circular-map name into fixed 30-character slices (mid-word, orphaning a trailing ")").
+ * Wrap the full name at separators into lines of at most `maxChars` and pad each line to the 30-character
+ * slice so the slices fall exactly on the line breaks. Nothing is dropped.
+ */
+export const CIRCULAR_CAPTION_MAX = 30;
+export const circularCaptionName = (name: string, maxChars: number = CIRCULAR_CAPTION_MAX): string => {
+    const limit = Math.max(8, Math.min(CIRCULAR_CAPTION_MAX, Math.floor(maxChars)));
+    if (name.length <= limit) return name;
+    const tokens: string[] = [];
+    for (const t of name.match(/[^ \-_,|]+[ \-_,|]*|[ \-_,|]+/g) ?? [name]) {
+        for (let i = 0; i < t.length; i += limit) tokens.push(t.slice(i, i + limit));
+    }
+    const fill = (width: number): string[] => {
+        const out: string[] = [];
+        let cur = '';
+        for (const t of tokens) {
+            if (cur && (cur + t).trimEnd().length > width) { out.push(cur); cur = t; } else cur += t;
+        }
+        if (cur) out.push(cur);
+        return out;
+    };
+    // fewest lines at the full limit, then the narrowest width that still fits in that many lines (balanced lines)
+    const need = fill(limit).length;
+    let lo = 1;
+    let hi = limit;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (fill(mid).length <= need) hi = mid; else lo = mid + 1;
+    }
+    const lines = fill(lo);
+    return lines.map((line, i) => (i < lines.length - 1 ? line.trimEnd().padEnd(CIRCULAR_CAPTION_MAX, ' ') : line.trimEnd())).join('');
+};
+
+type SeqVizChildrenProps = Parameters<NonNullable<SeqVizProps['children']>>[0];
+type ProjectionMode = 'circular' | 'both' | 'both_flip';
+
+export function getLinearBreakGeometry({ center, radius, size, centralIndex, sequenceLength, yDiff = 0 }: {
+    center: { x: number; y: number };
+    radius: number;
+    size: { width: number; height: number };
+    centralIndex: number;
+    sequenceLength: number;
+    yDiff?: number;
+}) {
+    // Use SeqViz's own circle geometry and central index. Boundary zero is
+    // between the last and first displayed base, independent of selection.
+    const radians = -centralIndex / Math.max(1, sequenceLength) * Math.PI * 2 - Math.PI / 2;
+    const dx = Math.cos(radians), dy = Math.sin(radians);
+    const x = center.x + dx * radius, y = center.y + dy * radius + yDiff;
+    const halfWidth = Math.min(53, Math.max(1, size.width / 2 - 8));
+    const halfHeight = 18;
+    const clampLabel = (direction: number) => ({
+        x: Math.max(halfWidth + 8, Math.min(size.width - halfWidth - 8, x + dx * 72 * direction)),
+        y: Math.max(halfHeight + 8, Math.min(size.height - halfHeight - 8, y + dy * 72 * direction)),
+    });
+    let label = clampLabel(1);
+    if (Math.abs(x - label.x) <= halfWidth + 4 && Math.abs(y - label.y) <= halfHeight + 4) label = clampLabel(-1);
+    const vx = x - label.x, vy = y - label.y;
+    const intersection = 1 / Math.max(Math.abs(vx) / halfWidth, Math.abs(vy) / halfHeight, 1);
+    return {
+        x, y, labelX: label.x, labelY: label.y, halfWidth, halfHeight,
+        lineX: label.x + vx * intersection, lineY: label.y + vy * intersection,
+        tangentX: -dy, tangentY: dx,
+    };
+}
+
+function LinearBreakMarker({ circularProps }: { circularProps: SeqVizChildrenProps['circularProps'] }) {
+    const { circular: centralIndex } = useContext(Circular.contextType);
+    const { center, radius, size, seq, yDiff } = circularProps;
+    if (!seq.length || size.width <= 0 || size.height <= 0) return null;
+    const g = getLinearBreakGeometry({ center, radius, size, centralIndex, sequenceLength: seq.length, yDiff });
+    return <svg data-linear-circular-projection="true" data-linear-break-marker="true"
+        data-linear-break-central-index={centralIndex}
+        className="pointer-events-none absolute top-0 z-20"
+        style={{ left: 0 }}
+        width={size.width} height={size.height} viewBox={`0 0 ${size.width} ${size.height}`}
+        role="img" aria-label={`Linear molecule boundary: ${seq.length.toLocaleString()} to 1. Stored topology remains linear.`}>
+        <title>Linear projection break: end → 1; display only, stored molecule remains linear</title>
+        <path d={`M${g.lineX} ${g.lineY} L${g.x} ${g.y}`} fill="none" stroke="#fcd34d" strokeWidth="2" />
+        <path d={`M${g.x - g.tangentX * 5} ${g.y - g.tangentY * 5} L${g.x + g.tangentX * 5} ${g.y + g.tangentY * 5}`}
+            stroke="var(--bg-secondary, #151e33)" strokeWidth="7" />
+        <circle data-linear-break-boundary="true" cx={g.x} cy={g.y} r="4" fill="#fcd34d" stroke="#451a03" strokeWidth="1.5" />
+        <g transform={`translate(${g.labelX}, ${g.labelY})`}>
+            <rect x={-g.halfWidth} y={-g.halfHeight} width={g.halfWidth * 2} height={g.halfHeight * 2}
+                rx="5" fill="#451a03" stroke="#fcd34d" strokeWidth="2" />
+            <text textAnchor="middle" y="-3" fill="#fef3c7" fontSize="10" fontWeight="700">LINEAR BREAK</text>
+            <text textAnchor="middle" y="11" fill="#fef3c7" fontSize="10" className="font-mono">{seq.length.toLocaleString()} → 1</text>
+        </g>
+    </svg>;
+}
+
+function LinearProjectionViews({ native, mode }: { native: SeqVizChildrenProps; mode: ProjectionMode }) {
+    const { circularProps, linearProps, handleMouseEvent, inputRef, onUnmount } = native;
+    // SeqViz gives the SVG automatic margins. Keep the marker in the same
+    // positioned pane so those margins never introduce an overlay offset.
+    const circular = <div data-linear-projection-pane="true" style={{
+        position: 'relative', flexShrink: 0, margin: 'auto', lineHeight: 0,
+        width: circularProps.size.width, height: circularProps.size.height,
+    }}>
+        <Circular {...circularProps} handleMouseEvent={handleMouseEvent} inputRef={inputRef} onUnmount={onUnmount} />
+        <LinearBreakMarker circularProps={circularProps} />
+    </div>;
+    const linear = <Linear {...linearProps} handleMouseEvent={handleMouseEvent} inputRef={inputRef} onUnmount={onUnmount} />;
+    return <>
+        {mode === 'both_flip' && linear}
+        {circular}
+        {mode === 'both' && linear}
+    </>;
+}
 
 export type ColorPaletteName =
     | 'classic'      // Traditional 4-color scheme
@@ -1015,27 +1127,6 @@ export function SequenceViewer({
             onPointerUpCapture={finishPointerSelection}
             onPointerCancelCapture={cancelPointerSelection}
         >
-            {!sequenceData.circular && resolvedViewerMode !== 'linear' && (
-                <div
-                    data-linear-circular-projection="true"
-                    data-linear-break-marker="true"
-                    className="pointer-events-none absolute top-2 z-20 flex -translate-x-1/2 flex-col items-center"
-                    style={{ left: resolvedViewerMode === 'both' ? '25%' : '50%' }}
-                    title="Linear projection break: end → 1; display only, stored molecule remains linear"
-                >
-                    <div className="rounded-md border-2 border-amber-300 bg-amber-950 px-3 py-1 text-center font-bold tracking-wide text-amber-100 shadow-[0_0_18px_rgba(251,191,36,0.55)]">
-                        <div className="text-[11px] leading-none">LINEAR BREAK</div>
-                        <div className="mt-1 font-mono text-[10px] leading-none">
-                            {sequenceData.sequence.length.toLocaleString()} → 1
-                        </div>
-                    </div>
-                    <div className="h-10 w-1 bg-amber-300 shadow-[0_0_10px_rgba(251,191,36,0.9)]" />
-                    <div className="-mt-1 h-3 w-3 rotate-45 border-b-2 border-r-2 border-amber-300" />
-                    <div className="mt-1 rounded bg-slate-950/90 px-2 py-0.5 text-[9px] font-medium text-amber-200 shadow">
-                        Linear projection • stored topology remains linear
-                    </div>
-                </div>
-            )}
             {showTouchRotationControls && (
                 <div className="pointer-events-none absolute right-3 top-3 z-20 flex items-center gap-2">
                     <button
@@ -1062,7 +1153,10 @@ export function SequenceViewer({
             )}
             <SeqViz
                 key={`${viewerSequenceKey}:selection-reset-${selectionResetVersion}`}
-                name={sequenceData.name}
+                children={!sequenceData.circular && resolvedViewerMode !== 'linear'
+                    ? (native) => <LinearProjectionViews native={native} mode={resolvedViewerMode} />
+                    : undefined}
+                name={circularCaptionName(sequenceData.name, viewerSize.width > 0 ? Math.floor(((resolvedViewerMode === 'both' ? viewerSize.width / 2 : viewerSize.width) - 24) / 7.8) : CIRCULAR_CAPTION_MAX)}
                 seq={displaySequence}
                 seqType={seqVizSeqType}
                 annotations={annotations}
@@ -1188,13 +1282,12 @@ export function SequenceViewer({
                                     vectorEffect="non-scaling-stroke"
                                 />
                                 <text
-                                    className="la-vz-circular-label"
+                                    className="la-vz-circular-label font-mono"
                                     x={textX}
                                     y={textY}
                                     dominantBaseline="middle"
                                     textAnchor={geometry.textAnchor}
                                     style={{
-                                        fontFamily: 'Roboto Mono, Monaco, monospace',
                                         fontSize: 12,
                                         fontWeight: 300,
                                         userSelect: 'none',

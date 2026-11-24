@@ -55,17 +55,6 @@ _PROJECT_SCHEDULED_CAPABILITIES: dict[str, tuple[str, str, str]] = {
         "methylation_analysis",
         "/api/ont/ngs/methylation-analysis/submit",
     ),
-    "ngs.ont.assembly_contamination_scan": (
-        "nanopore",
-        "assembly_contamination_scan",
-        "/api/ont/ngs/assembly-contamination-scan/submit",
-    ),
-    "ngs.ont.microbial_isolate_analysis": (
-        "nanopore",
-        "microbial_isolate_analysis",
-        "/api/ont/ngs/microbial-isolate-analysis/submit",
-    ),
-    "ngs.ont.raw_signal_qc": ("nanopore", "raw_signal_qc", "/api/ont/ngs/raw-signal-qc/submit"),
     "molbio.oligo_design.rfdpoly": ("oligo_design", "oligo_design", "/api/jobs/submit"),
 }
 _PROJECT_GOVERNED_DATASET_KINDS = frozenset(

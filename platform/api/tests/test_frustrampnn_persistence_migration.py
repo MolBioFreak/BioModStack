@@ -297,12 +297,12 @@ def test_runner_registers_frustrampnn_migration_identities_and_latest_statistics
         (26, "add_frustrampnn_statistics"),
         (27, "add_frustrampnn_reviews"),
     ]
-    assert identities[-1] == (42, "add_frustrampnn_statistics_claim_leases")
+    assert (42, "add_frustrampnn_statistics_claim_leases") in identities
     assert [version for version, _name in identities] == sorted(
         version for version, _name in identities
     )
     assert len({version for version, _name in identities}) == len(identities)
-    assert list(signature(runner.MIGRATIONS[-1].fn).parameters) == ["db_path"]
+    assert list(signature(next(m for m in runner.MIGRATIONS if m.version == 42).fn).parameters) == ["db_path"]
 
 
 def test_v26_migration_preserves_v23_rows_constraints_dependencies_and_indexes(

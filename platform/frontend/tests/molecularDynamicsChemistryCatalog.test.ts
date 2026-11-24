@@ -26,7 +26,7 @@ interface CatalogProfileFixture {
     automatic_preparation: boolean;
     inventory_class: string;
     availability_explanation: string;
-    supported_engines: Array<'gromacs' | 'openmm'>;
+    supported_engines: Array<'gromacs'>;
     v1_preparation: { force_field: string; water_model: string };
     launch_constraints: {
         input_mode: 'structure';
@@ -171,7 +171,7 @@ describe('molecular dynamics chemistry catalog launcher', () => {
         current.profile_sha256 = 'b'.repeat(64);
         const validateSavedDigest = validateMolecularDynamicsChemistryProfile as unknown as (
             profile: CatalogProfileFixture,
-            engine: 'gromacs' | 'openmm',
+            engine: 'gromacs',
             automaticPreparationRequired: boolean,
             savedDigest: string,
         ) => string[];

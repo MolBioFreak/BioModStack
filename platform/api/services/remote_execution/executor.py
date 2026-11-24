@@ -574,7 +574,6 @@ def _resource_monitor_contract(job, bundle, invocation, admission):
         return None
     from services.resource_usage_evidence import (
         build_resource_admission_handoff, build_dispatch_materialization_authority,
-        materialize_scheduler_dispatch_authority,
     )
     resources = json.loads(bundle.envelope.environment['BMS_TARGET_RESOURCES'])
     assignment = (job.provenance or {}).get('remote_execution_assignment') or {}
@@ -600,10 +599,9 @@ def _resource_monitor_contract(job, bundle, invocation, admission):
         lease_token=assignment['lease_id'], source_revision=bundle.envelope.source_revision,
         source_tree=bundle.envelope.source_tree,
     )
-    dispatch = build_dispatch_materialization_authority(payload_sha256=payload_sha256, handoff=handoff)
-    if device:
-        dispatch = materialize_scheduler_dispatch_authority(dispatch, handoff=handoff,
-            gpu_index=device['gpu_index'], gpu_uuid=device['gpu_uuid'])
+    dispatch = build_dispatch_materialization_authority(
+        payload_sha256=payload_sha256, handoff=handoff, assign_admitted_gpu=bool(devices),
+    )
     # First execution of this newly issued immutable attempt. Owner observations
     # are supplied later by the authenticated supervisor, never by this builder.
     return {'params': {'_global_resource_admission': handoff, '_global_dispatch_authority': dispatch},
@@ -969,7 +967,7 @@ async def pause_md_production(session: AsyncSession, job: Job, *, operation_id: 
         runtime.publish_projection()
         await _project_local_components(job, session, local_path)
     else:
-        status = await remote_status(session, job)
+        status = await remote_status(session, job, include_activity=False)
         if status.state != 'paused' or not status.quiescent:
             raise RemoteExecutionError('MD worker outer writer ownership remains unresolved')
         remote_root = Path(attempt_dir) / 'results'
@@ -1129,7 +1127,7 @@ async def resume_md_production(session: AsyncSession, job: Job, *, operation_id:
         if (edge.get('operation_id') != operation_id or edge.get('continuation_lease_id') != intent['continuation_lease_id']
                 or edge.get('md_resume') != intent['checkpoints']):
             raise RemoteExecutionError('MD worker continuation response conflicts')
-        observed = await remote_status(session,job)
+        observed = await remote_status(session, job, include_activity=False)
         if (observed.generation != state['generation'] or observed.continuation_lease_id != intent['continuation_lease_id']
                 or observed.plan_sha256 != edge['plan_sha256']):
             raise RemoteExecutionError('MD worker continuation outer owner remains unresolved')
@@ -1696,8 +1694,8 @@ async def prepare_checkpoint_successor(session: AsyncSession, job: Job, checkpoi
     from component_runtime import ResultReference, canonical_bytes, digest, durable_write
     from database import Design
     from schemas import JobCreate
-    from routers.jobs import (_native_gate_resume_params, _native_checkpoint_domain_follow_on,
-        _derive_source_stage_payload, _build_selection_manifest_item, _selection_manifest_path)
+    from services.binder_continuation import _native_gate_resume_params, _native_checkpoint_domain_follow_on, _derive_source_stage_payload, _build_selection_manifest_item
+    from services.job_requests import _selection_manifest_path
     from services.stage_review import ensure_stage_review_rows
 
     if (not job.awaiting_input or job.status != 'awaiting_input'
@@ -1915,7 +1913,8 @@ async def publish_remote_review_rows(session: AsyncSession, job: Job) -> int:
         return 0
 
 
-async def remote_status(session: AsyncSession, job: Job, *, recover_staging: bool = True) -> RemoteAttemptStatus:
+async def remote_status(session: AsyncSession, job: Job, *, recover_staging: bool = True,
+                        include_activity: bool = True) -> RemoteAttemptStatus:
     if not job.execution_target_id or not job.remote_attempt_id:
         raise RemoteExecutionError("Job has no complete remote attempt identity")
     target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
@@ -1923,10 +1922,14 @@ async def remote_status(session: AsyncSession, job: Job, *, recover_staging: boo
         raise RemoteExecutionError("Remote execution target record is missing")
     connection, attempt_dir = _connection_for_attempt(target, job)
     await session.commit()
+    argv = _worker_argv(connection, "status", attempt_dir)
+    if not include_activity:
+        # Interpreter hint: pinned workers ignore it and receive unchanged script argv.
+        argv.insert(1, "-Xbms_no_activity")
     try:
         response = await run_remote(
             connection,
-            _worker_argv(connection, "status", attempt_dir),
+            argv,
             timeout=30,
         )
     except RemoteTransportError as exc:
@@ -1971,7 +1974,7 @@ async def remote_live_logs(session: AsyncSession, job: Job, *, tail: int = 200) 
 
     receipt = deepcopy((job.provenance or {}).get('remote_execution_receipt') or {})
     ownership = (job.execution_target_id, job.remote_attempt_id, job.status)
-    observed = await remote_status(session, job, recover_staging=False)
+    observed = await remote_status(session, job, recover_staging=False, include_activity=False)
     if observed.state in TERMINAL_REMOTE_STATES:
         raise RemoteExecutionError('Remote attempt is terminal; retained result logs are not yet available')
     target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
@@ -3522,7 +3525,7 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
         elif job.model_id == "molecular_dynamics" and job.mode == "simulate":
             from services.md.completion import validate_and_finalize_md_job
 
-            await validate_and_finalize_md_job(job, session)
+            await validate_and_finalize_md_job(job, session, expected_attempt=(expected_run_id, expected_attempt_id))
         else:
             from services.result_state_integrity import finalize_successful_job
 

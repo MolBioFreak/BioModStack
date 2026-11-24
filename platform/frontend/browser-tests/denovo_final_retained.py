@@ -8,11 +8,13 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import tempfile
 
+SCRATCH_ROOT = Path(os.environ.get('BMS_QA_SCRATCH_ROOT') or tempfile.gettempdir()).resolve()
 p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);a=p.parse_args()
-assert a.root.resolve().is_relative_to(Path('/home/dalab/.hermes/profiles/fresh/cache/scratch'))
+assert a.root.resolve().is_relative_to(SCRATCH_ROOT)
 import os
-base=Path(os.environ.get('BMS_FINAL_RETAINED_BASE','/home/dalab/.hermes/profiles/fresh/cache/scratch/denovo-complete-parent/phase2/api-receiving/basetemp'))
+base=Path(os.environ.get('BMS_FINAL_RETAINED_BASE',str(SCRATCH_ROOT/'denovo-complete-parent/phase2/api-receiving/basetemp')))
 sources=[(base/'test_complete_receiving_real_e1/state.sqlite', ['jobs','job_artifacts']),
          (base/'test_partial_zero_unexpected_a2/test.db', ['jobs','rfd3_local_redesign_requests','rfd3_local_redesign_candidates','rfd3_local_redesign_artifacts'])]
 manifest=[]

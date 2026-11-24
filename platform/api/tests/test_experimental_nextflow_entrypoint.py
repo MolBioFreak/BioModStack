@@ -28,7 +28,6 @@ MINIMAL_PARAMS = {
     "protein_cad_experimental": {},
 
 
-    "boltz_cp_experimental": {"input_path": "/tmp/complex.yaml"},
     "confornets_experimental": {"sequence": "ACDEFGHIK"},
 }
 
@@ -58,12 +57,14 @@ def test_main_entrypoint_no_longer_dispatches_experimental_tab_workflows() -> No
         assert f"params.rfd_mode == '{workflow_id}'" not in main_text
 
 
-def test_api_routes_experimental_tab_workflows_to_workflow_specific_entrypoints() -> None:
+def test_api_routes_experimental_tab_workflows_to_workflow_specific_entrypoints(tmp_path) -> None:
+    config = tmp_path / "complex.yaml"
+    config.write_text("version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: ACDEFGHIK\n")
     for model_id, (mode, rel_path, _symbol) in EXPERIMENTAL_WORKFLOW_ENTRYPOINTS.items():
         cmd = build_nextflow_command(
             model_id,
             mode,
-            dict(MINIMAL_PARAMS[model_id]),
+            ({"input_path": str(config)} if model_id == "boltz_cp_experimental" else dict(MINIMAL_PARAMS[model_id])),
             "/tmp/out",
             job_id=f"job-{model_id}",
         )

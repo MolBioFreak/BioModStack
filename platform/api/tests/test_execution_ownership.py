@@ -92,6 +92,7 @@ def test_lane_mismatch_is_rejected_before_unit_inspection() -> None:
 
 
 def test_workflow_slices_render_one_global_aggregate_limit_with_lane_children(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BMS_CONTAINER_DIR", "/data/bms/apptainer")
     monkeypatch.delenv("BMS_DEV_NGS_RUNTIME_SIF", raising=False)
     development = services.render_user_units(tmp_path / "repo", runtime_mode="dev")
     production = services.render_user_units(tmp_path / "repo", runtime_mode="container")
@@ -110,15 +111,15 @@ def test_workflow_slices_render_one_global_aggregate_limit_with_lane_children(tm
     assert services.PRODUCTION_WORKFLOW_SLICE.startswith("biomodstack-workflows-")
     assert "Environment=BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18001" in development[services.API_SERVICE]
     assert "Environment=BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18101" in production[services.CORE_RUNTIME_SERVICE]
-    assert "Environment=BMS_CONTAINER_DIR=/mnt/BioModStack/apptainer" in development[services.API_SERVICE]
-    assert "Environment=BMS_CONTAINER_DIR=/mnt/BioModStack/apptainer" in development[
+    assert "Environment=BMS_CONTAINER_DIR=/data/bms/apptainer" in development[services.API_SERVICE]
+    assert "Environment=BMS_CONTAINER_DIR=/data/bms/apptainer" in development[
         services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE
     ]
     # Shared-image readers choose the admitted object. Unit rendering must not
     # resurrect a task-local Dorado path when no explicit legacy override exists.
     assert "Environment=BMS_NGS_RUNTIME_SIF=" not in development[services.API_SERVICE]
     assert "Environment=BMS_NGS_RUNTIME_SIF=" not in development[services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE]
-    assert "Environment=BMS_CONTAINER_DIR=/mnt/BioModStack/apptainer" in production[
+    assert "Environment=BMS_CONTAINER_DIR=/data/bms/apptainer" in production[
         services.PRODUCTION_WORKFLOW_ADAPTER_SERVICE
     ]
     for unit in (

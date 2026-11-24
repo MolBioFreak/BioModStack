@@ -94,18 +94,18 @@ async def launch_selected(request: SelectedBlindPoseRequest, background_tasks: B
     params[KEY] = binding
     params['selection_source_job_id'] = source.id
     params['lineage_root_job_id'] = root_id(source)
-    from routers.jobs import create_job
+    from services.job_submission import submit_job
     job = JobCreate(name=f'blind-pose-{source.id[:8]}', model_id='esmfold2', mode='blind_pose', params=params,
                     execution_target_id=request.execution_target_id)
     from services.binder_blind_pose_trust import selected_submission
     with selected_submission():
         if request.launch_context_id or request.execution_target_id:
-            from routers.jobs import submit_selected_child_jobs
+            from services.job_submission import submit_selected_child_jobs
             children = await submit_selected_child_jobs([job], background_tasks, session, experiment_session,
                 destination_launch_context_id=request.launch_context_id, idempotency_key=str(directory),
                 response_context={"source_job_id": source.id, "operation": "blind_pose"})
             return children[0]
-        return await create_job(job, background_tasks, session)
+        return await submit_job(job, background_tasks, session)
 
 
 @router.get('/{job_id}/selection-context')

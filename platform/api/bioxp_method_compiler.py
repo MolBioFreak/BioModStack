@@ -11,7 +11,7 @@ import json
 import operator
 from typing import NoReturn
 
-from bioxp_method_model import validate_method
+from bioxp_method_model import validate_method, workflow_pressure_streaming, HOLDER_TARGETS
 from bioxp_workflow_authoring import WorkflowPreviewRequest, preview, native_intent, _NATIVE
 
 VERSION = 'bms-method-compiler.v1'
@@ -225,6 +225,14 @@ def semantic(value):
     return value
 
 
+# Only ordinary pipetting occurrences default to operator recovery. Do not opt
+# service/mechanism actions or indivisible fast-move batches into a redo gate.
+_DEFAULT_HOLD_ACTIONS = frozenset({
+    'aspirate', 'dispense', 'mix', 'transfer', 'liquid_recipe', 'cavro_liquid_recipe',
+    'move', 'lift', 'lower', 'tip_pickup', 'load_tip', 'tip_eject', 'eject_tip', 'fluid_search',
+})
+
+
 def _lower(method, dependencies, params):
     procedures = {}
     procedure_paths = {}
@@ -283,7 +291,7 @@ def _lower(method, dependencies, params):
                 if not node.get('enabled', True):
                     continue
                 on_error = node.get('on_error', policy)
-                if on_error not in ('stop', 'pause_for_operator'):
+                if 'on_error' in node and on_error not in ('stop', 'pause_for_operator'):
                     fail('Unknown on_error policy')
                 typ = node.get('type')
                 if typ == 'action':
@@ -344,9 +352,12 @@ def _lower(method, dependencies, params):
                 raise
         return count
     scope = {'param': params, 'arg': {}}
-    count = walk(method['steps'], scope, '/method/steps', [], [], 'stop', None)
+    policy = method.get('on_error')
+    if 'on_error' in method and policy not in ('stop', 'pause_for_operator'):
+        fail('Unknown on_error policy', '/method/on_error')
+    count = walk(method['steps'], scope, '/method/steps', [], [], policy, None)
     occurrences = []
-    walk(method['steps'], scope, '/method/steps', [], [], 'stop', occurrences)
+    walk(method['steps'], scope, '/method/steps', [], [], policy, occurrences)
     assert count == len(occurrences)
     return occurrences
 
@@ -370,6 +381,18 @@ def native_values(value, field=''):
     return value
 
 
+def holder_target(intent):
+    """Bulk reagent holder move: an exact native named XY target (no calibrated holder heights)."""
+    extra = set(intent) - {'operation', 'target', 'position_flag'}
+    if extra:
+        raise ValueError(f'Holder moves use target only; remove {sorted(extra)}')
+    if intent['target'] not in HOLDER_TARGETS:
+        raise ValueError(f"Unknown Bulk reagent holder position {intent['target']!r}")
+    if intent.get('position_flag') not in (None, 0, '0'):
+        raise ValueError('Bulk reagent holder positions have no calibrated heights; they move at travel height only')
+    return {'target': intent['target'], 'camera_offset': False}
+
+
 def emit_rows(rows):
     """Reuse the existing emitter per occurrence; retain host-only native gates."""
     document = deepcopy(_NATIVE['document_template'])
@@ -384,6 +407,9 @@ def emit_rows(rows):
             targets = []
             for member in row['sequence']:
                 try:
+                    if 'target' in member['intent']:
+                        targets.append(holder_target(member['intent']))
+                        continue
                     step = native_intent({**member['intent'], 'position_flag': 0})
                 except (ValueError, TypeError, OverflowError) as exc:
                     issues.append({'step_id': member['step_id'], 'message': str(exc)})
@@ -421,6 +447,9 @@ def emit_rows(rows):
                         lift_row = {'step_id': row['step_id'], 'intent': {'operation': 'lift',
                             'location_id': intent['destination']['location_id'],
                             'height_steps': intent['destination_lift_height_steps']}}
+                        if 'target' in intent['destination']:
+                            from bioxp_holder_endpoints import holder_row
+                            lift_row['intent']['holder_row'] = holder_row(intent['destination']['target'])
                         if 'required_capability' in row:
                             lift_row['required_capability'] = row['required_capability']
                         lifted = preview(WorkflowPreviewRequest.model_validate({'draft': {
@@ -542,6 +571,10 @@ def compile_method(request):
                 fail('Compile request must be an object')
             method = request.get('method')
             validate_method(method)
+            try:
+                pressure_streaming = workflow_pressure_streaming(method)
+            except ValueError as exc:
+                fail(str(exc), '/method/workflow_pressure_streaming')
             from bioxp_method_deck import check_deck
             result['issues'].extend(check_deck(method))
             dependencies = deepcopy(request.get('dependencies', {}))
@@ -556,6 +589,13 @@ def compile_method(request):
             for occurrence in occurrences:
                 occurrence['inputs'] = native_values(occurrence['inputs'])
             occurrences, liquid_records, substitutions, planning_issues = prepare_occurrences(occurrences, method, dependencies)
+            for occurrence in occurrences:
+                if occurrence['on_error'] is None:
+                    hold = (occurrence['action'] in _DEFAULT_HOLD_ACTIONS and
+                            not (occurrence['action'] == 'move' and occurrence['inputs'].get('movement') == 'fast'))
+                    occurrence['on_error'] = 'pause_for_operator' if hold else 'stop'
+                    if hold:
+                        occurrence['default_error_hold'] = True
             result['resolved']['occurrences'] = json_value(occurrences)
             result['resolved']['liquids'] = liquid_records
             result['water_substitutions'] = substitutions
@@ -615,6 +655,9 @@ def compile_method(request):
                     continue
                 if fast:
                     row = {**row, 'intent': {'operation': 'move_sequence'}, 'sequence': [{'step_id': row['step_id'], 'intent': intent}], '_fast_key': key}
+                elif occurrence['action'] == 'move' and 'target' in intent:
+                    # Full lane holder move: its own one-target native sequence, so it stops and reports per step.
+                    row = {**row, 'intent': {'operation': 'move_sequence'}, 'sequence': [{'step_id': row['step_id'], 'intent': intent}], '_fast_key': None}
                 rows.append((row, cost))
             if sum(cost for _, cost in rows) > MAX_ACTIONS:
                 fail('Native expansion exceeds 100000 actions', code='resource_limit')
@@ -656,6 +699,8 @@ def compile_method(request):
                 action['source_occurrence_id'] = o['occurrence_id']
                 action['on_error'] = o['on_error']
                 action['metadata']['bms_method'] = {k: deepcopy(o[k]) for k in ('occurrence_id', 'step_id', 'path', 'call_path', 'loop_path', 'group_path')}
+                if o.get('default_error_hold'):
+                    action['metadata']['bms_method']['default_error_hold'] = True
                 if 'labware_id' in o['inputs']:
                     action['metadata']['bms_method']['labware_id'] = deepcopy(o['inputs']['labware_id'])
                 if 'generated_by' in o:
@@ -753,6 +798,7 @@ def compile_method(request):
             result['digest'] = hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
             document['protocol_id'] = 'method-' + result['digest']
             document['metadata']['bms_method'] = {'compiler': VERSION, 'digest': result['digest'],
+                'workflow_pressure_streaming': pressure_streaming,
                 'method': deepcopy(method), 'bindings': deepcopy(request.get('bindings', {})), 'dependencies': dependencies,
                 'native_source_commit': EXPORT['source_commit'], 'resolved_liquids': deepcopy(result['resolved'].get('liquids', [])),
                 'water_substitutions': deepcopy(result['water_substitutions']), 'initial_state': deepcopy(request.get('initial_state'))}

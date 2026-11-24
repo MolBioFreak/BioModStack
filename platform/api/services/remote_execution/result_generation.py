@@ -309,6 +309,8 @@ def _retire_redundant_previous(backup: Path, output: Path) -> None:
             return
         if current.is_symlink() or not current.is_file() or path.stat().st_size != current.stat().st_size:
             return
+        if path.samefile(current):
+            continue
         with path.open("rb") as old, current.open("rb") as new:
             if hashlib.file_digest(old, "sha256").digest() != hashlib.file_digest(new, "sha256").digest():
                 return

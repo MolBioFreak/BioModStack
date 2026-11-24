@@ -11,6 +11,8 @@ from database import Job, Design, get_session
 from experiment_database import get_experiment_session
 from experiment_models import ExperimentLaunchContext, ExperimentWorkflowPreparation
 from routers import jobs
+from services import job_submission
+from services import job_requests
 from schemas import JobCreate
 from test_project_manager_adapters import stores
 from test_project_workflow_setups import setup_store
@@ -120,7 +122,7 @@ async def test_native_project_editor_save_reopen_and_prepare(setup_store, target
             setup_context_id=setup['setup_context_id'], expected_generation=1, idempotency_key='prepare')
         row = await db.get(ExperimentWorkflowPreparation, prepared['preparation_id'])
         scheduler = json.loads(row.scheduler_payload_json)
-        expected = jobs.normalize_job_request(request).params
+        expected = job_requests.normalize_job_request(request).params
         assert scheduler['params'] == {**expected, 'workflow_adapter': f'bms.core-job.{model}.adapter.v1'}
         assert scheduler['name'] == request.name
         assert not {'source_document', 'collapsed', 'native_job_request', 'editor_state'} & scheduler['params'].keys()
@@ -147,7 +149,7 @@ async def test_selected_caller_retains_distinct_project_requests_for_review(setu
         # Real native normalization, Plan persistence, run group and context owner.
         # No successful resource authority is mocked; review does not reserve it.
         with pytest.raises(HTTPException) as raised:
-            await jobs.submit_selected_child_jobs(children, BackgroundTasks(), None, db,
+            await job_submission.submit_selected_child_jobs(children, BackgroundTasks(), None, db,
                 destination_launch_context_id=dest['launch_context_id'], idempotency_key='retained',
                 response_context={'operation': 'predict'})
         assert raised.value.status_code == 409
@@ -158,7 +160,7 @@ async def test_selected_caller_retains_distinct_project_requests_for_review(setu
         assert (await db.get(ExperimentLaunchContext, dest['launch_context_id'])).state == 'issued'
     async with setup_store() as db:
         with pytest.raises(HTTPException) as replay:
-            await jobs.submit_selected_child_jobs(children, BackgroundTasks(), None, db,
+            await job_submission.submit_selected_child_jobs(children, BackgroundTasks(), None, db,
                 destination_launch_context_id=dest['launch_context_id'], idempotency_key='retained',
                 response_context={'operation': 'predict'})
         assert replay.value.detail['job_requests'] == retained

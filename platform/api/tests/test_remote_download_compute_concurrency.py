@@ -77,6 +77,7 @@ async def test_preload_keeps_telemetry_and_actual_resource_limits(workers, monke
 @pytest.mark.parametrize('phase', PHASES)
 async def test_http_launch_preview_remains_available_during_preload(workers, monkeypatch, phase):
     from routers import jobs
+    from services import job_submission
     original_preload = await preparing(workers, phase)
     calls = []
 
@@ -89,7 +90,7 @@ async def test_http_launch_preview_remains_available_during_preload(workers, mon
             admissible=False, request=request.model_dump(), plan={}, input_identities=[],
             generated_inputs=[], deferred_preparation=[], blockers=[{'code': 'inert_fixture'}])
 
-    monkeypatch.setattr(jobs, '_execution_plan_preview', compile_preview)
+    monkeypatch.setattr(job_submission, '_execution_plan_preview', compile_preview)
     app = FastAPI()
     app.include_router(jobs.router, prefix='/jobs')
 

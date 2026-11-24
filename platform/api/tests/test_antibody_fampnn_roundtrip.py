@@ -88,6 +88,7 @@ async def test_antibody_request_prepared_child_analyzer(admission, monkeypatch, 
     from fastapi import BackgroundTasks
     from database import Job
     from routers import jobs
+    from services import job_submission
     from schemas import JobCreate
     from services import core_protein_scientific_contract as contract
     from services.nextflow import build_nextflow_command
@@ -103,7 +104,7 @@ async def test_antibody_request_prepared_child_analyzer(admission, monkeypatch, 
                 'antibody_design_mode':'framework_allowed', 'framework_type':'nanobody',
                 'seq_design_fampnn':True, 'protect_vhh_tetrad':False},
         fampnn_analysis_overrides={'mutation':mutation})
-    response = await jobs._create_job(request, BackgroundTasks(), admission)
+    response = await job_submission._create_job(request, BackgroundTasks(), admission)
     admission.expire_all()
     parent = await admission.get(Job, response.id)
     declaration = parent.provenance['fampnn_analysis_declaration']
@@ -176,7 +177,7 @@ async def test_antibody_request_prepared_child_analyzer(admission, monkeypatch, 
         before_jobs = len(list((await admission.execute(select(Job))).scalars()))
         before_dirs = set(Path(parent.output_dir).parent.iterdir())
         with pytest.raises(HTTPException) as exc:
-            await jobs._create_job(child_request, BackgroundTasks(), admission)
+            await job_submission._create_job(child_request, BackgroundTasks(), admission)
         assert exc.value.status_code == 422
         assert len(list((await admission.execute(select(Job))).scalars())) == before_jobs
         assert set(Path(parent.output_dir).parent.iterdir()) == before_dirs
@@ -202,14 +203,14 @@ async def test_antibody_request_prepared_child_analyzer(admission, monkeypatch, 
     forbidden = child_request.model_copy(deep=True)
     forbidden.fampnn_analysis_overrides = FampnnAnalysisOverrides.model_validate({'mutation':[{'chain_id':'H','author_number':1}]})
     with pytest.raises(HTTPException) as exc:
-        await jobs._create_job(forbidden, BackgroundTasks(), admission)
+        await job_submission._create_job(forbidden, BackgroundTasks(), admission)
     assert exc.value.status_code == 422
     forbidden.fampnn_analysis_overrides = FampnnAnalysisOverrides.model_validate({'summary':[]})
     with pytest.raises(HTTPException) as exc:
-        await jobs._create_job(forbidden, BackgroundTasks(), admission)
+        await job_submission._create_job(forbidden, BackgroundTasks(), admission)
     assert exc.value.status_code == 422
     child_request.fampnn_analysis_overrides = FampnnAnalysisOverrides.model_validate({'mutation': [] if mutation == [] else [{'chain_id':'H','author_number':2}]})
-    child_response = await jobs._create_job(child_request, BackgroundTasks(), admission)
+    child_response = await job_submission._create_job(child_request, BackgroundTasks(), admission)
     child = await admission.get(Job, child_response.id)
     expected_child = dict(declaration, mutation_override=[] if mutation == [] else ['H:2:'])
     import hashlib

@@ -462,29 +462,16 @@ async def finalize_successful_job(
             # The public ingester's commit=False contract includes the optional
             # attachment in the caller's transaction. Run its same primary owner
             # first, so no optional failure can decide primary publication.
-            from services.result_ingester import (
-                _ingest_job_results, _ingest_protenix_primary_publications,
-            )
-            from paths import resolve_runtime_data_path, get_data_root
+            from services.result_ingester import _publish_primary_results
 
-            ingested_count = await _ingest_job_results(
-                job_id, output_dir, session, epitope_residues,
+            ingested_count = await _publish_primary_results(
+                job_id, job, output_dir, session, epitope_residues, antibody_closeout,
             )
-            if str(job.model_id or '').strip().lower() == 'protenix':
-                root = Path(output_dir)
-                root = resolve_runtime_data_path(root) if root.is_absolute() else get_data_root() / root
-                await _ingest_protenix_primary_publications(job, root, session)
-            await session.flush()
-            if antibody_closeout is not None:
-                job.provenance = {**(job.provenance or {}),
-                                  'antibody_pipeline_result': antibody_closeout}
         else:
             ingested_count = await ingest_fn(
                 job_id, output_dir, session,
                 epitope_residues=epitope_residues, commit=False,
             )
-        from services.core_protein_execution_settings import persist_openmm_receipts
-        await persist_openmm_receipts(job, output_dir, session)
         if antibody_closeout is not None:
             expected_count = antibody_closeout['candidate_count']
             direct_count = int(await session.scalar(select(func.count(Design.id)).where(

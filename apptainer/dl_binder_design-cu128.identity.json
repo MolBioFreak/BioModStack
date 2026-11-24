@@ -2,17 +2,17 @@
   "adopted": false,
   "artifact": {
     "bytes": 9263149056,
-    "path": "/mnt/BioModStack/apptainer/dl_binder_design-cu128-20261003.sif",
+    "path": "$BMS_CONTAINER_DIR/dl_binder_design-cu128-20261003.sif",
     "sha256": "822d76ef1e9e2b9c187210f155a6389d3cc93e12921d036415f38f648929e06b"
   },
   "build": {
     "full_rebuild_exercised": false,
     "full_rebuild_recipe": "apptainer/dl_binder_design.def",
     "licensed_assets": "PyRosetta acquired from upstream authorized conda channel; existing licensed assets reused unchanged in tested local build",
-    "local_recipe": "/home/dalab/.local/state/biomodstack/task-evidence/binder-cuda-repair-20261003/mpnn/repair-local.def",
+    "local_recipe": "task-evidence/binder-cuda-repair-20261003/mpnn/repair-local.def",
     "mode": "verified-parent localimage; offline hash-locked wheels",
     "parent_bytes": 5413904384,
-    "parent_path": "/mnt/BioModStack/apptainer/dl_binder_design.sif",
+    "parent_path": "$BMS_CONTAINER_DIR/dl_binder_design.sif",
     "parent_sha256": "314c1d0bcf605bc85dfe076073adb616fe8aef1fc7f981119a1ebbeef09261db"
   },
   "inputs": {
@@ -81,7 +81,7 @@
     "cuda": "12.8",
     "cuda_runtime_version": 12080,
     "cudnn_version": 90701,
-    "evidence_root": "/home/dalab/.local/state/biomodstack/task-evidence/binder-cuda-repair-20261003/mpnn",
+    "evidence_root": "task-evidence/binder-cuda-repair-20261003/mpnn",
     "gpu_limitation": "Host NVIDIA-SMI cannot communicate with driver; --nv torch.cuda.init reports No CUDA GPUs are available; device_count=0",
     "interpreter": "/opt/conda/envs/mpnn/bin/python",
     "native_full_entrypoint": {
@@ -89,12 +89,12 @@
       "outputs": [
         {
           "bytes": 184,
-          "path": "/home/dalab/.local/state/biomodstack/task-evidence/binder-cuda-repair-20261003/mpnn/native-output/mpnn_pdl1_seed_binder_seq_0.json",
+          "path": "task-evidence/binder-cuda-repair-20261003/mpnn/native-output/mpnn_pdl1_seed_binder_seq_0.json",
           "sha256": "b1aec5776f48ab921d2a0e8c105f01588900dc47e0a4fb354afd0dd230a4c43d"
         },
         {
           "bytes": 334186,
-          "path": "/home/dalab/.local/state/biomodstack/task-evidence/binder-cuda-repair-20261003/mpnn/native-output/pdl1_seed_binder_seq_0.pdb",
+          "path": "task-evidence/binder-cuda-repair-20261003/mpnn/native-output/pdl1_seed_binder_seq_0.pdb",
           "sha256": "e517e912fe0e59aba94e019df2d2fdbba7b1b8bf45a21e30030c341aed089713"
         }
       ],

@@ -520,7 +520,7 @@ export const retryMDAnalysis = (jobId: string) => api.post<{ schema: 'bms.md.ana
 export interface MDRunDetail {
     schema: 'bms.md.run-detail.v1'; job_id: string; job_status: string; queue_status: string; phase: string; state_version: number;
     chemistry: { profile_id: string; profile_sha256: string; assurance: string; verification_status: string; requested_scope?: string | null };
-    engine: 'gromacs' | 'openmm'; replica_count: number; replica_summary: Record<string, number>;
+    engine: 'gromacs'; replica_count: number; replica_summary: Record<string, number>;
     simulated_time_ps: number; requested_time_ps: number; checkpoint_available: boolean;
     allowed_actions: Array<'pause' | 'resume_dynamics' | 'retry_dynamics' | 'cancel' | 'view_logs' | 'reorchestrate' | 'delete_failed_launch'>;
     action_explanations?: Partial<Record<'resume_dynamics' | 'retry_dynamics', string>>;
@@ -1767,25 +1767,34 @@ export const fetchOntBarcodeUnits = (jobId: string) =>
 export interface OntBarcodeBatchMapping {
     unit_id: string;
     sample_alias: string | null;
-    molbio_ngs_receipt_id: string;
+    molbio_ngs_receipt_id?: string;
+    /** Sequence name, sent when a barcode holds several sequences. */
+    label?: string;
 }
 
 export interface OntBarcodeBatchSubmitRequest {
     idempotency_key: string;
-    target_workflow: 'ont_plasmid_qc' | 'ont_construct_screening';
+    target_workflow: 'ont_plasmid_qc' | 'ont_construct_screening' | 'wf_clone_validation';
     name_prefix?: string;
     pinned_gpu?: number | null;
+    run_modkit?: boolean;
+    modkit_filter_threshold?: number;
     mappings: OntBarcodeBatchMapping[];
     execution_target_id?: string | null;
     execution_policy?: ExecutionPolicy;
     reference_set_id?: string | null;
+    pooled_reference_set_ids?: Record<string, string>;
     execution_plan_approvals?: Record<string, string>;
 }
 
 export interface OntBarcodeBatchSubmitResponse {
+    /** Barcodes holding several sequences: the run that assigns their reads first. */
+    assignment_job_ids?: Record<string, string>;
     reference_set_id: string;
     manifest_sha256: string;
     child_job_ids: string[];
+    /** Barcodes given no sequence: not analysed, reads kept. */
+    skipped_unit_ids?: string[];
 }
 
 export const submitOntBarcodeBatch = (
@@ -1835,7 +1844,7 @@ export const submitPooledReferenceAssignment = (
     );
 };
 
-export type PooledAssignmentTargetWorkflow = 'ont_plasmid_qc' | 'ont_construct_screening';
+export type PooledAssignmentTargetWorkflow = 'ont_plasmid_qc' | 'ont_construct_screening' | 'wf_clone_validation';
 
 export interface PooledAssignmentManifest {
     schema?: string;
@@ -3677,6 +3686,212 @@ export interface AssemblyJunction {
     notes: string[];
 }
 
+/* ── Assembly capability additions (digest / ligation / end operations / Gibson reopen) ─────────────── */
+export type FivePrimePhosphate = 'unknown' | 'phosphorylated' | 'unphosphorylated';
+export interface AssemblyFragmentEnd { five_prime_phosphate?: FivePrimePhosphate }
+export interface AssemblyFragmentInput { features?: SequenceFeature[] | null }
+export interface AssemblyJunction { sealed?: 'both' | 'one_strand' | 'none' | 'unknown'; overlap_tm?: number | null; overlap_tm_2_4?: number | null; overlap_gc?: number | null; distribution?: GibsonJunctionDistribution | 'homology' | null }
+export interface GibsonPrimerSite { start: number; end: number; strand: 1 | -1 }
+export interface GibsonDesignedPrimer {
+    tm_model?: string | null;
+    tm_assumptions?: Record<string, unknown> | null;
+    template_site?: GibsonPrimerSite | null;
+    product_site?: GibsonPrimerSite | null;
+}
+export type EndOperationName = 'fill_in' | 'remove_3_overhang' | 'remove_5_overhang_nuclease' | 'phosphorylate' | 'dephosphorylate';
+export interface EndOperationRequest {
+    source: { kind: 'molecular_revision'; revision_id: string }
+        | { kind: 'inline'; name: string; sequence: string; left_end: AssemblyFragmentEnd | null; right_end: AssemblyFragmentEnd | null; features: SequenceFeature[] | null };
+    operation: EndOperationName;
+    end: 'left' | 'right' | 'both';
+    new_name?: string | null;
+}
+export interface EndOperationResponse {
+    sequence: string;
+    topology: 'linear';
+    left_end: AssemblyFragmentEnd;
+    right_end: AssemblyFragmentEnd;
+    features: SequenceFeature[];
+    changed: { bases_added: number; bases_removed: number };
+    notes: string[];
+    operation_id?: string; document_id?: string; revision_id?: string; sequence_id?: string | null;
+}
+/** Saved Gibson design request restored on reopen (operation_params.design_request; falls back to assembly_request). */
+export interface SavedGibsonDesignRequest {
+    fragments: GibsonDesignFragmentInput[];
+    circular?: boolean;
+    overlap?: number;
+    target_tm?: number;
+    min_anneal?: number;
+    junctions?: GibsonJunctionInput[];
+}
+/** Per-junction user choice; `after_fragment_id` is the fragment on the LEFT of the join (the last one addresses the circular closure). */
+export type GibsonJunctionDistribution = 'split' | 'left' | 'right';
+export interface GibsonJunctionInput {
+    after_fragment_id: string;
+    overlap?: number | null;
+    distribution?: GibsonJunctionDistribution | null;
+}
+export const endOperations = (mode: 'preview' | 'apply', data: EndOperationRequest, signal?: AbortSignal) =>
+    api.post<EndOperationResponse>(`/api/molbio/end-operations/${mode}`, data, { signal });
+
+/* ── Suggest plan (Gibson/HiFi, Golden Gate, restriction cloning) ─────────────────────────────────── */
+export interface SuggestGibsonSource {
+    id: string; name: string; sequence: string; circular: boolean;
+    source_sequence_id?: string; source_revision?: number; features?: SequenceFeature[] | null;
+}
+export interface SuggestGibsonRequest {
+    target: { name: string; sequence: string; circular: boolean; features?: SequenceFeature[] | null };
+    sources: SuggestGibsonSource[];
+    min_match: number; overlap?: number | null; target_tm: number; min_anneal: number;
+    allow_synthesis: boolean; limit: number;
+    fixed_boundaries?: number[]; protected_feature_ids?: string[]; max_pcr_length?: number;
+    fragment_count?: number | null; max_synthesis_length?: number | null;
+}
+export interface SuggestGibsonJunction {
+    left_id: string; right_id: string; overlap_length: number; overlap_sequence?: string;
+    overlap_tm?: number | null; overlap_tm_2_4?: number | null; overlap_gc?: number | null;
+    distribution?: GibsonJunctionDistribution | 'homology' | null; notes?: string[];
+}
+export interface SuggestGibsonFragment {
+    id: string; name: string; preparation: 'pcr' | 'synthesis' | 'existing'; orientation: 'forward' | 'reverse';
+    source: { id: string; start: number; end: number; strand: 1 | -1; wraps_origin: boolean } | null;
+    sequence: string | null;
+}
+export interface SuggestGibsonProposal {
+    rank: number; summary: string;
+    counts: { pcr: number; synthesis: number; existing: number };
+    fragments: SuggestGibsonFragment[];
+    design_request: SavedGibsonDesignRequest;
+    junctions?: SuggestGibsonJunction[];
+    features: { kept: string[]; removed: string[]; clipped: string[] };
+    notes: string[];
+}
+export interface SuggestGibsonResponse { proposals: SuggestGibsonProposal[]; diagnostics: string[] }
+export const suggestGibsonPlan = (data: SuggestGibsonRequest, signal?: AbortSignal) =>
+    api.post<SuggestGibsonResponse>('/api/molbio/assembly/gibson/suggest', data, { signal });
+
+export type SuggestGoldenGateSource = { id: string; source:
+    | { kind: 'inline'; sequence: string; topology: 'linear' | 'circular'; features: unknown[] }
+    | { kind: 'molecular_revision'; revision_id: string } };
+export interface SuggestGoldenGateRequest {
+    target?: SuggestGoldenGateSource;
+    enzymes: string[];
+    fragment_count?: number | null;
+    target_fragment_length?: number | null;
+    min_fragment_length?: number;
+    max_fragment_length?: number | null;
+    avoid_repeats?: boolean;
+    max_homopolymer_run?: number | null;
+    homopolymer_junction_buffer?: number;
+    fixed_boundaries: number[];
+    preparation_kind: 'synthesis' | 'pcr';
+    terminal_right_fusion?: string | null;
+    proposals: number;
+    // Assemble-from-fragments mode (additive)
+    parts?: GoldenGatePartSpec[];
+    order?: 'given' | 'auto';
+    vector?: SuggestGoldenGateSource | null;
+    circular?: boolean;
+}
+export interface GoldenGatePartSpec {
+    source: SuggestGoldenGateSource;
+    name?: string | null;
+    region?: { start: number; end: number } | null;
+    orientation?: 'forward' | 'reverse';
+    left_overhang?: string | null;
+    right_overhang?: string | null;
+    kind?: 'auto' | 'bare' | 'prepared';
+    retained_fragment_index?: number | null;
+}
+export interface GoldenGatePartReport {
+    index: number; name: string; length: number; topology: string; enzyme_id: string; enzyme_name: string;
+    requested_kind: string; kind: 'bare' | 'prepared' | 'ambiguous' | 'invalid';
+    site_count: number; site_positions: number[];
+    left_overhang?: string | null; right_overhang?: string | null; retained_fragment_index?: number | null; payload_length?: number | null;
+    candidates: Array<{ fragment_index: number; length: number; left_overhang: string; right_overhang: string }>;
+    message: string;
+}
+export interface GoldenGateOrderSummary {
+    bare_parts: number; prepared_parts: number; order_lengths: number[]; order_total_bp: number; method: 'synthesis' | 'pcr';
+}
+export interface GoldenGatePreparedRow {
+    part_id: string; name: string; preparation: 'pcr' | 'synthesis' | 'donor'; part_kind: 'bare' | 'prepared';
+    input_index?: number | null; order_sequence: string | null; tailed_length: number | null; payload_length: number | null;
+    primers: string[]; digested_sequence: string | null; left_overhang: string | null; right_overhang: string | null;
+}
+export interface GoldenGateJunctionSlot { index: number; overhang: string; origin: 'user' | 'prepared' | 'vector' | 'optimizer'; between: unknown[] }
+export interface SuggestGoldenGateProposal {
+    rank: number; enzyme_id: string; enzyme_name: string; empirical: string; ranking_mode: string;
+    internal_sites: number; junction_mode: string; junctions: string[]; cuts: number[]; fragment_lengths: number[];
+    f_set: number | null;
+    split_request: Record<string, unknown>;
+    candidate?: { design?: { materials: Array<{ id: string; stage: 'source' | 'prepared' | 'digest'; sequence: string }> }; fidelity?: { per_junction?: Array<{ representative: string; probability: number | null }> } };
+    pcr_products: Array<{ part_id: string; tailed_length: number; payload_length: number }>;
+    donor_retained_fragment_index: number | null;
+    notes?: string[];
+    assemble_request?: Record<string, unknown> | null;
+    junction_slots?: GoldenGateJunctionSlot[];
+    prepared_fragments?: GoldenGatePreparedRow[];
+    final_sequence?: string | null;
+    part_order?: number[];
+    order_summary?: GoldenGateOrderSummary | null;
+}
+export interface SuggestGoldenGateResponse {
+    proposals: SuggestGoldenGateProposal[];
+    part_reports?: GoldenGatePartReport[];
+    enzymes: Array<{ enzyme_id: string; name: string; empirical: string; status: string; internal_sites?: number | null }>;
+    diagnostics: string[];
+}
+export const suggestGoldenGatePlan = (data: SuggestGoldenGateRequest, signal?: AbortSignal) =>
+    api.post<SuggestGoldenGateResponse>('/api/molbio/assembly/golden-gate/suggest', data, { signal });
+
+export interface SuggestRestrictionRequest {
+    backbone_sequence?: string | null; backbone_revision_id?: string | null; backbone_features?: SequenceFeature[];
+    backbone_source_document_id?: string | null; insert_source_document_id?: string | null;
+    backbone_topology?: 'circular' | 'linear';
+    insert_sequence?: string | null; insert_revision_id?: string | null; insert_features?: SequenceFeature[];
+    insert_topology?: 'circular' | 'linear';
+    backbone_region_start?: number | null; backbone_region_end?: number | null;
+    insert_start?: number | null; insert_end?: number | null;
+    vector_five_prime_phosphate?: 'unknown' | 'phosphorylated' | 'unphosphorylated';
+    enzymes?: string[]; limit?: number;
+}
+export interface RestrictionCloningSelection {
+    kind: 'existing_flank_sites' | 'primer_tail'; vector_enzymes: string[]; insert_enzymes: string[];
+    vector_fragment_index: number; insert_fragment_index: number; insert_orientation: 'forward' | 'reverse';
+    primers: PrimerDesignCandidate[]; primer_notes: string[];
+    parent_revisions: Partial<Record<'backbone' | 'insert', string>>;
+}
+export interface SuggestRestrictionProposal {
+    kind: 'existing_flank_sites' | 'primer_tail';
+    vector_enzymes: string[]; insert_enzymes: string[];
+    directional: boolean; insert_orientation: 'forward' | 'reverse' | 'either';
+    vector_ends_match_each_other: boolean; vector_self_ligation: string; vector_end_seal: string;
+    vector_length: number; insert_payload_length: number; insert_contributed_length: number; product_length: number; product_sequence: string;
+    vector_source_segments: Array<[number, number]>; insert_source_segments: Array<[number, number]>;
+    assembly_request: LigationAssemblyRequest; selection: RestrictionCloningSelection;
+    prepared_insert_sequence?: string | null;
+    junction_sites: Array<{ between: string; regenerated: string[]; destroyed: string[]; note: string }>;
+    primer_tails: null | { forward_primer_5prime_tail: string; reverse_primer_5prime_tail: string; note: string };
+}
+export interface SuggestRestrictionResponse {
+    proposals: SuggestRestrictionProposal[]; no_suitable_pair: boolean;
+    alternatives: Array<{ method: string; note: string }>; notes: string[];
+}
+export const suggestRestrictionCloning = (data: SuggestRestrictionRequest, signal?: AbortSignal) =>
+    api.post<SuggestRestrictionResponse>('/api/molbio/assembly/restriction-cloning/suggest', data, { signal });
+export interface PreparedRestrictionCloning {
+    operation_id: string; selection: RestrictionCloningSelection; request: SuggestRestrictionRequest;
+    outputs: Array<{ document_id: string; revision_id: string; name: string; role: string }>;
+    assembly_request: LigationAssemblyRequest; notes: string[];
+}
+export const prepareRestrictionCloning = (data: {
+    request: SuggestRestrictionRequest; selection: RestrictionCloningSelection; name?: string; idempotency_key?: string;
+}) => api.post<PreparedRestrictionCloning>('/api/molbio/assembly/restriction-cloning/prepare', data);
+export const fetchRestrictionCloningPreparation = (operationId: string, signal?: AbortSignal) =>
+    api.get<PreparedRestrictionCloning>(`/api/molbio/assembly/restriction-cloning/preparations/${encodeURIComponent(operationId)}`, { signal });
+
 export interface GoldenGateCatalogAuthority {
     enzyme_id: string;
     catalog_id: string;
@@ -3701,11 +3916,13 @@ export interface AssemblyOperationResponse {
     product: AssemblyProduct;
     saved_sequence?: SavedSequenceMetadata | null;
     message: string;
+    junction_sites?: Array<{ left_fragment_id: string; right_fragment_id: string; position: number; regenerated: string[]; destroyed: string[]; note: string }>;
 }
 
 export interface LigationAssemblyRequest {
     fragments: AssemblyFragmentInput[];
     circular?: boolean;
+    observe_enzymes?: string[];
     new_name?: string;
     save_description?: string;
 }
@@ -3785,6 +4002,7 @@ export interface GibsonDesignRequest {
     selected_candidate_checksum?: string;
     new_name?: string;
     save_description?: string;
+    junctions?: GibsonJunctionInput[];
 }
 
 export interface GibsonDesignedPrimer {
@@ -3858,6 +4076,7 @@ export interface GoldenGateAssemblyOptionsResponse {
 
 export interface FetchNucleotideSequencesParams {
     sequence_ids?: string;
+    project_membership?: 'all' | 'unassigned';
     limit?: number;
     offset?: number;
     search?: string;
@@ -3867,8 +4086,13 @@ export interface FetchNucleotideSequencesParams {
     sort_desc?: boolean;
 }
 
-export const fetchNucleotideSequences = (params: FetchNucleotideSequencesParams = {}) =>
-    api.get<NucleotideSequenceListItem[]>('/api/sequences/', { params });
+export const fetchNucleotideSequences = async (params: FetchNucleotideSequencesParams = {}) => {
+    const response = await api.get<NucleotideSequenceListItem[]>('/api/sequences/', { params });
+    if (params.project_membership === 'unassigned' && response.headers['x-bns-sequence-scope'] !== 'unassigned') {
+        throw new Error('The sequence shelf needs the updated Project membership API. Project sequences were hidden.');
+    }
+    return response;
+};
 
 export interface MolBioSequenceRevision {
     id: string;
@@ -4129,7 +4353,7 @@ export interface SequenceAlignmentResult {
 
 export interface PrimerDesignSearchProfile {
     version: 'flanking_exact_v1'; candidates_per_strand: 48; target_overlap_bases: 4;
-    origin_wrapping_candidates: false; product_size_includes_tails: true; overlapping_footprints: false; substrate: 'dna_template'; qc: PrimerQcProfile;
+    origin_wrapping_candidates: boolean; product_size_includes_tails: true; overlapping_footprints: false; substrate: 'dna_template'; qc: PrimerQcProfile;
 }
 
 export interface PrimerDesignRequest {
@@ -4785,8 +5009,8 @@ export interface PrimerTmInput {
 
 export interface PrimerTmResult {
     schema_version?: 'primer-tm-result-v1';
-    effective_input?: PrimerTmInput;
-    effective_settings?: PrimerTmSettings;
+    effective_input?: PrimerTmInput | null;
+    effective_settings?: PrimerTmSettings | null;
     id?: string | null;
     name?: string | null;
     sequence: string;
@@ -4881,6 +5105,63 @@ export interface PrimerQcRequest {
     include_pairwise?: boolean;
 }
 
+export type PrimerThermoSeverity = 'none' | 'yellow' | 'orange';
+
+export interface PrimerThermoRequest {
+    schema_version?: 'primer-thermo-v1';
+    primers: Array<{ id?: string; name?: string; sequence: string }>;
+    pairs?: Array<{ left: number; right: number }>;
+    settings?: {
+        temperature_c?: number;
+        na_mM?: number;
+        k_mM?: number;
+        tris_mM?: number;
+        mg_mM?: number;
+        dntps_mM?: number;
+    };
+}
+
+export interface PrimerThermoStructure {
+    dg_kcal_mol: number;
+    severity: PrimerThermoSeverity;
+    structure: string;
+    three_prime_paired: boolean;
+}
+
+export interface PrimerThermoEntry {
+    id?: string | null;
+    name?: string | null;
+    sequence: string;
+    hairpin: PrimerThermoStructure | null;
+    self_dimer: PrimerThermoStructure | null;
+    warnings: string[];
+}
+
+export interface PrimerThermoPairResult extends PrimerThermoStructure {
+    left: number;
+    right: number;
+    left_name?: string | null;
+    right_name?: string | null;
+}
+
+export interface PrimerThermoResponse {
+    schema_version?: 'primer-thermo-result-v1';
+    engine: string;
+    engine_version: string;
+    credit: string;
+    citations: string[];
+    caveats: string[];
+    thresholds_kcal_mol: { yellow_at_or_below: number; orange_at_or_below: number };
+    temperature_c: number;
+    monovalent_equivalent_mM: number;
+    salt_note?: string | null;
+    primers: PrimerThermoEntry[];
+    pairs: PrimerThermoPairResult[];
+}
+
+export const calculatePrimerThermo = (data: PrimerThermoRequest, signal?: AbortSignal) =>
+    api.post<PrimerThermoResponse>('/api/molbio/primer-thermo', { schema_version: 'primer-thermo-v1', ...data }, { signal });
+
 export const calculatePrimerQc = (data: PrimerQcRequest, signal?: AbortSignal) => api.post<PrimerQcResponse>('/api/molbio/primer-qc', { schema_version: 'primer-qc-v1', ...data }, { signal });
 
 export const designPrimers = (data: PrimerDesignRequest, signal?: AbortSignal) =>
@@ -4956,12 +5237,20 @@ export interface OntInstrumentRun {
     fake_or_demo_devices: false;
 }
 
+export interface OntBasecallingChoice {
+    quality: string;
+    default: boolean;
+    default_min_qscore: number | null;
+    modified_bases: Array<{ id: string; canonical_base: string | null; context: string | null }>;
+}
+
 export interface OntProtocolOption {
     option_id: string;
     option_receipt_id: string;
     expires_at: string;
     protocol_label: string;
     basecalling_enabled: boolean;
+    basecalling_choices?: OntBasecallingChoice[];
     output_policy_id: string;
     output_policy_label: string;
 }
@@ -5007,13 +5296,78 @@ export const createOntRunIntent = (position: string, payload: {
     option_receipt_id: string;
     sample_id?: string;
     experiment_group?: string;
+    barcode_samples?: Array<{ barcode: string; alias: string }>;
+    basecalling?: { quality?: string; modified_bases?: string[]; min_qscore?: number };
+    adaptive_sampling?: { mode: 'enrich' | 'deplete' | 'barcode_balance'; reference_path?: string; bed_path?: string };
 }) => api.post<OntInstrumentRun>(`/api/ont/positions/${encodeURIComponent(position)}/run-intents`, payload);
+
+export interface OntBarcodeBasecallHandoff {
+    run_id: string;
+    pod5_dir: string;
+    barcode_kit: string | null;
+    barcode_samples: Array<{ barcode: string; alias: string }>;
+    sample_sheet: string | null;
+}
+
+/** A finished run's POD5 folder, barcoding kit and sample names, ready for the ONT form. */
+export const requestOntBarcodeBasecallHandoff = (runId: string) =>
+    api.post<OntBarcodeBasecallHandoff>(`/api/ont/runs/${encodeURIComponent(runId)}/handoff/barcode-basecall`, {});
 
 export const startOntRunIntent = (runId: string, payload: { confirm_start: boolean; intent_generation: number }) =>
     api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/start`, payload);
 
 export const stopOntInstrumentRun = (runId: string) =>
     api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/stop`, { confirm_stop: true });
+
+export interface OntRunLiveYield {
+    read_count: number;
+    basecalled_pass_read_count: number;
+    basecalled_fail_read_count: number;
+    basecalled_pass_bases: number;
+    basecalled_fail_bases: number;
+    estimated_selected_bases: number;
+}
+
+export interface OntRunLiveActivity {
+    start_seconds: number;
+    sequencing: number;
+    pore: number;
+    recovering: number;
+    inactive: number;
+    unclassified: number;
+}
+
+export type OntRunLiveCumulative = OntRunLiveYield & { seconds: number };
+
+export interface OntRunLiveReadLengths {
+    n50: number;
+    buckets: Array<{ start: number; end: number; value: number; rejected?: number }>;
+}
+
+export interface OntRunLive {
+    run_id: string;
+    status: string;
+    available: boolean;
+    basecalling_enabled?: boolean;
+    fraction_basecalled?: number | null;
+    fraction_skipped?: number | null;
+    acquisition_count?: number | null;
+    barcoding_enabled?: boolean;
+    barcodes_available?: boolean;
+    channel_count?: number | null;
+    totals?: OntRunLiveYield;
+    barcodes?: Array<OntRunLiveYield & { barcode: string; alias: string | null }>;
+    channels?: { sequencing_fraction: number; open_pore_fraction: number; other_fraction: number } | null;
+    charts?: {
+        pore_activity: OntRunLiveActivity[];
+        cumulative: OntRunLiveCumulative[];
+        read_lengths: OntRunLiveReadLengths | null;
+    };
+}
+
+/** Live reads, basecalled yield and per-barcode output MinKNOW reports for a run. Read-only. */
+export const fetchOntInstrumentRunLive = (runId: string) =>
+    api.get<OntRunLive>(`/api/ont/runs/${encodeURIComponent(runId)}/live`);
 
 export const fetchOntInstrumentRun = (runId: string) =>
     api.get<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}`);
@@ -5670,6 +6024,81 @@ export const fetchMolecularRevision = (sequenceId: string, revisionId: string) =
         `/api/sequences/${encodeURIComponent(sequenceId)}/revisions/${encodeURIComponent(revisionId)}`,
     ));
 
+// --- Fragment chooser and revision relatives (lane l7) ---
+export interface ChooserEnd {
+    kind: 'natural' | 'blunt' | 'five_prime_overhang' | 'three_prime_overhang';
+    overhang_sequence_5to3?: string | null;
+    protruding_strand?: 'top' | 'bottom' | null;
+    length_nt?: number;
+    five_prime_phosphate?: string;
+    enzyme_created?: boolean;
+}
+
+export interface ChooserItem {
+    document_id: string;
+    revision_id: string;
+    revision_number: number;
+    sequence_id: string | null;
+    name: string;
+    topology: 'linear' | 'circular';
+    length: number;
+    is_current: boolean;
+    origin: 'shelf' | 'retained';
+    produced_by: { operation_id: string; operation_kind: string; role: string } | null;
+    left_end?: ChooserEnd | null;
+    right_end?: ChooserEnd | null;
+}
+
+export interface ChooserPage { items: ChooserItem[]; next_cursor: string | null }
+
+export const fetchChooser = (
+    params: { q?: string; kinds?: string[]; cursor?: string | null; limit?: number } = {},
+    signal?: AbortSignal,
+) => apiData(api.get<ChooserPage>('/api/molbio/chooser', {
+    params: {
+        ...(params.q ? { q: params.q } : {}),
+        ...(params.kinds?.length ? { kinds: params.kinds.join(',') } : {}),
+        ...(params.cursor ? { cursor: params.cursor } : {}),
+        limit: params.limit ?? 50,
+    },
+    signal,
+}));
+
+export interface RelativeEdge {
+    revision_id: string;
+    document_id: string;
+    document_name: string;
+    revision_number: number;
+    role: string;
+    position: number;
+    topology: 'linear' | 'circular';
+    length: number;
+}
+
+export interface RelativeOperation {
+    operation_id: string;
+    operation_kind: string;
+    created_at: string;
+    inputs: RelativeEdge[];
+    outputs: RelativeEdge[];
+}
+
+export interface RevisionRelatives {
+    revision: { revision_id: string; document_id: string; document_name: string; revision_number: number };
+    sources: RelativeOperation[];
+    derived: { items: RelativeOperation[]; next_cursor: string | null };
+}
+
+export const fetchRevisionRelatives = (
+    revisionId: string,
+    params: { cursor?: string | null; limit?: number } = {},
+    signal?: AbortSignal,
+) => apiData(api.get<RevisionRelatives>(
+    `/api/molbio/revisions/${encodeURIComponent(revisionId)}/relatives`,
+    { params: { ...(params.cursor ? { cursor: params.cursor } : {}), limit: params.limit ?? 25 }, signal },
+));
+// --- end lane l7 block ---
+
 export interface PcrExperimentRevision {
     id: string;
     experiment_id: string;
@@ -5992,6 +6421,51 @@ export const requestOntRawSignalWaveform = (
 ));
 export const fetchOntRawSignalWaveform = (lookupId: string) =>
     apiData(api.get<OntRawSignalWaveform>(`/api/ont/raw-signal/waveforms/${encodeURIComponent(lookupId)}`));
+export interface OntRawSignalSource {
+    run_id: string;
+    observed_generation: number;
+    origin: 'sequenced' | 'imported';
+    name: string;
+    status: string;
+    created_at: string;
+    source: { representation_id: string; format: 'pod5' | 'slow5' | 'blow5'; bytes: number; removed: boolean } | null;
+    /** `readable` is false when the BLOW5 files no longer match what BMS recorded, so nothing new can be read from them. */
+    blow5: { representation_id: string; read_count: number | null; readable: boolean } | null;
+    conversion: { job_id: string; state: string; reason_code: string } | null;
+    /** Newest move-tagged basecalls registered against this signal; squiggle views are built from them. */
+    basecalls: { move_source_id: string; state: string; reason_code: string; basecall_model_id: string | null; read_count: number | null; external: boolean } | null;
+    results: Array<{ job_id: string; name: string; created_at: string | null; signal_workbench: boolean }>;
+}
+/** Runs and imported files of one Project that hold raw signal. */
+export const fetchOntRawSignalSources = (experimentGroup: string) =>
+    apiData(api.get<{ sources: OntRawSignalSource[] }>('/api/ont/raw-signal/sources', { params: { experiment_group: experimentGroup } }));
+export interface OntRawSignalReadPage {
+    representation_id: string;
+    total: number;
+    matched: number;
+    offset: number;
+    read_ids: string[];
+}
+/** Read IDs in one ready indexed BLOW5, sorted and paged; `query` matches any part of the ID. */
+export const fetchOntRawSignalReads = (
+    runId: string, observedGeneration: number, representationId: string,
+    options: { offset?: number; limit?: number; query?: string } = {},
+) => apiData(api.get<OntRawSignalReadPage>(
+    `/api/ont/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/raw-signal/${encodeURIComponent(representationId)}/reads`,
+    { params: { offset: options.offset ?? 0, limit: options.limit ?? 50, ...(options.query ? { q: options.query } : {}) } },
+));
+export interface OntRawSignalOpenedRead {
+    lookup_id: string;
+    representation_id: string;
+    read_id: string;
+    state: OntRawSignalWaveform['state'];
+    sample_count: number | null;
+}
+/** Reads whose waveform was already opened for this file, newest first. */
+export const fetchOntRawSignalOpenedReads = (runId: string, observedGeneration: number) =>
+    apiData(api.get<{ lookups: OntRawSignalOpenedRead[] }>(
+        `/api/ont/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/raw-signal/waveform-lookups`,
+    ));
 export interface OntBasecallDeviceOptions {
     default: string;
     cuda_available: boolean | null;
@@ -6620,6 +7094,24 @@ export interface OntSignalViewerSessionUpdate {
 }
 
 const signalWorkbenchRoot = '/api/ont/signal-workbench';
+export interface OntExternalAlignmentJob {
+    job_id: string;
+    name: string;
+    status: string;
+    dataset_id: string;
+    run_id: string;
+    observed_generation: number;
+    move_source_id: string;
+    reference_revision_id: string;
+}
+/** Aligns an imported file's basecalls (a validated move BAM) to one Project reference, so its squiggle views can open. */
+export const createOntExternalAlignmentJob = (request: {
+    move_source_id: string;
+    reference_revision_id: string;
+    global_domain_experiment_id: string;
+    molbio_ngs_state_revision_id: string;
+    name: string;
+}) => apiData(api.post<OntExternalAlignmentJob>(`${signalWorkbenchRoot}/external-alignment-jobs`, request));
 export const fetchOntSignalWorkbenchCapabilities = (
     runId: string,
     observedGeneration: number,
@@ -6945,3 +7437,31 @@ export const updateProjectHubPlasmidInfo = (
     `${projectHubRoot(projectId, experimentId, domainId)}/plasmids/${encodeURIComponent(sequenceId)}/info`,
     request,
 ));
+
+// --- Branch export/import (lane w2d2; routes from lane w2c) ---
+export interface MolBioBranchBundle {
+    format: 'molbio-branch';
+    version: number;
+    selected: string[];
+    documents: Array<{ id: string; [key: string]: unknown }>;
+    revisions: Array<{ id: string; document_id: string; [key: string]: unknown }>;
+    operations: Array<Record<string, unknown>>;
+    inputs: Array<Record<string, unknown>>;
+    outputs: Array<Record<string, unknown>>;
+}
+
+export interface MolBioBranchImportResult {
+    batch_id: string;
+    already_imported: boolean;
+    id_map: { documents: Record<string, string>; revisions: Record<string, string>; operations: Record<string, string> };
+    created: { documents: number; revisions: number; operations: number };
+    selected: string[];
+}
+
+export const exportMolBioBranch = (revisionIds: string[]) =>
+    apiData(api.post<MolBioBranchBundle>('/api/molbio/branches/export', { revision_ids: revisionIds }));
+
+export const importMolBioBranch = (bundle: MolBioBranchBundle, idempotencyKey?: string) =>
+    apiData(api.post<MolBioBranchImportResult>('/api/molbio/branches/import', {
+        bundle, ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+    }));

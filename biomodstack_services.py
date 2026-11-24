@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import re
 import secrets
 import signal
@@ -1289,9 +1290,9 @@ def render_workflow_slice(lane: str) -> str:
     )
 
 
-def _ont_runtime_identity(
+def _ont_reference_image(
     project_root: Path, policy_name: str, label: str
-) -> tuple[str, str]:
+) -> str:
     policy_path = (
         project_root
         / "platform"
@@ -1301,18 +1302,17 @@ def _ont_runtime_identity(
         / policy_name
     )
     if not policy_path.is_file():
-        return "", ""
+        return ""
     try:
         policy = json.loads(policy_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ServiceManagerError(f"ONT {label} runtime policy is unreadable") from exc
     if not isinstance(policy, Mapping):
         raise ServiceManagerError(f"ONT {label} runtime policy must be an object")
+    # The reference build is tried first. The API falls back to the image under
+    # the tool's tag, so a local build needs no id here.
     runtime_id = str(policy.get("runtime_id", "")).strip().lower()
-    oci_digest = str(policy.get("oci_digest", "")).strip().lower()
-    if runtime_id != oci_digest or not re.fullmatch(r"sha256:[0-9a-f]{64}", runtime_id):
-        raise ServiceManagerError(f"ONT {label} runtime policy identity is invalid")
-    return runtime_id, runtime_id.removeprefix("sha256:")
+    return runtime_id if re.fullmatch(r"sha256:[0-9a-f]{64}", runtime_id) else ""
 
 
 def systemd_value(value: object) -> str:
@@ -1443,7 +1443,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     )
     from biomodstack_local_resources import configured_local_policy
     local_policy = configured_local_policy()
-    shared_data_root = Path(str(resolved.get("data_root", Path("/mnt/BioModStack")))).expanduser().resolve()
+    shared_data_root = Path(str(resolved.get("data_root", Path.home() / ".biomodstack"))).expanduser().resolve()
     # Host support bodies are independent of lane-local BMS_DATA/job state.
     support_payload_root = Path(os.environ.get("BMS_CM_API_RUNTIME_DIR", "").strip() or
         str(Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) /
@@ -1496,7 +1496,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     if mode == CONTAINER_RUNTIME_MODE:
         adapter_runner = root / "scripts" / "run_biomodstack_workflow_adapter.sh"
         core_runner = root / "scripts" / "run_biomodstack_core_runtime.sh"
-        production_state_root = str(resolved.get("data_root", Path("/mnt/BioModStack")))
+        production_state_root = str(resolved.get("data_root", Path.home() / ".biomodstack"))
         production_inputs_dir = str(resolved.get("inputs_dir", Path(production_state_root) / "inputs"))
         production_db_path = str(resolved.get("db_path", Path(production_state_root) / "biomodstack.db"))
         production_work_dir = str(resolved.get("work_dir", Path(production_state_root) / "work"))
@@ -1665,17 +1665,22 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             "",
         )
     )
-    ont_container_runtime = os.environ.get("BMS_ONT_CONTAINER_RUNTIME", "docker").strip() or "docker"
-    ont_runtime_image, ont_runtime_digest = _ont_runtime_identity(
+    # Same order the API uses: the ONT setting, the general setting, then whichever is installed.
+    ont_container_runtime = (
+        os.environ.get("BMS_ONT_CONTAINER_RUNTIME", "").strip()
+        or os.environ.get("BMS_CONTAINER_RUNTIME", "").strip()
+        or ("podman" if shutil.which("docker") is None and shutil.which("podman") is not None else "docker")
+    )
+    ont_runtime_image = _ont_reference_image(
         root, "raw_signal_runtime_policy_v1.json", "raw signal"
     )
-    ont_squigualiser_image, ont_squigualiser_digest = _ont_runtime_identity(
+    ont_squigualiser_image = _ont_reference_image(
         root, "runtime_policy_v1.json", "Squigualiser"
     )
-    ont_squigulator_image, ont_squigulator_digest = _ont_runtime_identity(
+    ont_squigulator_image = _ont_reference_image(
         root, "squigulator_runtime_policy_v1.json", "Squigulator producer"
     )
-    ont_comparison_image, ont_comparison_digest = _ont_runtime_identity(
+    ont_comparison_image = _ont_reference_image(
         root,
         "comparison_render_runtime_policy_v1.json",
         "Squigualiser comparison renderer",
@@ -1683,16 +1688,12 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     ont_runtime_environment = "\n        ".join(
         "Environment=" + systemd_value(f"{key}={value}")
         for key, value in {
-            "BMS_CONTAINER_RUNTIME": os.environ.get("BMS_CONTAINER_RUNTIME", ont_container_runtime),
+            "BMS_CONTAINER_RUNTIME": ont_container_runtime,
             "BMS_ONT_CONTAINER_RUNTIME": ont_container_runtime,
             "BMS_ONT_SLOW5TOOLS_IMAGE": ont_runtime_image,
-            "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST": ont_runtime_digest,
             "BMS_ONT_SQUIGUALISER_IMAGE": ont_squigualiser_image,
-            "BMS_ONT_SQUIGUALISER_IMAGE_DIGEST": ont_squigualiser_digest,
             "BMS_ONT_SQUIGULATOR_IMAGE": ont_squigulator_image,
-            "BMS_ONT_SQUIGULATOR_IMAGE_DIGEST": ont_squigulator_digest,
             "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE": ont_comparison_image,
-            "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST": ont_comparison_digest,
             # Basecalling device for the API (launch params) and adapter (Nextflow).
             **({"BMS_ONT_DORADO_DEVICE": os.environ["BMS_ONT_DORADO_DEVICE"].strip()}
                if os.environ.get("BMS_ONT_DORADO_DEVICE", "").strip() else {}),
@@ -2109,6 +2110,49 @@ def units_need_daemon_reload(unit_names: list[str], project_root: Path | None = 
 
 def ensure_target_enabled(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     run_systemctl("enable", runtime_target_unit(runtime_mode), project_root=project_root)
+
+
+def dev_autostart_enabled(project_root: Path | None = None) -> bool | None:
+    """True/False when the Development target is (not) enabled for session start; None if it is not installed or unreadable."""
+    try:
+        result = run_systemctl("is-enabled", DEV_TARGET_UNIT, check=False, project_root=project_root)
+    except (FileNotFoundError, OSError):
+        return None
+    state = (result.stdout or "").strip()
+    if state == "enabled":
+        return True
+    if state == "disabled":
+        return False
+    return None
+
+
+def user_linger_enabled() -> bool | None:
+    """Whether this account's user manager (and so an enabled Development target) starts at boot, before anyone logs in."""
+    try:
+        result = subprocess.run(
+            ["loginctl", "show-user", str(os.getuid()), "--property=Linger", "--value"],
+            check=False, capture_output=True, text=True, timeout=10,
+        )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        return None
+    value = (result.stdout or "").strip().lower()
+    return True if value == "yes" else False if value == "no" else None
+
+
+def set_dev_autostart(enabled: bool, project_root: Path | None = None) -> bool | None:
+    """Enable or disable starting the Development target with the user session. Running services are left alone."""
+    if dev_autostart_enabled(project_root) is None:
+        raise ServiceManagerError(
+            f"{DEV_TARGET_UNIT} is not installed for this account yet; press Start once with Dev selected."
+        )
+    result = run_systemctl("enable" if enabled else "disable", DEV_TARGET_UNIT, check=False, project_root=project_root)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        raise ServiceManagerError(
+            f"systemctl --user {'enable' if enabled else 'disable'} {DEV_TARGET_UNIT} failed"
+            + (f": {detail[-1]}" if detail else "")
+        )
+    return dev_autostart_enabled(project_root)
 
 
 def ensure_mobile_update_publisher_running(

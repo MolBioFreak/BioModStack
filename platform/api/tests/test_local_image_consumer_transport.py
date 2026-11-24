@@ -230,6 +230,7 @@ workflow { ResourceSetupProbe(Channel.of('task-input')) }
     context = {
         'resources': {'required': {'cpus': 1, 'memory_bytes': 268435456}},
         'resource_lock_path': str(lock), 'working_directory': str(tmp_path),
+        'artifact_root': str(tmp_path), 'ledger_path': str(tmp_path / 'ledger.json'),
         'execution_plan': {'metadata': {'static_components': [{
             'authority': authority, 'selection_json': {'native_process': name},
             'resources_json': json.loads(__import__('native_components').native_resource_policy({})),
@@ -282,13 +283,15 @@ def test_ngs_module_render_has_no_nested_runtime_fallback(tmp_path, module, proc
     block = source.split('process ' + process + ' {', 1)[1].split('\nprocess ', 1)[0]
     assert "label 'fastq_qc_cpu'" in block
     body = block.split('    script:', 1)[1].rsplit('}', 1)[0]
-    helper = source.split('\nprocess ', 1)[0]
+    # Module includes serve publishDir only; plain Groovy cannot evaluate them.
+    helper = '\n'.join(line for line in source.split('\nprocess ', 1)[0].splitlines()
+                       if not line.startswith('include '))
     bindings = {
-        'params': {'code_root': str(ROOT)}, 'projectDir': str(ROOT),
+        'params': {'code_root': str(ROOT)}, 'projectDir': str(ROOT), 'task': {'cpus': 1},
         **{key: 'fixture' for key in ('reference', 'aligned_bam', 'aligned_bai',
             'verification_input', 'per_base_support', 'alignment_stats',
             'dimer_breakpoint_call', 'dimer_secondary_summary', 'result_root',
-            'runtime_provenance')},
+            'runtime_provenance', 'sequencing_kits')},
     }
     (tmp_path / 'bindings.json').write_text(json.dumps(bindings))
     script = tmp_path / 'module.groovy'

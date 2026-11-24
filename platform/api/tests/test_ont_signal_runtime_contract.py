@@ -341,6 +341,16 @@ def test_move_evidence_rejects_model_molecule_mismatch() -> None:
         )
 
 
+def test_calibration_uses_the_reads_that_are_available_up_to_the_requested_count() -> None:
+    reads = [f"read-{index}" for index in range(7)]
+    few = runtime.select_calibration_reads(reads, 100)
+    assert sorted(few) == sorted(reads) and len(few) == 7
+    assert runtime.select_calibration_reads(list(reversed(reads)), 100) == few  # same order whatever the input order
+    assert runtime.select_calibration_reads(reads, 3) == few[:3]
+    with pytest.raises(ValueError, match="nothing to calibrate on"):
+        runtime.select_calibration_reads([], 100)
+
+
 def test_rna_calibration_orientation_and_upstream_flag_are_bound() -> None:
     assert runtime.calibration_sequence("ACGT", "dna") == "ACGT"
     assert runtime.calibration_sequence("ACGT", "rna") == "TGCA"
@@ -853,10 +863,9 @@ def test_container_command_sets_worker_label_and_finite_fsize(
     broker.mkdir(mode=0o700)
     digest = json.loads(worker_module.RUNTIME_POLICY_PATH.read_text())['runtime_id'].removeprefix("sha256:")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{digest}")
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", digest)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "podman")
     monkeypatch.setattr(
-        worker_module.subprocess,
+        subprocess,
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(
             args[0], 0, stdout=f"sha256:{digest}\n", stderr=""
@@ -889,56 +898,18 @@ def test_container_command_fails_closed_when_approved_image_is_absent(
     broker.mkdir(mode=0o700)
     digest = json.loads(worker_module.RUNTIME_POLICY_PATH.read_text())['runtime_id'].removeprefix("sha256:")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{digest}")
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", digest)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "docker")
     monkeypatch.setattr(
-        worker_module.subprocess,
+        subprocess,
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(
             args[0], 1, stdout="", stderr="image is absent"
         ),
     )
 
-    with pytest.raises(RuntimeError, match="local approved Squigualiser image"):
+    monkeypatch.setattr(worker_module.shutil, "which", lambda name: "/usr/bin/" + name)
+    with pytest.raises(RuntimeError, match="no local image for BMS_ONT_SQUIGUALISER_IMAGE"):
         OntSignalWorker(None, None)._container_command(output, broker, kind="mapping")
-
-
-@pytest.mark.parametrize("image_id,valid", [
-    ("sha256:" + "0" * 64, True),
-    ("sha256:" + "g" * 64, False),
-    ("mutable:tag", False),
-])
-def test_squigualiser_build_reports_measured_candidate_without_selecting_it(
-    tmp_path: Path, image_id: str, valid: bool,
-) -> None:
-    runtime = tmp_path / "docker"
-    runtime.write_text(
-        "#!/usr/bin/env python3\n"
-        "import os, sys\n"
-        "if sys.argv[1] == 'build': raise SystemExit(0)\n"
-        "if sys.argv[1:3] == ['image', 'inspect']:\n"
-        "    print(os.environ['FAKE_IMAGE_ID'])\n"
-        "    raise SystemExit(0)\n"
-        "raise SystemExit(64)\n",
-        encoding="utf-8",
-    )
-    runtime.chmod(0o755)
-    script = Path(__file__).parents[3] / "scripts" / "build_ont_squigualiser_runtime.sh"
-    environment = {
-        **os.environ,
-        "PATH": f"{tmp_path}:{os.environ['PATH']}",
-        "BMS_CONTAINER_RUNTIME": "docker",
-        "FAKE_IMAGE_ID": image_id,
-    }
-    result = subprocess.run(
-        ["bash", str(script)], env=environment, capture_output=True, text=True
-    )
-    if valid:
-        assert result.returncode == 0, result.stderr
-        assert f"BMS_ONT_SQUIGUALISER_IMAGE={image_id}" in result.stdout
-    else:
-        assert result.returncode != 0
-        assert "Invalid built image ID" in result.stderr
 
 
 @pytest.mark.asyncio
@@ -972,10 +943,9 @@ async def test_retained_parent_keeps_exact_inode_bytes_and_command_never_reopens
     broker.mkdir(mode=0o700)
     digest = json.loads(worker_module.RUNTIME_POLICY_PATH.read_text())['runtime_id'].removeprefix("sha256:")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{digest}")
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", digest)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "docker")
     monkeypatch.setattr(
-        worker_module.subprocess,
+        subprocess,
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(
             args[0], 0, stdout=f"sha256:{digest}\n", stderr=""
@@ -1186,55 +1156,42 @@ def test_runtime_broker_retains_parent_fds_across_trusted_child_exec(tmp_path: P
     ("squigulator_producer", "SQUIGULATOR_POLICY_PATH", "BMS_ONT_SQUIGULATOR_IMAGE"),
     ("squigualiser_comparison_renderer", "COMPARISON_RENDER_POLICY_PATH", "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE"),
 ])
-def test_selected_policy_is_single_runtime_authority_and_digest_is_provenance(
+def test_local_image_runs_on_its_own_id_and_policy_stays_provenance(
     tmp_path, monkeypatch, stage, policy_attribute, image_env,
 ):
     policy = json.loads(getattr(worker_module, policy_attribute).read_text())
-    # A release can select its actual rebuilt ID without editing Python constants.
-    selected = "sha256:" + "b" * 64
-    policy["runtime_id"] = policy["oci_digest"] = selected
     raw = json.dumps(policy, indent=4).encode() + b"\n"
     path = tmp_path / "policy.json"
     path.write_bytes(raw)
     monkeypatch.setattr(worker_module, policy_attribute, path)
-    monkeypatch.setenv(image_env, selected)
-    monkeypatch.setenv(image_env + "_DIGEST", "b" * 64)
+    # A locally built image has an id the repository cannot know in advance.
+    local = "sha256:" + "c" * 64
+    asked: list[str] = []
+    def resolve(env_name: str, runtime: str) -> tuple[str, str]:
+        asked.append(env_name)
+        return local, "c" * 64
+    monkeypatch.setattr(worker_module, "local_image_identity", resolve)
     identity = (OntSignalWorker._runtime_identity() if stage is None
                 else OntSignalWorker._comparison_runtime_identity(stage))
-    assert identity["image"] == selected
+    assert asked == [image_env]
+    assert identity["image"] == local != policy["runtime_id"]
+    assert identity["image_digest"] == "c" * 64
     assert identity["policy_manifest_sha256" if stage is None else "policy_sha256"] == hashlib.sha256(raw).hexdigest()
     if stage is not None:
         assert identity["wrapper_sha256"] == policy["wrapper_sha256"]
-    monkeypatch.setenv(image_env, "sha256:" + "c" * 64)
-    with pytest.raises(RuntimeError, match="identity"):
-        if stage is None:
-            OntSignalWorker._runtime_identity()
-        else:
-            OntSignalWorker._comparison_runtime_identity(stage)
-
-
-def test_runtime_identity_is_bound_to_the_staged_approved_oci_policy(
+def test_runtime_identity_records_the_local_image_and_upstream_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    approved = json.loads(worker_module.RUNTIME_POLICY_PATH.read_text())['runtime_id'].removeprefix("sha256:")
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{approved}")
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", approved)
-
+    local = "d" * 64
+    monkeypatch.setattr(
+        worker_module, "local_image_identity", lambda env_name, runtime: (f"sha256:{local}", local)
+    )
     identity = OntSignalWorker._runtime_identity()
-
-    assert identity["image"] == f"sha256:{approved}"
-    assert identity["image_digest"] == approved
+    assert identity["image"] == f"sha256:{local}"
+    assert identity["image_digest"] == local
     assert identity["upstream_version"] == "0.7.0"
     assert identity["upstream_commit"] == "5a2404f1f43bc3227a85475c59b2b77970078b2e"
     assert len(identity["policy_manifest_sha256"]) == 64
-
-    arbitrary = "d" * 64
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{arbitrary}")
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", arbitrary)
-    with pytest.raises(RuntimeError, match="approved runtime policy"):
-        OntSignalWorker._runtime_identity()
-
-
 class _FailedCleanupProcess:
     returncode = 19
 
@@ -1485,14 +1442,17 @@ def test_worker_uses_short_private_broker_socket_path_for_deep_output_roots(
     worker = OntSignalWorker(None, None)
     seen: dict[str, Path] = {}
 
-    def fake_container_command(output: Path, broker: Path, *, kind: str) -> list[str]:
+    def fake_container_command(output: Path, broker: Path, *, kind: str, identity: dict[str, str] | None = None) -> list[str]:
         seen["broker"] = broker
+        # The image is resolved once at dispatch and handed to the command.
+        assert identity == {"image": "sha256:" + "a" * 64, "image_digest": "a" * 64}
         assert len(str(broker / "parents.sock").encode()) < 108
         return ["runtime", "run"]
 
     async def fake_execute(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {"ok": True}
 
+    monkeypatch.setattr(worker, "_runtime_identity", lambda: {"image": "sha256:" + "a" * 64, "image_digest": "a" * 64})
     monkeypatch.setattr(worker, "_container_command", fake_container_command)
     monkeypatch.setattr(worker, "_execute", fake_execute)
     result = asyncio.run(
@@ -1509,3 +1469,80 @@ def test_worker_uses_short_private_broker_socket_path_for_deep_output_roots(
     assert result == {"ok": True}
     assert seen["broker"].parent == Path("/tmp")
     assert not seen["broker"].exists()
+
+
+def test_reform_coordinates_read_from_the_parent_paf_equal_the_move_table_derivation(tmp_path: Path) -> None:
+    paf = tmp_path / "reform.paf"
+    paf.write_text(_valid_reform_line(), encoding="utf-8")
+    assert runtime.reform_authority_from_paf(paf) == _reform_authority()
+    paf.write_text("read-1\t9\t3\t9\t+\tread-1\t2\t0\t2\t2\t2\t255\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="structure or required tags"):
+        runtime.reform_authority_from_paf(paf)
+
+
+def test_realign_takes_signal_coordinates_from_its_checked_parent_without_rereading_raw_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in ("original.bam", "filtered.bam", "alignment.bam", "alignment.bam.bai"):
+        (tmp_path / name).write_bytes(name.encode())
+    (tmp_path / "inventory.txt").write_text("read-1\n", encoding="utf-8")
+    (tmp_path / "reference.fasta").write_text(">chr1\n" + "ACGT" * 25 + "\n", encoding="utf-8")
+    reform = tmp_path / "reform.paf"
+    reform.write_text("read-1\t12\t0\t12\t+\tread-1\t2\t0\t2\t2\t2\t255\tss:Z:6,6,\n", encoding="utf-8")
+    output = tmp_path / "realign.paf"
+
+    record = SimpleNamespace(
+        is_unmapped=False, is_secondary=False, is_supplementary=False, has_tag=lambda _tag: False,
+        query_name="read-1", reference_name="chr1", reference_start=10, reference_end=12,
+        cigartuples=[(0, 2)], is_reverse=True,
+    )
+
+    class Alignment:
+        header = SimpleNamespace(to_dict=lambda: {"SQ": [{"SN": "chr1", "LN": 100}]})
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def fetch(self, until_eof=True):
+            return iter([record])
+
+    def fake_run(command):
+        if command[:2] == ["squigualiser", "realign"]:
+            output.write_text("read-1\t12\t0\t12\t-\tchr1\t2\t10\t12\t2\t2\t255\tss:Z:6,6,\n", encoding="utf-8")
+        elif command[0] == "bgzip":
+            output.rename(f"{output}.gz")
+        elif command[0] == "tabix":
+            Path(f"{output}.gz.tbi").write_bytes(b"index")
+        return {"argv": command, "stdout_tail": ""}
+
+    def raw_signal_must_not_be_read(*_args, **_kwargs):
+        raise AssertionError("realign re-derived reform coordinates from the move BAM and raw signal")
+
+    monkeypatch.setattr(runtime, "pysam", SimpleNamespace(AlignmentFile=lambda *_a, **_k: Alignment()))
+    monkeypatch.setattr(runtime, "run", fake_run)
+    monkeypatch.setattr(runtime, "raw_parent_hashes", lambda _paths: [])
+    monkeypatch.setattr(runtime, "reform_parent_authority", raw_signal_must_not_be_read)
+    report = tmp_path / "validation.json"
+    args = SimpleNamespace(
+        inventory=tmp_path / "inventory.txt", filtered_bam=tmp_path / "filtered.bam", original_bam=tmp_path / "original.bam",
+        blow5=[], kmer_length=1, signal_move_offset=0, reform_paf=reform, molecule_type="dna",
+        reference_fasta=tmp_path / "reference.fasta", alignment_bam=tmp_path / "alignment.bam",
+        alignment_index=tmp_path / "alignment.bam.bai", output=output, report=report,
+    )
+    runtime.cmd_realign(args)
+    written = json.loads(report.read_text(encoding="utf-8"))
+    assert written["schema"] == "bms.ont-signal-realign.v1" and written["record_count"] == 1
+    assert written["realigned_intersection_read_count"] == 1
+    assert written["parent_sha256s"]["parent_reform_sha256"] == hashlib.sha256(reform.read_bytes()).hexdigest()
+    # A realigned record that does not follow from the parent's coordinates is still refused.
+    reform.write_text("read-1\t12\t0\t12\t+\tread-1\t2\t0\t2\t2\t2\t255\tss:Z:5,7,\n", encoding="utf-8")
+    Path(f"{output}.gz").unlink()
+    with pytest.raises(ValueError, match="parent reform"):
+        runtime.cmd_realign(args)
+    # A parent whose own coordinates are incoherent is refused before realigning.
+    reform.write_text("read-1\t12\t0\t12\t+\tread-1\t2\t0\t2\t2\t2\t255\tss:Z:6,5,\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="ss signal span is incoherent"):
+        runtime.cmd_realign(args)

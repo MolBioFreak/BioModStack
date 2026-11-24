@@ -10,11 +10,6 @@ PROCESS_CONTRACTS = {
     'modules/laproteina_evaluation.nf:EvaluateLaProteina': (('LaProteina', 'gpu'), ("path closure, stageAs: 'la_evaluation_closure'",), ("path 'laproteina_evaluation', emit: native_outputs",), ('scripts/run_laproteina_inference.py', 'scripts/lib/laproteina_contract.py', 'scripts/lib/laproteina_motif_custody.py', 'scripts/bms_complexa/hf_cache.py', 'scripts/bms_complexa/assets.json'), ()),
     'modules/rfd4_proteina.nf:RunRFD4Proteina': (('RFD4Proteina', 'gpu'), ("path closure, stageAs: 'rfd4_closure'",), ("path 'rfd4_proteina', emit: native_outputs",), ('scripts/bms_rfd4/run.py',), ()),
     'modules/complexa.nf:RunComplexa': (('Complexa', 'gpu'), ('path request_dir',), ("path 'results', emit: native_results",), ('scripts/run_complexa_inference.py', 'scripts/lib/complexa_contract.py', 'scripts/bms_complexa/config.py', 'scripts/bms_complexa/profiles.json', 'scripts/bms_complexa/run.py', 'scripts/bms_complexa/inputs.py', 'scripts/bms_complexa/publication.py', 'scripts/bms_complexa/hf_cache.py', 'scripts/bms_complexa/assets.json'), ()),
-    'modules/af2.nf:RunAF2': (('AF2', 'gpu'), ('tuple val(batch_id), path(pdbs)',), ('tuple path("outputs/*.pdb"), path("*.json"), emit: pdbs_jsons', 'path ("*.json"), emit: json, topic: metadata_ch_fold_seq', 'path "*.log"'), ('scripts/run_af2_initial_guess.py',), ()),
-    'modules/af2.nf:AlignAF2': (('pyrosetta_tools',), ('path af2_pdbs', 'path reference_pdb'), ('path "aligned/*.pdb", emit: pdbs, optional: true', 'path "alignment_${task.index}.log", emit: logs, optional: true'), (), ()),
-    'modules/af2.nf:FilterAF2': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("output/*.pdb"), emit: pdbs, optional: true', 'path "filter_af2_${task.index}.log"', 'path ("filtered.jsonl"), emit: jsonl, optional: true'), (), ()),
-    'modules/af2_backprop.nf:MergeComplex': (('process_low',), ('tuple val(meta), path(antibody_pdb), path(target_pdb)',), ('tuple val(meta), path("*_complex.pdb"), emit: complex',), ('scripts/merge_complex.py',), ()),
-    'modules/af2_backprop.nf:AF2_BACKPROP': (('process_gpu', 'AF2_BACKPROP'), ('tuple val(meta), path(complex_pdb)',), ('tuple val(meta), path("*_refined.pdb"), emit: refined', 'tuple val(meta), path("*_refined.json"), emit: metrics', 'path "*.log", emit: log'), ('scripts/run_af2_backprop.py',), ()),
     'modules/analysis.nf:AnalyseBestDesigns': (('pyrosetta_tools',), ('path pdbs',), ('path "best_designs.jsonl", emit: jsonl, topic: metadata_ch_fold_seq', 'path "analysis.log", emit: log'), (), ()),
     'modules/antiberty.nf:ANTIBERTY_SCORE': (('process_medium',), ('tuple val(meta), path(input_file)  // Can be FASTA or PDB',), ('tuple val(meta), path("${meta.id}_pll_scores.csv"), emit: scores', 'tuple val(meta), path("${meta.id}_embeddings.pt"), emit: embeddings, optional: true', 'path "antiberty_${meta.id}.log"'), (), ('container "${params.container_dir}/antibody_tools.sif"',)),
     'modules/antiberty.nf:ANTIBERTY_FILTER': (('process_low',), ('tuple val(meta), path(scores_csv), path(fasta)',), ('tuple val(meta), path("${meta.id}_filtered.fasta"), emit: filtered_fasta', 'tuple val(meta), path("${meta.id}_filter_report.json"), emit: report'), (), ('container "${params.container_dir}/antibody_tools.sif"',)),
@@ -24,7 +19,6 @@ PROCESS_CONTRACTS = {
     'modules/antibody_batch.nf:BatchProtenixValidation': (('Protenix', 'gpu'), ('path pdbs', 'path msa'), ('path "predictions/*.pdb", emit: pdbs', 'path "predictions/*.json", emit: scores', 'path "predictions/*.cif", emit: cifs, optional: true', 'path "predictions/aligned_error/*.json", emit: aligned_error, optional: true', 'path "protenix_batch.log"'), ('scripts/align_protenix.py', 'scripts/extract_target_templates.py', 'scripts/prepare_protenix_exact_templates.py', 'scripts/protenix_constraint_utils.py', 'scripts/prep_protenix_batch.py', 'scripts/prepare_protenix_msa.py', 'scripts/protenix_chemistry.py', 'scripts/run_protenix_inference.py'), ('container { params.protenix_container_path ?: "${params.container_dir}/protenix.sif" }',)),
     'modules/antibody_batch.nf:BatchESMFold2Validation': (('ESMFold2',), ('path pdbs', 'path msa_files'), ('path "predictions/*_esmfold2.pdb", emit: pdbs', 'path "predictions/*_esmfold2.cif", emit: cifs', 'path "predictions/*_esmfold2.metrics.json", emit: metrics', 'path "predictions/esmfold2_validation_summary.json", emit: summary', 'path "esmfold2_batch.log", emit: log', 'path "predictions/*.confidence.npz", optional: true, emit: native_confidence', 'path "raw_predictions/*/effective_settings.json", emit: effective_settings'), ('scripts/run_esmfold2_batch.py', 'scripts/run_esmfold2_inference.py', 'scripts/normalize_esmfold2_validation.py'), ('container "${params.container_dir}/esmfold2.sif"',)),
     'modules/antibody_batch.nf:BatchImmunogenicity': (('Antiberty',), ('path pdbs',), ('path "immunogenicity_scores.csv", emit: scores',), ('scripts/batch_antiberty.py',), ('container "${params.container_dir}/antibody_tools.sif"',)),
-    'modules/antibody_batch.nf:BatchStability': (('ThermoMPNN',), ('path pdbs',), ('path "stability_scores.csv", emit: scores',), (), ('container "${params.container_dir}/stability_tools.sif"',)),
     'modules/antibody_frustrampnn_parent.nf:PrepareAntibodyFrustraMPNNCandidate': (('CPU',), ('tuple val(candidate_meta), path(terminal_structure), val(settings_base64), \\', 'val(settings_sha256), val(settings_value_origin)'), ("tuple path('workflow_component_request_v3.json'), path('canonical_source.pdb'), \\", "path('frustrampnn_structure_map_v1.json'), emit: prepared"), ('scripts/prepare_frustrampnn_candidate.py',), ()),
     'modules/antibody_frustrampnn_parent.nf:PublishAntibodyFrustraMPNNCandidate': (('CPU',), ('tuple val(result_meta), path(candidate_bundle), path(result_manifest)',), ("tuple val(result_meta), path(result_manifest), path('published_*.json'), emit: published",), ('scripts/publish_frustrampnn_bundle.py',), ()),
     'modules/antibody_frustrampnn_parent.nf:AggregateAndReportAntibodyFrustraMPNN': (('CPU',), ('path published_markers',), ("path 'antibody_frustrampnn_terminal_manifest.json', emit: terminal_manifest", "path 'frustrampnn_complete.reported', emit: reported"), ('scripts/stage_reporter.py',), ()),
@@ -34,13 +28,13 @@ PROCESS_CONTRACTS = {
     'modules/antifold.nf:ANTIFOLD': (('process_gpu',), ('tuple val(meta), path(pdb_imgt)',), ('tuple val(meta), path("*_probs.csv"), emit: probabilities', 'tuple val(meta), path("*_sampled.fasta"), emit: sequences', 'path "antifold.log"'), (), ('container "${params.container_dir}/antibody_tools.sif"',)),
     'modules/boltz.nf:PrepBoltz': (('pyrosetta_tools',), ('path pdb_files',), ('path ("yamls/*.yaml"), emit: yamls',), ('scripts/prep_boltz_yaml.py', 'scripts/prepare_protein_local_validator_input.py'), ("errorStrategy { params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'ignore' : 'terminate' }",)),
     'modules/boltz.nf:PrepBoltzWithMSA': (('pyrosetta_tools',), ('path pdb_files',), ('path ("yamls/*.yaml"), emit: yamls', 'path ("msa/*.a3m"), emit: msas, optional: true'), ('scripts/prep_boltz_with_msa.py', 'scripts/run_local_msa.py', 'scripts/prep_boltz_yaml.py'), ()),
-    'modules/boltz.nf:RunBoltz': (('Boltz', 'gpu'), ('tuple val(batch_id), path(yamls)',), ('tuple path("predictions/*.pdb"), path("predictions/*.json"), emit: pdbs_jsons', 'tuple val(batch_id), path("predictions"), emit: sample_artifacts', 'path "boltz_completion.json", emit: completion', 'path ("predictions/*.npz"), emit: pae_npz, optional: true', 'path ("*.log"), emit: logs'), ('scripts/run_boltz_wrapper.py', 'scripts/lib/boltz_fidelity.py', 'scripts/publish_boltz_samples.py'), ("errorStrategy { params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'ignore' : 'terminate' }",)),
+    'modules/boltz.nf:RunBoltz': (('Boltz', 'gpu'), ('tuple val(batch_id), path(yamls)',), ('tuple path("predictions/*.pdb"), path("predictions/*.json"), emit: pdbs_jsons', 'tuple val(batch_id), path("predictions"), path("boltz_completion.json"), emit: sample_artifacts', 'path "boltz_completion.json", emit: completion', 'path ("predictions/*.npz"), emit: pae_npz, optional: true', 'path ("*.log"), emit: logs'), ('scripts/run_boltz_wrapper.py', 'scripts/lib/boltz_fidelity.py', 'scripts/publish_boltz_samples.py'), ("errorStrategy { params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'ignore' : 'terminate' }",)),
     'modules/boltz.nf:AlignBoltz': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)', 'path designs', 'val design_type'), ('tuple path("aligned/*.pdb"), path("aligned/*.json"), emit: pdbs_jsons', 'path "alignment_*.log"', 'path ("boltz_metadata_*.jsonl"), topic: metadata_ch_fold_seq'), ('scripts/align_boltz.py',), ()),
     'modules/boltz.nf:FilterBoltz': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("output/*.pdb"), emit: pdbs, optional: true', 'path ("filter_boltz_${task.index}.log"), emit: log', 'path ("filtered.jsonl"), emit: jsonl, optional: true'), (), ()),
-    'modules/boltz_cp_experimental.nf:RunBoltzCPExperimental': (('BoltzCP', 'gpu'), ('path input_config',), ("path 'cp_results', emit: results_dir, optional: true", "path 'cp_results/processed', emit: processed_dir, optional: true", "path '*.log'"), ('scripts/fold_cp_input.py',), ()),
+    'modules/boltz_cp_experimental.nf:RunBoltzCPExperimental': (('BoltzCP', 'gpu'), ('tuple val(variant), path(input_config)',), ("tuple val(variant), path('cp_results'), emit: results_dir, optional: true", "path 'cp_results/processed', emit: processed_dir, optional: true", "path '*.log'"), ('scripts/fold_cp_input.py',), ()),
     'modules/bindcraft2.nf:RunBindCraft2': (('gpu',), ('path compilation', 'val campaign_dir'), ("path 'bc2_complete.json', emit: completion",), ('scripts/run_bindcraft2_campaign.py', 'scripts/bindcraft2_native_adapter/sitecustomize.py'), ('container "${params.container_dir}/bindcraft2.sif"', "beforeScript \"mkdir -p '${params.cache_root}/bindcraft2/compile'\"")),
     'modules/binder_blind_pose.nf:BinderBlindPoseESMFold2': (('ESMFold2', 'gpu'), ('path selection_manifest', 'path candidate_pdbs', 'path target_pdb'), ("path 'blind_pose_results', emit: results",), ('scripts/run_binder_blind_pose.py', 'scripts/run_esmfold2_batch.py', 'scripts/run_esmfold2_inference.py'), ('container "${params.container_dir}/esmfold2.sif"',)),
-    'modules/boltz_cp_experimental.nf:FinalizeBoltzCPExperimental': (('process_low',), ('path results_dir',), ("path 'published/**/*.pdb', emit: pdbs, optional: true", "path 'published/**/*.cif', emit: cifs, optional: true", "path 'published/**/*.json', emit: jsons, optional: true", "path 'published/**/*.npz', emit: npzs, optional: true"), (), ()),
+    'modules/boltz_cp_experimental.nf:FinalizeBoltzCPExperimental': (('process_low',), ('tuple val(variant), path(results_dir)',), ("path 'published/**/*.pdb', emit: pdbs, optional: true", "path 'published/**/*.cif', emit: cifs, optional: true", "path 'published/**/*.json', emit: jsons, optional: true", "path 'published/**/*.npz', emit: npzs, optional: true"), (), ()),
     'modules/boltzgen.nf:PrepBoltzGenInput': (('pyrosetta_tools',), ('val ligand_smiles', 'val ntp_type', 'val scaffold_length', 'val num_designs', 'val binding_site_residues', 'val catalytic_site', 'val protein_sequence', 'val dna_template_seq', 'val dna_primer_seq', 'val secondary_structure', 'val protocol', 'val covalent_bonds', 'val nanobody_framework', 'val cdr_h1_length', 'val cdr_h2_length', 'val cdr_h3_length', "path input_pdb, stageAs: 'backbone/*'", "path ligand_pdb, stageAs: 'ligand/*'", "path dna_structure, stageAs: 'dna/*'", "path target_pdb, stageAs: 'target/*'"), ('path "boltzgen_prepared", emit: yaml',), ('scripts/prep_boltzgen.py', 'scripts/lib/boltzgen_inputs.py'), ()),
     'modules/boltzgen.nf:RunBoltzGen': (('BoltzGen', 'gpu'), ('path yaml_configs',), ('path "output/designs/*.pdb", emit: pdbs, optional: true', 'path "output/designs/*.{json,npz,csv}", emit: jsons, optional: true', 'path "*.log"'), ('scripts/lib/boltzgen_inputs.py', 'scripts/run_boltzgen_wrapper.py', 'scripts/boltzgen_source_correspondence.py', 'scripts/lib/boltzgen_native_source.json'), ()),
     'modules/boltzgen.nf:FilterBoltzGen': (('pyrosetta_tools',), ('path pdbs', 'path jsons'), ('path "filtered/*.pdb", emit: pdbs, optional: params.get(\'core_protein_scientific_contract\') == 1', 'path "filtered/*.json", emit: jsons, optional: true', 'path "filtered/filter_summary.json", emit: summary, optional: true', 'path "filtered/*.{npz,csv}", emit: native_artifacts, optional: true', 'path "*.log"'), ('scripts/filter_boltzgen.py',), ()),
@@ -74,7 +68,6 @@ PROCESS_CONTRACTS = {
     'modules/esmfold2_experimental.nf:ESMFold2FromPdb': (('ESMFold2', 'gpu'), ('tuple val(producer_meta), path(source_pdb), val(candidate_name)',), ("tuple val(producer_meta), val('esmfold2'), path('esmfold2_results/*.cif'), path('esmfold2_results/*.metrics.json'), emit: typed_results",), (), ("errorStrategy 'ignore'",)),
     'modules/experimental/molecular_dynamics/analyze.nf:MD_ANALYZE_REPLICA': (('MolecularDynamicsAnalysis',), ('tuple val(replica_index), path(replica_dir), val(manifest_sha256)',), ('tuple val(replica_index), path("md_analysis_replica_${replica_index}.json"), emit: reports', 'tuple val(replica_index), path("md_analysis_replica_${replica_index}.artifacts.json"), emit: artifact_manifests', 'tuple val(replica_index), path("md_analysis_replica_${replica_index}.timeseries.parquet"), emit: timeseries', 'tuple val(replica_index), path("md_analysis_replica_${replica_index}.residue_metrics.parquet"), emit: residue_metrics'), (), ('container params.md_analysis_container ?: "${params.data_root}/apptainer/md-analysis-1.0.0.sif"', "errorStrategy 'retry'", 'maxRetries 2')),
     'modules/experimental/molecular_dynamics/gromacs_replica.nf:MD_GROMACS_REPLICA': (('MolecularDynamicsGromacs',), ('tuple val(replica_index), path(normalized_config), path(preparation_bundle)',), ('path "gromacs_replica_${replica_index}_manifest.json", emit: manifest', 'path "replica_${replica_index}", emit: artifacts'), ('scripts/bms_md/aggregate_children.py',), ()),
-    'modules/experimental/molecular_dynamics/openmm_replica.nf:MD_OPENMM_REPLICA': (('MolecularDynamicsOpenMM',), ('tuple val(replica_index), path(normalized_config), path(preparation_bundle)',), ('path "openmm_replica_${replica_index}_manifest.json", emit: manifest', 'path "replica_${replica_index}", emit: artifacts'), ('scripts/bms_md/aggregate_children.py',), ()),
     'modules/experimental/molecular_dynamics/prepare.nf:MD_PREPARE_CONFIG': (('MolecularDynamicsPreparation',), ('path source_config', 'val config_base_dir'), ("path 'normalized_config.json', emit: normalized_config", "path 'md_metadata.json', emit: metadata", "path 'preparation_bundle', emit: preparation_bundle"), (), ()),
     'modules/fampnn.nf:PrepFAMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("fampnn_input/*.pdb"), emit: pdbs', 'path ("fampnn_input/*.fampnn_prep.json"), emit: provenance, optional: true', 'path ("*.csv"), emit: csv'), ('lib/FampnnNativeControls.groovy', 'lib/FampnnAnalysisPolicy.groovy', 'scripts/fampnn_native_runtime.py', 'scripts/fampnn_native_binding.py', 'scripts/prep_fampnn_constraints_generic.py', 'scripts/maturation_native_adapter.py', 'scripts/maturation_correspondence.py', 'scripts/analyse_fampnn.py', 'scripts/analyse_fampnn_seq_probs.py'), ()),
     'modules/fampnn.nf:RunFAMPNN': (('FAMPNN', 'gpu_light'), ('tuple val(batch_id), path(pdbs), path(csv), val(gpu_id)', 'val analysis_chain_id', 'val analysis_contract // Trusted workflow-owned envelope, independent of pSCE.'), ('tuple path("results/*.pdb"), path("results/*.json"), emit: pdbs_jsons', 'path "fampnn_output", emit: raw', 'path ("fampnn_metadata_${batch_id}.jsonl"), topic: metadata_ch_fold_seq', 'path ("fampnn_seq_prob_metrics_${batch_id}.jsonl"), emit: seq_prob_metrics, optional: true', 'path "*.log"'), ('scripts/prep_fampnn_constraints_generic.py', 'scripts/fampnn_native_binding.py', 'scripts/maturation_native_adapter.py', 'scripts/maturation_correspondence.py', 'lib/FampnnNativeControls.groovy', 'lib/FampnnAnalysisPolicy.groovy', 'scripts/fampnn_native_runtime.py', 'scripts/analyse_fampnn.py', 'scripts/analyse_fampnn_seq_probs.py'), ()),
@@ -85,34 +78,29 @@ PROCESS_CONTRACTS = {
     'modules/frustrampnn_parent_fanout.nf:StageFrustraMPNNParentCandidate': (('CPU',), ('tuple val(candidate_meta), path(terminal_structure)',), ("path 'candidate_*', emit: candidate",), ('scripts/stage_frustrampnn_parent_candidate.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
     'modules/frustrampnn_parent_fanout.nf:SpawnWaitFrustraMPNNParentChildren': (('CPU',), ('val parent_job_id', 'val parent_workflow_id', 'val settings_json', 'val settings_value_origin', 'path candidate_dirs'), ("path 'frustrampnn_parent_terminal_v1.json', emit: receipt", "path 'frustrampnn_child_bundles', emit: bundles"), ('scripts/run_frustrampnn_parent_fanout.py', 'scripts/stage_frustrampnn_parent_candidate.py'), ("errorStrategy 'terminate'", 'maxRetries 0')),
     'modules/frustrampnn_parent_fanout.nf:ReportFrustraMPNNParentChildrenComplete': (('CPU',), ('val parent_job_id', 'val parent_workflow_id', 'path terminal_receipt'), ("path 'frustrampnn_children_complete.reported', emit: marker",), ('scripts/stage_reporter.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
-    'modules/iggm.nf:IGGM_DENOVO': (('process_gpu',), ('tuple val(meta), path(antigen_pdb)', 'val epitope_residues'), ('tuple val(meta), path("output/*.pdb"), emit: designs', 'tuple val(meta), path("output/*.json"), emit: scores, optional: true', 'path "iggm_denovo_${meta.id}.log"'), (), ('container "${params.container_dir}/iggm.sif"',)),
-    'modules/iggm.nf:IGGM_AFFINITY_MATURATION': (('process_gpu',), ('tuple val(meta), path(antibody_pdb), path(antigen_pdb)',), ('tuple val(meta), path("output/*_matured.pdb"), emit: matured_designs', 'tuple val(meta), path("output/*_mutations.json"), emit: mutations', 'path "iggm_maturation_${meta.id}.log"'), (), ('container "${params.container_dir}/iggm.sif"',)),
-    'modules/iggm.nf:IGGM_STRUCTURE_PREDICTION': (('process_gpu',), ('tuple val(meta), path(antibody_fasta), path(antigen_pdb)',), ('tuple val(meta), path("output/*.pdb"), emit: predicted_structure', 'tuple val(meta), path("output/*_confidence.json"), emit: confidence', 'path "iggm_structure_${meta.id}.log"'), (), ('container "${params.container_dir}/iggm.sif"',)),
-    'modules/iggm.nf:IGGM_HUMANIZATION': (('process_gpu',), ('tuple val(meta), path(antibody_pdb)',), ('tuple val(meta), path("output/*_humanized.pdb"), emit: humanized', 'tuple val(meta), path("output/*_humanization_report.json"), emit: report', 'path "iggm_humanization_${meta.id}.log"'), (), ('container "${params.container_dir}/iggm.sif"',)),
     'modules/merge_uncropped_target.nf:MergeUncroppedTarget': (('pyrosetta_tools',), ('path pdb_files', 'path uncropped_target_pdb'), ('path ("merged_pdbs/*.pdb"), emit: pdbs',), (), ()),
     'modules/ngs/bam_prepare.nf:PrepareBamForAnalysis': (('dorado_cpu',), ("path bam, stageAs: 'source.bam'",), ('tuple path("aligned.bam"), path("aligned.bam.bai"), emit: aligned', 'path "bam_prepare.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
     'modules/ngs/bam_prepare.nf:ValidateMappedBam': (('dorado_cpu',), ("tuple path(bam, stageAs: 'validated-source.bam'), path(bai, stageAs: 'validated-source.bam.bai')", "path reference, stageAs: 'expected-reference.fasta'"), ('tuple path("aligned.bam"), path("aligned.bam.bai"), emit: aligned', 'path "bam_mapped_check.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
+    'modules/ngs/bam_prepare.nf:FastqToUnalignedBam': (('dorado_cpu',), ('path fastq',), ('path "reads.unaligned.bam", emit: bam',), (), ()),
     'modules/ngs/bam_prepare.nf:BamToFastqForQC': (('dorado_cpu',), ('tuple path(bam), path(bai)',), ('path "reads_for_qc.fastq", emit: fastq', 'path "bam_to_fastq_for_qc.log", emit: log'), ('modules/ngs/publication.nf',), ()),
     'modules/ngs/bam_prepare.nf:PrepareReferenceForIGV': (('dorado_cpu',), ("path reference, stageAs: 'expected-reference-source.fasta'",), ('path "reference.fasta", emit: reference_copy', 'path "reference.fasta.fai", emit: reference_index', 'path "reference_prepare.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
     'modules/ngs/clone_validation.nf:RunCloneValidation': (('wf_clone',), ('tuple path(bam), val(reference_fasta)',), ('env published_directory, emit: out', 'path "wf_clone_out/**", type: \'file\', hidden: true, emit: publication_files', 'path "wf_clone.log", emit: log', 'path "runtime_provenance.json", emit: runtime_provenance', 'path "input_model_provenance.json", emit: input_model_provenance', 'path "wf_clone_out/wf-clone-validation-report.html", emit: report', 'path "wf_clone_out/sample_status.txt", emit: sample_status'), ('scripts/validate_clone_input_model.py', 'scripts/validate_wf_clone_runtime.py', 'modules/ngs/publication.nf'), ()),
-    'modules/ngs/clone_validation.nf:CloneValidationAdapter': (('fastq_qc_cpu',), ('path result_root', 'path runtime_provenance', 'tuple path(aligned_bam), path(aligned_bai)', "path reference, stageAs: 'authoritative_reference.fasta'"), ('path "adapter_manifest.json", emit: manifest', 'env published_directory, emit: verification_input', 'path "verification_input/**", type: \'file\', hidden: true, emit: publication_files', 'path "per_base_support.tsv", emit: per_base_support', 'path "alignment_stats.tsv", emit: alignment_stats', 'path "dimer_breakpoint_call.tsv", emit: breakpoint_call', 'path "dimer_secondary_summary.tsv", emit: secondary_summary'), ('scripts/adapt_wf_clone_validation.py', 'scripts/build_construct_verification_input.py', 'scripts/build_fastq_support_tables.py', 'modules/ngs/publication.nf'), ()),
+    'modules/ngs/clone_validation.nf:HostComposition': (('fastq_qc_cpu',), ('tuple path(aligned_bam), path(aligned_bai)', "path host_reference, stageAs: 'host_reference.fasta'"), ('path "host_composition.json", emit: composition, optional: true',), ('scripts/build_host_composition.py',), ()),
+    'modules/ngs/clone_validation.nf:CloneValidationAdapter': (('fastq_qc_cpu',), ('path result_root', 'path runtime_provenance', 'tuple path(aligned_bam), path(aligned_bai)', "path reference, stageAs: 'authoritative_reference.fasta'"), ('path "adapter_manifest.json", emit: manifest', 'env published_directory, emit: verification_input', 'path "verification_input/**", type: \'file\', hidden: true, optional: true, emit: publication_files', 'path "per_base_support.tsv", emit: per_base_support', 'path "consensus_pileup.ab1", emit: pileup_chromatogram, optional: true', 'path "plasmid_summary/*", emit: plasmid_summary, optional: true', 'path "alignment_stats.tsv", emit: alignment_stats', 'path "dimer_breakpoint_call.tsv", emit: breakpoint_call', 'path "dimer_secondary_summary.tsv", emit: secondary_summary'), ('scripts/adapt_wf_clone_validation.py', 'scripts/build_construct_verification_input.py', 'scripts/build_fastq_support_tables.py', 'scripts/write_pileup_ab1.py', 'scripts/build_plasmid_summary.py', 'modules/ngs/publication.nf'), ()),
     'modules/ngs/clone_validation.nf:ComparePlasmidConsensus': (('fastq_qc_cpu',), ('path verification_input', 'path read_consensus'), ('env published_directory, emit: verification_input', 'path "compared_verification_input/**", type: \'file\', hidden: true, emit: publication_files', "path 'compared_verification_input/consensus_comparison.json', emit: comparison"), ('scripts/compare_plasmid_consensus.py', 'scripts/verify_construct.py', 'scripts/plasmid_evidence.py', 'scripts/plasmid_circular.py', 'modules/ngs/publication.nf'), ()),
     'modules/ngs/comparison_panel_attribution.nf:ComparisonPanelAttribution': (('dorado_cpu',), ('path fastq', 'path expected_reference', 'path snapshot'), ("path 'comparison_panel.fasta', emit: reference", "path 'comparison_panel_expected_reference.fasta', emit: expected_reference", "path 'comparison_panel_source.fastq', emit: source_fastq", "path 'comparison_panel_normalized.fastq', emit: normalized_fastq", "path 'comparison_panel_occurrence_map.json', emit: occurrence_map", "path 'comparison_panel.bam', emit: bam", "path 'comparison_panel.bam.bai', emit: bai", "path 'comparison_panel_summary.json', emit: summary"), (), ()),
-    'modules/ngs/construct_verify.nf:ConstructVerify': (('fastq_qc_cpu',), ('path reference', 'path verification_input', 'path per_base_support', 'tuple path(aligned_bam), path(aligned_bai)', 'path alignment_stats', 'path dimer_breakpoint_call', 'path dimer_secondary_summary'), ('path "verification", emit: verification_dir', 'path "verification/qc_manifest.json", emit: manifest', 'path "verification/verification_summary.tsv", emit: summary', 'path "verification/variants.vcf", emit: variants', 'path "verification/per_base_metrics.tsv", emit: per_base_metrics', 'path "verification/evidence.html", emit: evidence_html'), ('scripts/build_construct_topology_evidence.py', 'scripts/verify_construct.py', 'scripts/plasmid_evidence.py', 'scripts/plasmid_circular.py'), ()),
+    'modules/ngs/construct_verify.nf:ConstructVerify': (('fastq_qc_cpu',), ('path reference', 'path verification_input', 'path per_base_support', 'tuple path(aligned_bam), path(aligned_bai)', 'path alignment_stats', 'path dimer_breakpoint_call', 'path dimer_secondary_summary', 'val sequencing_kits'), ('path "verification", emit: verification_dir', 'path "verification/qc_manifest.json", emit: manifest', 'path "verification/verification_summary.tsv", emit: summary', 'path "verification/variants.vcf", emit: variants', 'path "verification/per_base_metrics.tsv", emit: per_base_metrics', 'path "verification/evidence.html", emit: evidence_html'), ('scripts/build_construct_topology_evidence.py', 'scripts/verify_construct.py', 'scripts/plasmid_evidence.py', 'scripts/plasmid_circular.py'), ()),
     'modules/ngs/dorado_align.nf:DoradoAlign': (('dorado_cpu',), ('path bam', 'path reference'), ('tuple path("aligned.bam"), path("aligned.bam.bai"), emit: aligned', 'path "reference.fasta", emit: reference_copy', 'path "reference.fasta.fai", emit: reference_index', 'path "align.log", emit: log', 'path "qc_manifest.json", emit: primary_manifest, optional: true'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
     'modules/ngs/dorado_basecall.nf:DoradoPreflight': (('local_cpu',), ('path pod5_dir',), ('path "dorado_preflight.json", emit: manifest',), ('scripts/dorado_p4_preflight.py', 'modules/ngs/publication.nf', 'scripts/lib/container_runtime.py', 'scripts/lib/shared_runtime_images.py'), ()),
-    'modules/ngs/dorado_basecall.nf:DoradoBasecall': (('dorado_gpu', 'gpu'), ('path pod5_dir', 'path preflight_json'), ('path "calls.bam", emit: bam', 'path "basecall.log", emit: log', 'path "dorado_preflight.json", emit: preflight', 'path "dorado_runtime_provenance.json", emit: provenance', 'path "sequencing_summary.tsv", emit: summary, optional: true'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh', 'scripts/dorado_supports_option.sh'), ()),
+    'modules/ngs/dorado_basecall.nf:DoradoBasecall': (('dorado_gpu', 'gpu'), ('path pod5_dir', 'path preflight_json'), ('path "calls.bam", emit: bam', 'path "basecall.log", emit: log', 'path "dorado_preflight.json", emit: preflight', 'path "dorado_runtime_provenance.json", emit: provenance', 'path "sequencing_summary.tsv", emit: summary, optional: true', 'path "poly_a_config.toml", emit: poly_a_config, optional: true'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh', 'scripts/dorado_supports_option.sh'), ()),
     'modules/ngs/dorado_basecall.nf:DoradoDemux': (('dorado_cpu',), ('path bam', 'path preflight_json'), ('env published_directory, emit: directory', 'path "demux/**", type: \'file\', hidden: true, emit: publication_files', 'path "demux_manifest.json", emit: manifest', 'path "per_barcode_units.json", emit: units', 'path "demux.log", emit: log'), ('modules/ngs/publication.nf',), ()),
     'modules/ngs/fastq_align.nf:FastqAlign': (('dorado_cpu',), ('path fastq', 'path reference'), ('tuple path("aligned.bam"), path("aligned.bam.bai"), emit: aligned', 'path "reference.fasta", emit: reference_copy', 'path "reference.fasta.fai", emit: reference_index', 'path "fastq_align.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
     'modules/ngs/fastq_dimer_qc.nf:FastqDimerAnalysis': (('dorado_cpu',), ('path fastq', 'path reference'), ('path "dimer_candidates.fastq", emit: dimer_fastq', 'path "dimer_candidates.fasta", emit: dimer_fasta', 'path "dimer_read_lengths.tsv", emit: dimer_lengths', 'path "dimer_reference.fasta", emit: dimer_reference', 'path "dimer_reference.fasta.fai", emit: dimer_reference_index', 'path "dimer_analysis_summary.tsv", emit: summary', 'path "dimer_analysis.log", emit: log', 'path "qc_manifest.json", emit: qc_manifest', 'path "dimer_candidates.aligned.bam", emit: dimer_bam, optional: true', 'path "dimer_candidates.aligned.bam.bai", emit: dimer_bai, optional: true', 'path "dimer_consensus.fasta", emit: consensus, optional: true', 'path "dimer_consensus.log", emit: consensus_log, optional: true', 'path "dominant_dimer_consensus.fasta", emit: dominant_consensus, optional: true', 'path "dominant_dimer_consensus.log", emit: dominant_consensus_log, optional: true', 'path "dominant_dimer_consensus_metadata.tsv", emit: dominant_consensus_metadata, optional: true', 'path "dominant_dimer_consensus.read_ids.txt", emit: dominant_consensus_reads, optional: true', 'path "dimer_junction_profile.tsv", emit: junction_profile, optional: true', 'path "dimer_read_junctions.tsv", emit: junction_reads, optional: true', 'path "dimer_junction_events.tsv", emit: junction_events, optional: true', 'path "dimer_junction_clusters.tsv", emit: junction_clusters, optional: true', 'path "dimer_junction_hotspots.tsv", emit: junction_hotspots, optional: true', 'path "dimer_junction_rotated_profile.tsv", emit: junction_rotated_profile, optional: true', 'path "dimer_junction_rotation_summary.tsv", emit: junction_rotation_summary, optional: true', 'path "dimer_breakpoint_screen.tsv", emit: breakpoint_screen, optional: true', 'path "dimer_breakpoint_start_counts.tsv", emit: breakpoint_start_counts, optional: true', 'path "dimer_read_ledger.tsv", emit: read_ledger, optional: true', 'path "dimer_breakpoint_reads.tsv", emit: breakpoint_reads, optional: true', 'path "dimer_rotated_remap_summary.tsv", emit: rotated_remap_summary, optional: true', 'path "dimer_rotated_remap_breakpoints.tsv", emit: rotated_remap_breakpoints, optional: true', 'path "dimer_single_ref_split_events.tsv", emit: single_ref_split_events, optional: true', 'path "dimer_single_ref_split_profile.tsv", emit: single_ref_split_profile, optional: true', 'path "dimer_candidates.single_ref.aligned.bam", emit: single_ref_bam, optional: true', 'path "dimer_candidates.single_ref.aligned.bam.bai", emit: single_ref_bai, optional: true', 'path "dimer_single_ref_alignment.log", emit: single_ref_align_log, optional: true', 'path "dimer_alignment.log", emit: align_log, optional: true'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
     'modules/ngs/fastq_dimer_qc.nf:BuildDimerCanonicalOutputs': (('local_cpu',), ('path summary', 'path events', 'path single_ref_events', 'path single_ref_profile', 'path breakpoint_screen', 'path reference_fasta'), ('path "dimer_breakpoint_call.tsv", emit: breakpoint_call', 'path "dimer_evidence_by_position.tsv", emit: evidence_by_position', 'path "dimer_read_events.tsv", emit: read_events', 'path "dimer_breakpoint_sequences.tsv", emit: breakpoint_sequences', 'path "dimer_secondary_anomalies.tsv", emit: secondary_anomalies', 'path "dimer_secondary_summary.tsv", emit: secondary_summary', 'path "dimer_diagnostics.tar.gz", emit: diagnostics, optional: true'), ('modules/ngs/publication.nf',), ()),
-    'modules/ngs/fastq_plasmid_qc.nf:FastqPlasmidQC': (('fastq_qc_cpu',), ("tuple path(bam, stageAs: 'source-aligned.bam'), path(bai, stageAs: 'source-aligned.bam.bai')", "path reference, stageAs: 'expected-reference-source.fasta'", 'path fastq'), ('path "aligned.bam", emit: alignment_bam', 'path "aligned.bam.bai", emit: alignment_bai', 'path "read_lengths.tsv", emit: lengths', 'path "fastq_qc_summary.tsv", emit: summary', 'path "fastq_alignment_stats.tsv", emit: alignment_stats', 'path "fastq_coverage.tsv", emit: coverage', 'path "per_base_support.tsv", emit: per_base_support', 'path "qc_manifest.json", emit: qc_manifest', 'env published_directory, emit: verification_input', 'path "construct_verification_input/**", type: \'file\', hidden: true, emit: publication_files', 'path "reference_qc.fasta", emit: reference', 'path "reference_qc.fasta.fai", emit: reference_index', 'path "igv_coverage_depth.bedgraph", emit: igv_coverage_depth', 'path "igv_position_gradient.bedgraph", emit: igv_position_gradient', 'path "igv_gc_content.bedgraph", emit: igv_gc_content', 'path "igv_gc_zscore.bedgraph", emit: igv_gc_zscore', 'path "igv_split_read_density.bedgraph", emit: igv_split_density', 'path "igv_softclip_density.bedgraph", emit: igv_softclip_density', 'path "igv_junction_hotspots.bed", emit: igv_hotspots', 'path "igv_report_sites.bed", emit: igv_report_sites_bed', 'path "igv_report_sites.tsv", emit: igv_report_sites_tsv', 'path "igv_track_config.json", emit: igv_track_config', 'path "igv_report.html", emit: igv_report', 'path "igv_report.log", emit: igv_report_log', 'path "fastq_consensus.fasta", emit: consensus', 'path "fastq_consensus.fasta.fai", emit: consensus_index', 'path "fastq_consensus.log", emit: consensus_log', 'path "fastq_qc.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh'), ()),
+    'modules/ngs/fastq_plasmid_qc.nf:FastqPlasmidQC': (('fastq_qc_cpu',), ("tuple path(bam, stageAs: 'source-aligned.bam'), path(bai, stageAs: 'source-aligned.bam.bai')", "path reference, stageAs: 'expected-reference-source.fasta'", 'path fastq'), ('path "aligned.bam", emit: alignment_bam', 'path "aligned.bam.bai", emit: alignment_bai', 'path "read_lengths.tsv", emit: lengths', 'path "fastq_qc_summary.tsv", emit: summary', 'path "fastq_alignment_stats.tsv", emit: alignment_stats', 'path "fastq_coverage.tsv", emit: coverage', 'path "per_base_support.tsv", emit: per_base_support', 'path "qc_manifest.json", emit: qc_manifest', 'env published_directory, emit: verification_input', 'path "construct_verification_input/**", type: \'file\', hidden: true, emit: publication_files', 'path "reference_qc.fasta", emit: reference', 'path "reference_qc.fasta.fai", emit: reference_index', 'path "igv_coverage_depth.bedgraph", emit: igv_coverage_depth', 'path "igv_position_gradient.bedgraph", emit: igv_position_gradient', 'path "igv_gc_content.bedgraph", emit: igv_gc_content', 'path "igv_gc_zscore.bedgraph", emit: igv_gc_zscore', 'path "igv_split_read_density.bedgraph", emit: igv_split_density', 'path "igv_softclip_density.bedgraph", emit: igv_softclip_density', 'path "igv_junction_hotspots.bed", emit: igv_hotspots', 'path "igv_report_sites.bed", emit: igv_report_sites_bed', 'path "igv_report_sites.tsv", emit: igv_report_sites_tsv', 'path "igv_track_config.json", emit: igv_track_config', 'path "igv_report.html", emit: igv_report, optional: true', 'path "igv_report.log", emit: igv_report_log', 'path "fastq_consensus.fasta", emit: consensus', 'path "fastq_consensus.fasta.fai", emit: consensus_index', 'path "fastq_consensus.log", emit: consensus_log', 'path "consensus_pileup.ab1", emit: pileup_chromatogram, optional: true', 'path "plasmid_summary/*", emit: plasmid_summary, optional: true', 'path "fastq_qc.log", emit: log'), ('modules/ngs/publication.nf', 'scripts/ngs_input_snapshot.sh', 'scripts/write_pileup_ab1.py', 'scripts/build_plasmid_summary.py'), ()),
     'modules/ngs/modkit_pileup.nf:ValidateModifiedBaseBam': (('dorado_cpu',), ("tuple path(bam, stageAs: 'modified-base-source.bam'), path(bai, stageAs: 'modified-base-source.bam.bai')",), ('tuple path("modified_base_input.bam"), path("modified_base_input.bam.bai"), emit: bam', 'path "modified_base_tag_check.log", emit: log'), ('scripts/ngs_input_snapshot.sh',), ()),
     'modules/ngs/modkit_pileup.nf:ModkitPileup': (('dorado_cpu',), ("tuple path(bam, stageAs: 'modkit-input.bam'), path(bai, stageAs: 'modkit-input.bam.bai')", "path reference, stageAs: 'modkit-reference.fasta'"), ('path "methylation.bed", emit: bed', 'path "pileup.log", emit: log'), (), ()),
     'modules/ngs/modkit_summary.nf:ModkitSummary': (('dorado_cpu',), ('tuple path(bam), path(bai)',), ('path "modkit_summary.tsv", emit: summary', 'path "summary.log", emit: log'), (), ()),
-    'modules/openmm.nf:OpenMMRelaxation': (('OpenMM', 'gpu'), ('tuple val(batch_id), path(pdbs)', 'val compute_tier', 'val cdr_only', 'val restraint_mode', 'val antibody_chain', 'val force_field'), ('path "relaxed/*.pdb", emit: relaxed_pdbs, optional: true', 'tuple val(batch_id), path("relaxed/*.pdb"), emit: relaxed_with_batch, optional: true', 'path "relaxed/*.json", emit: metrics_json, optional: true', 'path "*.log", emit: logs', 'path "openmm_metadata_${batch_id}.jsonl", emit: metadata, optional: true, topic: metadata_ch_openmm'), (), ()),
-    'modules/openmm.nf:OpenMMScore': (('OpenMM', 'gpu'), ('tuple val(batch_id), path(pdbs)', 'val scoring_mode', 'val binder_chains', 'val target_chains', 'val force_field'), ('path "scores/*.json", emit: scores_json, optional: true', 'path "*.log", emit: logs', 'path "mmgbsa_metadata_${batch_id}.jsonl", emit: metadata, optional: true, topic: metadata_ch_mmgbsa'), (), ()),
-    'modules/openmm.nf:OpenMMDeltaDeltaG': (('OpenMM', 'gpu'), ('tuple val(design_name), path(mutant_pdb), path(wildtype_pdb)', 'val binder_chains', 'val target_chains', 'val force_field'), ('path "${design_name}_ddg.json", emit: ddg_json', 'path "*.log", emit: logs'), (), ()),
     'modules/ppiflow.nf:IdentifyAnchorResidues': (('pyrosetta_tools',), ('tuple val(meta), path(complex_pdb)',), ('tuple val(meta), path(complex_pdb), path("${meta.id}_enriched_complex.pdb"), path("${meta.id}_anchors.json"), path("${meta.id}_ppiflow_positions.txt"), path("${meta.id}_cdr_positions.txt"), path("${meta.id}_cdr_positions_by_loop.json"), emit: anchor_inputs', 'tuple val(meta), path("${meta.id}_interface_score.json"), emit: interface_scores', 'tuple val(meta), path("${meta.id}_rotamer_enrichment.json"), emit: rotamer_enrichment'), ('scripts/prepare_ppiflow_maturation.py',), ()),
     'modules/ppiflow.nf:RunPartialFlow': (('gpu', 'PPIFlow'), ('tuple val(meta), path(original_complex_pdb), path(complex_pdb), path(anchors_json), path(ppiflow_positions), path(cdr_positions), path(cdr_positions_by_loop_json)',), ('tuple val(meta), path("ppiflow_backbones"), path("ppiflow_backbones_manifest.json"), emit: backbones', 'tuple val(meta), path("${meta.id}_ppiflow_accounting.json"), emit: accounting'), ('scripts/anchors_to_ppiflow_positions.py', 'scripts/maturation_native_adapter.py', 'scripts/ppiflow_sample_identity.py', 'scripts/validate_ppiflow_masks.py', 'scripts/validate_ppiflow_roles.py'), ()),
     'modules/ppiflow.nf:PrepMaturationRedesign': (('pyrosetta_tools',), ('tuple val(meta), path(backbone_pdbs), path(anchors_json), path(cdr_positions), path(cdr_positions_by_loop), path(comparison_requests)',), ('tuple val(meta), path("fampnn_input/*.pdb"), path("fampnn.csv"), path("fampnn_transport"), emit: prep',), ('scripts/anchors_to_ppiflow_positions.py', 'scripts/prep_antibody_constraints.py', 'scripts/prep_fampnn_designs.py'), ()),
@@ -168,7 +156,6 @@ PROCESS_CONTRACTS = {
     'modules/structure_prediction.nf:BoltzFromSequenceWithMSATask': (('Boltz', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name), path(msa_file)',), ("path 'boltz_task_binding.json'", 'tuple val(producer_meta), path("producer_candidates.json"), path("predictions/*.{pdb,cif}"), emit: canonical_structures', 'path "predictions/*.json", emit: jsons, optional: true', 'path "predictions/*.npz", emit: native_identity_artifacts, optional: true', 'path "*.log"'), ('scripts/run_boltz_wrapper.py', 'scripts/lib/boltz_fidelity.py'), ()),
     'modules/structure_prediction.nf:PrepareComplexWithMSA': (('CPU',), ('tuple val(complex_name), path(complex_json), path(msa_files)',), ('tuple val(complex_name), path("yamls/${complex_name}.yaml"), path("msa"), emit: prepared', 'path "msa/*.a3m", emit: msa, optional: true', 'path "msa/*_msa_quality.json", emit: quality_report, optional: true', 'path "msa/complex_msa_manifest.json", emit: msa_manifest, optional: true', 'path "*.log"'), ('scripts/extract_target_templates.py', 'scripts/run_local_msa.py', 'scripts/lib/boltz_fidelity.py'), ()),
     'modules/structure_prediction.nf:BoltzFromComplex': (('Boltz', 'gpu'), ('tuple val(complex_name), path(complex_yaml), path(msa_dir)',), ("path 'boltz_task_binding.json'", 'tuple val(complex_name), path("producer_candidates.json"), path("predictions/*.pdb"), emit: canonical_pdbs, optional: true', 'path "predictions/*.cif", emit: cifs, optional: true', 'path "predictions/*.json", emit: jsons, optional: true', 'path "predictions/*.npz", emit: npz, optional: true', 'path "*.log"'), ('scripts/finalize_target_geometry.py', 'scripts/write_structure_producer_manifest.py', 'scripts/run_boltz_wrapper.py', 'scripts/lib/boltz_fidelity.py'), ()),
-    'modules/thermompnn.nf:THERMOMPNN': (('process_gpu',), ('tuple val(meta), path(pdb)',), ('tuple val(meta), path("*_stability.csv"), optional: true, emit: stability', 'path "thermompnn.log"'), (), ('container "${params.container_dir}/stability_tools.sif"',)),
     'modules/utils/anarci.nf:ANARCII': (('process_low',), ('tuple val(meta), path(pdb)',), ('tuple val(meta), path("*_imgt.pdb"), emit: pdb_imgt', 'tuple val(meta), path("*_cdrs.json"), emit: cdrs', 'tuple val(meta), path("*_cdr_positions.json"), emit: cdr_positions', 'path "anarci.log"'), (), ('container "${params.container_dir}/antibody_tools.sif"',)),
     'workflows/antibody_denovo.nf:SpawnRFantibodyJobs': (('process_low',), ('path target_pdb', 'val epitope_residues', 'val framework_type', 'val total_designs', 'val designs_per_job', 'val parent_job_id', 'val batch_name'), ('path "spawn_rfa_result.json", emit: result',), ('scripts/spawn_rfantibody_children.py',), ()),
     'workflows/antibody_denovo.nf:NormalizeTargetPDB': (('process_low',), ('tuple val(meta), path(target_pdb)',), ('tuple val(meta), path("normalized_target.pdb"), emit: normalized',), ('scripts/normalize_target_pdb.py',), ()),
@@ -239,7 +226,7 @@ PROCESS_CONTRACTS = {
     'workflows/protein_local_redesign.nf:PrepProteinLocalFAMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)', 'val fixed_args'), ("path('fampnn_input/*.pdb'), emit: pdbs", "path('fampnn_input/*.fampnn_prep.json'), emit: provenance, optional: true", "path('fampnn.csv'), emit: csv"), ('scripts/prep_fampnn_constraints_from_spec.py', 'scripts/prep_fampnn_designs.py', 'scripts/fampnn_policy_resolution.py', 'scripts/antibody_fampnn_provenance.py', 'lib/FampnnNativeControls.groovy', 'lib/FampnnAnalysisPolicy.groovy', 'scripts/fampnn_native_runtime.py', 'scripts/fampnn_native_binding.py', 'scripts/prep_fampnn_constraints_generic.py', 'scripts/maturation_native_adapter.py', 'scripts/maturation_correspondence.py', 'scripts/analyse_fampnn.py', 'scripts/analyse_fampnn_seq_probs.py'), ()),
     'workflows/protein_local_redesign.nf:PrepProteinLocalMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)', 'val designable_args'), ("path('mpnn_fixed/*.pdb'), emit: pdbs",), ('scripts/add_fixed_labels_from_spec.py', 'scripts/prep_mpnn_designs.py', 'scripts/proteinmpnn_native_binding.py'), ()),
     'workflows/protein_local_redesign.nf:ExportProteinLocalMPNNResults': (('process_low',), ('tuple path(pdb_files), path(json_files)',), ("path('published/*.pdb'), emit: pdbs", "path('published/*.json'), emit: jsons"), (), ()),
-    'workflows/protein_local_redesign.nf:ExportProteinLocalBoltzPredictions': (('process_low',), ('tuple val(batch_id), path(sample_dir)',), ("path('published/*.pdb'), emit: pdbs", "path('published/*.json'), emit: jsons", "path('published/*.npz'), emit: pae, optional: true", "path('published/*.manifest'), emit: manifests"), (), ("errorStrategy 'ignore'",)),
+    'workflows/protein_local_redesign.nf:ExportProteinLocalBoltzPredictions': (('process_low',), ('tuple val(batch_id), path(sample_dir), path(completion_receipt)',), ("path('published/*.pdb'), emit: pdbs", "path('published/*.json'), emit: jsons", "path('published/*.npz'), emit: pae, optional: true", "path('published/*.manifest'), emit: manifests"), (), ("errorStrategy 'ignore'",)),
     'workflows/rfantibody_backbone.nf:NormalizeTargetPDB': (('process_low',), ('path target_pdb',), ('path "normalized_target.pdb", emit: normalized',), ('scripts/normalize_target_pdb.py',), ()),
 }
 
@@ -285,8 +272,6 @@ LOOP_DESIGNER_STAGES = {
 
 # Images are the existing nextflow.config labels, not top-level model guesses.
 LABEL_ASSETS = {
-    'AF2': ('af2.sif', None, 'alphafold', 'af2_models'),
-    'AF2_BACKPROP': ('af2.sif', None, 'alphafold', 'af2_models'),
     'Boltz': ('boltz2.sif', None, 'boltz', 'boltz_models'),
     'BoltzCP': ('fold-cp.sif', 'bcp_container_path', 'boltz', 'boltz_models'),
     'ConforNets': ('confornets.sif', 'cn_container_path', 'openfold3', 'cn_checkpoint_path'),
@@ -294,7 +279,6 @@ LABEL_ASSETS = {
     'MolecularDynamicsPreparation': ('md-preparation-v1.sif', 'md_preparation_container', None, None),
     'MolecularDynamicsAnalysis': ('md-analysis-1.0.0.sif', 'md_analysis_container', None, None),
     'MolecularDynamicsGromacs': ('gromacs-md-2025.3.sif', 'md_gromacs_container', None, None),
-    'MolecularDynamicsOpenMM': ('openmm-md-8.5.2.sif', 'md_openmm_container', None, None),
     'MolecularDynamicsCpu': ('gromacs-md-2025.3.sif', 'md_gromacs_container', None, None),
     'ESMFold2': ('esmfold2.sif', 'esmf_container_path', 'esmfold2', None),
     'Caliby': ('caliby.sif', None, None, None),
@@ -312,8 +296,6 @@ LABEL_ASSETS = {
     'LaProteina': ('laproteina.sif', None, None, None),
     'DISCO': ('disco.sif', None, None, None),
     'Antiberty': ('antibody_tools.sif', None, None, None),
-    'ThermoMPNN': ('stability_tools.sif', None, 'thermompnn', None),
-    'OpenMM': ('openmm.sif', None, None, None),
     'RFDpoly': ('rfdpoly_v2.sif', None, 'rfdpoly', None),
     'nampnn': ('nampnn.sif', None, 'nampnn', None),
     'PPIFlow': ('ppiflow.sif', None, 'ppiflow', 'ppiflow_weights_dir'),
@@ -390,29 +372,28 @@ def native_resource_policy(params, label='CPU'):
     """
     from component_runtime import canonical_bytes
     gpu = label in {'gpu', 'gpu_light', 'process_gpu', 'frustrampnn_gpu',
-                    'MolecularDynamicsGromacs', 'MolecularDynamicsOpenMM'}
+                    'MolecularDynamicsGromacs'}
     cpu_key, mem_key = ('cpus_per_gpu', 'memory_gpu') if gpu else ('cpus', 'memory_cpu')
     fixed = {
         'MolecularDynamicsPreparation': (1, '4 GB', '1h'),
         'MolecularDynamicsCoordinator': (1, '2 GB', '7d'),
         'MolecularDynamicsAnalysis': (4, '12 GB', '4h'),
         'MolecularDynamicsGromacs': (8, '16 GB', '24h'),
-        'MolecularDynamicsOpenMM': (4, '8 GB', '24h'),
         'MolecularDynamicsCpu': (1, '2 GB', '1h'),
         'ShapeEvaluate': (2, '8 GB', None),
     }.get(label)
     md_config = params.get('md_config') or {}
-    native_md = label == 'MolecularDynamicsGromacs' and md_config.get('schema') == 'bms.md.job.v3'
-    if native_md:
-        execution = md_config['execution']
-        fixed = (execution['ntmpi'] * execution['ntomp'], fixed[1], fixed[2])
+    md_replica = label == 'MolecularDynamicsGromacs'
+    if md_replica:
+        execution = md_config.get('execution') or {}
+        fixed = (execution.get('ntmpi', 1) * execution.get('ntomp', 8), fixed[1], fixed[2])
     return canonical_bytes({
         'authority': 'nextflow.config:process.withLabel.' + label,
         'profile_authority': 'nextflow.config:profiles.workstation_ryzen7960x',
         'execution_role': 'compute',
         'cpus': {'value': fixed[0] if fixed else 2 if label == 'local_cpu' else
                  8 if label == 'pooled_assignment_cpu' else params.get(cpu_key, 4),
-                 'parameter': 'md_config.execution.ntmpi * md_config.execution.ntomp' if native_md else None if fixed else cpu_key,
+                 'parameter': 'md_config.execution.ntmpi * md_config.execution.ntomp' if md_replica else None if fixed else cpu_key,
                  'base_default': 8 if gpu else 24, 'profile_default': 4},
         'memory': {'value': fixed[1] if fixed else '16GB' if label == 'gpu_light' else
                    params.get(mem_key, '12GB' if gpu else '8GB'),
@@ -829,19 +810,15 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         if not sequence_prediction and not boltzgen and not generation_only and not yes('skip_rfd_seq_pred') and not yes('skip_pred'):
             if p.get('uncropped_target_pdb') and str(p.get('rfd_mode', '')).startswith('binder_'):
                 after = a.chain(['MergeUncroppedTarget'], after)
-            pred = p.get('pred_method', 'af2')
-            if pred == 'af2':
-                after = a.chain(['RunAF2', 'FilterAF2'], after)
-                if str(p.get('rfd_mode', '')).startswith('binder_'):
-                    after = a.chain(['AlignAF2'], after)
-            elif pred == 'boltz':
+            pred = p.get('pred_method', 'boltz')
+            if pred == 'boltz':
                 after = a.chain(['PrepBoltz', 'RunBoltz', 'AlignBoltz', 'FilterBoltz'], after)
                 a.msa('boltz2', after)
             elif pred == 'rf3':
                 after = a.chain(['RunRF3', 'FilterRF3'], after)
             else:
                 unresolved(workflow, 'dependency_closure', entrypoint, 'Unsupported native design predictor: ' + str(pred))
-        for producer in ('RunMPNN', 'RunFAMPNN', 'RunAF2', 'AlignBoltz'):
+        for producer in ('RunMPNN', 'RunFAMPNN', 'AlignBoltz'):
             if any(row.component_key == producer for row in components):
                 a.stage('Compress', (producer,), condition='protein_design native run artifact publication')
         terminal = a.chain(['BindProteinDesignTerminalMetadata'], after)
@@ -875,10 +852,10 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             return True
         cfg = p.get('md_config')
         engine = p.get('md_engine') or (cfg.get('engine') if isinstance(cfg, dict) else None)
-        if engine not in {'gromacs', 'openmm'}:
+        if engine != 'gromacs':
             unresolved('molecular_dynamics', 'dependency_closure', 'scripts/bms_md/contract.py:normalize_job_config',
                        'Bind normalized md_config.engine or native md_engine before selected engine provisioning')
-        engines = [engine] if engine in {'gromacs', 'openmm'} else []
+        engines = [engine] if engine == 'gromacs' else []
         retry = workflow == 'orchestrator' and bool(p.get('md_retry_spawn_receipt'))
         prep = a.chain(['MD_PREPARE_CONFIG']) if workflow == 'orchestrator' and not retry else ()
         from scripts.bms_md.chemistry.prepare import preparation_owner
@@ -886,7 +863,7 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             a.asset('runtime_data', 'md-preparation/env-v1-explicit.txt', 'nextflow.config:params.md_preparation_runtime_lock', 'md_preparation_runtime_lock')
         spawn = a.chain(['MD_SPAWN_REPLICAS'], prep) if prep else ()
         for selected_engine in engines:
-            process = 'MD_GROMACS_REPLICA' if selected_engine == 'gromacs' else 'MD_OPENMM_REPLICA'
+            process = 'MD_GROMACS_REPLICA'
             expansion = None if workflow == 'replica' else {
                 'authority': 'scripts/bms_md/spawn_replicas.py; scripts/bms_md/contract.py',
                 'child_model': 'molecular_dynamics', 'child_mode': 'replica', 'child_stage': 'md_replica',
@@ -1144,7 +1121,6 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
 
     if workflow == 'antibody_child':
         after = validation((), str(p.get('structure_validator') or 'boltz2').lower())
-        if yes('run_thermompnn'):a.chain(['BatchStability'], after)
         if yes('run_immunogenicity_scoring'):a.chain(['BatchImmunogenicity'], after)
         return True
 
@@ -1221,8 +1197,6 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             if p.get('maturation_redesign_enabled') is not False:
                 after = a.chain(['ANARCII', 'PrepMaturationRedesign', 'RunMaturationFAMPNN', 'ScoreMaturationImprovement'], after)
             after = a.chain(['FilterByMaturation'], after)
-        if yes('run_thermompnn'):after = a.chain(['THERMOMPNN'], after)
-        if yes('run_af2_backprop'):after = a.chain(['MergeComplex', 'AF2_BACKPROP'], after)
         if p.get('run_structure_validation') is not False:
             after = validation(after, str(p.get('structure_validator') or 'boltz2').lower())
             after = a.chain(['FinalizeSequentialValidationOutputs', 'StageStructureValidationArtifacts'], after)
@@ -1240,14 +1214,9 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
                 a.callback('maturation_post_validation', entrypoint + ':SpawnValidatedMaturationJobs')
         else:
             after = a.chain(['FinalizeTerminalAntibodyOutputs'], after)
-        if yes('openmm_enabled'):
-            after = a.chain(['OpenMMRelaxation'], after)
-            if p.get('openmm_compute_tier') == 'full' or p.get('openmm_mmgbsa_mode') != 'off':
-                a.stage('OpenMMScore', after, condition="openmm_compute_tier == 'full' || openmm_mmgbsa_mode != 'off'")
         if p.get('run_immunogenicity_scoring') is not False:
             after = a.chain(['ANTIBERTY_SCORE'], after)
             if p.get('filter_immunogenic') is not False:after = a.chain(['ANTIBERTY_FILTER_STRUCTURES'], after)
-        if yes('run_affinity_maturation'):after = a.chain(['IGGM_AFFINITY_MATURATION'], after)
         if yes('run_frustrampnn'):a.frustra(after)
         if yes('interactive_gating') or yes('interactive_swa'):
             a.stage('OpenInteractiveGate', after, source=entrypoint, condition='interactiveGateEnabled; native stage predicates')
@@ -1347,9 +1316,40 @@ def ngs_clone_runtime_dependencies(params):
     add('runtime_data', prefix + '/nxf-home/' + jar, home / jar)
     cache = resolve_lock_path(lock_path, lock['containers']['cache_dir'])
     for image in selected_images(lock, params.get('wf_clone_assembly_tool') or 'flye'):
-        add('image', prefix + '/images/' + image['cache_file'],
-            cache / image['cache_file'], image['sha256'])
+        installed = cache / image['cache_file']
+        # A pulled or locally built image never reproduces the reference file hash,
+        # so the identity carried to launch and remote transport is the installed
+        # file's own. A missing image keeps the reference hash and is reported as
+        # missing by the existing check.
+        add('image', prefix + '/images/' + image['cache_file'], installed,
+            _installed_file_sha256(installed) or image['sha256'])
     return tuple(dependencies), paths
+
+
+_INSTALLED_SHA256 = {}
+
+
+def _installed_file_sha256(path):
+    """SHA-256 of an installed regular file, hashed once per file version."""
+    import hashlib
+    import os
+    try:
+        info = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return None
+    import stat as stat_module
+    if not stat_module.S_ISREG(info.st_mode):
+        return None
+    key = (str(path), info.st_size, info.st_mtime_ns, info.st_ino)
+    cached = _INSTALLED_SHA256.get(str(path))
+    if cached and cached[0] == key:
+        return cached[1]
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    _INSTALLED_SHA256[str(path)] = (key, digest.hexdigest())
+    return digest.hexdigest()
 
 
 def ngs_dorado_model_dependencies(params, workflow):
@@ -1388,6 +1388,9 @@ def _append_ngs(a, workflow, yes):
     reference = bool(p.get('reference_fasta'))
     run_qc = p.get('run_fastq_qc', p.get('run_multimer_qc', True)) is not False
     methylation = workflow == 'ont_methylation_analysis'
+    # Reference-free assembly: reads go to the assembler unaligned and are
+    # aligned to the assembled consensus afterwards.
+    assembly_only = workflow == 'wf_clone_validation' and not reference
     after = ()
     if pod5:
         dependencies = ngs_dorado_model_dependencies(p, workflow)
@@ -1402,8 +1405,10 @@ def _append_ngs(a, workflow, yes):
             return True
         if reference and (not methylation or p.get('run_modkit') is not False):
             after = a.chain(['DoradoAlign'], after)
-        elif not basecall and not methylation:
+        elif not basecall and not methylation and not assembly_only:
             after = a.chain(['PrepareBamForAnalysis'], after)
+    elif bam and assembly_only:
+        pass
     elif bam:
         realign = reference and yes('bam_force_realign') and not methylation
         after = a.chain(['DoradoAlign' if realign else 'PrepareBamForAnalysis'])
@@ -1411,7 +1416,7 @@ def _append_ngs(a, workflow, yes):
                 (workflow in {'ont_construct_screening', 'wf_clone_validation'} and not yes('bam_force_realign'))):
             after = a.chain(['ValidateMappedBam'], after)
     elif fastq:
-        after = a.chain(['FastqAlign'])
+        after = a.chain(['FastqToUnalignedBam' if assembly_only else 'FastqAlign'])
     else:
         a.unresolved(workflow, 'dependency_closure', a.entrypoint,
                      'Native compiler must identify exactly one POD5/BAM/FASTQ input branch')
@@ -1424,6 +1429,17 @@ def _append_ngs(a, workflow, yes):
             after = a.chain(['ValidateModifiedBaseBam'], after)
             a.stage('ModkitPileup', after)
             a.stage('ModkitSummary', after)
+        return True
+    if assembly_only:
+        dependencies, _ = ngs_clone_runtime_dependencies(p)
+        for dependency in dependencies:
+            a.dependencies[dependency.logical_id] = dependency
+        clone = (a.stage('RunCloneValidation', after,
+            extra=tuple(row.logical_id for row in dependencies)),)
+        aligned = a.chain(['DoradoAlign'], tuple(dict.fromkeys((*clone, *after))))
+        a.chain(['CloneValidationAdapter'], tuple(dict.fromkeys((*clone, *aligned))))
+        if p.get('wf_clone_host_reference'):
+            a.stage('HostComposition', aligned)
         return True
     if workflow in {'wf_clone_validation', 'ont_construct_screening'}:
         # These entrypoints share the assembled/read-guided evidence graph.
@@ -1438,6 +1454,8 @@ def _append_ngs(a, workflow, yes):
             clone = (a.stage('RunCloneValidation', after,
                 extra=tuple(row.logical_id for row in dependencies)),)
             adapter = a.chain(['CloneValidationAdapter'], tuple(dict.fromkeys((*clone, *after))))
+            if workflow == 'wf_clone_validation' and p.get('wf_clone_host_reference'):
+                a.stage('HostComposition', after)
         qc, dimer_after = (), ()
         if run_qc:
             reads = a.chain(['BamToFastqForQC'], after) if not fastq else ()

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from component_runtime import SourceIdentity
 from database import Base, Job
 from routers import jobs, ont_runs
+from routers import job_stages
 from services import nextflow, ont_ngs_completion, ont_ngs_contract, alignment_access
 from services.result_state_integrity import finalize_successful_job
 from test_ont_retained_execution import upgraded_source
@@ -86,7 +87,7 @@ async def test_historical_compilation_terminal_publication_and_fresh_readback(hi
         async with sessions() as session:
             session.add(job)
             await session.commit()
-            await jobs.report_stage_complete(job.id, _request('/stage-complete', stage_token),
+            await job_stages.report_stage_complete(job.id, _request('/stage-complete', stage_token),
                 'dorado_demux', [str(manifest)], session)
             await session.refresh(job)
             assert job.provenance['ont_dorado_terminal_products']['identities']['lock_sha256'] == declared

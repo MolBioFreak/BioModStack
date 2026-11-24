@@ -25,7 +25,7 @@ from frustrampnn_upload_limit import FrustraMPNNUploadLimitMiddleware
 from routers import atomworks_studio, molecular_construction, molecular_geometry
 from routers import binder_blind_pose, binder_continuation
 from routers import ligandmpnn_interface_context, sequence_native, protonpottsmpnn, protonpottsmpnn_prediction
-from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, execution_targets, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, molbio_restriction, molbio_share, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, plr_results, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
+from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, execution_targets, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_end_operations, molbio_ngs_experiments, molbio_ops, molbio_restriction, molbio_share, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, plr_results, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
 from runtime_policy import (
     WorkflowAdmissionBlocked,
     workflow_launch_block_detail,
@@ -203,15 +203,25 @@ async def lifespan(app: FastAPI):
         install_global_experiment_worker(None)
         logger.warning("[STARTUP] %s", workflow_launch_block_detail("start the GPU workflow scheduler"))
 
-    ont_runtime_image = os.getenv("BMS_ONT_SLOW5TOOLS_IMAGE", "").strip()
-    ont_runtime_digest = os.getenv("BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST", "").strip()
-    if ont_runtime_image and len(ont_runtime_digest) == 64:
+    from services.ont_local_images import (
+        configured_container_runtime as _ont_container_runtime,
+        local_image_identity as _ont_local_image_identity,
+    )
+    try:
+        _ont_local_image_identity(
+            "BMS_ONT_SLOW5TOOLS_IMAGE", _ont_container_runtime()
+        )
+    except RuntimeError:
+        ont_raw_image_present = False
+    else:
+        ont_raw_image_present = True
+    if ont_raw_image_present:
         _ont_raw_signal_worker = OntRawSignalWorker(async_session, poll_interval=5.0)
         await _ont_raw_signal_worker.start()
         logger.info("[STARTUP] ONT raw-signal derivation worker started")
     else:
         _ont_raw_signal_worker = None
-        logger.info("[STARTUP] ONT raw-signal worker disabled: pinned runtime identity absent")
+        logger.info("[STARTUP] ONT raw-signal worker disabled: raw-signal image is not built on this machine")
 
     # The raw-signal worker already polls active runs; otherwise run a plain
     # status monitor so MinKNOW runs started from BMS still reach completion.
@@ -225,7 +235,7 @@ async def lifespan(app: FastAPI):
         OntSignalWorker._runtime_identity()
     except (OSError, RuntimeError):
         _ont_signal_worker = None
-        logger.info("[STARTUP] ONT signal-workbench worker disabled: approved Squigualiser runtime policy absent or mismatched")
+        logger.info("[STARTUP] ONT signal-workbench worker disabled: Squigualiser image is not built on this machine")
     else:
         _ont_signal_worker = OntSignalWorker(async_session, molbio_ngs_session_factory, poll_interval=5.0)
         if await _ont_signal_worker.start():
@@ -434,12 +444,21 @@ app.include_router(rcsb.router, prefix="/api/rcsb", tags=["rcsb"])
 app.include_router(nucleotide_sequences.router)  # /api/sequences/*
 app.include_router(system.router, prefix="/api", tags=["system"])  # /api/system/*
 app.include_router(telemetry.router, prefix="/api", tags=["telemetry"])
+from routers import tools_installer
+app.include_router(tools_installer.router)  # /api/tools/* - tool installer
 app.include_router(frameworks.router)  # /api/frameworks/* - SAbDab integration
 app.include_router(boltzgen.router)
 app.include_router(molbio_ops.router)
 from routers import molbio_golden_gate_design
 app.include_router(molbio_golden_gate_design.router)
+from routers import molbio_gibson_suggest
+app.include_router(molbio_gibson_suggest.router)
 app.include_router(molbio_restriction.router)
+from routers import molbio_relatives
+app.include_router(molbio_relatives.router)
+from routers import molbio_branches
+app.include_router(molbio_branches.router)
+app.include_router(molbio_end_operations.router)
 app.include_router(molbio_share.router)  # tailnet-only guest share grants
 app.include_router(rna_structure.router)
 app.include_router(msa.router)

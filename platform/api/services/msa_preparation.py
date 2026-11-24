@@ -161,7 +161,7 @@ def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destinat
     from biomodstack_msa_api import validate_settings
     from services.msa_provider_setup import selected_provider, provider_settings
     from biomodstack_boltz_msa import a3m_rows
-    from biomodstack_msa_handoff import validate_a3m
+    from biomodstack_msa_handoff import verified_provider_a3m
     import tempfile
     provider = selected_provider(effective)
     tasks = {}
@@ -196,16 +196,14 @@ def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destinat
                 if key is None or (index, role) in seen:
                     raise ValueError('MSA provider returned a duplicate or invalid alignment role')
                 seen.add((index, role))
-                path = Path(artifact['path'])
-                data = validate_a3m(path, missing[index]['sequence'])
-                if digest(path.read_bytes()) != artifact['sha256']:
-                    raise ValueError('Cached MSA artifact changed before model packaging')
+                data = verified_provider_a3m(artifact, missing[index]['sequence'])
                 if role == 'paired':
                     paired_depths[index] = len(a3m_rows(data))
                     if result['provider'] == 'colabfold_api':
-                        converted = Path(scratch) / f'task-{task}-chain-{index}-paired.a3m'
-                        converted.write_bytes(_protenix_paired_headers(data))
-                        path = converted
+                        data = _protenix_paired_headers(data)
+                # Export reads paths: give it the verified snapshot, not the cache name.
+                path = Path(scratch) / f'task-{task}-chain-{index}-{role}.a3m'
+                path.write_bytes(data)
                 missing[index][key] = str(path)
             if paired_depths and (set(paired_depths) != set(range(len(missing)))
                                   or len(set(paired_depths.values())) != 1):

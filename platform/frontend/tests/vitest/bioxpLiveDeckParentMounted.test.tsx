@@ -26,7 +26,7 @@ vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: () =
 
 let host: HTMLDivElement, root: Root, client: QueryClient;
 let catalog: any, generation: number, active: boolean, autoAccept: boolean;
-let held: Array<{ config: any; body: any; resolve: (value: any) => void }>;
+let held: Array<{ config: any; body: any; resolve: (value: any) => void; reject: (error: unknown) => void }>;
 let requests: Array<{ method: string; url: string; body?: any; params?: any }>;
 let receipts: Map<string, any>;
 const adapter = api.defaults.adapter, exported: any[] = [];
@@ -39,8 +39,11 @@ const button = (label: string, owner: ParentNode = host) => {
     const result = [...owner.querySelectorAll<HTMLButtonElement>('button')].find(el => el.textContent?.trim() === label);
     expect(result, label).toBeTruthy(); return result!;
 };
+const moveHere = () => [...document.querySelectorAll<HTMLButtonElement>('.bld-popup button')].find(b => b.textContent?.trim() === 'Move here');
+// A well click opens the well menu; its Move here button sends the well intent.
 const click = async (el: Element, detail = 1, options: MouseEventInit = {}) => {
     await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true, detail, ...options })); });
+    const go = el.hasAttribute('data-well') ? moveHere() : undefined; if (go && !go.disabled) await act(async () => go.click());
     await advance();
 };
 const tab = (name: string) => click(host.querySelector(`#control-tab-${name}`)!);
@@ -48,7 +51,9 @@ const key = async (el: Element, value: string, repeat = false) => {
     await act(async () => {
         el.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, repeat }));
         el.dispatchEvent(new KeyboardEvent('keyup', { key: value, bubbles: true }));
-    }); await advance();
+    });
+    const go = !repeat && el.hasAttribute('data-well') ? moveHere() : undefined; if (go && !go.disabled) await act(async () => go.click());
+    await advance();
 };
 const well = (station: string, address: string) => live().querySelector(`[data-station="${station}"][data-well="${address}"]`)!;
 const station = (label: string) => {
@@ -82,6 +87,9 @@ beforeEach(() => {
         { action_id: 'oem.deck.move_to_well', request_schema_version: 'bioxp.operator_action_request.v2',
             response_schema_version: 'bioxp.operator_action_receipt.v2', interrupt: false,
             enabled: true, disabled_reason: null, expected_board_epoch_by_board: { '4': 64, '5': 1 } },
+        ...['catch_plate', 'release_plate'].map(name => ({ action_id: `oem.deck.${name}`, request_schema_version: 'bioxp.operator_action_request.v2',
+            response_schema_version: 'bioxp.operator_action_receipt.v2', interrupt: false, enabled: true, disabled_reason: null,
+            expected_board_epoch_by_board: { '4': 72, '5': 9 } })),
     ]);
     api.defaults.adapter = async config => {
         const method = config.method ?? 'get', url = config.url ?? '';
@@ -89,6 +97,7 @@ beforeEach(() => {
         requests.push({ method, url, body, params: config.params });
         if (method === 'get') {
             if (url === '/api/bioxp/status') return response(config, { connection: { generation, active, configured: true, reachable: true, runtime_ready: true, hardware_fresh: true }, mutation_access: { enabled: true } });
+            if (url === '/api/bioxp/methods/catalog') return response(config, custodyCatalog);
             if (url.endsWith('/catalog')) return response(config, catalogWireFixture({ schema_version: 'bioxp.operator_control_catalog.v1',
                 dashboard: catalog.dashboard.telemetry ?? metadata.catalog.dashboard.telemetry,
                 actions: manual.referenced, canonical: structuredClone(catalog) }, config.params?.view));
@@ -97,7 +106,6 @@ beforeEach(() => {
             if (url.includes('/receipts/')) return response(config, receipts.get(decodeURIComponent(url.split('/').at(-1)!)));
             if (url === '/api/bioxp/protocols/jobs') return response(config, { rows: [] });
             if (url === '/api/bioxp/protocols/presets') return response(config, []);
-            if (url === '/api/bioxp/methods/catalog') return response(config, custodyCatalog);
             if (url === '/api/bioxp/operator-controls/deck/state') return response(config, { schema_version: 'bioxp.operator_deck_state.v1',
                 semantic: { plate_on_gantry: null, movable_plate_locations: { OUTPUT_COVER: 'LOC_OC_COVER_STORAGE', REAGENT_COVER: 'LOC_RC_COVER' } },
                 movable_objects: {}, physical_observation: false });
@@ -106,9 +114,9 @@ beforeEach(() => {
                 physical_observation: false });
             throw new Error(`Unexpected GET ${url}`);
         }
-        if (url.includes('/v2/actions/oem.deck.move_to_')) {
+        if (url.includes('/v2/actions/oem.deck.')) {
             if (autoAccept) return admit(config, body);
-            return new Promise(resolve => held.push({ config, body, resolve }));
+            return new Promise((resolve, reject) => held.push({ config, body, resolve, reject }));
         }
         if (url.endsWith('/v2/actions/meta.deactivate_motion') || url.endsWith('/v2/actions/meta.activate_motion')) return admit(config, body);
         if (url.includes('/v2/interrupts/')) return response(config, { ...park, action_id: url.split('/').at(-1), command_id: 'stop-parent' });
@@ -124,7 +132,8 @@ afterEach(async () => {
     vi.unstubAllGlobals(); vi.useRealTimers();
 });
 afterAll(() => {
-    if (process.env.BIOXP_LIVE_DECK_UI_EXPORT) writeFileSync(process.env.BIOXP_LIVE_DECK_UI_EXPORT,
+    const exportPath = process.env.BIOXP_MANUAL_PLATE_UI_EXPORT ?? process.env.BIOXP_LIVE_DECK_UI_EXPORT;
+    if (exportPath) writeFileSync(exportPath,
         JSON.stringify({ source: 'actual mounted cockpit and Axios serialization', transport_fixture_only: true, requests: exported }, null, 2));
 });
 
@@ -132,7 +141,7 @@ it('relocates deck controls to a fourth tab without changing the default robot l
     await mount('robot');
     expect(host.querySelector('[data-testid="oem-deck-movement"]')).toBeNull();
     expect([...host.querySelectorAll('[role="tablist"][aria-label="Robot controls"] [role="tab"]')].map(el => el.textContent))
-        .toEqual(['Robot controls', 'Pipettes', 'Workflows', 'Live deck movement']);
+        .toEqual(['Robot controls', 'Pipettes & plates', 'Workflows', 'Live deck']);
     await tab('live-deck');
     expect(panel().hidden).toBe(false); expect(live()).not.toBeNull();
     expect(host.querySelector('#control-panel-robot [data-testid="oem-deck-movement"]')).toBeNull();
@@ -143,7 +152,7 @@ it('relocates deck controls to a fourth tab without changing the default robot l
     await vi.waitFor(() => expect(live().querySelector('[data-testid="deck-record-panel"]')?.textContent).toContain('Reagent chiller'));
     expect(live().querySelector('[data-testid="tips-3"]')?.textContent).toBe('0/96 tips · 0 pickups');
     expect(live().querySelectorAll('[data-station="TECANRACK3"] .bwd-tip')).toHaveLength(0);
-    expect(host.querySelector('header [data-testid="motion-toggle"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Robot state and recovery"] [data-testid="motion-toggle"]')).not.toBeNull();
     expect(mutations()).toEqual([]);
 });
 
@@ -152,7 +161,7 @@ it('opens the real robot-local deep link with one default-open camera and no rob
     expect(host.querySelector('#control-tab-live-deck')?.getAttribute('aria-selected')).toBe('true');
     expect(panel().hidden).toBe(false); expect(live()).not.toBeNull();
     expect(host.querySelectorAll('[data-testid="parent-test-camera"]')).toHaveLength(1);
-    expect(panel().querySelector<HTMLDetailsElement>('[data-testid="live-deck-camera"]')?.open).toBe(true);
+    expect(panel().querySelector('[data-testid="live-deck-camera"]')?.closest('details')).toBeNull(); // always visible, no fold
     expect(mutations()).toEqual([]);
 });
 
@@ -199,7 +208,7 @@ it('sends native named travel from map regions and keeps selector camera offset 
     await mount();
     const select = [...live().querySelectorAll('label')].find(el => el.textContent?.trim().startsWith('Robot destination'))!.querySelector('select')!;
     await act(async () => { select.value = 'LOC_TC'; select.dispatchEvent(new Event('change', { bubbles: true })); });
-    const offset = live().querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    const offset = live().querySelector<HTMLInputElement>('[aria-label="Move head"] input[type="checkbox"]')!;
     await click(offset);
     await click(button('Move to destination', live()));
     expect(deckWrites().at(-1)?.body.inputs).toEqual({ target: 'LOC_TC', camera_offset: true });
@@ -245,10 +254,11 @@ it('keeps view navigation, focus, arrow exploration and repeated keys nonmoving 
 it('keeps synchronous deck admission ownership across tabs, leaves Stop independent and accepts the next explicit intent after POST', async () => {
     autoAccept = false; await mount();
     const first = well('LOC_TC', 'B3'), second = well('LOC_OC', 'H12');
-    await act(async () => {
-        first.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
-        second.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
-    }); await advance();
+    // Two quick well-menu moves before any reply: only the first is admitted.
+    await act(async () => { first.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); });
+    await act(async () => { moveHere()!.click(); });
+    await act(async () => { second.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); });
+    await act(async () => { moveHere()?.click(); }); await advance();
     expect(held).toHaveLength(1); expect(held[0].body.inputs).toEqual({ location_id: 2, well: 'B3', position_flag: 1 });
     await tab('robot'); await tab('live-deck'); await click(second);
     expect(held).toHaveLength(1);
@@ -295,12 +305,123 @@ it('top-bar Motion Off posts Motion Off once even when the robot reports Activat
             response_schema_version: 'bioxp.operator_action_receipt.v2', interrupt: false, enabled: false, disabled_reason: 'Door open' },
     ]);
     await mount('robot');
-    const toggle = host.querySelector<HTMLElement>('header [data-testid="motion-toggle"]')!;
-    expect(button('On', toggle).disabled).toBe(true);
-    expect(button('Off', toggle).disabled).toBe(false);
-    await click(button('Off', toggle));
+    const toggle = host.querySelector<HTMLElement>('[data-testid="motion-toggle"]')!;
+    expect(button('Enable motion', toggle).disabled).toBe(true);
+    expect(button('Disable motion', toggle).disabled).toBe(false);
+    await click(button('Disable motion', toggle));
     const sent = mutations().filter(row => row.url.includes('/v2/actions/meta.'));
     expect(sent).toHaveLength(1);
     expect(sent[0].url).toBe('/api/bioxp/operator-controls/v2/actions/meta.deactivate_motion');
     expect(sent[0].body).toMatchObject({ schema_version: 'bioxp.operator_action_request.v2', inputs: {} });
+});
+
+const platePanel = () => live().querySelector<HTMLElement>('[aria-label="Manual plate handling"]')!;
+const choosePlate = async (label: string, value: string) => {
+    const select = platePanel().querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!;
+    expect(select, label).toBeTruthy();
+    await act(async () => { select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })); }); await advance();
+};
+const plateWrites = () => mutations().filter(r => r.url.endsWith('/oem.deck.catch_plate') || r.url.endsWith('/oem.deck.release_plate'));
+it('manual plate handling uses published nondefault ordinals, one synchronous submission and no protocol', async () => {
+    autoAccept = false; await mount();
+    expect(platePanel()).toBeTruthy();
+    expect(button('Pick up and move', live())).toBeTruthy();
+    await choosePlate('Object to pick up', 'PL_REAGENT');
+    await choosePlate('Place destination', 'LOC_MS');
+    const pickup = button('Pick up & hold', platePanel());
+    await act(async () => { pickup.click(); pickup.click(); }); await advance();
+    expect(plateWrites()).toHaveLength(1);
+    const request = plateWrites()[0];
+    expect(request).toMatchObject({ method: 'post', url: '/api/bioxp/operator-controls/v2/actions/oem.deck.catch_plate', body: {
+        schema_version: 'bioxp.operator_action_request.v2', expected_connection_generation: generation,
+        expected_ownership_generation: catalog.dashboard.ownership_generation, expected_board_epoch_by_board: { '4': 72, '5': 9 },
+        inputs: { plate: 2 }, idempotency_key: expect.any(String) } });
+    expect(request.body.inputs).toEqual({ plate: 2 });
+    await choosePlate('Object to pick up', 'PL_OUTPUT');
+    expect(plateWrites()[0]).toEqual(request);
+    const accepted = admit(held[0].config, held[0].body); accepted.data.status = 'queued';
+    await act(async () => held[0].resolve(accepted)); await advance();
+    expect(live().textContent).toContain('robot queued');
+    // No held provenance gate: native admission owns whether the held object can be placed.
+    await click(button('Place held plate', platePanel()));
+    expect(plateWrites()).toHaveLength(2);
+    expect(plateWrites()[1]).toMatchObject({ url: '/api/bioxp/operator-controls/v2/actions/oem.deck.release_plate', body: {
+        expected_board_epoch_by_board: { '4': 72, '5': 9 }, inputs: { destination: 25, press_plate: false } } });
+    expect(plateWrites()[1].body.inputs).toEqual({ destination: 25, press_plate: false });
+    expect(plateWrites()[1].body.idempotency_key).not.toBe(request.body.idempotency_key);
+    expect(mutations()).toHaveLength(2);
+});
+it('manual plate handling renders actual source choices and submits every published placement ordinal', async () => {
+    await mount();
+    const custody = custodyCatalog.authoring.custody;
+    const choices = platePanel().querySelector<HTMLSelectElement>('[aria-label="Object to pick up"]')!;
+    expect([...choices.options].filter(o => o.value).map(o => o.value)).toEqual(custody.objects.map(o => o.token));
+    for (const row of custody.destinations.filter(d => Number.isInteger(d.plate_destination))) {
+        await choosePlate('Place destination', row.token); await click(button('Place held plate', platePanel()));
+        expect(plateWrites().at(-1)?.body.inputs).toEqual({ destination: row.plate_destination, press_plate: false });
+    }
+    const id = [...receipts.keys()].at(-1)!;
+    const key = plateWrites().at(-1)!.body.idempotency_key;
+    expect(live().querySelector(`[data-request-key="${key}"]`)?.textContent).toContain('robot dispatched');
+    receipts.set(id, { ...receipts.get(id), terminal: true, status: 'completed', completion_class: 'completed' });
+    await act(async () => { await client.refetchQueries({ queryKey: ['bioxp'] }); }); await advance();
+    expect(requests.some(r => r.url.includes(`/receipts/${encodeURIComponent(id)}`))).toBe(true);
+    // The existing canonical observer retires only this completed request, not a synthetic UI timer.
+    expect(live().querySelector(`[data-request-key="${key}"]`)).toBeNull();
+    expect(mutations().every(r => r.url.includes('/v2/actions/oem.deck.release_plate'))).toBe(true);
+});
+it('manual plate handling retains late-error request identity without retrying the POST', async () => {
+    autoAccept = false; await mount();
+    await choosePlate('Object to pick up', 'PL_OUTPUT');
+    await click(button('Pick up & hold', platePanel()));
+    const original = structuredClone(plateWrites()[0]);
+    await act(async () => held[0].reject({ response: { status: 502, data: { detail: {
+        error: 'post_dispatch_receipt_validation_failed', command_id: 'late-manual-1', status_path: '/operator/v2/actions/receipts/late-manual-1',
+        retry_guidance: 'do_not_resubmit_reconcile_by_command_id' } } } })); await advance(5000);
+    expect(plateWrites()).toEqual([original]);
+    expect(live().textContent).toContain(original.body.idempotency_key);
+    expect(live().textContent).toContain('admission uncertain');
+    expect(live().textContent).toContain('late-manual-1');
+    const lookups = requests.filter(r => r.url.includes('/v2/requests/'));
+    expect(lookups.length).toBeGreaterThan(0);
+    expect(lookups.every(r => r.url.endsWith(original.body.idempotency_key))).toBe(true);
+});
+it('manual plate handling preserves native live interlock denials but ignores historical ambiguity', async () => {
+    catalog.actions.find((a: any) => a.action_id === 'oem.deck.catch_plate').enabled = false;
+    catalog.actions.find((a: any) => a.action_id === 'oem.deck.catch_plate').disabled_reason = 'Door interlock';
+    catalog.dashboard.latest_receipts = [{ ...park, action_id: 'oem.deck.release_plate', status: 'ambiguous', terminal: true }];
+    await mount(); await choosePlate('Object to pick up', 'PL_POOL'); await choosePlate('Place destination', 'LOC_OC');
+    expect(button('Pick up & hold', platePanel()).disabled).toBe(true);
+    expect(platePanel().textContent).toContain('Door interlock');
+    expect(button('Place held plate', platePanel()).disabled).toBe(false);
+    await click(button('Place held plate', platePanel()));
+    expect(plateWrites()).toHaveLength(1);
+});
+
+
+it('keeps dashboard observation running on the Workflows tab without mutations', async () => {
+    await mount('robot');
+    await tab('workflows'); await advance(100);
+    const dashboardReads = () => requests.filter(r => r.url.endsWith('/operator-controls/catalog') && r.params?.canonical_assessment_base !== undefined);
+    const before = dashboardReads().length;
+    await advance(5200);
+    expect(dashboardReads().length).toBeGreaterThan(before);
+    expect(requests.some(r => r.url.endsWith('/operator-controls/updates'))).toBe(true);
+    expect(mutations()).toHaveLength(0);
+});
+
+it('refreshes Motion at unchanged ownership without sending a command', async () => {
+    const motion = catalog.dashboard.telemetry.motion;
+    Object.assign(motion, { state: 'unknown', enabled: false, reason: 'Same-epoch CAN readiness has not been established.' });
+    catalog.dashboard.telemetry.connection.ownership.CAN_READY = null;
+    await mount('robot');
+    const toggle = () => host.querySelector('[data-testid="motion-toggle"]')?.getAttribute('data-motion');
+    expect(toggle()).toBe('unknown');
+    for (const [state, enabled] of [['off', false], ['on', true]] as const) {
+        Object.assign(motion, { state, enabled, reason: enabled ? null : 'Motion is inactive.' });
+        if (enabled) catalog.dashboard.telemetry.connection.ownership.CAN_READY = true;
+        await advance(6000);
+        expect(toggle()).toBe(state);
+    }
+    expect(mutations()).toEqual([]);
 });

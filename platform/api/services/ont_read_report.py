@@ -15,6 +15,8 @@ from typing import Any
 
 REPORT_SCHEMA = "bms.ngs.read-report.v1"
 MAX_READS = 200_000
+POLY_A_BIN_NT = 10
+REFERENCE_LIST_LIMIT = 50
 HISTOGRAM_BINS = 60
 MOD_PROBABILITY_THRESHOLD = 0.5
 
@@ -25,6 +27,8 @@ MOD_CODE_NAMES = {
     "19228": "2OmeC", "19229": "2OmeG", "69426": "2OmeA",
 }
 
+# RNA names for the codes that DNA calls 6mA and 5mC.
+RNA_MOD_CODE_NAMES = {**MOD_CODE_NAMES, "a": "m6A", "m": "m5C"}
 _BAM_KINDS = ("alignment_bam", "basecall_bam", "calls_bam")
 
 
@@ -65,21 +69,22 @@ _COMPLEMENT = str.maketrans("ACGTN", "TGCAN")
 _DCM = {"CCAGG", "CCTGG"}
 
 
-def _motif_context(code_name: str, sequence: str, index: int) -> str | None:
+def _motif_context(code_name: str, canonical: str, strand: int, sequence: str, index: int) -> str | None:
     """Methylase motif at a called base, from the read's own forward sequence.
 
-    Dam methylates the A of GATC; Dcm the second C of CCWGG (either C counts
-    here because both strands' calls are reported per read orientation).
+    Dam methylates the A of GATC. Dcm methylates the second C of CCWGG, so only
+    that C is a Dcm site: counting the first C as well halves the fraction.
+    A call reported on the opposite strand (G-m) sits on the G paired with the
+    other strand's target C, the fourth base of the motif. 5hmC is not Dcm.
     """
-    if code_name == "6mA" and sequence[max(0, index - 1):index + 3] == "GATC":
+    if code_name == "6mA" and canonical == "A" and strand == 0 and sequence[max(0, index - 1):index + 3] == "GATC":
         return "GATC"
-    if code_name in {"5mC", "5hmC"} and (
-        sequence[max(0, index - 1):index + 4] in _DCM or sequence[index:index + 5] in _DCM
-    ):
-        return "CCWGG"
+    if code_name == "5mC":
+        if canonical == "C" and strand == 0 and index >= 1 and sequence[index - 1:index + 4] in _DCM:
+            return "CCWGG"
+        if canonical == "G" and strand == 1 and index >= 3 and sequence[index - 3:index + 2] in _DCM:
+            return "CCWGG"
     return None
-
-
 def _implicit_modes(read: Any) -> set[tuple[str, str]]:
     """(canonical, code) pairs whose MM mode is implicit ('.' or omitted).
 
@@ -105,7 +110,7 @@ def _implicit_modes(read: Any) -> set[tuple[str, str]]:
 
 
 def _modification_tallies(read: Any, totals: dict[str, dict[str, int]],
-                          motifs: dict[str, dict[str, int]] | None = None) -> None:
+                          motifs: dict[str, dict[str, int]] | None = None, *, rna: bool = False) -> None:
     """Count called sites and sites with P(mod) >= 0.5, overall and at Dam/Dcm motifs."""
     try:
         mods = read.modified_bases_forward or read.modified_bases
@@ -116,7 +121,7 @@ def _modification_tallies(read: Any, totals: dict[str, dict[str, int]],
     sequence = (read.get_forward_sequence() or "").upper()
     implicit = _implicit_modes(read)
     for (canonical, _strand, code), calls in mods.items():
-        name = MOD_CODE_NAMES.get(str(code), str(code))
+        name = (RNA_MOD_CODE_NAMES if rna else MOD_CODE_NAMES).get(str(code), str(code))
         key = f"{canonical}+{name}"
         probability = {position: (quality + 0.5) / 256 for position, quality in calls}
         if (canonical, str(code)) in implicit and sequence:
@@ -127,10 +132,11 @@ def _modification_tallies(read: Any, totals: dict[str, dict[str, int]],
         entry["called_sites"] += len(sites)
         entry["modified_sites"] += sum(1 for index in sites if probability.get(index, 0.0) >= MOD_PROBABILITY_THRESHOLD)
         entry["reads"] += 1
-        if motifs is None or not sequence:
+        # Dam and Dcm are bacterial DNA methylases; an RNA run has no such motif.
+        if motifs is None or not sequence or rna:
             continue
         for index in sites:
-            motif = _motif_context(name, sequence, index)
+            motif = _motif_context(name, canonical, int(_strand), sequence, index)
             if motif is None:
                 continue
             bucket = motifs[f"{key}@{motif}"]
@@ -138,7 +144,59 @@ def _modification_tallies(read: Any, totals: dict[str, dict[str, int]],
             bucket["modified_sites"] += int(probability.get(index, 0.0) >= MOD_PROBABILITY_THRESHOLD)
 
 
-def build_read_report(bam_path: Path, *, artifact: dict[str, Any]) -> dict[str, Any]:
+def _poly_a_summary(values: list[int], reads: int) -> dict[str, Any] | None:
+    """Dorado's pt tag: a tail length per read, -1 where it made no estimate."""
+    if not values:
+        return None
+    estimated = sorted(value for value in values if value >= 0)
+    middle = len(estimated) // 2
+    median = None if not estimated else (
+        estimated[middle] if len(estimated) % 2 else (estimated[middle - 1] + estimated[middle]) / 2)
+    bins = Counter(value // POLY_A_BIN_NT for value in estimated)
+    return {
+        "source": "Dorado pt tag, one value per read",
+        "reads": reads,
+        "estimated_reads": len(estimated),
+        # Kept apart: no estimate (-1) is not a tail of length zero, and neither is a read with no tag.
+        "no_estimate_reads": len(values) - len(estimated),
+        "zero_length_reads": sum(1 for value in estimated if value == 0),
+        "reads_without_tag": reads - len(values),
+        "median_tail_nt": median,
+        "mean_tail_nt": round(sum(estimated) / len(estimated), 2) if estimated else None,
+        "longest_tail_nt": estimated[-1] if estimated else None,
+        "histogram": {
+            "bin_width_nt": POLY_A_BIN_NT,
+            "bins": [{"start_nt": index * POLY_A_BIN_NT, "end_nt_exclusive": (index + 1) * POLY_A_BIN_NT, "read_count": count}
+                     for index, count in sorted(bins.items())],
+        },
+    }
+
+
+def poly_a_tsv_text(bam_path: Path) -> str:
+    """Every primary read with the exact value Dorado wrote."""
+    try:
+        import pysam
+    except ImportError as exc:  # pragma: no cover - pinned dependency
+        raise OntReadReportError("pysam is unavailable") from exc
+    lines = ["read_id\tpoly_a_tail_nt\testimate"]
+    try:
+        with pysam.AlignmentFile(str(bam_path), "rb", check_sq=False) as handle:
+            for read in handle.fetch(until_eof=True):
+                if read.is_secondary or read.is_supplementary:
+                    continue
+                if len(lines) > MAX_READS:
+                    break
+                if not read.has_tag("pt"):
+                    lines.append(f"{read.query_name}\t\tnot_tagged")
+                    continue
+                value = int(read.get_tag("pt"))
+                lines.append(f"{read.query_name}\t{value}\t{'estimated' if value >= 0 else 'no_estimate'}")
+    except (OSError, ValueError) as exc:
+        raise OntReadReportError(f"reads BAM could not be read: {exc}") from exc
+    return "\n".join(lines) + "\n"
+
+
+def build_read_report(bam_path: Path, *, artifact: dict[str, Any], molecule_type: str | None = None) -> dict[str, Any]:
     try:
         import pysam
     except ImportError as exc:  # pragma: no cover - pinned dependency
@@ -150,10 +208,14 @@ def build_read_report(bam_path: Path, *, artifact: dict[str, Any]) -> dict[str, 
     modifications: dict[str, dict[str, int]] = defaultdict(lambda: {"called_sites": 0, "modified_sites": 0, "reads": 0})
     motif_calls: dict[str, dict[str, int]] = defaultdict(lambda: {"called_sites": 0, "modified_sites": 0})
     move_tagged = 0
+    poly_a_values: list[int] = []
     truncated = False
     try:
         with pysam.AlignmentFile(str(bam_path), "rb", check_sq=False) as handle:
             header = handle.header.to_dict()
+            # The job's molecule type wins; without it the basecall model name decides.
+            rna = (molecule_type or "").lower() == "rna" if molecule_type else any(
+                "basecall_model=rna" in str(item.get("DS") or "") for item in header.get("RG", []))
             for read in handle.fetch(until_eof=True):
                 if read.is_secondary:
                     secondary += 1
@@ -179,7 +241,9 @@ def build_read_report(bam_path: Path, *, artifact: dict[str, Any]) -> dict[str, 
                     contigs[read.reference_name] += 1
                 if read.has_tag("mv"):
                     move_tagged += 1
-                _modification_tallies(read, modifications, motif_calls)
+                if read.has_tag("pt"):
+                    poly_a_values.append(int(read.get_tag("pt")))
+                _modification_tallies(read, modifications, motif_calls, rna=rna)
     except (OSError, ValueError) as exc:
         raise OntReadReportError(f"reads BAM could not be read: {exc}") from exc
     programs = [
@@ -214,12 +278,24 @@ def build_read_report(bam_path: Path, *, artifact: dict[str, Any]) -> dict[str, 
             "unmapped_reads": unmapped,
             "secondary_records": secondary,
             "supplementary_records": supplementary,
-            "references": references[:50],
-            "reads_per_reference": dict(contigs.most_common(50)),
+            "references": references[:REFERENCE_LIST_LIMIT],
+            "reference_count": len(references),
+            "reads_per_reference": dict(contigs.most_common(REFERENCE_LIST_LIMIT)),
+            "references_with_reads": len(contigs),
+            "reference_list_limit": REFERENCE_LIST_LIMIT,
         },
         "move_tagged_reads": move_tagged,
+        "poly_a": _poly_a_summary(poly_a_values, len(lengths)),
+        "molecule_type": "rna" if rna else "dna",
         "modifications": {
             "probability_threshold": MOD_PROBABILITY_THRESHOLD,
+            # How these tallies are made, so they are not read as modkit's per-site estimates.
+            "method": {
+                "source": "read MM/ML tags",
+                "population": "primary reads" + (f", first {MAX_READS} in file order" if truncated else ""),
+                "denominator": "called bases of the modified base type",
+                "filter": "none",
+            },
             "by_code": [
                 {"code": key, **value,
                  "modified_fraction": round(value["modified_sites"] / value["called_sites"], 6) if value["called_sites"] else 0.0}

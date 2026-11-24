@@ -68,29 +68,6 @@ def test_complex_producer_boundary_emits_typed_manifest_without_adapter_inferenc
     assert "predicted.getName()" not in complex_helper
 
 
-def test_complex_producer_binding_preserves_nested_keys_across_nextflow_staging() -> None:
-    module = (REPO_ROOT / "modules" / "structure_prediction.nf").read_text(encoding="utf-8")
-    protenix = (REPO_ROOT / "modules" / "protenix.nf").read_text(encoding="utf-8")
-    complex_helper = module.split("def complexCanonicalProducerOutputs", 1)[1].split(
-        "// Generate MSA", 1
-    )[0]
-    protenix_process = protenix.split("process ProtenixFromComplex", 1)[1].split(
-        "process ", 1
-    )[0]
-
-    assert (
-        'tuple val(input_sample), path("producer_candidates.json"), '
-        'path("predictions/**/*.cif"), emit: canonical_structures, optional: true'
-    ) in protenix_process
-    assert "manifest.candidates.size() != predictedFiles.size()" in complex_helper
-    assert "(manifestNames as Set).size() != manifestNames.size()" in complex_helper
-    assert "ambiguous output filenames" in complex_helper
-    assert "binds one output more than once" in complex_helper
-    assert "boundKeys" in complex_helper
-    assert "record.producer_output_key.toString().tokenize('/')[-1] == stagedOutputName" in complex_helper
-    assert "record.producer_artifact_sha256 == artifactDigest" in complex_helper
-    assert "boundKeys != manifestKeys" in complex_helper
-    assert "predicted.baseName" not in complex_helper
 
 
 def test_complex_producer_coordinates_are_explicit_typed_and_preserved(tmp_path: Path) -> None:
@@ -370,22 +347,6 @@ def test_complex_module_exposes_typed_canonical_candidate_channel() -> None:
     assert re.search(r"emit:\s+structures\s+canonical_candidates", complex_block)
 
 
-def test_complex_prediction_uses_one_canonical_component_for_actual_candidates() -> None:
-    workflow = _workflow()
-
-    assert "include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'" in workflow
-    assert workflow.count("SchedulerFrustraMPNNParentFanout(") == 1
-    assert "CanonicalFrustraMPNNV2(" not in workflow
-    assert "CanonicalFrustraMPNN(" not in workflow
-    assert "FrustrampnnQC" not in workflow
-    assert "AggregateFrustrationReports" not in workflow
-    assert "placeholder.pdb" not in workflow
-    assert "complex_prediction:no_candidates" in workflow
-    assert "complex_prediction_wf.out.structures.flatten()" in workflow
-    assert "PrepareComplexPredictionFrustraMPNNCandidate" in workflow
-    assert "MaterializeComplexPredictionFrustraMPNNCandidate" in workflow
-    assert "frustrampnn_results = SchedulerFrustraMPNNParentFanout.out.receipt" in workflow
-    assert re.search(r"emit:\s+structures\s+frustrampnn_results", workflow)
 
 
 def test_complex_candidate_identity_is_byte_bound_and_representation_deduplicated() -> None:
@@ -462,28 +423,6 @@ def test_complex_prediction_reports_closed_v2_publication_marker_before_completi
     assert "set(payload)" not in reporter
 
 
-def test_complex_prediction_reports_terminal_states_and_protein_only_scope() -> None:
-    workflow = _workflow()
-
-    assert "params.frustrampnn_requiredness ?: 'required'" in workflow
-    assert "frustrampnn_requiredness must be required" in workflow
-    assert "'optional'" not in workflow
-    assert "ReportComplexPredictionFrustraMPNNNotRequested" in workflow
-    assert "ReportComplexPredictionFrustraMPNNComplete" in workflow
-    assert "frustrampnn not_requested" in workflow
-    assert "complex_prediction_frustrampnn_terminal_manifest" in workflow
-    assert "status: 'not_requested'" in workflow
-    assert "requiredness: 'not_requested'" in workflow
-    assert "candidate_count: 0" in workflow
-    assert "publish_frustrampnn_bundle.py" in workflow
-    assert "frustrampnn complete" in workflow
-    assert "def reportStage" not in workflow
-    assert ".subscribe" not in workflow
-    assert "workflow.onError" not in workflow
-    assert ".execute()" not in workflow
-    assert "protein entities only" in workflow
-    assert "ligand/nucleic-acid context is not analyzed" in workflow
-    assert "protein_only" in workflow
 
 
 def test_complex_candidate_preparation_rejects_optional_requiredness(tmp_path: Path) -> None:

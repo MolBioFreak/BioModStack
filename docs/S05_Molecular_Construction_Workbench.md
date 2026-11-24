@@ -61,7 +61,7 @@ was changed in this branch.
 ## Verified evidence
 
 Task-owned native interpreter:
-`/home/dalab/.hermes/profiles/fresh/cache/scratch/s05-molecular-venv/bin/python`.
+`<scratch>/s05-molecular-venv/bin/python`.
 Reused the already provisioned native graph environment and existing locked
 frontend dependencies; no shared-environment installation.
 

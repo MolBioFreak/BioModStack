@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 from routers import conformational_mapping as cm
+from services.conformational_mapping import submission
 from lib.runtime_image_lifecycle import commit_release, transaction
 from lib.shared_runtime_images import publish_image
 from prepare_runtime_image_attestation import (
@@ -30,7 +31,9 @@ def managed(tmp_path, monkeypatch):
         commit_release(root, 'production', {key: {'sha256': digest, 'path': str(image)} for key in KEYS})
     source.unlink()
     monkeypatch.setattr(cm, 'get_container_dir', lambda: tmp_path)
+    monkeypatch.setattr(submission, 'get_container_dir', lambda: tmp_path)
     monkeypatch.setattr(cm, 'get_weights_root', lambda: tmp_path / 'weights')
+    monkeypatch.setattr(submission, 'get_weights_root', lambda: tmp_path / 'weights')
     checkpoint = tmp_path / 'weights/protenix/checkpoint/protenix-v2.pt'
     checkpoint.parent.mkdir(parents=True)
     checkpoint.write_bytes(b'checkpoint')
@@ -140,9 +143,10 @@ def test_existing_receipt_rejects_same_byte_replacement(managed, tmp_path):
 
 def test_clean_install_is_unqualified_without_writes(tmp_path, monkeypatch):
     monkeypatch.setattr(cm, 'get_container_dir', lambda: tmp_path)
+    monkeypatch.setattr(submission, 'get_container_dir', lambda: tmp_path)
     monkeypatch.delenv('BMS_RUNTIME_IMAGE_STORE', raising=False)
     monkeypatch.delenv(KEYS[1], raising=False)
     with pytest.raises(HTTPException) as exc:
-        cm._server_confornets_identity()
+        submission._server_confornets_identity()
     assert exc.value.status_code == 503
     assert not list(tmp_path.iterdir())

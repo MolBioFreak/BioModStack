@@ -7,9 +7,11 @@ import { catalogWireFixture } from '../fixtures/bioxpCatalogWire';
 import metadata from '../fixtures/bioxp_xy_bms_metadata.json';
 import canonicalProducer from '../fixtures/bioxp_deck_canonical_queue.json';
 import deckCatalog from '../fixtures/bioxp_deck_admission_catalog.json';
+import holderCatalog from '../fixtures/bioxp_bulk_holder_destinations.json';
 import park from '../fixtures/bioxp_park_completed_receipt.json';
 const state = vi.hoisted(() => ({ generation: 7, error: false, active: true }));
 vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
+vi.mock('../../src/components/BioXpThermalControls', () => ({ BioXpThermalControls: () => null }));
 vi.mock('../../src/lib/bioxpClient', async importOriginal => ({
     ...await importOriginal<typeof import('../../src/lib/bioxpClient')>(),
     useBioXpStatus: () => ({ data: { connection: { active: state.active, configured: true, generation: state.generation, reachable: true, runtime_ready: true }, mutation_access: { enabled: true } }, isError: state.error }),
@@ -32,7 +34,7 @@ const panel = () => container.querySelector('[data-testid="oem-deck-movement"]')
 const move = () => [...panel().querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
 const submit = async (target: string, cameraOffset = false) => {
     await act(async () => { const select = [...panel().querySelectorAll('label')].find(label => label.textContent?.startsWith('Robot destination'))!.querySelector('select')!; select.value = target; select.dispatchEvent(new Event('change', { bubbles: true })); });
-    await act(async () => { const checkbox = panel().querySelector('input[type=checkbox]') as HTMLInputElement; if (!checkbox.disabled && checkbox.checked !== cameraOffset) checkbox.click(); });
+    await act(async () => { const checkbox = panel().querySelector('[aria-label="Move head"] input[type=checkbox]') as HTMLInputElement; if (!checkbox.disabled && checkbox.checked !== cameraOffset) checkbox.click(); });
     await act(async () => move().click()); await advance();
 };
 const accept = async (index: number) => { await act(async () => admissions[index].resolve({ data: receipt(index) })); await advance(); };
@@ -189,4 +191,21 @@ it('bounds a stalled browser admission by the existing request policy without re
     expect(panel().textContent).toContain('admission uncertain');
     expect(api.post).toHaveBeenCalledWith(expect.stringContaining('/oem.deck.move_to_location'), expect.anything(), { timeout: 12000 });
     await advance(6000); expect(admissions).toHaveLength(1);
+});
+it('submits Bulk reagent holder dropdown and map targets as exact native named destinations', async () => {
+    const deck = catalog.actions.find((a: any) => a.action_id === 'oem.deck.move_to_location');
+    deck.destination_options = deck.destination_options.filter((d: any) => d.target !== 'LOC_TROUGH').concat(structuredClone(holderCatalog.destination_options));
+    await render();
+    const select = [...panel().querySelectorAll('label')].find(label => label.textContent?.startsWith('Robot destination'))!.querySelector('select')!;
+    expect([...select.querySelectorAll('optgroup[label="Bulk reagent holder"] option')].map(o => (o as HTMLOptionElement).value))
+        .toEqual(holderCatalog.destination_options.filter(d => 'xy' in d).map(d => d.target));
+    await submit('LOC_TROUGH_PCR_ROW_2_WELL_2');
+    expect(admissions).toHaveLength(1);
+    expect(admissions[0].body.inputs).toEqual({ target: 'LOC_TROUGH_PCR_ROW_2_WELL_2', camera_offset: false });
+    await accept(0);
+    await act(async () => panel().querySelector('[data-holder-target="LOC_TROUGH_MICRO_ROW_2"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
+    await advance();
+    expect(admissions).toHaveLength(2);
+    expect(admissions[1].body.inputs).toEqual({ target: 'LOC_TROUGH_MICRO_ROW_2', camera_offset: false });
+    expect(vi.mocked(api.post).mock.calls.every(([url]) => String(url).endsWith('/oem.deck.move_to_location'))).toBe(true);
 });

@@ -22,7 +22,10 @@ async def test_native_canonical_scalars_ignore_legacy_columns(tmp_path, monkeypa
         row.ptm = 999
         row.plddt_overall = 999
         result = await scientific.persisted_projection(row, session)
-        assert set(result['metrics']) == {'ptm', 'complex_plddt'}
+        assert {'ptm', 'complex_plddt'} <= set(result['metrics'])
+        assert set(result['metrics']) == set(result['metric_sources'])
+        assert all(source['artifact_sha256'] for source in result['metric_sources'].values())
+        assert result['metrics']['complex_plddt'] != 999
         assert result['metrics']['ptm'] != 999
         assert result['metric_descriptors']['complex_plddt'].unit == 'fraction'
         assert result['metric_sources']['ptm']['candidate_id'] != row.id
@@ -82,7 +85,7 @@ async def test_actual_api_transports_canonical_scalar_sources(tmp_path, zero):
             async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
                 raw = await client.get('/analytics/job/job/designs')
                 assert raw.status_code == 200, raw.text
-                assert all(set(p['metrics']) == {'ptm','complex_plddt'} for p in raw.json())
+                assert all({'ptm','complex_plddt'} <= set(p['metrics']) == set(p['metric_sources']) for p in raw.json())
                 if zero:
                     assert any(p['metrics'].get('ptm') == 0 for p in raw.json())
                 assert all(p['metric_sources']['ptm']['artifact_sha256'] for p in raw.json())

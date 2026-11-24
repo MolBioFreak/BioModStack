@@ -17,7 +17,6 @@ import secrets
 import re
 import shutil
 import stat
-import subprocess
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -35,6 +34,7 @@ from database import (
     InputFile,
     OntInstrumentRun,
     OntInstrumentRunEvent,
+    OntMoveTableSource,
     OntRawSignalDerivationEvent,
     OntRawSignalDerivationJob,
     OntRawSignalLookup,
@@ -42,6 +42,7 @@ from database import (
 )
 from services.container_cli_environment import container_cli_environment, container_user_namespace_args
 from services.file_lease_signals import register_lease_break_listener
+from services.ont_local_images import configured_container_runtime, local_image_identity
 from services.ont_read_metrics import publish_read_metrics_from_validation
 
 
@@ -51,7 +52,6 @@ EXTERNAL_BLOW5_VALIDATION_PROFILE_ID = "bms.blow5.external-validation.v2"
 # Lossless SLOW5 (ASCII) -> indexed BLOW5 (binary) with slow5tools from the same pinned runtime.
 SLOW5_TO_BLOW5_PROFILE_ID = "bms.blow5.slow5-to-blow5.v1"
 BLOW5_CONTAINER_ENV = "BMS_ONT_SLOW5TOOLS_IMAGE"
-BLOW5_CONTAINER_DIGEST_ENV = "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST"
 BLOW5_CONTAINER_RUNTIME_ENV = "BMS_ONT_CONTAINER_RUNTIME"
 BLOW5_STAGING_ROOT_ENV = "BMS_ONT_RAW_SIGNAL_STAGING_ROOT"
 BLOW5_MIN_FREE_BYTES_ENV = "BMS_ONT_RAW_SIGNAL_MIN_FREE_BYTES"
@@ -59,7 +59,14 @@ BLOW5_ACQUISITION_PRESSURE_ENV = "BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE"
 EXTERNAL_POD5_ROOT_ENV = "BMS_ONT_EXTERNAL_POD5_ROOT"
 LIVE_CONVERSION_ENABLED_ENV = "BMS_ONT_LIVE_CONVERSION_ENABLED"
 RAW_SIGNAL_RETENTION_POLICY_ENV = "BMS_ONT_RAW_SIGNAL_RETENTION_POLICY"
-BLOW5_DEFAULT_STAGING_ROOT = "/mnt/BioModStack/ont-raw-signal-staging"
+
+
+def blow5_default_staging_root() -> str:
+    """Install default beside the data root; BMS_ONT_RAW_SIGNAL_STAGING_ROOT overrides it."""
+    from paths import get_data_root
+    return str(get_data_root() / "ont-raw-signal-staging")
+
+
 BLOW5_DEFAULT_MIN_FREE_BYTES = 20 * 1024 * 1024 * 1024
 RAW_SIGNAL_RUNTIME_POLICY_PATH = Path(__file__).resolve().parents[1] / "config/ont_signal_workbench/raw_signal_runtime_policy_v1.json"
 
@@ -123,7 +130,7 @@ def source_lease_break_requested() -> bool:
 
 
 def raw_signal_runtime_identity() -> dict[str, Any]:
-    """Resolve raw-signal runtime identity from checked-in authority, not env input."""
+    """Tool versions from the checked-in policy, plus the id of the image on this machine."""
     descriptor = os.open(
         RAW_SIGNAL_RUNTIME_POLICY_PATH,
         os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -142,62 +149,26 @@ def raw_signal_runtime_identity() -> dict[str, Any]:
         policy = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError("raw-signal runtime policy is invalid") from exc
-    runtime_id = policy.get("runtime_id") if isinstance(policy, dict) else None
-    oci_digest = policy.get("oci_digest") if isinstance(policy, dict) else None
     tools = policy.get("tools") if isinstance(policy, dict) else None
     if (
-        policy != {
-            "schema": "bms.ont-raw-signal-runtime-policy.v1",
-            "runtime_id": runtime_id,
-            "oci_digest": oci_digest,
-            "tools": tools,
-            "network": "none",
-        }
-        or not isinstance(runtime_id, str)
-        or not isinstance(oci_digest, str)
-        or re.fullmatch(r"sha256:[0-9a-f]{64}", runtime_id) is None
-        or runtime_id != oci_digest
+        not isinstance(policy, dict)
+        or policy.get("schema") != "bms.ont-raw-signal-runtime-policy.v1"
+        or policy.get("network") != "none"
         or not isinstance(tools, dict)
         or tools != {"blue_crab": "0.5.0", "slow5tools": "1.4.0", "pyslow5": "1.4.0"}
     ):
         raise RuntimeError("raw-signal runtime policy manifest is invalid")
-    image = os.getenv(BLOW5_CONTAINER_ENV, "").strip()
-    digest = os.getenv(BLOW5_CONTAINER_DIGEST_ENV, "").strip().lower()
-    if image != runtime_id or digest != oci_digest.removeprefix("sha256:"):
-        raise RuntimeError("raw-signal runtime policy does not match configured image identity")
+    image, digest = local_image_identity(
+        BLOW5_CONTAINER_ENV, configured_container_runtime()
+    )
     return {
-        "image": runtime_id,
+        "image": image,
         "digest": digest,
         "tools": dict(tools),
         "network": "none",
         "policy_sha256": policy_sha256,
     }
 
-
-def assert_local_raw_runtime_image(runtime: str, image: str) -> None:
-    """Admit only the exact policy image already present in the local runtime."""
-    if runtime not in {"docker", "podman"} or shutil.which(runtime) is None:
-        raise RuntimeError("raw-signal container runtime is unavailable")
-    if not image.startswith("sha256:") or not _is_sha256(image.removeprefix("sha256:")):
-        raise RuntimeError("raw-signal runtime image ID is not immutable")
-    try:
-        result = subprocess.run(
-            [runtime, "image", "inspect", "--format", "{{.Id}}", image],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-            timeout=30,
-            env=container_cli_environment(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("local raw-signal runtime image inspection failed") from exc
-    observed = result.stdout.strip()
-    if runtime == "podman" and re.fullmatch(r"[0-9a-f]{64}", observed):
-        observed = f"sha256:{observed}"
-    if result.returncode != 0 or observed != image:
-        raise RuntimeError("local raw-signal runtime image is absent or diverged")
 
 _RAW_FORMATS = frozenset({"pod5", "slow5", "blow5"})
 _TERMINAL_STATES = frozenset({"stopped", "completed", "failed"})
@@ -216,7 +187,7 @@ _RETENTION_POLICIES = ("pod5_and_blow5", "blow5_only")
 
 def retention_settings_path() -> Path:
     """Operator choice beside the raw-signal publication tree; the env value is the install default."""
-    staging = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).expanduser()
+    staging = Path(os.getenv(BLOW5_STAGING_ROOT_ENV) or blow5_default_staging_root()).expanduser()
     return staging.parent / "ont-raw-signal-retention.json"
 
 
@@ -795,7 +766,9 @@ async def retained_pod5_launch_binding(session: AsyncSession, root: Path) -> dic
         try:
             for item in artifacts:
                 path = _revalidate_descriptor_artifact(item, authority='retained POD5 generation')
-                files[path.relative_to(root).as_posix()] = {'sha256': item['sha256'], 'bytes': item['bytes']}
+                # The version lets preflight see this is the file hashed at acquisition, without hashing it again.
+                files[path.relative_to(root).as_posix()] = {'sha256': item['sha256'], 'bytes': item['bytes'],
+                                                            'mtime_ns': item.get('mtime_ns'), 'ctime_ns': item.get('ctime_ns')}
         except (OSError, ValueError):
             continue
         return {'representation_id': record.id, 'manifest_sha256': record.manifest_sha256, 'files': files}
@@ -1072,7 +1045,7 @@ def _retain_external_indexed_pair(
     """Acquire a mutable external pair once in the representation publication owner."""
     import tempfile
 
-    configured = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).expanduser()
+    configured = Path(os.getenv(BLOW5_STAGING_ROOT_ENV) or blow5_default_staging_root()).expanduser()
     root = configured.parent / "ont-raw-signal" / _publication_component(run_id, authority="run ID") / str(observed_generation)
     parent_fd = _open_absolute_directory_nofollow(configured.parent)
     try:
@@ -1892,16 +1865,18 @@ def _derivation_resource_snapshot(
 
 
 def _resource_snapshot(source_bytes: int) -> dict[str, Any]:
-    root = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).expanduser()
+    root = Path(os.getenv(BLOW5_STAGING_ROOT_ENV) or blow5_default_staging_root()).expanduser()
     probe = root
     while not probe.exists() and probe != probe.parent:
         probe = probe.parent
     usage = shutil.disk_usage(probe)
     configured_floor = int(os.getenv(BLOW5_MIN_FREE_BYTES_ENV, str(BLOW5_DEFAULT_MIN_FREE_BYTES)))
     required_free = max(configured_floor, int(source_bytes * 2.5) + 10 * 1024 * 1024 * 1024)
-    image = os.getenv(BLOW5_CONTAINER_ENV, "").strip()
-    image_digest = os.getenv(BLOW5_CONTAINER_DIGEST_ENV, "").strip()
-    container_runtime = os.getenv(BLOW5_CONTAINER_RUNTIME_ENV, "docker").strip()
+    container_runtime = configured_container_runtime()
+    try:
+        image, image_digest = local_image_identity(BLOW5_CONTAINER_ENV, container_runtime)
+    except RuntimeError:
+        image, image_digest = "", ""
     return {
         "schema": "bms.ont.raw-signal-resource-snapshot.v1",
         "staging_root": str(root),
@@ -2431,14 +2406,49 @@ def _external_blow5_artifact_records(source: OntRawSignalRepresentation) -> tupl
     return blow5, index
 
 
+# A file version (device, inode, size, mtime, ctime) whose bytes were hashed once in
+# this process is not hashed again: the same version has the same bytes. A changed
+# file is a different version and is read in full.
+_VERIFIED_FILE_VERSIONS: dict[tuple[int, int, int, int, int], str] = {}
+_VERIFIED_FILE_VERSION_LIMIT = 512
+
+
+def _descriptor_sha256(descriptor: int) -> str:
+    """SHA-256 of an open regular file, read through once per file version."""
+    before = os.fstat(descriptor)
+    key = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    known = _VERIFIED_FILE_VERSIONS.get(key)
+    if known is not None:
+        return known
+    digest = hashlib.sha256()
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    while chunk := os.read(descriptor, 1024 * 1024):
+        digest.update(chunk)
+    after = os.fstat(descriptor)
+    value = digest.hexdigest()
+    if key == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        if len(_VERIFIED_FILE_VERSIONS) >= _VERIFIED_FILE_VERSION_LIMIT:
+            _VERIFIED_FILE_VERSIONS.pop(next(iter(_VERIFIED_FILE_VERSIONS)))
+        _VERIFIED_FILE_VERSIONS[key] = value
+    return value
+
+
+def _representation_files_view(representation: Any) -> Any:
+    """The fields the file checks read, so those checks can run off the event loop."""
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        format=representation.format, state=representation.state,
+        validation_receipts=representation.validation_receipts,
+        artifact_manifest=representation.artifact_manifest, manifest_sha256=representation.manifest_sha256,
+    )
+
+
 def _assert_external_blow5_artifact_identity(artifact: Mapping[str, Any], *, authority: str) -> dict[str, Any]:
     path, descriptor = _open_descriptor_confined_artifact(artifact, authority=authority)
     try:
         info = os.fstat(descriptor)
-        digest = hashlib.sha256()
-        while chunk := os.read(descriptor, 1024 * 1024):
-            digest.update(chunk)
-        if digest.hexdigest() != artifact.get("sha256") or info.st_size != artifact.get("bytes"):
+        observed_sha256 = _descriptor_sha256(descriptor)
+        if observed_sha256 != artifact.get("sha256") or info.st_size != artifact.get("bytes"):
             raise ValueError(f"{authority} bytes diverged from registration manifest")
         return {
             "device": info.st_dev,
@@ -2448,7 +2458,7 @@ def _assert_external_blow5_artifact_identity(artifact: Mapping[str, Any], *, aut
             "ctime_ns": info.st_ctime_ns,
             "root_device": artifact.get("governed_root_device"),
             "root_inode": artifact.get("governed_root_inode"),
-            "sha256": digest.hexdigest(),
+            "sha256": observed_sha256,
         }
     finally:
         os.close(descriptor)
@@ -2477,13 +2487,10 @@ def _verified_external_descriptor_identity(
         )
     ):
         raise ValueError(f"{authority} descriptor identity diverged")
-    os.lseek(file_descriptor, 0, os.SEEK_SET)
-    digest = hashlib.sha256()
-    while chunk := os.read(file_descriptor, 1024 * 1024):
-        digest.update(chunk)
+    observed_sha256 = _descriptor_sha256(file_descriptor)
     after = os.fstat(file_descriptor)
     identity = {
-        "sha256": digest.hexdigest(),
+        "sha256": observed_sha256,
         "bytes": after.st_size,
         "device": after.st_dev,
         "inode": after.st_ino,
@@ -2897,11 +2904,7 @@ def _open_descriptor_confined_artifact(
 def _revalidate_descriptor_artifact(artifact: Mapping[str, Any], *, authority: str) -> Path:
     path, descriptor = _open_descriptor_confined_artifact(artifact, authority=authority)
     try:
-        digest = hashlib.sha256()
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        while chunk := os.read(descriptor, 1024 * 1024):
-            digest.update(chunk)
-        if digest.hexdigest() != artifact.get("sha256"):
+        if _descriptor_sha256(descriptor) != artifact.get("sha256"):
             raise ValueError(f"{authority} digest diverged")
         return path
     finally:
@@ -3033,11 +3036,14 @@ async def request_waveform_lookup(
     representation = await session.get(OntRawSignalRepresentation, representation_id)
     if representation is None or representation.run_id != run_id or representation.observed_generation != observed_generation:
         raise ValueError("representation does not belong to the exact run generation")
-    _validated_blow5_paths(representation, read_id)
-    existing = (await session.execute(select(OntRawSignalLookup).where(
+    # File checks read from disk, so they run off the event loop.
+    await asyncio.to_thread(_validated_blow5_paths, _representation_files_view(representation), read_id)
+    from sqlalchemy.exc import IntegrityError
+    query = select(OntRawSignalLookup).where(
         OntRawSignalLookup.representation_id == representation_id,
         OntRawSignalLookup.read_id == read_id,
-    ))).scalar_one_or_none()
+    )
+    existing = (await session.execute(query)).scalar_one_or_none()
     if existing is None:
         existing = OntRawSignalLookup(
             id=_id("ont-waveform"), run_id=run_id, observed_generation=observed_generation,
@@ -3045,8 +3051,40 @@ async def request_waveform_lookup(
             state="requested", reason_code="requested", receipt={}, created_at=_now(), updated_at=_now(),
         )
         session.add(existing)
+        try:
+            await session.commit()
+        except IntegrityError:
+            # A request made at the same moment created the row; both share it.
+            await session.rollback()
+            existing = (await session.execute(query)).scalar_one()
+    elif existing.state == "failed":
+        # Asking again after a failure runs the same row again. A row that is
+        # waiting, running or ready is returned as it is, so there is one worker per read.
+        await session.execute(
+            update(OntRawSignalLookup)
+            .where(OntRawSignalLookup.id == existing.id, OntRawSignalLookup.state == "failed")
+            .values(state="requested", reason_code="retry_requested", claim_token=None, lease_expires_at=None,
+                    completed_at=None, sample_count=None, samples=None, updated_at=_now())
+        )
         await session.commit()
+        await session.refresh(existing)
     return _public_lookup(existing)
+
+
+# The lookup writes at most RAW_SIGNAL_MAX_WAVEFORM_SAMPLES values as JSON.
+_WAVEFORM_LOOKUP_OUTPUT_BYTES = 16 * 1024 * 1024
+
+
+def _waveform_lookup_required_bytes(
+    representation: OntRawSignalRepresentation,
+    blow5_identity: Mapping[str, Any],
+    index_identity: Mapping[str, Any],
+) -> int:
+    """Free space one indexed read lookup uses: its result, plus a private copy of the pair when it is not read in place."""
+    manifest = representation.artifact_manifest if isinstance(representation.artifact_manifest, dict) else {}
+    if manifest.get("retained_indexed_pair") is True:
+        return _WAVEFORM_LOOKUP_OUTPUT_BYTES
+    return _WAVEFORM_LOOKUP_OUTPUT_BYTES + int(blow5_identity.get("bytes") or 0) + int(index_identity.get("bytes") or 0)
 
 
 def _public_lookup(lookup: OntRawSignalLookup) -> dict[str, Any]:
@@ -3265,7 +3303,8 @@ async def claim_next_waveform_lookup(
         lookup.completed_at = _now()
         await session.commit()
         return None
-    blow5, index = _validated_blow5_paths(representation, lookup.read_id)
+    blow5, index = await asyncio.to_thread(
+        _validated_blow5_paths, _representation_files_view(representation), lookup.read_id)
     blow5_artifact = _artifact_for_resolved_path(representation, blow5, "blow5")
     index_artifact = _artifact_for_resolved_path(representation, index, "blow5_index")
     blow5_identity = _assert_external_blow5_artifact_identity(
@@ -3275,11 +3314,10 @@ async def claim_next_waveform_lookup(
         index_artifact, authority="waveform BLOW5 index"
     )
     snapshot = _resource_snapshot(0)
+    # One read through the index, not a conversion of the run.
+    snapshot["required_free_bytes"] = _waveform_lookup_required_bytes(representation, blow5_identity, index_identity)
     try:
         runtime_identity = raw_signal_runtime_identity()
-        assert_local_raw_runtime_image(
-            str(snapshot["container_runtime"]), runtime_identity["image"]
-        )
     except RuntimeError as exc:
         lookup.state = "failed"
         lookup.reason_code = f"raw_signal_runtime_not_admitted:{type(exc).__name__}"
@@ -3465,7 +3503,8 @@ async def finish_waveform_lookup(session: AsyncSession, lookup_id: str, claim_to
     representation = await session.get(OntRawSignalRepresentation, lookup.representation_id)
     if representation is None:
         raise ValueError("waveform representation authority disappeared")
-    blow5, index = _validated_blow5_paths(representation, lookup.read_id)
+    blow5, index = await asyncio.to_thread(
+        _validated_blow5_paths, _representation_files_view(representation), lookup.read_id)
     expected_source_identity = {
         "blow5": {
             key: _artifact_for_resolved_path(representation, blow5, "blow5")[key]
@@ -3601,9 +3640,6 @@ async def claim_next_derivation(session: AsyncSession, *, lease_seconds: int = 3
     snapshot = _derivation_resource_snapshot(run, source)
     try:
         runtime_identity = raw_signal_runtime_identity()
-        assert_local_raw_runtime_image(
-            str(snapshot["container_runtime"]), runtime_identity["image"]
-        )
     except RuntimeError as exc:
         result = await session.execute(
             update(OntRawSignalDerivationJob)
@@ -4037,8 +4073,8 @@ def _assert_publication_directory_identity(
 async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJob, source: OntRawSignalRepresentation, commands: dict[str, Any]) -> OntRawSignalRepresentation:
     job = await _fence_active_derivation_claim(session, job.id, str(job.claim_token or ""))
     configured_value = os.getenv(
-        BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT
-    )
+        BLOW5_STAGING_ROOT_ENV
+    ) or blow5_default_staging_root()
     configured_root = Path(configured_value).expanduser()
     if not configured_root.is_absolute() or ".." in configured_root.parts:
         raise ValueError("raw-signal publication staging root must be absolute and lexical")
@@ -4559,7 +4595,7 @@ async def recover_expired_derivations(session: AsyncSession) -> int:
                     run,
                 )
             )
-            final_directory = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).parent / "ont-raw-signal" / row.run_id / str(row.observed_generation) / row.id
+            final_directory = Path(os.getenv(BLOW5_STAGING_ROOT_ENV) or blow5_default_staging_root()).parent / "ont-raw-signal" / row.run_id / str(row.observed_generation) / row.id
             if final_directory.is_dir():
                 try:
                     representation = await publish_derivation(session, row, source, commands)
@@ -4623,3 +4659,197 @@ async def recover_expired_derivations(session: AsyncSession) -> int:
     if recovered_count:
         await session.commit()
     return recovered_count
+
+
+# --- Raw signal tab: what a Project holds, which reads a file has, and which were opened ---
+
+_READ_ID_CACHE: dict[tuple[str, str], tuple[str, ...]] = {}
+_BLOW5_INDEX_MAX_BYTES = 512 * 1024 * 1024
+
+
+def _read_confined_bytes(artifact: Mapping[str, Any], *, authority: str, maximum: int) -> bytes:
+    if int(artifact.get("bytes", 0) or 0) > maximum:
+        raise ValueError(f"{authority} exceeds bounded policy")
+    _path, descriptor = _open_descriptor_confined_artifact(artifact, authority=authority)
+    try:
+        data = b""
+        while chunk := os.read(descriptor, 1024 * 1024):
+            data += chunk
+    finally:
+        os.close(descriptor)
+    if hashlib.sha256(data).hexdigest() != artifact.get("sha256"):
+        raise ValueError(f"{authority} digest diverged")
+    return data
+
+
+def _blow5_index_read_ids(data: bytes) -> list[str]:
+    """Read IDs from a slow5tools index: 64-byte header, then (length, id, offset, size) records, then a trailer."""
+    if data[:8] != b"SLOW5IDX" or data[-8:] != b"XDI5WOLS":
+        raise ValueError("BLOW5 index could not be read")
+    ids: list[str] = []
+    offset, end = 64, len(data) - 8
+    while offset < end:
+        length = int.from_bytes(data[offset:offset + 2], "little")
+        offset += 2
+        ids.append(data[offset:offset + length].decode("ascii"))
+        offset += length + 16
+    if offset != end:
+        raise ValueError("BLOW5 index could not be read")
+    return ids
+
+
+def _representation_read_ids(representation: Any) -> tuple[str, ...]:
+    """Every read ID in one ready indexed BLOW5, sorted. Reads the routing table or the index, never the signal."""
+    if representation.format != "blow5" or representation.state != _READY:
+        raise ValueError("reads can be listed once the indexed BLOW5 is ready")
+    manifest = representation.artifact_manifest if isinstance(representation.artifact_manifest, dict) else {}
+    if _digest(manifest) != representation.manifest_sha256:
+        raise ValueError("raw-signal representation manifest authority is invalid")
+    key = (str(representation.manifest_sha256), str(representation.format))
+    if key in _READ_ID_CACHE:
+        return _READ_ID_CACHE[key]
+    artifacts = [item for item in manifest.get("artifacts") or [] if isinstance(item, dict) and item.get("path")]
+    routing = next((item for item in artifacts if item.get("kind") == "read_routing"), None)
+    if routing is not None:
+        table = json.loads(_read_confined_bytes(routing, authority="routing artifact", maximum=_BLOW5_INDEX_MAX_BYTES))
+        ids = [str(read_id) for read_id in (table.get("read_to_group") or {})]
+    else:
+        ids = []
+        for index in (item for item in artifacts if item.get("kind") == "blow5_index"):
+            ids.extend(_blow5_index_read_ids(
+                _read_confined_bytes(index, authority="BLOW5 index artifact", maximum=_BLOW5_INDEX_MAX_BYTES)))
+    if len(_READ_ID_CACHE) >= 4:
+        _READ_ID_CACHE.pop(next(iter(_READ_ID_CACHE)))
+    _READ_ID_CACHE[key] = tuple(sorted(ids))
+    return _READ_ID_CACHE[key]
+
+
+async def list_representation_reads(
+    session: AsyncSession, *, run_id: str, observed_generation: int, representation_id: str,
+    offset: int = 0, limit: int = 50, query: str | None = None,
+) -> dict[str, Any]:
+    representation = await session.get(OntRawSignalRepresentation, representation_id)
+    if representation is None or representation.run_id != run_id or representation.observed_generation != observed_generation:
+        raise KeyError(representation_id)
+    ids = await asyncio.to_thread(_representation_read_ids, _representation_files_view(representation))
+    needle = (query or "").strip().lower()
+    matched = [read_id for read_id in ids if needle in read_id.lower()] if needle else ids
+    return {"representation_id": representation_id, "total": len(ids), "matched": len(matched),
+            "offset": offset, "read_ids": list(matched[offset:offset + limit])}
+
+
+async def list_waveform_lookups(session: AsyncSession, *, run_id: str, observed_generation: int, limit: int = 50) -> list[dict[str, Any]]:
+    """Reads already opened for this file, newest first, without their samples."""
+    records = (await session.execute(
+        select(OntRawSignalLookup).where(
+            OntRawSignalLookup.run_id == run_id, OntRawSignalLookup.observed_generation == observed_generation,
+        ).order_by(OntRawSignalLookup.updated_at.desc(), OntRawSignalLookup.id).limit(limit)
+    )).scalars()
+    return [{"lookup_id": item.id, "representation_id": item.representation_id, "read_id": item.read_id,
+             "state": item.state, "sample_count": item.sample_count} for item in records]
+
+
+def _blow5_files_match_record(manifest: Mapping[str, Any]) -> bool:
+    """Whether the BLOW5 files are still where and what BMS recorded. Compares file identity only; reads no signal."""
+    artifacts = [item for item in manifest.get("artifacts") or [] if isinstance(item, dict) and item.get("path")]
+    checked = [item for item in artifacts if item.get("kind") in {"read_routing", "blow5_index"}]
+    try:
+        for artifact in checked:
+            _path, descriptor = _open_descriptor_confined_artifact(artifact, authority="BLOW5 artifact")
+            os.close(descriptor)
+    except ValueError:
+        return False
+    return bool(checked)
+
+
+def _source_display_name(run: OntInstrumentRun, source: OntRawSignalRepresentation | None) -> str:
+    if run.external_source_relative_path:
+        return Path(run.external_source_relative_path).name
+    manifest = source.artifact_manifest if source is not None and isinstance(source.artifact_manifest, dict) else {}
+    files = [item for item in manifest.get("artifacts") or [] if isinstance(item, dict) and item.get("path")]
+    if run.minknow_run_id is None and len(files) >= 1:
+        return Path(str(files[0]["path"])).name
+    return run.sample_id or run.id
+
+
+async def list_signal_sources(session: AsyncSession, *, experiment_group: str) -> list[dict[str, Any]]:
+    """Every run and imported file of one Project that holds raw signal, with its POD5, BLOW5 and results."""
+    from sqlalchemy import func  # noqa: PLC0415
+    from database import Job  # noqa: PLC0415
+
+    runs = list((await session.execute(
+        select(OntInstrumentRun).where(OntInstrumentRun.experiment_group == experiment_group)
+        .order_by(OntInstrumentRun.created_at.desc(), OntInstrumentRun.id)
+    )).scalars())
+    if not runs:
+        return []
+    run_ids = [run.id for run in runs]
+    representations: dict[str, list[OntRawSignalRepresentation]] = {}
+    for record in (await session.execute(
+        select(OntRawSignalRepresentation).where(OntRawSignalRepresentation.run_id.in_(run_ids))
+        .order_by(OntRawSignalRepresentation.created_at, OntRawSignalRepresentation.id)
+    )).scalars():
+        representations.setdefault(record.run_id, []).append(record)
+    conversions: dict[tuple[str, int], OntRawSignalDerivationJob] = {}
+    for job in (await session.execute(
+        select(OntRawSignalDerivationJob).where(OntRawSignalDerivationJob.run_id.in_(run_ids))
+        .order_by(OntRawSignalDerivationJob.created_at, OntRawSignalDerivationJob.id)
+    )).scalars():
+        conversions[(job.run_id, job.observed_generation)] = job
+    moves: dict[tuple[str, int], OntMoveTableSource] = {}
+    for move in (await session.execute(
+        select(OntMoveTableSource).where(OntMoveTableSource.run_id.in_(run_ids))
+        .order_by(OntMoveTableSource.created_at, OntMoveTableSource.id)
+    )).scalars():
+        moves[(move.run_id, move.observed_generation)] = move
+    source_run = func.json_extract(Job.params, "$.source_instrument_run_id")
+    results: dict[str, list[dict[str, Any]]] = {}
+    for job_id, name, params, created_at in (await session.execute(
+        select(Job.id, Job.name, Job.params, Job.created_at)
+        .where(Job.status == "completed", source_run.in_(run_ids)).order_by(Job.created_at.desc())
+    )).all():
+        params = params if isinstance(params, dict) else {}
+        results.setdefault(str(params.get("source_instrument_run_id")), []).append({
+            "job_id": job_id, "name": name, "created_at": created_at.isoformat() if created_at else None,
+            "signal_workbench": bool(params.get("dataset_id")) and bool(params.get("source_instrument_observed_generation")),
+        })
+    sources = []
+    for run in runs:
+        held = representations.get(run.id, [])
+        if not held and run.minknow_run_id is None:
+            continue
+        generation = max((item.observed_generation for item in held), default=run.observed_generation)
+        held = [item for item in held if item.observed_generation == generation]
+        source = next((item for item in held if item.role == "source"), None)
+        blow5 = next((item for item in held if item.format == "blow5" and item.state == _READY
+                      and (item.validation_receipts or {}).get("adjacent_index")), None)
+        conversion = conversions.get((run.id, generation))
+        move = moves.get((run.id, generation))
+        source_manifest = source.artifact_manifest if source is not None and isinstance(source.artifact_manifest, dict) else {}
+        sources.append({
+            "run_id": run.id,
+            "observed_generation": generation,
+            "origin": "sequenced" if run.minknow_run_id is not None else "imported",
+            "name": _source_display_name(run, source),
+            "status": run.state,
+            "created_at": run.created_at.isoformat(),
+            "source": {
+                "representation_id": source.id, "format": source.format,
+                "bytes": sum(int(item.get("bytes") or 0) for item in source_manifest.get("artifacts") or []
+                             if isinstance(item, dict) and item.get("kind") in {"pod5", "slow5", "blow5"}),
+                "removed": bool((source.validation_receipts or {}).get("source_removed")),
+            } if source is not None else None,
+            "blow5": {"representation_id": blow5.id, "read_count": blow5.read_count,
+                      "readable": await asyncio.to_thread(_blow5_files_match_record, dict(blow5.artifact_manifest or {}))}
+            if blow5 is not None else None,
+            "conversion": {"job_id": conversion.id, "state": conversion.state,
+                           "reason_code": conversion.failure_code or conversion.reason_code} if conversion is not None else None,
+            # The newest basecalls (move-tagged BAM) registered against this signal, if any.
+            "basecalls": {
+                "move_source_id": move.id, "state": move.validation_state, "reason_code": move.reason_code,
+                "basecall_model_id": move.basecall_model_id, "read_count": move.unique_read_count,
+                "external": move.external_registration_receipt_id is not None,
+            } if move is not None else None,
+            "results": results.get(run.id, []),
+        })
+    return sources

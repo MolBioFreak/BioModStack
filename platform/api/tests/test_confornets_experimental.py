@@ -45,9 +45,15 @@ def _write_ca_cif(path: Path, coords: list[tuple[float, float, float]], b_factor
         "_atom_site.Cartn_y",
         "_atom_site.Cartn_z",
         "_atom_site.B_iso_or_equiv",
+        "_atom_site.auth_asym_id",
+        "_atom_site.auth_atom_id",
+        "_atom_site.auth_comp_id",
+        "_atom_site.auth_seq_id",
+        "_atom_site.label_alt_id",
+        "_atom_site.pdbx_PDB_ins_code",
     ]
     for idx, (x, y, z) in enumerate(coords, start=1):
-        lines.append(f"ATOM {idx} C CA GLY A {idx} {x:.3f} {y:.3f} {z:.3f} {b_factor:.2f}")
+        lines.append(f"ATOM {idx} C CA GLY A {idx} {x:.3f} {y:.3f} {z:.3f} {b_factor:.2f} A CA GLY {idx} . .")
     lines.append("#")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -318,10 +324,10 @@ def test_run_confornets_normalizer_captures_confidence_evaluation_diversity_and_
     sample1 = raw_dir / "case" / "run_0" / "sample_1.cif"
     ref_open = tmp_path / "refs" / "open_ref.cif"
     ref_closed = tmp_path / "refs" / "closed_ref.cif"
-    _write_ca_cif(ref_open, [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)])
-    _write_ca_cif(ref_closed, [(0.0, 0.0, 0.0), (1.0, 0.5, 0.0), (2.0, 0.0, 0.0)])
-    _write_ca_cif(sample0, [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)])
-    _write_ca_cif(sample1, [(0.0, 0.0, 0.0), (1.0, 0.5, 0.0), (2.0, 0.0, 0.0)])
+    _write_ca_cif(ref_open, [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 1.0)])
+    _write_ca_cif(ref_closed, [(0.0, 0.0, 0.0), (1.0, 0.5, 0.0), (2.0, 0.0, 1.0)])
+    _write_ca_cif(sample0, [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 1.0)])
+    _write_ca_cif(sample1, [(0.0, 0.0, 0.0), (1.0, 0.5, 0.0), (2.0, 0.0, 1.0)])
     (raw_dir / "case" / "run_0" / "confidence.csv").write_text(
         "sample,plddt,gpde,ptm,iptm\n0,91.25,0.72,0.81,0.77\n1,86.50,0.95,0.78,0.74\n",
         encoding="utf-8",
@@ -358,7 +364,7 @@ def test_run_confornets_normalizer_captures_confidence_evaluation_diversity_and_
     assert (output_dir / "evaluation" / "pairwise_rmsd_matrix.csv").exists()
     landscape = json.loads((output_dir / "landscape.json").read_text(encoding="utf-8"))
     assert landscape["status"] == "computed"
-    assert landscape["method"] == "ca_kabsch_rmsd_mds"
+    assert landscape["method"] == "authoritative_identity_ca_kabsch_rmsd+classical_metric_mds"
     artifact_manifest = json.loads((output_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
     assert artifact_manifest["confidence_summary_json"] == "confidence/confidence_summary.json"
     assert artifact_manifest["evaluation_summary_json"] == "evaluation/evaluation_summary.json"

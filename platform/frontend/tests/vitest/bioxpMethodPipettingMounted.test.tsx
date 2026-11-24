@@ -97,7 +97,7 @@ it('connects two native well panes with exact volume, explicit adoption and orde
     expect(host.textContent).toContain('Authored reagent');
     expect(host.querySelectorAll('[aria-label="Transfer pairs"] li')).toHaveLength(2);
     expect(host.querySelector('[aria-label="Transfer pairs"]')?.textContent).toContain('Not set → C2');
-    expect(host.querySelectorAll('.bioxp-transfer-scene > details')).toHaveLength(2);
+    expect(host.querySelectorAll('.bioxp-transfer-scene > .bioxp-transfer-tab > details')).toHaveLength(2);
     expect(host.querySelector('details[open]')).toBeNull();
     expect(host.querySelector('.bioxp-plan-leaf')).toBeNull();
     await click('Source well D4'); await click('Source well A1');
@@ -147,4 +147,49 @@ it('keeps expression-valued channels untouched and exposes native expression edi
     expect(current.inputs).toEqual(original);
     await input('Inputs direct.channels reference', 'other-channels');
     expect(current.inputs).toEqual({ ...original, channels: { expr: { op: 'param', id: 'other-channels' } } });
+});
+
+
+it('authors combined holder source/destination and preserves pLLD, channels and exact numeric text through mode changes and reopen', async () => {
+    const original = { source: { station: 'LOC_RC', location_id: 3, wells: ['A1'], labware_id: 'barcode-plate' }, destination: { station: 'LOC_OC', location_id: 1, wells: ['C5'] }, channels: [2], volume_ul: '036.000', liquid_detection: { when: 'every_draw', mode: 'on_contact' }, source_lift_height_steps: null };
+    await direct(original);
+    await input('Source holder position', 'LOC_TROUGH_MICRO_ROW_1');
+    const source = { station: 'LOC_TROUGH', location_id: 16, target: 'LOC_TROUGH_MICRO_ROW_1', wells: ['A1'] };
+    expect((current.inputs as MethodValue).source).toEqual(source);
+    expect((current.inputs as MethodValue).channels).toEqual([2]);
+    expect((current.inputs as MethodValue).liquid_detection).toEqual(original.liquid_detection);
+    expect(host.querySelector('[aria-label="Source per-channel footprints"]')?.textContent).toContain('P3 tube 3');
+    await input('Destination holder position', 'LOC_TROUGH_PCR_ROW_2_WELL_2');
+    const destination = { station: 'LOC_TROUGH', location_id: 16, target: 'LOC_TROUGH_PCR_ROW_2_WELL_2', wells: ['C5'] };
+    expect((current.inputs as MethodValue).destination).toEqual(destination);
+    await input('Transfer mode', 'class'); await input('Transfer mode', 'manual');
+    expect((current.inputs as MethodValue).source).toEqual(source);
+    expect((current.inputs as MethodValue).destination).toEqual(destination);
+    expect((current.inputs as MethodValue).volume_ul).toBe('036.000');
+    const saved = JSON.parse(JSON.stringify(current));
+    await act(async () => root.render(<div />));
+    await direct(saved.inputs);
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Source holder position"]')?.value).toBe('LOC_TROUGH_MICRO_ROW_1');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Destination holder position"]')?.value).toBe('LOC_TROUGH_PCR_ROW_2_WELL_2');
+    expect(current.inputs).toEqual(saved.inputs);
+    await click('Swap source and destination');
+    expect((current.inputs as MethodValue).source).toEqual(destination);
+    expect((current.inputs as MethodValue).destination).toEqual(source);
+    await click('Clear source');
+    expect((current.inputs as MethodValue).source).not.toHaveProperty('target');
+});
+
+it('removes holder addressing when an ordinary deck selection is adopted', async () => {
+    await direct({ source: { station: 'LOC_TROUGH', location_id: 16, target: 'LOC_TROUGH_MICRO_ROW_1', wells: ['A1'] }, destination: { station: 'LOC_OC', location_id: 1, wells: ['A1'] } });
+    await click('Destination well D4');
+    await click('Use deck selection as source');
+    expect((current.inputs as MethodValue).source).toEqual({ station: 'LOC_OC', location_id: 1, wells: ['D4'] });
+});
+
+it('maps a strip source with the OEM strip rule (every second well) when no plate profile is given', async () => {
+    await direct({ source: { station: 'LOC_STRIP1', location_id: 11, wells: ['A1'] }, destination: { station: 'LOC_OC', location_id: 1, wells: ['A1'] }, channels: [0, 1, 2, 3], volume_ul: '9' });
+    const source = host.querySelector('[aria-label="Source per-channel footprints"]')?.textContent ?? '';
+    expect(source).toContain('P1 A1, P2 C1, P3 E1, P4 G1');
+    expect(source).not.toContain('Mapping unavailable');
+    expect(host.querySelector('[aria-label="Destination per-channel footprints"]')?.textContent).toContain('Mapping unavailable');
 });

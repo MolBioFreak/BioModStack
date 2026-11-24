@@ -9,10 +9,12 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 
+SCRATCH_ROOT = Path(os.environ.get('BMS_QA_SCRATCH_ROOT') or tempfile.gettempdir()).resolve()
 REPO = Path(__file__).resolve().parents[3]
 ROOT = Path(os.environ['BMS_FINAL_BROWSER_ROOT']).resolve()
-assert ROOT.is_relative_to(Path('/home/dalab/.hermes/profiles/fresh/cache/scratch'))
+assert ROOT.is_relative_to(SCRATCH_ROOT)
 ROOT.mkdir(parents=True, exist_ok=True)
 for key, leaf in {
     'HOME':'home', 'BMS_DATA':'data', 'BMS_INPUTS':'inputs', 'BMS_RESULTS_DIR':'results',
@@ -40,7 +42,7 @@ from test_denovo_project_http import app_for
 # This avoids treating a missing harness binding as a product download failure.
 import paths
 native_roots = paths.get_allowed_roots
-retained = Path(os.environ.get('BMS_FINAL_RETAINED_BASE','/home/dalab/.hermes/profiles/fresh/cache/scratch/denovo-complete-parent/phase2/api-receiving/basetemp'))
+retained = Path(os.environ.get('BMS_FINAL_RETAINED_BASE',str(SCRATCH_ROOT/'denovo-complete-parent/phase2/api-receiving/basetemp')))
 def read_roots():
     return {**native_roots(),
         'retained_generation': retained / 'test_complete_receiving_real_e1/output',

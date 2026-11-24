@@ -18,7 +18,7 @@
     "version": "flanking_exact_v1",
     "candidates_per_strand": 48,
     "target_overlap_bases": 4,
-    "origin_wrapping_candidates": false,
+    "origin_wrapping_candidates": true,
     "product_size_includes_tails": true,
     "overlapping_footprints": false,
     "substrate": "dna_template",

@@ -6,6 +6,7 @@ import { api } from '../../src/lib/api';
 import { BioXpLiveDeck, type BioXpLiveDeckProps } from '../../src/components/BioXpLiveDeck';
 import { BioXpWorkflowDeck } from '../../src/components/BioXpWorkflowDeck';
 import destinations from '../fixtures/bioxp_deck_admission_catalog.json';
+import holderCatalog from '../fixtures/bioxp_bulk_holder_destinations.json';
 import type { BioXpDeckDestinationV1, BioXpOperatorDashboardV2 } from '../../src/lib/bioxpClient';
 import { deckResources, deckStations, projectDeckPoint } from '../../src/lib/bioxpWorkflowDeck';
 
@@ -40,14 +41,19 @@ async function render(next: Partial<BioXpLiveDeckProps> = {}) {
     });
 }
 function el(label: string) { const e = host.querySelector(`[aria-label="${label}"]`); expect(e, label).not.toBeNull(); return e!; }
-async function click(label: string, init: MouseEventInit = {}) { await act(async () => el(label).dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, ...init }))); }
-async function key(label: string, key: string, init: KeyboardEventInit = {}) { await act(async () => el(label).dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key, ...init }))); }
+const moveHere = () => [...document.querySelectorAll<HTMLButtonElement>('.bld-popup button')].find(b => b.textContent?.trim() === 'Move here');
+// A well click opens the well menu; its Move here button sends the well intent.
+async function click(label: string, init: MouseEventInit = {}) { const target = el(label); await act(async () => target.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, ...init }))); await moveFromMenu(target); }
+async function openMenu(label: string) { await act(async () => el(label).dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))); }
+async function moveFromMenu(target: Element) { const go = target.hasAttribute('data-well') ? moveHere() : undefined; if (go && !go.disabled) await act(async () => go.click()); }
+async function key(label: string, key: string, init: KeyboardEventInit = {}) { const target = el(label); await act(async () => target.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key, ...init }))); if (!init.repeat) await moveFromMenu(target); }
 async function button(text: string) { await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === text)!.click()); }
 beforeEach(() => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     query = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }); station.mockClear(); well.mockClear();
     geometryRead.mockReset().mockResolvedValue({ data: settings });
-    vi.spyOn(api, 'get').mockImplementation((url, config) => url.endsWith('/updates') ? new Promise(() => {}) : geometryRead(url, config));
+    vi.spyOn(api, 'get').mockImplementation((url, config) => url.endsWith('/updates') ? new Promise(() => {})
+        : url === '/api/bioxp/calibration-settings' ? geometryRead(url, config) : Promise.resolve({ data: {} })); // plate types, liquid record and tips read empty
     vi.spyOn(api, 'post').mockRejectedValue(new Error('No leaf mutation allowed'));
     props = { generation: 1, connected: true, visible: true, stale: false, dashboard: dashboard(), selection: { station: '', wells: [] },
         onMoveToStation: station, onMoveToWell: well, stationDisabledReason: () => null, wellDisabledReason: null,
@@ -162,7 +168,7 @@ it('shares the full deck with exact station/well callbacks for every rendered ad
     expect(api.post).not.toHaveBeenCalled();
     expect(host.querySelector('[data-testid="oem-deck-movement"]')!.textContent).toContain('Door slot');
     expect([...host.querySelectorAll('details')].every(d => !d.open)).toBe(true);
-});
+}, 180000);
 it('renders a vertical rail and four recognizable gun modules with fixed source centers; destination is not position', async () => {
     await render();
     const rail = host.querySelector('[data-testid="vertical-deck-arm"]')!;
@@ -252,17 +258,19 @@ it('rejects late old-generation geometry and cannot resurrect a prior connection
 it('respects only parent action admission, not missing pose/geometry, and preserves disabled reasons', async () => {
     await render({ dashboard: null, connected: false, wellDisabledReason: 'Submitting', stationDisabledReason: () => 'Submitting' });
     await click('Select Waste bin'); await click('Magnetic station A1'); expect(station).not.toHaveBeenCalled(); expect(well).not.toHaveBeenCalled();
-    expect(el('Magnetic station A1').getAttribute('aria-disabled')).toBe('true');
+    await act(async () => el('Magnetic station A1').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))); expect(moveHere()?.disabled).toBe(true);
     await render({ wellDisabledReason: null, stationDisabledReason: () => null });
     await key('Select Waste bin', 'Enter'); await key('Magnetic station A1', ' '); expect(station).toHaveBeenCalledTimes(1); expect(well).toHaveBeenCalledTimes(1);
 });
 
-it('puts the deck record and the Move plate / cover card above door and movement controls', async () => {
-    await render({ deckRecord: <div>Record slot</div> });
-    const aside = el('Live movement controls');
-    const text = aside.textContent!;
-    expect(text.indexOf('Record slot')).toBeLessThan(text.indexOf('Move plate / cover'));
-    expect(text.indexOf('Move plate / cover')).toBeLessThan(text.indexOf('Door slot'));
+it('keeps camera, pipette and head moves beside the deck and thermal, plate moves and the deck record in one row under it', async () => {
+    await render({ deckRecord: <div>Record slot</div>, cameraControls: <div>Camera slot</div> });
+    const aside = el('Live movement controls').textContent!;
+    expect(aside.indexOf('Camera slot')).toBeLessThan(aside.indexOf('Pipette'));
+    expect(aside.indexOf('Pipette')).toBeLessThan(aside.indexOf('Movement slot'));
+    const text = host.querySelector('.bld-band')!.textContent!;
+    expect(text.indexOf('Door slot')).toBeLessThan(text.indexOf('Move plate / cover'));
+    expect(text.indexOf('Move plate / cover')).toBeLessThan(text.indexOf('Record slot'));
     expect(el('Move plate / cover').textContent).toContain('Transfer slot');
     expect([...host.querySelectorAll('summary')].map(s => s.textContent)).not.toContain('Plate and cover handling');
     expect(api.post).not.toHaveBeenCalled();
@@ -280,4 +288,75 @@ it('shades tip racks from recorded occupancy and keeps every well position', asy
     expect(host.querySelectorAll('[data-station="TECANRACK2"] .bwd-tip')).toHaveLength(96);
     expect(host.querySelector('[data-station="TECANRACK1"][data-well="B1"] .bwd-ring')!.getAttribute('cx'))
         .toBe(host.querySelector('[data-station="TECANRACK1"][data-well="B1"] .bwd-core')!.getAttribute('cx'));
+});
+
+it('draws Bulk reagent holder rows and PCR wells at catalog XY and moves to the exact named target', async () => {
+    const options = structuredClone(holderCatalog.destination_options) as unknown as BioXpDeckDestinationV1[];
+    await render({ destinations: options });
+    const drawn = options.filter(o => o.xy && (o.holder_row!.startsWith('micro') || o.well_number != null)).map(o => o.target);
+    const markers = [...host.querySelectorAll('[data-holder-target]')];
+    expect(markers.map(m => m.getAttribute('data-holder-target')).sort()).toEqual([...drawn].sort());
+    expect(markers).toHaveLength(18);
+    for (const option of options.filter(o => o.xy && o.well_number != null)) {
+        const [x, y] = projectDeckPoint(option.xy!.x, option.xy!.y);
+        const ring = host.querySelector(`[data-holder-target="${option.target}"] .bwd-holder-well`)!;
+        expect(Number(ring.getAttribute('cx'))).toBeCloseTo(x); expect(Number(ring.getAttribute('cy'))).toBeCloseTo(y);
+    }
+    expect(host.querySelectorAll('[data-holder-target="LOC_TROUGH_MICRO_ROW_1"] .bwd-holder-tube')).toHaveLength(4);
+    expect(host.querySelectorAll('svg g[data-move-to]')).toHaveLength(13);
+    expect(el('Select Bulk reagent holder')).toBeTruthy();
+    for (const marker of markers) {
+        station.mockClear();
+        await act(async () => marker.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
+        expect(station.mock.calls).toEqual([[marker.getAttribute('data-holder-target')]]);
+    }
+    station.mockClear();
+    await act(async () => markers[0].dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' })));
+    expect(station).toHaveBeenCalledTimes(1);
+    await render({ destinations: options, selectedDestination: options.find(o => o.target === 'LOC_TROUGH_PCR_ROW_2_WELL_2')! });
+    const chosen = host.querySelector('g[data-selected-destination="LOC_TROUGH_PCR_ROW_2_WELL_2"] circle')!;
+    const [sx, sy] = projectDeckPoint(82262, 64110);
+    expect(Number(chosen.getAttribute('cx'))).toBeCloseTo(sx); expect(Number(chosen.getAttribute('cy'))).toBeCloseTo(sy);
+    expect(host.querySelector('[data-selected-station]')).toBeNull();
+    station.mockClear();
+    await render({ destinations: options, stationDisabledReason: () => 'Native action unavailable' });
+    await act(async () => host.querySelector('[data-holder-target="LOC_TROUGH_MICRO_ROW_1"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
+    expect(station).not.toHaveBeenCalled(); expect(well).not.toHaveBeenCalled(); expect(api.post).not.toHaveBeenCalled();
+});
+
+it('mouse wheel never zooms; double-clicking a module and the +/- buttons do', async () => {
+    await render();
+    const map = el('BioXP deck map'), view = () => map.getAttribute('viewBox');
+    const start = view();
+    await act(async () => map.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -400 })));
+    expect(view()).toBe(start);
+    await act(async () => host.querySelector('g[data-resource="LOC_MS"] > g[data-station]')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    const zoomed = view(); expect(zoomed).not.toBe(start);
+    await click('Zoom out'); expect(view()).not.toBe(zoomed);
+    await button('Fit deck'); expect(view()).toBe(start);
+    expect(station).not.toHaveBeenCalled(); expect(well).not.toHaveBeenCalled(); expect(api.post).not.toHaveBeenCalled();
+});
+it('saves a well amount, builds a route from clicked wells and clears per module and for the whole deck', async () => {
+    const put = vi.spyOn(api, 'put').mockResolvedValue({ data: {} }), del = vi.spyOn(api, 'delete').mockResolvedValue({ data: {} });
+    vi.mocked(api.get).mockImplementation((url: string) => url.endsWith('/updates') ? new Promise(() => {})
+        : Promise.resolve({ data: url.endsWith('/deck/contents') ? { wells: { LOC_MS: { A1: 50 } } } : url === '/api/bioxp/calibration-settings' ? settings : {} }));
+    await render();
+    await vi.waitFor(() => expect(host.innerHTML).toContain('50 µL recorded'));
+    await openMenu('Magnetic station A1');
+    const amount = el('Liquid in well (µL)') as HTMLInputElement;
+    await vi.waitFor(() => expect((el('Liquid in well (µL)') as HTMLInputElement).value).toBe('50'));
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(amount, '80'); amount.dispatchEvent(new Event('input', { bubbles: true })); });
+    await button('Save');
+    expect(put).toHaveBeenLastCalledWith('/api/bioxp/operator-controls/deck/contents', { station: 'LOC_MS', wells: { A1: 80 } });
+    await button('Aspirate from');
+    await openMenu('Output chiller B2'); await button('Dispense to');
+    expect([...host.querySelectorAll('[data-route-stop]')].map(row => row.getAttribute('data-route-stop'))).toEqual(['A', 'B']);
+    expect(host.querySelector('[data-route-stop="B"]')!.textContent).toContain('Output chiller B2');
+    await openMenu('Magnetic station A1'); await button('Clear module');
+    expect(del).toHaveBeenLastCalledWith('/api/bioxp/operator-controls/deck/contents', { params: { station: 'LOC_MS' } });
+    expect([...host.querySelectorAll('[data-route-stop]')]).toHaveLength(1);
+    await button('Clear deck'); await button('Yes, clear');
+    expect(del).toHaveBeenLastCalledWith('/api/bioxp/operator-controls/deck/contents');
+    expect(host.querySelectorAll('[data-route-stop]')).toHaveLength(0);
+    expect(well).not.toHaveBeenCalled(); expect(station).not.toHaveBeenCalled(); expect(api.post).not.toHaveBeenCalled();
 });

@@ -21,14 +21,17 @@ from experiment_database import ExperimentBase, create_experiment_engine, create
 from experiment_migrations import run_all as run_experiment_migrations
 from migrations.sqlite_sha256 import register_sqlite_sha256
 from experiment_models import (
+    ExperimentAggregateHead,
     ExperimentAuditEvent,
     ExperimentDispatchOutbox,
     ExperimentLineageEdge,
     ExperimentResource,
     ExperimentRevision,
     ExperimentValidation,
+    ExperimentWorkflowPlanAuthority,
     ExperimentWorkflowPreparation,
     ExperimentWorkflowRun,
+    ExperimentWorkflowSetupContext,
 )
 from experiment_services import (
     DispatchFailure,
@@ -42,6 +45,7 @@ from experiment_services import (
     create_domain_experiment,
     create_experiment_workspace,
     create_global_experiment,
+    create_project,
     create_workflow,
     create_run_group,
     clone_workflow,
@@ -49,9 +53,11 @@ from experiment_services import (
     save_dataset_revision,
     save_workflow_draft,
     save_workflow_revision,
+    workflow_plan_capability_contract,
 )
 from routers import experiment_workspaces as workspace_router
 from routers.experiment_workspaces import router
+from services.global_experiments import workflow_setups
 
 
 def _sha(value: str) -> str:
@@ -86,6 +92,63 @@ def _workflow_payload() -> dict:
             "params": {"seed": 101},
         },
     }
+
+
+async def _prepared_setup(session: AsyncSession, name: str) -> SimpleNamespace:
+    """Prepare a real Project workflow setup whose Plan pins managed dispatch.
+
+    No Project-plannable capability currently declares a managed launch mode, so
+    the fixture pins that one field on an otherwise server-built contract; the
+    preparation, run group, outbox and dispatcher under test are the real owners.
+    """
+    capability_id = "protein.structure_prediction.esmfold2"
+    project = await create_project(session, {
+        "schema": "bms.project.v1",
+        "name": name,
+        "description": "Run-group fixture",
+        "research_objective": "Launch one prepared workflow setup",
+        "owner": "test",
+        "contributors": [],
+        "tags": [],
+        "status": "active",
+        "start_date": None,
+        "target_end_date": None,
+        "external_references": [],
+        "created_by": "test",
+        "change_summary": "created",
+    })
+    setup = await workflow_setups.create_workflow_setup(
+        session, project_id=project.id, relationship_kind="primary",
+        global_experiment_id=None, experiment_name="Target", experiment_objective="Fold",
+        domain_kind="protein_in_silico", capability_id=capability_id,
+        idempotency_key="setup",
+    )
+    row = await session.get(ExperimentWorkflowSetupContext, setup["setup_context_id"])
+    domain = await session.get(ExperimentAggregateHead, row.domain_experiment_id)
+    contract = json.loads(canonical_json(workflow_plan_capability_contract(capability_id)))
+    contract["capability"]["launch_mode"] = "managed_materialization"
+    contract_json = canonical_json(contract)
+    session.add(ExperimentWorkflowPlanAuthority(
+        workflow_id=row.workflow_id, workspace_id=project.id,
+        domain_experiment_id=row.domain_experiment_id,
+        expected_domain_revision_id=domain.current_revision_id,
+        capability_contract_json=contract_json, capability_contract_sha256=_sha(contract_json),
+        created_at=row.created_at,
+    ))
+    await session.flush()
+    await workflow_setups.save_workflow_setup_draft(
+        session, project_id=project.id, setup_context_id=setup["setup_context_id"],
+        draft={"sequence": "MQIFVK"}, expected_generation=0, idempotency_key="save",
+    )
+    prepared = await workflow_setups.prepare_workflow_setup_launch(
+        session, project_id=project.id, setup_context_id=setup["setup_context_id"],
+        expected_generation=1, idempotency_key="prepare",
+    )
+    return SimpleNamespace(
+        workspace_id=project.id,
+        workflow_id=row.workflow_id,
+        preparation_id=prepared["preparation_id"],
+    )
 
 
 async def _domain_parent(session: AsyncSession, workspace_id: str, label: str):
@@ -258,6 +321,7 @@ async def test_global_cm_mutation_owner_fails_closed_for_ownerless_and_foreign_r
 _MUTATING_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
 _GLOBAL_OPERATOR_PATHS = {
     "/api/experiment-workspaces/ops/backup",
+    "/api/experiment-workspaces/ops/backups/{backup_id}/restore-drill",
     "/api/experiment-workspaces/dispatch/once",
     "/api/experiment-workspaces/{workspace_id}/run-groups/{run_group_id}/reconcile",
 }
@@ -332,6 +396,11 @@ _MUTATION_HTTP_CASES = {
         {"payload": {}, "expected_head_generation": 0},
         None,
     ),
+    "derive_dataset_revision_route": (
+        "/api/experiment-workspaces/workspace/datasets/dataset/revisions/derive",
+        {"parent_revision_id": "revision", "ordinals": [0], "expected_head_generation": 0},
+        None,
+    ),
     "prepare_workspace_workflow": (
         "/api/experiment-workspaces/workspace/preparations",
         {},
@@ -339,24 +408,49 @@ _MUTATION_HTTP_CASES = {
     ),
     "create_workspace_run_group": (
         "/api/experiment-workspaces/workspace/run-groups",
-        {"preparation_ids": ["preparation"], "idempotency_key": "launch"},
+        {
+            "preparation_ids": ["preparation"],
+            "source_domain_id": "domain",
+            "launch_context_ids": {},
+            "idempotency_key": "launch",
+        },
         None,
     ),
     "reconcile_workspace_run_group": (
         "/api/experiment-workspaces/workspace/run-groups/group/reconcile", None, None,
     ),
+    "cancel_workspace_run_group": (
+        "/api/experiment-workspaces/workspace/run-groups/group/cancel",
+        {"idempotency_key": "cancel", "expected_generation": 0, "reason": "operator request"},
+        None,
+    ),
     "retry_workspace_run_group": (
         "/api/experiment-workspaces/workspace/run-groups/group/retry",
-        {"idempotency_key": "retry"},
+        {
+            "idempotency_key": "retry",
+            "expected_generation": 0,
+            "source_domain_id": "domain",
+            "replacement_preparation_ids": {"run": "preparation"},
+            "replacement_launch_context_ids": {},
+        },
         None,
     ),
     "resubmit_workspace_run_group": (
         "/api/experiment-workspaces/workspace/run-groups/group/resubmit",
-        {"idempotency_key": "resubmit"},
+        {
+            "idempotency_key": "resubmit",
+            "expected_generation": 0,
+            "source_domain_id": "domain",
+            "preparation_ids": ["preparation"],
+            "launch_context_ids": {},
+        },
         None,
     ),
     "create_experiment_backup": (
         "/api/experiment-workspaces/ops/backup", None, None,
+    ),
+    "restore_experiment_backup_drill": (
+        "/api/experiment-workspaces/ops/backups/backup/restore-drill", None, None,
     ),
     "export_workspace": (
         "/api/experiment-workspaces/workspace/exports", None, None,
@@ -445,6 +539,12 @@ async def test_global_backup_and_dispatch_http_routes_require_operator_or_admin_
     app.include_router(router)
 
     class StubSession(SimpleNamespace):
+        def add(self, _row: object) -> None:
+            pass
+
+        async def commit(self) -> None:
+            pass
+
         async def rollback(self) -> None:
             pass
 
@@ -545,7 +645,7 @@ async def test_workflow_and_dataset_revision_save_load_prepare_is_server_backed(
         preparation = await prepare_workflow(
             session,
             workflow_revision.id,
-            {"input_dataset_revision_ids": [dataset_revision.id]},
+            {"input_dataset_revision_ids": []},
         )
         await session.commit()
 
@@ -582,47 +682,33 @@ async def test_workflow_and_dataset_revision_save_load_prepare_is_server_backed(
 async def test_revision_generation_conflict_and_run_group_idempotency(experiment_store):
     _db_path, _engine, factory = experiment_store
     async with factory() as session:
-        workspace = await create_experiment_workspace(session, "run-group workspace")
-        domain = await _domain_parent(session, workspace.id, "run-group")
-        workflow = await create_workflow(
-            session, workspace.id, "workflow", "generic_test", experiment_id=domain.id,
-        )
-        dataset = await create_dataset(
-            session, workspace.id, "dataset", "generic_inputs", experiment_id=domain.id,
-        )
-        await save_workflow_draft(session, workflow.id, _workflow_payload(), expected_generation=0)
-        revision = await save_workflow_revision(session, workflow.id, expected_head_generation=0)
-        dataset_revision = await save_dataset_revision(
-            session, dataset.id, {"members": []}, expected_head_generation=0
-        )
-        preparation = await prepare_workflow(
-            session, revision.id, {"input_dataset_revision_ids": [dataset_revision.id]}
-        )
+        setup = await _prepared_setup(session, "run-group workspace")
         await session.commit()
 
         with pytest.raises(RevisionConflict):
-            await save_workflow_revision(session, workflow.id, expected_head_generation=0)
+            await save_workflow_revision(session, setup.workflow_id, expected_head_generation=0)
 
         group = await create_run_group(
             session,
-            workspace.id,
-            [preparation.id],
+            setup.workspace_id,
+            [setup.preparation_id],
             idempotency_key="launch-1",
         )
         await session.commit()
         replay = await create_run_group(
             session,
-            workspace.id,
-            [preparation.id],
+            setup.workspace_id,
+            [setup.preparation_id],
             idempotency_key="launch-1",
         )
         assert replay.id == group.id
         with pytest.raises(IdempotencyConflict):
             await create_run_group(
                 session,
-                workspace.id,
-                [],
+                setup.workspace_id,
+                [setup.preparation_id],
                 idempotency_key="launch-1",
+                idempotency_authority={"request": "different"},
             )
 
         outbox_rows = (
@@ -632,6 +718,7 @@ async def test_revision_generation_conflict_and_run_group_idempotency(experiment
         assert len(outbox_rows) == 1
         assert len(runs) == 1
         assert outbox_rows[0].status == "pending"
+        preparation = await session.get(ExperimentWorkflowPreparation, setup.preparation_id)
         with pytest.raises(IntegrityError, match="workflow preparation is immutable"):
             preparation.validation_receipt_json = canonical_json({"schema": "bms.experiment.validation.v1", "status": "valid", "tampered": True})
             await session.flush()
@@ -678,28 +765,15 @@ async def test_outbox_dispatch_is_idempotent_and_acknowledges_external_receipt(e
     from experiment_services import dispatch_pending_outbox
 
     async with factory() as session:
-        workspace = await create_experiment_workspace(session, "dispatch workspace")
-        domain = await _domain_parent(session, workspace.id, "dispatch")
-        workflow = await create_workflow(
-            session, workspace.id, "workflow", "generic_test", experiment_id=domain.id,
+        setup = await _prepared_setup(session, "dispatch workspace")
+        await create_run_group(
+            session, setup.workspace_id, [setup.preparation_id], idempotency_key="dispatch-1",
         )
-        dataset = await create_dataset(
-            session, workspace.id, "dataset", "generic_inputs", experiment_id=domain.id,
-        )
-        await save_workflow_draft(session, workflow.id, _workflow_payload(), expected_generation=0)
-        revision = await save_workflow_revision(session, workflow.id, expected_head_generation=0)
-        dataset_revision = await save_dataset_revision(
-            session, dataset.id, {"members": []}, expected_head_generation=0
-        )
-        preparation = await prepare_workflow(
-            session, revision.id, {"input_dataset_revision_ids": [dataset_revision.id]}
-        )
-        await create_run_group(session, workspace.id, [preparation.id], idempotency_key="dispatch-1")
         await session.commit()
 
         materializer = _FakeMaterializer()
-        first = await dispatch_pending_outbox(session, materializer)
-        second = await dispatch_pending_outbox(session, materializer)
+        first = await dispatch_pending_outbox(session, materializer, core_session=session)
+        second = await dispatch_pending_outbox(session, materializer, core_session=session)
 
         assert first == 1
         assert second == 0
@@ -709,7 +783,9 @@ async def test_outbox_dispatch_is_idempotent_and_acknowledges_external_receipt(e
         run = (await session.execute(select(ExperimentWorkflowRun))).scalar_one()
         assert run.state == "dispatched"
 
-        await create_run_group(session, workspace.id, [preparation.id], idempotency_key="dispatch-2")
+        await create_run_group(
+            session, setup.workspace_id, [setup.preparation_id], idempotency_key="dispatch-2",
+        )
         await session.commit()
         stale = (
             await session.execute(
@@ -720,7 +796,9 @@ async def test_outbox_dispatch_is_idempotent_and_acknowledges_external_receipt(e
         stale.updated_at = "2000-01-01T00:00:00+00:00"
         await session.commit()
         recovered_materializer = _FakeMaterializer()
-        assert await dispatch_pending_outbox(session, recovered_materializer) == 1
+        assert await dispatch_pending_outbox(
+            session, recovered_materializer, core_session=session,
+        ) == 1
         assert len(recovered_materializer.calls) == 1
 
 
@@ -782,43 +860,60 @@ async def test_workspace_router_exposes_server_backed_creation(
 
 @pytest.mark.asyncio
 async def test_existing_job_materializer_preallocates_and_reuses_core_job_identity(tmp_path: Path):
-    from database import Job
+    from database import Base, Job
+    from services.resource_usage_evidence import build_resource_admission_handoff
+    from experiment_services import (
+        scheduler_job_id_for_attempt, _materialization_resource_authority,
+        _attach_materialization_resource_authority,
+    )
+    attempt_id = "12345678-1234-5234-9234-123456789012"
+    job_id = scheduler_job_id_for_attempt(attempt_id)
 
     core_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core.db'}")
     try:
         async with core_engine.begin() as connection:
-            await connection.run_sync(Job.__table__.create)
+            await connection.run_sync(Base.metadata.create_all)
         core_factory = async_sessionmaker(core_engine, expire_on_commit=False, class_=AsyncSession)
         payload = {
             "run_group_id": "run-group-id",
-            "scheduler_job_id": "12345678-1234-1234-1234-123456789012",
+            "scheduler_job_id": job_id,
+            "resource_admission": build_resource_admission_handoff(
+                admission_id="admission-1", run_attempt_id=attempt_id, canonical_job_id=job_id,
+                preparation_id="preparation-1", cpu_threads=1, dram_bytes=16 * 1024**3,
+                gpu_index=None, gpu_uuid=None, policy_source="project-scheduler",
+                policy_version="bms.resource-admission-policy.v1", owner="local-application-operator",
+                lease_token="lease-1", source_revision="1" * 40, source_tree="2" * 40,
+            ),
             "scheduler": {
                 "name": "materialized-job",
-                "model_id": "protenix",
+                "model_id": "esmfold2",
                 "mode": "predict",
                 "params": {
                     "seed": 101,
                     "sequence": "ACDEFGHIKLMNPQRSTVWY",
-                    "msa_provider": "colabfold_api",
                     "job_name": "materialized-job",
-                    "pred_method": "protenix",
-                    "structure_validator": "protenix",
-                    "workflow_adapter": "bms.core-job.protenix.adapter.v1",
+                    "pred_method": "esmfold2",
+                    "structure_validator": "esmfold2",
+                    "workflow_adapter": "bms.core-job.esmfold2.adapter.v1",
                 },
             },
         }
         async with core_factory() as session:
             materializer = ExistingJobMaterializer(session)
             first = await materializer.materialize("12345678-1234-5234-9234-123456789012", payload)
-            persisted = await session.get(Job, "12345678-1234-5234-9234-123456789012")
+            persisted = await session.get(Job, job_id)
             assert persisted is not None
-            assert dict(persisted.params or {}) == payload["scheduler"]["params"], (
+            handoff, dispatch = _materialization_resource_authority(attempt_id, payload)
+            expected = _attach_materialization_resource_authority(payload["scheduler"]["params"], handoff, dispatch)
+            expected["core_protein_scientific_contract"] = 1
+            expected["remote_result_policy"] = "manual"
+            assert dict(persisted.params or {}) == expected, (
                 persisted.params,
                 payload["scheduler"]["params"],
             )
             second = await materializer.materialize("12345678-1234-5234-9234-123456789012", payload)
             assert first == second
-            assert first["external_job_id"] == "12345678-1234-5234-9234-123456789012"
+            assert first["external_job_id"] == job_id
             assert (await session.execute(select(Job))).scalars().all().__len__() == 1
             conflict = {
                 **payload,

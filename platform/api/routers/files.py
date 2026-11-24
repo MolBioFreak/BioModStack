@@ -2,6 +2,18 @@
 File serving and directory browsing API router.
 """
 
+from services.binder_source_materialization import (
+    IMMUTABLE_STRUCTURE_UPLOAD_MAX_BYTES,
+    _contained_lexically,
+    _is_governed_ngs_artifact,
+    _lexical_absolute,
+    _reject_governed_ngs_artifact,
+    _sha256_regular_file_nofollow,
+    _under_persisted_ngs_root,
+    governed_ngs_result_roots,
+    materialize_structure_source,
+)
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
@@ -30,7 +42,6 @@ from paths import (
 
 router = APIRouter()
 IMMUTABLE_STRUCTURE_UPLOAD_PATH = "inputs/protein_local_redesign"
-IMMUTABLE_STRUCTURE_UPLOAD_MAX_BYTES = 64 * 1024 * 1024
 IMMUTABLE_STRUCTURE_FILENAME_RE = re.compile(
     r"^[A-Za-z0-9_.-]{1,160}-([0-9a-f]{64})\.pdb$"
 )
@@ -42,24 +53,6 @@ IMMUTABLE_STRUCTURE_UPLOADS = {
     IMMUTABLE_STRUCTURE_UPLOAD_PATH: IMMUTABLE_STRUCTURE_FILENAME_RE,
     IMMUTABLE_ANNOTATED_STRUCTURE_UPLOAD_PATH: IMMUTABLE_ANNOTATED_STRUCTURE_FILENAME_RE,
 }
-GOVERNED_NGS_MANIFEST_SCHEMAS = frozenset(
-    {"sequence_qc.manifest.v1", "biomodstack.construct_verification.v2"}
-)
-GOVERNED_NGS_MODEL_IDS = frozenset(
-    {"nanopore", "ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation"}
-)
-
-
-def _lexical_absolute(path: Path) -> Path:
-    return Path(os.path.abspath(path.expanduser()))
-
-
-def _contained_lexically(path: Path, root: Path) -> bool:
-    try:
-        _lexical_absolute(path).relative_to(_lexical_absolute(root))
-        return True
-    except ValueError:
-        return False
 
 
 def _allowed_lexical_path(value: str) -> Path:
@@ -79,76 +72,7 @@ def _allowed_lexical_path(value: str) -> Path:
 async def get_governed_ngs_result_roots(
     session: AsyncSession = Depends(get_session),
 ) -> tuple[Path, ...]:
-    """Return stable lexical authority from persisted canonical NGS job rows."""
-    configured_root = _lexical_absolute(get_allowed_roots()["bms_results"])
-    result = await session.execute(
-        select(Job.output_dir, Job.child_output_dir).where(Job.model_id.in_(GOVERNED_NGS_MODEL_IDS))
-    )
-    roots: set[Path] = set()
-    for output_dir, child_output_dir in result.all():
-        for raw in (output_dir, child_output_dir):
-            if not isinstance(raw, str) or not raw.strip():
-                continue
-            declared = Path(raw.strip()).expanduser()
-            candidate = _lexical_absolute(declared if declared.is_absolute() else configured_root / declared)
-            if _contained_lexically(candidate, configured_root):
-                roots.add(candidate)
-    return tuple(sorted(roots, key=os.fspath))
-
-
-def _under_persisted_ngs_root(path: Path, governed_roots: tuple[Path, ...]) -> bool:
-    return any(_contained_lexically(path, root) for root in governed_roots)
-
-
-def _read_json_nofollow(path: Path, *, max_bytes: int = 10 * 1024 * 1024) -> dict:
-    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    try:
-        absolute = Path(os.path.abspath(path))
-        for index, component in enumerate(absolute.parts[1:]):
-            final = index == len(absolute.parts[1:]) - 1
-            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
-            if not final:
-                flags |= os.O_DIRECTORY
-            next_descriptor = os.open(component, flags, dir_fd=descriptor)
-            os.close(descriptor)
-            descriptor = next_descriptor
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > max_bytes:
-            raise ValueError("manifest is unsafe")
-        raw = b""
-        while len(raw) <= max_bytes:
-            chunk = os.read(descriptor, min(1024 * 1024, max_bytes + 1 - len(raw)))
-            if not chunk:
-                break
-            raw += chunk
-        if len(raw) > max_bytes:
-            raise ValueError("manifest is too large")
-        payload = json.loads(raw.decode("utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("manifest root is invalid")
-        return payload
-    finally:
-        os.close(descriptor)
-
-
-def _sha256_regular_file_nofollow(path: Path) -> tuple[str, int]:
-    flags = os.O_RDONLY | os.O_CLOEXEC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(path, flags)
-    try:
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ValueError("immutable structure path is not a regular file")
-        digest = hashlib.sha256()
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-        return digest.hexdigest(), metadata.st_size
-    finally:
-        os.close(descriptor)
+    return await governed_ngs_result_roots(session)
 
 
 def _immutable_structure_response(path: Path, expected_sha256: str, *, existing: bool) -> dict:
@@ -265,47 +189,12 @@ def _serve_file_response(full_path: Path, request: Request, as_attachment: bool)
     return response
 
 
-def is_path_allowed(path: Path) -> bool:
-    """Check if path is within allowed roots."""
-    try:
-        resolved = path.resolve()
-        for root in get_allowed_roots().values():
-            try:
-                resolved.relative_to(root.resolve())
-                return True
-            except ValueError:
-                continue
-        return False
-    except (ValueError, RuntimeError):
-        return False
-
-
-def _is_governed_ngs_artifact(path: Path) -> bool:
-    resolved = path.resolve()
-    for parent in resolved.parents:
-        manifest = parent / "qc_manifest.json"
-        if not manifest.is_file() or manifest.is_symlink():
-            continue
-        try:
-            payload = _read_json_nofollow(manifest)
-            if payload.get("schema") in GOVERNED_NGS_MANIFEST_SCHEMAS:
-                return True
-        except (OSError, ValueError, json.JSONDecodeError):
-            return True
-    return False
-
-
 def _is_governed_ngs_directory(path: Path) -> bool:
     resolved = path.resolve()
     return any(
         (candidate / "qc_manifest.json").exists()
         for candidate in (resolved, *resolved.parents)
     )
-
-
-def _reject_governed_ngs_artifact(path: Path) -> None:
-    if _is_governed_ngs_artifact(path):
-        raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
 
 
 @router.get("/browse")
@@ -396,67 +285,6 @@ async def materialize_structure(
     governed_roots: tuple[Path, ...] = Depends(get_governed_ngs_result_roots),
 ):
     return await materialize_structure_source(payload, session, governed_roots)
-
-
-async def materialize_structure_source(
-    payload: StructureSourceRequest, session: AsyncSession,
-    governed_roots: tuple[Path, ...], *, destination: Path | None = None,
-):
-    """Shared exact acquisition for files and Resequence; destination is caller-owned.
-
-    A supplied destination must not exist. Failure removes only the directory
-    created by this acquisition, never a source or a prior preparation.
-    """
-    from services.binder_source_materialization import resolve_structure_source, materialize_source_bytes, structure_suffix
-    directory = None
-    try:
-        source, identity = await resolve_structure_source(payload, session)
-        if not is_path_allowed(source) or _under_persisted_ngs_root(source, governed_roots):
-            raise HTTPException(403, "Access denied to this structure")
-        _reject_governed_ngs_artifact(source)
-        descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
-        with os.fdopen(descriptor, "rb") as handle:
-            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-                raise ValueError("Source is not a regular structure file")
-            raw = handle.read(IMMUTABLE_STRUCTURE_UPLOAD_MAX_BYTES + 1)
-        if len(raw) > IMMUTABLE_STRUCTURE_UPLOAD_MAX_BYTES:
-            raise HTTPException(413, "Structure exceeds 64 MiB")
-        digest = hashlib.sha256(raw).hexdigest()
-        expected = identity.get("artifact_sha256") or payload.expected_sha256
-        if expected is not None and digest != expected:
-            raise ValueError("Selected source bytes differ from the exact document digest")
-        if payload.expected_sha256 is not None and digest != payload.expected_sha256:
-            raise ValueError("Selected source bytes changed")
-        parent = resolve_allowed_path("inputs")
-        parent.mkdir(parents=True, exist_ok=True)
-        if destination is None:
-            directory = Path(tempfile.mkdtemp(prefix="structure-", dir=parent))
-        else:
-            destination.resolve().relative_to(parent.resolve())
-            destination.mkdir(parents=True, exist_ok=False)
-            directory = destination
-        result = materialize_source_bytes(raw, structure_suffix(source), directory,
-            output_format=payload.output_format, model_number=payload.model_number,
-            verified_original_sha256=digest)
-        retained = payload.model_copy(update={"path": result["original_path"],
-                                              "expected_sha256": result["original_sha256"]})
-        result = {**result, "source_identity": identity, "source_path": to_allowed_relative(source),
-                  "source_structure": retained.model_dump(mode="json", exclude_none=True)}
-        # Keep the already governed acquisition's ancestry beside its retained
-        # bytes. Replay access is still governed by the inputs path and digest,
-        # not by the continued existence of a historical producer row.
-        import json
-        (directory / '.source-custody.json').write_text(json.dumps({
-            'source_structure': result['source_structure'], 'source_identity': identity}, sort_keys=True))
-        return result
-    except HTTPException:
-        if directory is not None:
-            shutil.rmtree(directory)
-        raise
-    except (ValueError, OSError, EOFError, KeyError) as exc:
-        if directory is not None:
-            shutil.rmtree(directory)
-        raise HTTPException(422, str(exc)) from exc
 
 
 @router.post("/upload")

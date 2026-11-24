@@ -101,10 +101,10 @@ it('actual Results parent serializes independent stages and preserves null/false
     await act(async () => field('fixed_positions').findByType('input').props.onChange({ target: { value: '' } }));
     await click('Back to round');
     await click('Add Sequence design');
-    await click('Add fampnn call'); await click('Add proteinmpnn call');
+    await click('Add FA-MPNN'); await click('Add ProteinMPNN');
     await click('FA-MPNN settings'); await click('Clear Samples (null)'); await click('Back to round');
     await click('Add Blind prediction');
-    await click('Add protenix call'); await click('Add boltz2 call');
+    await click('Add Protenix'); await click('Add Boltz-2');
     await close(); await mount(); await click('Next round (2)');
     await click('Queue round');
     const sent = calls.filter(call => call.url === '/api/binder-continuation/selected')[0].body;
@@ -208,7 +208,7 @@ it('keeps the same idempotent intent after lost transport and reload, and preser
 it('protein recipe visibly orders flow then intentionally chosen designers then predictors without a hidden designer', async () => {
     writeBinderSelection('parent', ['design']); await mount(); await click('Next round (1)'); await click('Add protein flow → design → predict');
     expect(tree!.root.findAll(node => node.type === 'section' && /^Invocation /.test(node.props['aria-label'] ?? ''))).toHaveLength(0);
-    await click('Add proteinmpnn call'); await click('Add caliby_binder call'); await click('Add protenix call');
+    await click('Add ProteinMPNN'); await click('Add Caliby binder'); await click('Add Protenix');
     await click('Queue round');
     const stages = calls.filter(call => call.url === '/api/binder-continuation/selected').at(-1)!.body.round_plan.stages;
     expect(stages.map((stage: any) => stage.kind)).toEqual(['maturation', 'sequence_design', 'prediction']);
@@ -232,7 +232,7 @@ it('keeps task-owned protein and antibody defaults and edited drafts separate wi
 
 it('approved role initialization uses the exact producer document and preserves explicit clears through reload', async () => {
     writeBinderSelection('parent', ['design']);
-    await mount(); await click('Next round (1)'); await click('Add Sequence design'); await click('Add fampnn call'); await click('FA-MPNN settings');
+    await mount(); await click('Next round (1)'); await click('Add Sequence design'); await click('Add FA-MPNN'); await click('FA-MPNN settings');
     const field = (name: string) => tree!.root.findAll(node => typeof node.type === 'function' && node.props.param?.name === name).at(-1)!.findByType('input');
     expect(field('design_chain').props.value).toBe('B');
     expect(field('target_chain').props.value).toBe('A');

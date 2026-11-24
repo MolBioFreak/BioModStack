@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from database import Base, Job
 from model_registry import ModelRegistry
 from routers import jobs
+from services import job_submission
+from services import job_requests
 from schemas import JobCreate
 from services import core_protein_scientific_contract as contract
 
@@ -41,7 +43,7 @@ async def test_marked_variants_all_validate_before_any_row_mutation(admission, m
             raise AssertionError("Job row mutation before all variant validation")
         monkeypatch.setattr(admission, "add", no_add)
         with pytest.raises(HTTPException) as exc:
-            await jobs._create_job(payload, BackgroundTasks(), admission)
+            await job_submission._create_job(payload, BackgroundTasks(), admission)
         assert exc.value.status_code == 422
         # Both invalid branches must reach the variant validator, not an MSA gate.
         # model_registry.validate_job_params (a3971bd) rejects a non-string with the
@@ -56,7 +58,7 @@ async def test_marked_variants_all_validate_before_any_row_mutation(admission, m
         assert list((await admission.execute(select(Job))).scalars()) == []
         assert not admission.new
     else:
-        await jobs._create_job(payload, BackgroundTasks(), admission)
+        await job_submission._create_job(payload, BackgroundTasks(), admission)
         rows = list((await admission.execute(select(Job))).scalars())
         variants = [row for row in rows if row.model_id == "boltz2"]
         assert len(rows) == 2  # No MSA-search dependency row for this explicit no-MSA request.
@@ -85,7 +87,7 @@ async def test_explicit_local_variant_policy_rejects_before_any_row_mutation(adm
         raise AssertionError("Job row mutation before explicit local policy rejection")
     monkeypatch.setattr(admission, "add", no_add)
     with pytest.raises(HTTPException) as exc:
-        await jobs._create_job(payload, BackgroundTasks(), admission)
+        await job_submission._create_job(payload, BackgroundTasks(), admission)
     assert exc.value.status_code == 422
     assert exc.value.detail == (
         "Local MSA search is disabled by the BMS 1.0 interim policy. "
@@ -99,7 +101,7 @@ async def test_explicit_local_variant_policy_rejects_before_any_row_mutation(adm
 
 @pytest.mark.asyncio
 async def test_forged_child_stage_cannot_suppress_current_revision(admission):
-    result = await jobs._create_job(request(child_stage="boltz2"), BackgroundTasks(), admission)
+    result = await job_submission._create_job(request(child_stage="boltz2"), BackgroundTasks(), admission)
     assert contract.revision_for_job(await admission.get(Job, result.id)) == 1
 
 
@@ -109,7 +111,7 @@ async def test_marked_parent_child_receives_default_revision(admission):
                  status="running", params={}, provenance={KEY: 1})
     admission.add(parent)
     await admission.commit()
-    result = await jobs._create_job(request(parent_job_id="parent", child_stage="boltz2"),
+    result = await job_submission._create_job(request(parent_job_id="parent", child_stage="boltz2"),
                                     BackgroundTasks(), admission)
     child = await admission.get(Job, result.id)
     assert contract.revision_for_job(child) == contract.REVISION
@@ -127,8 +129,8 @@ async def test_reused_legacy_child_is_unchanged(admission, monkeypatch):
     admission.add_all([parent, child])
     await admission.commit()
     before = deepcopy((child.params, child.provenance))
-    monkeypatch.setattr(jobs, "_child_job_has_reusable_outputs", lambda job: True)
-    result = await jobs._create_job(request(parent_job_id="parent", child_stage="boltz2"),
+    monkeypatch.setattr(job_submission, "_child_job_has_reusable_outputs", lambda job: True)
+    result = await job_submission._create_job(request(parent_job_id="parent", child_stage="boltz2"),
                                     BackgroundTasks(), admission)
     assert result.id == "child"
     assert (child.params, child.provenance) == before
@@ -209,8 +211,11 @@ def test_resume_preserves_known_overrides_and_legacy_extra_policy():
 async def admission(monkeypatch, tmp_path):
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "0")
     monkeypatch.setattr(jobs, "get_results_dir", lambda: tmp_path / "results")
+    monkeypatch.setattr(job_submission, "get_results_dir", lambda: tmp_path / "results")
     registry = ModelRegistry(Path(__file__).resolve().parents[1] / "config" / "models")
     monkeypatch.setattr(jobs, "get_registry", lambda: registry)
+    monkeypatch.setattr(job_submission, "get_registry", lambda: registry)
+    monkeypatch.setattr(job_requests, "get_registry", lambda: registry)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'jobs.sqlite'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -233,7 +238,7 @@ async def test_admission_persists_server_revision_and_keeps_old_rows(admission):
     admission.add(old)
     await admission.commit()
     original = deepcopy((old.params, old.provenance))
-    response = await jobs._create_job(request(), BackgroundTasks(), admission)
+    response = await job_submission._create_job(request(), BackgroundTasks(), admission)
     admission.expire_all()
     new = await admission.get(Job, response.id)
     historical = await admission.get(Job, "old")
@@ -250,9 +255,11 @@ async def test_common_boundary_rejects_post_schema_mutation_before_handoff(monke
     def never(*args, **kwargs):
         raise AssertionError("trusted handoff/registry must not execute")
     monkeypatch.setattr(jobs, "get_registry", never)
-    monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", never)
+    monkeypatch.setattr(job_submission, "get_registry", never)
+    monkeypatch.setattr(job_requests, "get_registry", never)
+    monkeypatch.setattr(job_submission, "_raise_if_workflow_launches_disabled", never)
     with pytest.raises(HTTPException) as exc:
-        await jobs._create_job(payload, BackgroundTasks(), object())
+        await job_submission._create_job(payload, BackgroundTasks(), object())
     assert exc.value.status_code == 422
     assert "server-owned" in str(exc.value.detail)
 
@@ -265,7 +272,7 @@ async def test_governing_validation_precedes_assignment(admission, monkeypatch):
     payload = request()
     payload.mode = "not_an_admitted_mode"
     with pytest.raises(HTTPException) as exc:
-        await jobs._create_job(payload, BackgroundTasks(), admission)
+        await job_submission._create_job(payload, BackgroundTasks(), admission)
     assert exc.value.status_code == 422
     assert list((await admission.execute(select(Job))).scalars()) == []
 
@@ -278,7 +285,7 @@ async def test_new_scientific_child_uses_current_admission(admission, parent_rev
                  provenance={} if parent_revision is None else {KEY: parent_revision})
     admission.add(parent)
     await admission.commit()
-    response = await jobs._create_job(request(parent_job_id="parent", child_stage="boltz2"),
+    response = await job_submission._create_job(request(parent_job_id="parent", child_stage="boltz2"),
                                       BackgroundTasks(), admission)
     child = await admission.get(Job, response.id)
     assert contract.revision_for_job(child) == 1

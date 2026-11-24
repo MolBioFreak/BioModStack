@@ -13,3 +13,8 @@
     -webkit-user-select: text;
     user-select: text;
 }
+
+/* Circular-map name: SeqViz draws it at 20px mono (30 chars = 360px), wider than the map column. */
+.sequence-viewer svg.la-vz-viewer-circular > g > g > text[font-weight="500"] {
+  font-size: 13px;
+}

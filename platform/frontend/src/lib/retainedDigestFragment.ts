@@ -1,6 +1,6 @@
 import type { RestrictionDigestFragment } from './restrictionAnalysis';
 
-export const DUPLEX_EDIT_REASON = 'This retained digest fragment has exact duplex ends. Sequence editing and top-strand-only import are unsupported; reopen the saved digest or use its physical fragments in Assembly.';
+export const DUPLEX_EDIT_REASON = 'This retained digest fragment has exact duplex ends. Sequence editing is unsupported; reopen the saved digest or use its physical fragments in Assembly.';
 
 /** Keep saved chemistry attached to the sequence without inventing end repair. */
 export function retainedDigestFragment(provenance: unknown, sequence: string): RestrictionDigestFragment | undefined {
@@ -20,13 +20,15 @@ export function hasStickyDigestEnds(fragment: RestrictionDigestFragment | undefi
         end.kind === 'five_prime_overhang' || end.kind === 'three_prime_overhang'));
 }
 
-/** Generic sequence import cannot persist physical end metadata. Fail before parsing/saving. */
-export function requireSupportedDigestImport(value: unknown): void {
-    if (!value || typeof value !== 'object') return;
+/** Ends recorded on a retained fragment, read back from Toolkit JSON (`digestFragment`) or its provenance geometry. */
+export function digestFragmentFromImport(value: unknown, sequence: string): RestrictionDigestFragment | undefined {
+    if (!value || typeof value !== 'object') return undefined;
     const v = value as Record<string, unknown>;
-    if (v.digestFragment || v.schema === 'bms.molbio.restriction-digest-fragment-provenance.v1'
-        || (v.provenance && typeof v.provenance === 'object'
-            && (v.provenance as Record<string, unknown>).schema === 'bms.molbio.restriction-digest-fragment-provenance.v1')) {
-        throw new Error(DUPLEX_EDIT_REASON);
+    const direct = v.digestFragment as RestrictionDigestFragment | undefined;
+    if (direct && typeof direct === 'object' && direct.left_end && direct.right_end) return structuredClone(direct);
+    const provenance = (v.schema ? v : v.provenance) as Record<string, unknown> | undefined;
+    if (provenance && typeof provenance === 'object' && provenance.schema === 'bms.molbio.restriction-digest-fragment-provenance.v1') {
+        try { return retainedDigestFragment(provenance, sequence); } catch { return undefined; }
     }
+    return undefined;
 }

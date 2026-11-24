@@ -100,7 +100,7 @@ async def save_operation_parameters(request: OperationParametersRequest, runtime
 class TipOffsetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_connection_generation: Annotated[int, Field(strict=True, ge=0)]
-    tip_type: Literal[10, 50, 200, 201]
+    tip_type: Literal[10, 50, 200]
     offset_steps: Annotated[int, Field(strict=True)]
     source: str = Field(min_length=1, max_length=300)
 
@@ -110,6 +110,24 @@ async def read_tip_offsets(expected_connection_generation: int = Query(ge=0),
                            runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
     try:
         return await runtime.connection.request_active_v2_query("tip_offsets", expected_generation=expected_connection_generation)
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
+class LoadedTipTypeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_connection_generation: Annotated[int, Field(strict=True, ge=0)]
+    tip_type: Literal[10, 50, 200]
+    used: StrictBool = True
+
+
+@router.post("/loaded-tip-type")
+async def set_loaded_tip_type(request: LoadedTipTypeRequest, runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    """Record which tips are on the guns. Software only; nothing moves."""
+    try:
+        return await runtime.connection.request_active(
+            "set_loaded_tip_type", expected_generation=request.expected_connection_generation, require_fresh=False,
+            json_data=request.model_dump(mode="json", exclude={"expected_connection_generation"}))
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
 
@@ -198,6 +216,65 @@ async def remove_depth_offset(request: DepthOffsetKey, runtime: BioXpRuntime = D
             json_data=request.model_dump(mode="json", exclude={"expected_connection_generation"}))
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
+
+
+class PlateGripperRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_connection_generation: Annotated[int, Field(strict=True, ge=0)]
+    plate_id: str = Field(min_length=1, max_length=80)
+    location: Literal["LOC_P_MS", "LOC_P_TC", "LOC_P_OC", "LOC_P_RC"]
+    z_low_offset_steps: Annotated[int, Field(ge=-60000, le=20000)] | None
+    source: str | None = Field(default=None, max_length=300)
+
+
+class PlateStationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_connection_generation: Annotated[int, Field(strict=True, ge=0)]
+    location: str = Field(min_length=1, max_length=40)
+    plate_id: str | None = Field(default=None, max_length=80)
+
+
+class PlateLoadedRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_connection_generation: Annotated[int, Field(strict=True, ge=0)]
+    movable_object: Literal["OUTPUT_PLATE"]
+    plate_id: str = Field(min_length=1, max_length=80)
+
+
+@router.get("/plate-profiles")
+async def read_plate_profiles(expected_connection_generation: int = Query(ge=0),
+                              runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    try:
+        return await runtime.connection.request_active_v2_query("plate_profiles", expected_generation=expected_connection_generation)
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
+async def _plate_save(route: str, request: BaseModel, runtime: BioXpRuntime):
+    try:
+        return await runtime.connection.request_active(
+            route, expected_generation=request.expected_connection_generation, require_fresh=False,
+            json_data=request.model_dump(mode="json", exclude={"expected_connection_generation"}))
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
+@router.put("/plate-profiles/gripper")
+async def save_plate_gripper(request: PlateGripperRequest, runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    """Record-only: the plate's next grab/release at that station uses it; empty restores the OEM height."""
+    return await _plate_save("save_plate_gripper", request, runtime)
+
+
+@router.put("/plate-profiles/station")
+async def save_plate_station(request: PlateStationRequest, runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    """Record-only: which plate sits at a pipetting station, so its depth offsets apply there."""
+    return await _plate_save("save_plate_station", request, runtime)
+
+
+@router.put("/plate-profiles/loaded")
+async def save_plate_loaded(request: PlateLoadedRequest, runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    """Record-only: which plate type is loaded as the output plate."""
+    return await _plate_save("save_plate_loaded", request, runtime)
 
 
 @router.get("/calibration-settings")

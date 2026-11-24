@@ -104,7 +104,7 @@ it.each(['ligandmpnn', 'caliby_experimental', 'protonpottsmpnn'])('actual Result
             designs: refs.map((candidate_ref, i) => ({ candidate_ref, design_id: `criteria0:native${i}`, native_design_id: `native${i}`, criteria_index: 0, native: { ...native, final_potts_energy: i } })) });
     }
     const selectLabel = (i: number) => `Select ${model_id === 'ligandmpnn' ? JSON.stringify({ name: 'native', batch_idx: 0, design_idx: i }) : model_id === 'caliby_experimental' ? `native-${i}` : `criteria0:native${i}`}`;
-    await mount();
+    await mount(); await click('Data table');
     await change(selectLabel(0), true); await click('Next native records'); await change(selectLabel(31), true);
     expect(button('Next round (2)')).toBeTruthy();
     const selectedSets = tree!.root.findAll(node => typeof node.type === 'function' && node.props.candidates?.length === 2 && node.props.onLoad)[0];
@@ -116,7 +116,7 @@ it.each(['ligandmpnn', 'caliby_experimental', 'protonpottsmpnn'])('actual Result
     const rankOwner = tree!.root.findAll(node => typeof node.type === 'function' && node.props.ranking?.metric === metric && node.props.onLoad)[0];
     await act(async () => rankOwner.findAllByType('button').find(node => text(node) === 'Save set (32)')!.props.onClick()); await flush();
     expect(sets.at(-1).candidate_refs[0]).toEqual(initialRef(31));
-    await click('Next round (2)'); await click('Add Blind prediction'); await change('Stage 1 Protenix', true); await click('Protenix settings');
+    await click('Next round (2)'); await click('Add Blind prediction'); await click('Add Protenix'); await click('Protenix settings');
     const field = (name: string) => tree!.root.findAll(node => typeof node.type === 'function' && node.props.param?.name === name).at(-1)!.findByType('input');
     await act(async () => field('fixed_positions').props.onChange({ target: { value: '' } }));
     await click('Clear Samples (null)'); await click('Back to round'); await click('Local'); await click('Queue round');
@@ -128,7 +128,7 @@ it.each(['ligandmpnn', 'caliby_experimental', 'protonpottsmpnn'])('actual Result
     posts = calls.filter(c => c.url === '/api/binder-continuation/selected');
     expect(posts[1].body.selection.candidate_refs).toEqual([initialRef(0), initialRef(31), { kind: 'native_sequence', job_id: 'fixture-child', publication_ref: 'fixture-publication', native_output_id: 'sample-32' }]);
     expect(posts[1].body.idempotency_key).not.toBe(posts[0].body.idempotency_key);
-    await close(); await mount();
+    await close(); await mount(); await click('Data table'); await click('Previous native records');
     expect(button('Next round (3)')).toBeTruthy();
     expect(tree!.root.findByProps({ 'aria-label': selectLabel(0) }).props.checked).toBe(true);
     expect(calls.some(c => /\/api\/designs\/(criteria|native|producer)/.test(c.url))).toBe(false);
@@ -151,12 +151,13 @@ it('actual RFantibody Results uses compact all-output selection and exact backen
     expect(text(tree!.root)).toContain('RFantibody candidates');
     expect(tree!.root.findByProps({ 'data-molecule': '/exact/rf-complex.cif' })).toBeTruthy();
     await change('Select rf-0', true); await click('Next native records'); await change('Select rf-31', true);
-    await click('Next round (2)'); await click('Add Sequence design'); await change('Stage 1 ProteinMPNN', true); await click('Queue round');
+    await click('Next round (2)'); await click('Add Sequence design'); await click('Add ProteinMPNN'); await click('Queue round');
     expect(calls.find(c => c.url === '/api/binder-continuation/selected')!.body.selection.candidate_refs).toEqual([rfRefs[0], rfRefs[31]]);
     await click('Open RFantibody model workbench');
     expect(button('Back to RFantibody candidates')).toBeTruthy();
     await click('Back to RFantibody candidates');
     expect(button('Next round (2)')).toBeTruthy();
+    await click('Previous native records');
     expect(tree!.root.findByProps({ 'aria-label': 'Select rf-0' }).props.checked).toBe(true);
 });
 
@@ -178,11 +179,10 @@ it('actual parent renders every applicable installed protein registry field, inc
         } else expect(field.findAll(node => ['input','select','textarea','button'].includes(String(node.type))).length, param.name).toBeGreaterThan(0);
     }
     for (const name of ['ppiflow_protein_num_timesteps','ppiflow_protein_scaffold_contig','ppiflow_protein_twisting_use','ppiflow_protein_twisting_scale_w_t']) expect(fields.some((p: any) => p.name === name)).toBe(true);
-    expect(tree!.root.findAll(node => node.props['data-sequence-designer-field'] === 'ppiflow_retry_limit')).toHaveLength(0);
     const editable = (name: string) => tree!.root.findAll(node => typeof node.type === 'function' && node.props.param?.name === name).at(-1)!;
     await act(async () => editable('ppiflow_protein_num_timesteps').findByType('input').props.onChange({ target: { value: '42' } }));
     await act(async () => tree!.root.findByProps({ 'aria-label': 'ppiflow_protein_scaffold_contig' }).props.onChange({ target: { value: '' } }));
-    await click('Back to round'); await change('Stage 2 ProteinMPNN', true); await change('Stage 3 Protenix', true); await click('Queue round');
+    await click('Back to round'); await click('Add ProteinMPNN'); await click('Add Protenix'); await click('Queue round');
     const sent = calls.find(c => c.url === '/api/binder-continuation/selected')!.body;
     expect(sent.round_plan.stages[0].params).toMatchObject({ ppiflow_task: 'protein_binder_partial', ppiflow_protein_num_timesteps: 42, ppiflow_protein_scaffold_contig: '' });
 });
@@ -191,7 +191,7 @@ it('backend exact native document refs preserve model and declared roles without
     const ref = { kind: 'native_document', job_id: 'parent', artifact_id: 'complex', target_state: 'complex', model: 7 };
     interceptResult('/api/jobs/parent/generation-results', { records: [{ candidate_key: 'published-source', candidate_ref: { ...ref, label: 'not transport' }, structures: [doc], metrics: {} }], total: 1, offset: 0, limit: 100, receipt: {}, publication: {} });
     await mount(); await change('Select Candidate 1', true); await click('Next round (1)');
-    await click('Add Sequence design'); await change('Stage 1 FA-MPNN', true); await click('FA-MPNN settings');
+    await click('Add Sequence design'); await click('Add FA-MPNN'); await click('FA-MPNN settings');
     const field = (name: string) => tree!.root.findAll(node => typeof node.type === 'function' && node.props.param?.name === name).at(-1)!.findByType('input');
     expect(field('design_chain').props.value).toBe('B'); expect(field('target_chain').props.value).toBe('A');
     await act(async () => field('design_chain').props.onChange({ target: { value: '' } }));

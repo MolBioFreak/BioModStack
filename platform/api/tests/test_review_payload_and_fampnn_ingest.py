@@ -19,20 +19,12 @@ from routers.designs import (
     _merge_review_payload,
     _should_force_review_stage_listing,
 )
-from routers.jobs import (
-    SavedReviewFilterSet,
-    _build_antibody_iteration_job,
-    _build_selection_manifest_item,
-    _child_job_has_reusable_outputs,
-    _derive_job_stage_tags,
-    _derive_source_stage_payload,
-    _iter_saved_review_filter_sets,
-    _looks_like_antibody_job,
-    _merge_preserved_gate_payload,
-    _normalize_antibody_job_params,
-    _prune_iteration_params,
-    _repair_job_for_response,
-)
+from routers.job_stages import _iter_saved_review_filter_sets
+from routers.job_results import _merge_preserved_gate_payload, _repair_job_for_response
+from services.job_submission import _child_job_has_reusable_outputs
+from services.binder_continuation import _build_antibody_iteration_job, _build_selection_manifest_item, _derive_job_stage_tags, _derive_source_stage_payload, _looks_like_antibody_job, _prune_iteration_params
+from services.job_readback import SavedReviewFilterSet
+from services.job_requests import _normalize_antibody_job_params
 from services.result_ingester import (
     _apply_ppiflow_filter_fields,
     _apply_ppiflow_score_fields,
@@ -283,9 +275,9 @@ def test_load_caliby_review_metrics_canonicalizes_self_consistency_fields(tmp_pa
 
 
 def test_repair_job_for_response_marks_ok_history_job_completed_without_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("routers.jobs.nextflow_history_status", lambda job: "OK")
-    monkeypatch.setattr("routers.jobs.load_review_gate_snapshot", lambda *_args, **_kwargs: (None, {}))
-    monkeypatch.setattr("routers.jobs.has_stage_gate", lambda job: False)
+    monkeypatch.setattr("routers.job_results.nextflow_history_status", lambda job: "OK")
+    monkeypatch.setattr("routers.job_results.load_review_gate_snapshot", lambda *_args, **_kwargs: (None, {}))
+    monkeypatch.setattr("routers.job_results.has_stage_gate", lambda job: False)
 
     job = SimpleNamespace(
         execution_target_id=None,
@@ -315,9 +307,9 @@ def test_repair_job_for_response_marks_ok_history_job_completed_without_gate(tmp
 
 
 def test_repair_job_for_response_marks_err_history_job_failed_without_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("routers.jobs.nextflow_history_status", lambda job: "ERR")
-    monkeypatch.setattr("routers.jobs.load_review_gate_snapshot", lambda *_args, **_kwargs: (None, {}))
-    monkeypatch.setattr("routers.jobs.has_stage_gate", lambda job: False)
+    monkeypatch.setattr("routers.job_results.nextflow_history_status", lambda job: "ERR")
+    monkeypatch.setattr("routers.job_results.load_review_gate_snapshot", lambda *_args, **_kwargs: (None, {}))
+    monkeypatch.setattr("routers.job_results.has_stage_gate", lambda job: False)
 
     job = SimpleNamespace(
         execution_target_id=None,
@@ -353,9 +345,9 @@ def test_repair_job_for_response_preserves_terminal_closeout_completion_on_err_h
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("routers.jobs.nextflow_history_status", lambda job: "ERR")
-    monkeypatch.setattr("routers.jobs.load_review_gate_snapshot", lambda *_args, **_kwargs: (None, {}))
-    monkeypatch.setattr("routers.jobs.has_stage_gate", lambda job: False)
+    monkeypatch.setattr("routers.job_results.nextflow_history_status", lambda job: "ERR")
+    monkeypatch.setattr("routers.job_results.load_review_gate_snapshot", lambda *_args, **_kwargs: (None, {}))
+    monkeypatch.setattr("routers.job_results.has_stage_gate", lambda job: False)
 
     (tmp_path / "terminal_closeout_report.json").write_text(
         '{"status":"complete","total_terminal_designs":50}',
@@ -824,7 +816,8 @@ TER
 END
 """)
 
-    metrics = _extract_fampnn_metrics(None, pdb_path)
+    assert _extract_fampnn_metrics(None, pdb_path)["avg_psce"] is None
+    metrics = _extract_fampnn_metrics(None, pdb_path, allow_structure_psce=True)
 
     assert metrics["avg_psce"] == 1.5
     assert metrics["max_residue_psce"] == 3.0
@@ -850,7 +843,8 @@ TER
 END
 """)
 
-    metrics = _extract_fampnn_metrics(None, pdb_path)
+    assert _extract_fampnn_metrics(None, pdb_path)["avg_psce"] is None
+    metrics = _extract_fampnn_metrics(None, pdb_path, allow_structure_psce=True)
 
     assert metrics["binder_length"] == 10
     assert metrics["binder_sequence"] == "QVQLQESGGG"

@@ -23,6 +23,7 @@ if str(API_ROOT) not in sys.path:
 from model_registry import ModelRegistry  # noqa: E402
 from routers import jobs as jobs_router  # noqa: E402
 from routers import conformational_mapping as cm_router  # noqa: E402
+from services.conformational_mapping import submission
 from schemas import JobCreate  # noqa: E402
 from services import nextflow  # noqa: E402
 from services.conformational_mapping import request_builder  # noqa: E402
@@ -55,10 +56,10 @@ def test_server_confornets_identity_matches_the_executed_upstream_commit(
 ) -> None:
     image = tmp_path / "confornets-canonical.sif"
     image.write_bytes(b"canonical-confornets")
-    monkeypatch.setattr(cm_router, "_registered_image_digest",
+    monkeypatch.setattr(submission, "_registered_image_digest",
                         lambda _: hashlib.sha256(image.read_bytes()).hexdigest())
 
-    identity = cm_router._server_confornets_identity()
+    identity = submission._server_confornets_identity()
 
     assert identity["backend_version"] == "canonical-4df561a"
     assert identity["backend_commit"] == "4df561a1fbd0fd2b9c7a230fa62957a837d9f72d"
@@ -303,7 +304,7 @@ def test_snapshot_chain_context_uses_schema_mapping_fields() -> None:
     fixture = json.loads(
         (API_ROOT / "tests" / "fixtures" / "conformational_mapping" / "schemas" / "positive" / "all_schemas.json").read_text()
     )
-    assert cm_router._snapshot_chain_ids([fixture["cm_complex_snapshot_v1"]]) == ["A", "B"]
+    assert submission._snapshot_chain_ids([fixture["cm_complex_snapshot_v1"]]) == ["A", "B"]
 
 
 def test_external_import_binding_reseals_authoritative_input_context(tmp_path: Path) -> None:
@@ -890,7 +891,7 @@ async def test_cm3_004dc_submit_route_persists_state_comparison_authority(
                 name="state authority route",
                 backend="protenix_v2_ensemble",
                 ordered_seeds=[101, 202], samples_per_seed=1,
-                feature_policy=_request_params("protenix_v2_ensemble")["feature_policy"],
+                feature_policy={**_request_params("protenix_v2_ensemble")["feature_policy"], "rna_msa_enabled": False},
                 runtime_policy={"use_default_params": True},
                 analysis_policy=_request_params("protenix_v2_ensemble")["analysis_policy"],
                 registered_snapshot_id="snapshot",
@@ -913,7 +914,7 @@ async def test_cm3_004dc_submit_route_persists_state_comparison_authority(
         from database import Job
         job = await session.get(Job, response["job_id"])
         assert job is not None and job.status == "queued"
-        assert persisted.request_json["feature_policy"]["rna_msa_enabled"] is True
+        assert persisted.request_json["feature_policy"]["rna_msa_enabled"] is False
         monkeypatch.setenv("BMS_RESULTS_DIR", str(tmp_path / "results"))
         monkeypatch.setattr(nextflow, "get_results_dir", lambda: tmp_path / "results")
         invocation = nextflow.compile_nextflow_invocation(

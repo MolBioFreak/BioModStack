@@ -104,12 +104,14 @@ portable-closure registration of this new ordinary artifact remain parent-owned.
 
 From this worktree (baseline `60d65adad604ddcba9ed4e220141271131daae84`):
 
+`$BMS_CONTAINER_DIR` is the configured container directory.
+
 ```sh
 mkdir -p "$TMPDIR/s05-geometry-build"
 curl -fL https://ambermd.org/downloads/AmberTools24_rc5.tar.bz2 \
   -o "$TMPDIR/s05-geometry-build/AmberTools24_rc5.tar.bz2"
 python scripts/molecular_geometry/build.py \
-  --image /mnt/BioModStack/apptainer/md-preparation-v1.sif \
+  --image $BMS_CONTAINER_DIR/md-preparation-v1.sif \
   --source "$TMPDIR/s05-geometry-build/AmberTools24_rc5.tar.bz2" \
   --output "$TMPDIR/s05-geometry-bundle-qualified"
 ```
@@ -145,7 +147,7 @@ managed artifact owner before scratch expiry):
 * Actual typed native response example SHA256:
   `89d90914af1d41eaba4adc014cbe207526573dd40ed86c5636d365a4d6189a01`.
 
-Here `$TMPDIR` was `/home/dalab/.hermes/profiles/fresh/cache/scratch`.
+Here `$TMPDIR` was a scratch directory.
 Existing isolated graph test environment was reused; no shared API install:
 
 ```sh

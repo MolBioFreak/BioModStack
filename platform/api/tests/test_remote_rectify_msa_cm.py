@@ -131,14 +131,25 @@ def test_cm_actual_native_portable_delivery(cm, tmp_path, monkeypatch, provider)
         observed = {}
         def preprocess(filename, **kwargs):
             observed.update(filename=filename, **kwargs)
-            assert json.loads(Path(filename).read_text()) == json.loads(consumed.read_text())
+            actual = json.loads(Path(filename).read_text())
+            expected = json.loads(consumed.read_text())
+            for (_, _, placed), (_, _, source) in zip(iter_protein_chains(actual), iter_protein_chains(expected), strict=True):
+                placed_path = Path(placed['unpairedMsaPath'])
+                assert placed_path.is_relative_to(tmp_path/'native_protenix/predictions/inline_msa')
+                assert placed_path.read_bytes() == Path(source['unpairedMsaPath']).read_bytes()
+                placed['unpairedMsaPath'] = source['unpairedMsaPath']
+            assert actual == expected
             raise ReachedPreprocess
         runner = types.SimpleNamespace(configs=types.SimpleNamespace(sorted_by_ranking_score=False), init_dumper=lambda **kw: None)
+        class SampleDictToFeatures:
+            def build_full_atom_array(self):
+                pytest.fail('native feature construction not authorized')
         for name, fields in {
             'torch': {'cuda': types.SimpleNamespace(is_available=lambda: False)},
             'configs.configs_inference': {'inference_configs': {}},
             'runner.batch_inference': {'get_default_runner': lambda **kw: runner, 'preprocess_input': preprocess},
             'runner.inference': {'infer_predict': lambda *args: pytest.fail('inference not authorized')},
+            'protenix.data.inference.json_to_feature': {'SampleDictToFeatures': SampleDictToFeatures},
         }.items():
             mod = types.ModuleType(name)
             mod.__dict__.update(fields)
@@ -153,7 +164,8 @@ def test_cm_actual_native_portable_delivery(cm, tmp_path, monkeypatch, provider)
         monkeypatch.chdir(tmp_path)
         with pytest.raises(ReachedPreprocess):
             wrapper.main()
-        assert observed['filename'] == str(consumed)
+        assert Path(observed['filename']).is_relative_to(tmp_path/'native_protenix/predictions/inline_msa')
+        assert native.read_bytes() == original_native
         assert observed['use_msa'] is True and observed['use_template'] is True
         assert observed['use_rna_msa'] is False
         replay = subprocess.run(['bash', '-euo', 'pipefail', '-c', 'EXTRA=();\n' + block], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=15)

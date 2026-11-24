@@ -98,6 +98,23 @@ it('saves only changed fields, shows robot warnings and reads the record again',
     expect(select('Set Reagent cover to').value).toBe('');
 });
 
+it('paints tips out of a full rack by dragging and saves the remaining wells once', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { schema_version: 'bioxp.operator_deck_record_result.v1', record_id: 'auto-3',
+        motion_commanded: false, physical_observation: false } } as never);
+    await render(<BioXpDeckRecordPanel generation={3} connected />);
+    await choose('Set Tips 1 to', 'pick');
+    const fire = (node: EventTarget, type: string) => node.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 }));
+    const tip = (w: string) => host.querySelector(`[aria-label="Tip ${w}"]`)!;
+    await act(async () => { fire(tip('A9'), 'pointerdown'); });
+    await act(async () => { fire(tip('A10'), 'pointermove'); });
+    await act(async () => { fire(document, 'pointerup'); });
+    expect(host.textContent).toContain('94 of 96 tips');
+    await act(async () => button('Save record').click()); await tick();
+    expect(api.post).toHaveBeenCalledTimes(1);
+    const wells = 'ABCDEFGH'.split('').flatMap(r => Array.from({ length: 12 }, (_, c) => `${r}${c + 1}`)).filter(w => w !== 'A9' && w !== 'A10');
+    expect(vi.mocked(api.post).mock.calls[0][1]).toEqual({ expected_connection_generation: 3, tip_trays: [{ tray: 1, tips: wells }] });
+});
+
 it('shows and records the tip size per rack', async () => {
     vi.mocked(api.get).mockImplementation(async path => {
         if (path === '/api/bioxp/operator-controls/deck/state') return { data: deckState() } as never;
@@ -132,16 +149,28 @@ it('shows a robot refusal without retrying', async () => {
 it('Motion toggle: On follows the robot catalog, Off is never disabled by sensor state', async () => {
     const on = vi.fn(), off = vi.fn();
     await render(<BioXpMotionToggle enabled={false} reason="Door open" connected onDisabledReason="Door open; close it first." onOn={on} onOff={off} />);
-    expect(host.textContent).toContain('Motion Off');
-    expect(button('On').disabled).toBe(true);
-    expect(button('Off').disabled).toBe(false);
-    await act(async () => button('Off').click()); expect(off).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[data-motion]')!.getAttribute('data-motion')).toBe('blocked');
+    expect(button('Enable motion').disabled).toBe(true);
+    expect(button('Disable motion').disabled).toBe(false);
+    await act(async () => button('Disable motion').click()); expect(off).toHaveBeenCalledTimes(1);
     await render(<BioXpMotionToggle enabled connected onDisabledReason={null} pending onOn={on} onOff={off} />);
-    expect(host.textContent).toContain('Motion On');
-    expect(button('Off').disabled).toBe(false);
+    expect(host.querySelector('[data-motion]')!.getAttribute('data-motion')).toBe('on');
+    expect(button('Disable motion').disabled).toBe(false);
     await render(<BioXpMotionToggle enabled connected onDisabledReason={null} onOn={on} onOff={off} />);
-    await act(async () => button('On').click()); expect(on).toHaveBeenCalledTimes(1);
+    await act(async () => button('Enable motion').click()); expect(on).toHaveBeenCalledTimes(1);
     await render(<BioXpMotionToggle enabled={undefined} connected={false} onDisabledReason={null} onOn={on} onOff={off} />);
-    expect(host.textContent).toContain('Motion Unknown');
-    expect(button('Off').disabled).toBe(true);
+    expect(host.querySelector('[data-motion]')!.getAttribute('data-motion')).toBe('unknown');
+    expect(button('Disable motion').disabled).toBe(true);
+});
+
+it('reports unknown CAN, explicit Off, and a readiness promotion without sending commands', async () => {
+    const on = vi.fn(), off = vi.fn();
+    for (const state of ['unknown', 'off', 'on', 'blocked'] as const) {
+        await render(<BioXpMotionToggle enabled={state === 'on'} reportedState={state} connected
+            onDisabledReason={null} onOn={on} onOff={off} />);
+        expect(host.querySelector('[data-motion]')?.getAttribute('data-motion')).toBe(state);
+        expect(button('Disable motion').getAttribute('aria-pressed')).toBe(String(state === 'off'));
+        expect(button('Disable motion').disabled).toBe(false);
+    }
+    expect(on).not.toHaveBeenCalled(); expect(off).not.toHaveBeenCalled();
 });

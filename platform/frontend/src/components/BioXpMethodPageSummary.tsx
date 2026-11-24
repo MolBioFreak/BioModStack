@@ -27,7 +27,9 @@ function custodyText(steps: CustodyStep[]) {
     });
 }
 
-export function BioXpMethodPageSummary({ page, method, bindings, actions, preview, catalog: _catalog, onSelect, custody = [], hazards = [] }: {
+export function BioXpMethodPageSummary({ page, method, bindings, actions, preview, catalog: _catalog, onSelect, custody = [], hazards = [], list = true }: {
+    /** The step list for this stage; off where the owner already lists the steps. */
+    list?: boolean;
     page: MethodPage; method: MethodValue; bindings: MethodValue; actions: MethodValue[];
     preview?: MethodCompile; catalog: MethodCatalog; onSelect: (path: string) => void;
     custody?: CustodyStep[]; hazards?: [string, number][];
@@ -64,13 +66,13 @@ export function BioXpMethodPageSummary({ page, method, bindings, actions, previe
     return <section className="bioxp-page-summary" aria-label="Stage summary">
         {hazards.length > 0 && <div className="bioxp-stage-hazards" role="note" aria-label="Run hazards on this stage">{hazards.map(([text, count]) => <p key={text}><strong>Check before running:</strong> {text}{count > 1 ? ` (${count}× on this stage)` : ''}</p>)}</div>}
         {page.id === 'starting-deck' ? <p>Planned starting contents, tips and covers. Next shows the first operation; browsing does not move the robot.</p> : <>
-            <ul>{[...transfers.values()].map(t => <li key={t.text}>{t.count === null ? '' : `${t.count} transfers · `}{t.text}</li>)}
+            <ul>{[...transfers.values()].map(t => <li key={t.text}>{t.count === null ? '' : `${t.count} transfer${t.count === 1 ? '' : 's'} · `}{t.text}</li>)}
                 {settings.map((text, i) => <li key={i}>{text}</li>)}</ul>
             {moves.length > 0 && <ol className="bioxp-stage-custody-list" aria-label="Plate, cover and door steps">{moves.map(m => <li key={m.n} value={m.n}>{m.text}</li>)}</ol>}
             {!preview && <p>Showing authored steps; compiled settings and resulting placement are not yet available.</p>}
-            <details><summary>{actionCount} authored action{actionCount === 1 ? '' : 's'}{preview ? ` · ${actions.length} robot action${actions.length === 1 ? '' : 's'}` : ''} in this stage</summary>
+            {list && <details><summary>{actionCount} authored action{actionCount === 1 ? '' : 's'}{preview ? ` · ${actions.length} robot action${actions.length === 1 ? '' : 's'}` : ''} in this stage</summary>
                 <ol>{entries.filter(e => !Array.isArray(e.node.steps)).map(e => <li key={e.path}><button type="button" onClick={() => onSelect(e.path)}>{String(e.node.label || e.node.action || e.node.type || 'Step')}</button></li>)}</ol>
-            </details>
+            </details>}
         </>}
     </section>;
 }

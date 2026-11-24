@@ -218,12 +218,16 @@ async def test_production_weight_layout_request_is_bounded_reference(tmp_path, m
     async def run(connection, argv, input_bytes=None, **kwargs):
         if '-c' in argv:
             return SimpleNamespace(stdout='')
+        if argv[:2] == ['mkdir', '-p']:
+            assert argv[2] == str(Path(layout['path']).parent)
+            return SimpleNamespace(stdout='')
         request = json.loads(input_bytes)
         requests.append(request)
         if request['action'] == 'probe':
             return SimpleNamespace(stdout=json.dumps(
                 {'artifacts': [dict(row, state='missing') for row in request['artifacts']]}))
         if request['action'] in {'weights_probe', 'weights_install'}:
+            assert uploads == [(str(bundle.runtime_transfers[0].source), layout['path'])]
             return SimpleNamespace(stdout=json.dumps(
                 {'state': 'ready', 'root': bundle.envelope.environment['BMS_WEIGHTS']}))
         return SimpleNamespace(stdout=json.dumps({'artifacts': []}))
@@ -232,23 +236,14 @@ async def test_production_weight_layout_request_is_bounded_reference(tmp_path, m
     monkeypatch.setattr(cache, 'run_remote', run)
     monkeypatch.setattr(cache, 'rsync_to_remote', upload)
     receipts = await cache.stage_cached_bundle(connection=connection, bundle=bundle)
-    assert len(receipts) == 1 and receipts[0]['sha256'] == layout['sha256']
+    assert receipts == []  # Private listing transfer is not a shared weight receipt.
     assert max(len(json.dumps(request).encode()) for request in requests) < 8 * 1024 * 1024
     weights = [request for request in requests if request['action'] in {'weights_probe', 'weights_install'}]
     assert [request['action'] for request in weights] == ['weights_probe']
     assert weights[0] == {'action': 'weights_probe', 'layout': layout}
-    # The listing object is uploaded, ingested and materialized before the probe.
-    probe = requests.index(weights[0])
-    assert any(request['action'] == 'probe'
-               and [row['sha256'] for row in request['artifacts']] == [layout['sha256']]
-               for request in requests[:probe])
-    assert any(request['action'] == 'ingest_many'
-               and [row['sha256'] for row in request['artifacts']] == [layout['sha256']]
-               for request in requests[:probe])
-    assert any(request['action'] == 'materialize_many'
-               and [row['destination'] for row in request['entries']] == [layout['path']]
-               for request in requests[:probe])
-    assert len(uploads) == 1
+    # The private authenticated listing is uploaded before the by-reference probe.
+    assert uploads == [(str(bundle.runtime_transfers[0].source), layout['path'])]
+
 
 
 @pytest.mark.asyncio

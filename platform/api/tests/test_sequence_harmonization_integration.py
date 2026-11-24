@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from routers.jobs import normalize_job_request
+from services.job_requests import normalize_job_request
 from schemas import JobCreate
 from services.nextflow import compile_nextflow_invocation
 from test_generic_sequence_launch_closeout import ROWS, request

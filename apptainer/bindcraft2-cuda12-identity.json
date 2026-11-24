@@ -11,7 +11,7 @@
     "nvidia-cusparse-cu12": "12.5.8.93",
     "nvidia-nvjitlink-cu12": "12.8.93"
   },
-  "base_sif": "/mnt/BioModStack/apptainer/.image-store/objects/sha256/d42ce246dd3f6dd18906b7e12253d18c7b0b1d370b4a8af63506796d18c4025e/runtime.sif",
+  "base_sif": "$BMS_CONTAINER_DIR/.image-store/objects/sha256/d42ce246dd3f6dd18906b7e12253d18c7b0b1d370b4a8af63506796d18c4025e/runtime.sif",
   "base_sif_sha256": "d42ce246dd3f6dd18906b7e12253d18c7b0b1d370b4a8af63506796d18c4025e",
   "compatibility_note": "CUDA12.8 update 1 compiler/runtime/library closure replaces CUDA12.6 after RTX 5060 Ti sm120 failed with ptxas does not support CC 12.0. JAX/jaxlib/CUDA12 plugin/PJRT remain 0.11.2; cuEquivariance remains 0.11.1; cuDNN remains 9.10.2.21, whose support matrix includes Blackwell with CUDA12.8. Native source, settings, scaffolds, checkpoints and both patches unchanged. CPU qualification and sm120 assembly are not GPU execution qualification.",
   "cuda_toolkit": "12.8 update 1",

@@ -10,6 +10,9 @@ from sqlalchemy import select
 from component_runtime import SourceIdentity
 from database import ExecutionTarget, Job
 from routers import jobs
+from services import job_submission
+from services import binder_continuation
+from services import job_requests
 from schemas import JobCreate
 from services.caliby_native import read_prepared_request
 from services.nextflow import compile_job_nextflow_invocation
@@ -48,7 +51,7 @@ def assert_invocation(job, prepared):
 async def test_local_job_persists_prepared_science_and_compiles_offline(admission, target, mode):
     submitted = request(mode, target)
     tasks = BackgroundTasks()
-    response = await jobs._create_job(submitted, tasks, admission)
+    response = await job_submission._create_job(submitted, tasks, admission)
     admission.expire_all()
     job = await admission.get(Job, response.id)
     prepared = Path(job.params['caliby_request_dir'])
@@ -64,7 +67,8 @@ async def test_local_job_persists_prepared_science_and_compiles_offline(admissio
 @pytest.mark.parametrize('mode', ['ensemble_design', 'sidechain_pack'])
 async def test_remote_review_reuses_exact_retained_tree_after_source_removed(
         admission, target, mode, monkeypatch):
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: target.parent)
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: target.parent)
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: target.parent)
     selected = ExecutionTarget(id='vast:caliby-fixture', provider='vast', provider_instance_id='caliby-fixture',
         active=True, state='ready', capabilities={
             'gpu_count': 1,
@@ -78,7 +82,7 @@ async def test_remote_review_reuses_exact_retained_tree_after_source_removed(
     # This fixture tests input custody, not dirty-tree release admission.
     monkeypatch.setattr(bundle, 'current_source_identity', lambda *_: (identity.revision, identity.tree))
     with pytest.raises(HTTPException) as review:
-        await jobs._create_job(request(mode, target, selected.id), BackgroundTasks(), admission)
+        await job_submission._create_job(request(mode, target, selected.id), BackgroundTasks(), admission)
     assert review.value.status_code == 409
     assert review.value.detail['code'] == 'remote_prepared_job_review_required'
     assert list(await admission.scalars(select(Job.id))) == []
@@ -88,10 +92,10 @@ async def test_remote_review_reuses_exact_retained_tree_after_source_removed(
     before = {p.relative_to(prepared): (p.read_bytes(), p.stat().st_mtime_ns)
               for p in prepared.rglob('*') if p.is_file()}
     target.unlink()
-    preview = jobs._execution_plan_preview(typed)
+    preview = job_requests._execution_plan_preview(typed)
     assert preview['admissible'], preview['blockers']
     approved = JobCreate.model_validate({**prepared_body, 'execution_plan_approval': preview['approval_digest']})
-    result = await jobs._create_job(approved, BackgroundTasks(), admission)
+    result = await job_submission._create_job(approved, BackgroundTasks(), admission)
     job = await admission.get(Job, result.id)
     assert job.params['caliby_request_dir'] == str(prepared)
     assert job.provenance['execution_plan_approval']['approval_digest'] == preview['approval_digest']

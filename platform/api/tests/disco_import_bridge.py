@@ -25,7 +25,7 @@ def run(payload):
             response = client.get('/files/disco-jobs/' + payload['path'])
         return {'status': response.status_code, 'data': response.json()}
     from schemas import JobCreate
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     from services.nextflow import compile_nextflow_invocation
     from component_runtime import SourceIdentity
     from scripts.lib.portable_inputs import discover_native_input_references

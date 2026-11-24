@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { api } from '../../src/lib/api';
 import { parseRestrictionDigestSimulation } from '../../src/lib/restrictionAnalysis';
-import { retainedDigestFragment, requireSupportedDigestImport } from '../../src/lib/retainedDigestFragment';
+import { retainedDigestFragment, digestFragmentFromImport } from '../../src/lib/retainedDigestFragment';
 import { digestFragmentsForAssembly } from '../../src/lib/digestAssemblyTransfer';
 import { ExportDropdown } from '../../src/components/MolBioToolkit/ExportDropdown';
 import { AssemblyPanel } from '../../src/components/MolBioToolkit/panels/AssemblyPanel';
@@ -16,7 +16,7 @@ vi.mock('../../src/components/MolBioToolkit/SequenceViewer', () => ({ SequenceVi
 vi.mock('../../src/components/MolBioToolkit/MolecularInputModal', () => ({ MolecularInputModal: (props: any) => { shell.input = props; return null; } }));
 vi.mock('../../src/components/MolBioToolkit/VisibilityPanel', () => ({ VisibilityPanel: () => null }));
 vi.mock('../../src/components/MolBioToolkit/demoConstructs', () => ({ loadDemoPlasmids: async () => [] }));
-vi.mock('@teselagen/bio-parsers', () => ({ anyToJson: shell.parsed }));
+vi.mock('@teselagen/bio-parsers', async original => ({ ...await original<any>(), anyToJson: shell.parsed }));
 vi.mock('../../src/components/MolBioToolkit/panels', () => Object.fromEntries(['AlignmentPanel','AssemblyPanel','DigestPanel','HistoryPanel','PCRPanel','PrimerPanel','RnaStructurePanel','FeaturePanel','EditPanel','SearchPanel'].map(name => [name, () => null])));
 vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({ useGlobalExperimentContext: () => ({ updateQueryParams: vi.fn(), contextHref: () => '/' }) }));
 import { MolBioToolkitV2 } from '../../src/components/MolBioToolkit/MolBioToolkitV2';
@@ -71,26 +71,30 @@ it('retains opposing sticky strands in direct and whole-fragment assembly handof
     const call = transport.mock.calls.find(([config]) => config.url.endsWith('/ligation/simulate'));
     expect(call).toBeDefined(); expect(JSON.parse(call![0].data).fragments[0]).toMatchObject({ ...expected, metadata: { digest_fragment: fragment } });
 });
-it.each(['FASTA (.fasta)', 'GenBank (.gb)'])('blocks lossy physical-fragment export: %s', async label => {
-    await render(<ExportDropdown sequenceData={sequence} />); await click('Export'); await click(label);
-    expect(downloaded).toHaveLength(0); expect(host.textContent).toContain('cannot preserve both strands and end chemistry');
+it.each(['FASTA (.fasta)', 'GenBank (.gb)'])('A7c sticky fragment export proceeds with ends noted, top strand only: %s', async label => {
+    await render(<ExportDropdown sequenceData={sequence} />); await click('Export');
+    expect(document.body.textContent).toContain('encode only the top strand'); await click(label);
+    await vi.waitFor(() => expect(downloaded).toHaveLength(1)); expect(host.textContent).not.toContain('Could not export'); const text = await blobText(downloaded[0]);
+    expect(text).toMatch(/5' overhang AATT/); expect(text).toMatch(/top strand/);
 });
 it('retained immutable revision hydrates end geometry and exports it intact through real shell', async () => {
     await render(<MolBioToolkitV2 />, '/designer?molbio_sequence_id=digest-document&molbio_revision_id=digest-revision');
     expect(requests).toContain('/api/sequences/digest-document/revisions/digest-revision');
     expect(shell.viewer.sequenceData.digestFragment).toEqual(fragment);
-    expect([...host.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Assembly')?.disabled).toBe(true);
-    await click('Export'); await click('FASTA (.fasta)'); expect(downloaded).toHaveLength(0);
-    await click('Toolkit JSON (.molbio.json)'); expect(downloaded).toHaveLength(1);
+    // Derive from this revision: Assembly/Digest/PCR are enabled on an exact revision (editing stays disabled).
+    const tab = (name: string) => [...host.querySelectorAll('.panel-tabs button')].find(b => b.textContent?.trim() === name) as HTMLButtonElement | undefined;
+    expect(tab('Assembly')?.disabled).toBe(false); expect(tab('Digest')?.disabled).toBe(false); expect(tab('PCR')?.disabled).toBe(false); expect(tab('Edit')?.disabled).toBe(true);
+    await click('Export'); await click('Toolkit JSON (.molbio.json)'); expect(downloaded).toHaveLength(1);
     const saved = JSON.parse(await blobText(downloaded[0]));
     expect(saved.digestFragment).toEqual(fragment); expect(saved.sequence).toBe('AATTCAATTG');
-    expect(() => requireSupportedDigestImport(saved)).toThrow(/exact duplex ends/);
+    expect(digestFragmentFromImport(saved, saved.sequence)).toEqual(fragment);
 });
-it('real generic import rejects retained JSON before parsing, storage or chemistry loss', async () => {
-    await render(<MolBioToolkitV2 />); const before = requests.slice();
+it('A7c Toolkit JSON of a sticky fragment re-imports with its ends intact', async () => {
+    await render(<MolBioToolkitV2 />);
     const file = new File([JSON.stringify(sequence)], 'fragment.molbio.json'); Object.defineProperty(file, 'text', { value: async () => JSON.stringify(sequence) });
     await act(async () => shell.input.onImportFile(file));
-    expect(shell.parsed).not.toHaveBeenCalled(); expect(requests).toEqual(before); expect(alert).toHaveBeenCalledWith(expect.stringContaining('exact duplex ends'));
+    expect(shell.parsed).not.toHaveBeenCalled(); expect(alert).not.toHaveBeenCalled();
+    expect(shell.viewer.sequenceData.digestFragment).toEqual(fragment); expect(shell.viewer.sequenceData.sequence).toBe('AATTCAATTG');
 });
 it.each(['dna', 'rna'] as const)('opening a known %s primer preserves its single-stranded substrate identity', async sequenceType => {
     await render(<MolBioToolkitV2 />);
@@ -102,9 +106,9 @@ it.each(['dna', 'rna'] as const)('opening a known %s primer preserves its single
     });
     expect(shell.viewer.sequenceData.moleculeLabel).not.toContain('dsDNA');
 });
-it('GenBank blocks review-needed placement while JSON preserves review status', async () => {
+it('GenBank export no longer refuses unplaced primers; JSON still preserves review status', async () => {
     const data = { ...sequence, digestFragment: undefined, primers: [{ name: 'moved', sequence: 'AATT', start: 0, end: 0, strand: 1 as const, binding_status: 'needs_review' as const, binding_warning: 'Sequence changed' }] };
     await render(<ExportDropdown sequenceData={data} />); await click('Export'); await click('GenBank (.gb)');
-    expect(downloaded).toHaveLength(0); expect(host.textContent).toContain('Review primer bindings');
-    await click('Toolkit JSON (.molbio.json)'); expect(JSON.parse(await blobText(downloaded[0])).primers[0].binding_status).toBe('needs_review');
+    await vi.waitFor(() => expect(downloaded).toHaveLength(1)); expect(host.textContent).not.toContain('Could not export'); expect(await blobText(downloaded[0])).not.toMatch(/moved|primer_bind/);
+    await click('Export'); await click('Toolkit JSON (.molbio.json)'); expect(JSON.parse(await blobText(downloaded[1])).primers[0].binding_status).toBe('needs_review');
 });

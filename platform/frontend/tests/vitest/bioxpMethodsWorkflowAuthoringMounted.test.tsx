@@ -23,6 +23,7 @@ function button(name: string, scope: ParentNode = host) { const b = [...scope.qu
 async function click(name: string, scope?: ParentNode) { await act(async () => button(name, scope).click()); await settle(); }
 async function input(label: string, value: string) {
     const el = host.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!; expect(el, label).toBeTruthy();
+    if (el.getAttribute('role') === 'listbox') { const option = el.querySelector<HTMLElement>(`[data-value="${value}"]`)!; expect(option, value).toBeTruthy(); await act(async () => option.click()); await settle(); return; }
     await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); await settle();
 }
 async function station(id: string) { const el = host.querySelector<SVGGElement>(`[data-station="${id}"]:not([data-well])`) ?? host.querySelector<SVGGElement>(`[data-station="${id}"]`)!; expect(el, id).toBeTruthy(); await act(async () => el.dispatchEvent(new MouseEvent('click', { bubbles: true }))); await settle(); }
@@ -34,6 +35,7 @@ async function mount(connected = false) {
     await act(async () => root.render(<QueryClientProvider client={client}><BioXpMethodsWorkspace generation={4} connected={connected} controlsEnabled={connected} /></QueryClientProvider>)); await settle();
 }
 beforeEach(() => {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
     vi.stubGlobal('crypto', webcrypto); localStorage.clear(); requests = []; db = {};
     api.defaults.adapter = async config => {
         const url = config.url!, body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
@@ -147,3 +149,26 @@ it('Pause and Abort stay enabled when the job read fails and send to the robot',
     await click('Abort workflow');
     expect(controls[1]).toMatchObject({ action: 'abort', command_id: jobId });
 });
+
+it('Park defaults ON, saves explicit OFF, cold opens OFF and compiles each toggle without any run submission', async () => {
+    await mount(); await input('Method name', 'Park home setting');
+    await input('Action palette', 'park'); await click('Add step');
+    const toggle = () => host.querySelector<HTMLInputElement>('[aria-label="Home X/Y on Park"]')!;
+    expect(toggle().checked).toBe(true);
+    await click('Save');
+    expect(db.s1.method.steps[0].inputs).toEqual({ rehome: true });
+    expect(compile({ method: db.s1.method }).document.stages.flatMap((s: any) => s.actions)[0]).toMatchObject({ kind: 'park', params: { rehome: true } });
+    await act(async () => toggle().click()); await settle(); await click('Save');
+    const saved = structuredClone(db.s1.method);
+    expect(saved.steps[0].inputs).toEqual({ rehome: false });
+    await act(async () => root.unmount()); client.clear(); host.remove();
+    await mount(); await settle(100);
+    await input('Library entry', 's1'); await click('Open');
+    expect(toggle().checked).toBe(false);
+    await checked();
+    const result = compile(posts('/check').at(-1)!.body);
+    expect(result.document.stages.flatMap((s: any) => s.actions)[0]).toMatchObject({ kind: 'park', params: { rehome: false } });
+    expect(db.s1.method).toEqual(saved);
+    expect(requests.filter(r => r.method === 'post').every(r => /\/(check|library)$/.test(r.url))).toBe(true);
+    expect(posts('/quick-runs')).toHaveLength(0);
+}, 30000);

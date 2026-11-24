@@ -5,12 +5,12 @@
       "name": "readback-post",
       "http_status": 200,
       "headers": {
-        "content-length": "6317",
+        "content-length": "6301",
         "content-type": "application/json"
       },
-      "sha256": "cb37e40290e11bfbb1d8074eee8a2070d89889bb442fad547c12039daa550a3b",
+      "sha256": "217d7451640de10f3f00472682efdee56d32aab20faa1521a93fcdfb934c0813",
       "file": "readback-post.json",
-      "bytes": 6317
+      "bytes": 6301
     },
     {
       "name": "readback-get",
@@ -28,12 +28,12 @@
       "name": "readback-data-post",
       "http_status": 200,
       "headers": {
-        "content-length": "7072",
+        "content-length": "7056",
         "content-type": "application/json"
       },
-      "sha256": "4640539f48e296fb40e7ad7e2e2020628c0c10a624cb5afebc8ad07167a4365b",
+      "sha256": "b8071359a2ab51a75c9afaa916e51da24a8ff135f58a72b88d5624a749bb5f89",
       "file": "readback-data-post.json",
-      "bytes": 7072
+      "bytes": 7056
     },
     {
       "name": "readback-data-get",

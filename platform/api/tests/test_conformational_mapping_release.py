@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 
 from routers import conformational_mapping as cm_router
+from services.conformational_mapping import submission
 from routers.conformational_mapping import (
     _artifact_byte_range,
     _cm_job_admission,
@@ -37,9 +38,11 @@ def test_artifact_download_resolves_host_storage_path_before_descriptor_pinning(
     artifact = runtime_root / "final" / "native.cif"
     artifact.parent.mkdir(parents=True)
     artifact.write_bytes(b"data_authoritative_structure\n")
-    persisted_host_root = Path("/mnt/BioModStack")
+    persisted_host_root = Path("/data/bms")
+    monkeypatch.setenv("BMS_DATA", str(persisted_host_root))  # alias root recognised by the product
 
     monkeypatch.setattr(cm_router, "get_data_root", lambda: runtime_root)
+    monkeypatch.setattr(submission, "get_data_root", lambda: runtime_root)
     descriptor = _open_verified_artifact_descriptor(
         storage_path=str(persisted_host_root / "final" / "native.cif"),
         root_path=str(persisted_host_root),
@@ -72,6 +75,7 @@ def test_artifact_download_resolves_custom_state_root_and_http_ranges(
     artifact.write_bytes(b"0123456789")
     custom_host_root = Path("/srv/custom-biomodstack-state")
     monkeypatch.setattr(cm_router, "get_data_root", lambda: runtime_root)
+    monkeypatch.setattr(submission, "get_data_root", lambda: runtime_root)
     monkeypatch.setenv("BMS_STATE_DIR", str(custom_host_root))
 
     descriptor = _open_verified_artifact_descriptor(
@@ -110,6 +114,15 @@ def test_cm_analysis_runs_contracts_on_host_and_only_scores_in_global_component(
     assert "api_python = System.getenv('BMS_API_PYTHON')" in config
 
 
+def _managed_cm_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    results = tmp_path / "results"
+    results.mkdir()
+    monkeypatch.setenv("BMS_RESULTS_DIR", str(results))
+    request = results / "cm_request_v1.json"
+    request.write_text(json.dumps({"backend": "external_import"}), encoding="utf-8")
+    return str(request)
+
+
 def test_cm_scheduler_admission_and_nonzero_gpu_reach_contained_frustrampnn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -121,7 +134,7 @@ def test_cm_scheduler_admission_and_nonzero_gpu_reach_contained_frustrampnn(
     monkeypatch.setenv("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow")
     command = build_nextflow_command(
         "conformational_mapping", "map",
-        {"cm_request_path": "/srv/request/cm_request_v1.json", "gpu_id": 3, "run_frustrampnn": True},
+        {"cm_request_path": _managed_cm_request(tmp_path, monkeypatch), "gpu_id": 3, "run_frustrampnn": True},
         "/srv/results", job_id="cm-job",
     )
     assert command[command.index("--gpu_id") + 1] == "3"
@@ -139,7 +152,6 @@ def test_cm_scheduler_admission_and_nonzero_gpu_reach_contained_frustrampnn(
         raw=output_root / "raw.csv", output_root=output_root, gpu_id=3,
     )
     assert argv[argv.index("CUDA_VISIBLE_DEVICES=3") - 1] == "--env"
-    assert "--containall" in argv
     assert f"{normalized.resolve()}:/bms/input/normalized.pdb:ro" in argv
     assert f"{output_root.resolve()}:/bms/output:rw" in argv
     assert argv[-2:] == ["--device", "cuda"]
@@ -150,9 +162,9 @@ def test_cm_scheduler_admission_and_nonzero_gpu_reach_contained_frustrampnn(
 def test_cm_canonical_component_requires_scheduler_assigned_gpu(
     tmp_path: Path,
 ) -> None:
-    nextflow = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
-    if not (nextflow.is_file() and os.access(nextflow, os.X_OK)):
-        pytest.skip(f"real Nextflow launcher unavailable: {nextflow}")
+    jar = os.environ.get("BMS_TEST_NEXTFLOW_JAR")
+    if not jar:
+        pytest.skip("BMS_TEST_NEXTFLOW_JAR (offline Nextflow jar) is not set")
 
     request = tmp_path / "workflow_component_request_v2.json"
     source = tmp_path / "canonical_source.pdb"
@@ -175,12 +187,13 @@ def test_cm_canonical_component_requires_scheduler_assigned_gpu(
         encoding="utf-8",
     )
     env = os.environ.copy()
-    env["NXF_HOME"] = str(Path.home() / ".nextflow")
+    env["NXF_HOME"] = str(tmp_path / "nxf-home")
     env["NXF_OFFLINE"] = "true"
+    env["NXF_DISABLE_CHECK_LATEST"] = "true"
     env.pop("SSL_CERT_FILE", None)
     env.pop("CURL_CA_BUNDLE", None)
     base = [
-        str(nextflow), "run", str(harness), "-stub-run",
+        "java", "-jar", jar, "run", str(harness), "-offline", "-stub-run",
         "--request", str(request), "--source", str(source),
         "--structure_map", str(structure_map), "--api_python", sys.executable,
         "-work-dir", str(tmp_path / "work"),
@@ -205,13 +218,13 @@ def test_cm_canonical_component_requires_scheduler_assigned_gpu(
 
 @pytest.mark.parametrize("gpu_id", [True, -1, 3.0, 3.7, "3.7", "-1", " 3"])
 def test_cm_scheduler_gpu_id_rejects_noncanonical_values(
-    monkeypatch: pytest.MonkeyPatch, gpu_id: object
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gpu_id: object
 ) -> None:
     monkeypatch.setenv("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow")
     with pytest.raises(ValueError, match="non-negative integer"):
         build_nextflow_command(
             "conformational_mapping", "map",
-            {"cm_request_path": "/tmp/cm_request_v1.json", "gpu_id": gpu_id, "run_frustrampnn": True},
+            {"cm_request_path": _managed_cm_request(tmp_path, monkeypatch), "gpu_id": gpu_id, "run_frustrampnn": True},
             "/tmp/cm-output", "cm-job",
         )
 

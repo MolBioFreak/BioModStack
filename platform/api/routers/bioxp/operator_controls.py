@@ -20,6 +20,8 @@ from services.bioxp.operator_requests import (
     OperatorAdmissionRequest,
     OperatorAssessmentRequest,
     OperatorDeckMoveInputsV1,
+    OperatorDeckCatchPlateInputsV2,
+    OperatorDeckReleasePlateInputsV2,
     OperatorDeckRecordRequestV1,
     OperatorDeckMoveToWellInputsV2,
     OperatorEmptyInputsV2,
@@ -35,6 +37,10 @@ from services.bioxp.operator_requests import (
     PipetteApplicationPlanRequest,
     PipetteReadbackRequest,
 )
+from pydantic import BaseModel, ConfigDict, Field
+
+from paths import get_data_root
+from services.bioxp.deck_contents import DeckContentsError, DeckContentsStore
 from services.bioxp.runtime import BioXpRuntime
 
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
@@ -179,6 +185,8 @@ _V2_NORMAL_INPUT_TYPES = {
     "oem.deck.collect_authority": OperatorEmptyInputsV2,
     "oem.deck.move_to_location": OperatorDeckMoveInputsV1,
     "oem.deck.move_to_well": OperatorDeckMoveToWellInputsV2,
+    "oem.deck.catch_plate": OperatorDeckCatchPlateInputsV2,
+    "oem.deck.release_plate": OperatorDeckReleasePlateInputsV2,
     "oem.xy.move_sequence": OperatorXYMoveSequenceInputsV2,
     "oem.xy.retarget": OperatorXYRetargetInputsV2,
 }
@@ -211,7 +219,8 @@ async def invoke_operator_action_v2(
     if input_type is None:
         raise HTTPException(status_code=404, detail="Unknown BMS v2 normal operator action")
     try:
-        inputs = input_type.model_validate(request.inputs).model_dump(mode="json")
+        inputs = input_type.model_validate(request.inputs).model_dump(
+            mode="json", exclude_unset=input_type in (OperatorDeckCatchPlateInputsV2, OperatorDeckReleasePlateInputsV2))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Action inputs do not match the action schema") from exc
     body = request.model_dump(exclude={"expected_connection_generation", "inputs"}, mode="json")
@@ -254,6 +263,70 @@ async def operator_deck_state(runtime: BioXpRuntime = Depends(get_bioxp_runtime)
 @router.get("/operator-controls/tip-trays", response_model=None)
 async def operator_tip_trays(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> Any:
     return await _query(runtime, "operator_tip_trays", require_fresh=False)
+
+
+class DeckContentsSave(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    station: str = Field(min_length=2, max_length=48)
+    wells: dict[str, float | None] = Field(min_length=1, max_length=96)
+
+
+def _deck_contents() -> DeckContentsStore:
+    return DeckContentsStore(get_data_root().expanduser().resolve() / "bioxp" / "deck_contents.json")
+
+
+def _deck_contents_call(call):
+    try:
+        return call()
+    except DeckContentsError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/operator-controls/deck/contents", response_model=None)
+def read_deck_contents() -> Any:
+    """Operator-entered liquid per well (uL). A saved estimate; survives restarts."""
+    return _deck_contents_call(_deck_contents().read)
+
+
+@router.put("/operator-controls/deck/contents", response_model=None,
+            dependencies=[Depends(require_bioxp_mutation_access)])
+def save_deck_contents(request: DeckContentsSave) -> Any:
+    """Record-only: set or clear (null) wells of one station."""
+    return _deck_contents_call(lambda: _deck_contents().set_wells(request.station, request.wells))
+
+
+@router.delete("/operator-controls/deck/contents", response_model=None,
+               dependencies=[Depends(require_bioxp_mutation_access)])
+def clear_deck_contents(station: str | None = Query(default=None, min_length=2, max_length=48)) -> Any:
+    """Record-only: clear one station, or the whole deck when no station is given."""
+    return _deck_contents_call(lambda: _deck_contents().clear(station))
+
+
+@router.get("/operator-controls/thermal/readings", response_model=None)
+async def operator_thermal_readings(runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+                                    include_chiller_blocks: bool = False) -> Any:
+    """Fan service state, optionally accompanied by passive chiller block readings in °C."""
+    generation = runtime.connection.generation
+    fan = await _query(runtime, "thermal_fan_services", require_fresh=False)
+    if not include_chiller_blocks:
+        return fan
+    try:
+        snapshot = await runtime.connection.request_active_query(
+            "chiller_snapshot", expected_generation=generation, require_fresh=False)
+    except RobotTransportError:
+        snapshot = {}  # The fan report remains usable when block readings are unavailable.
+    except ConnectionStateError as exc:
+        raise _translate_robot_error(exc) from exc
+    temps = snapshot
+    for key in ("domains", "chiller", "observation", "temps"):
+        temps = temps.get(key) if isinstance(temps, dict) else None
+    blocks = {}
+    for bank in ("rc", "oc"):
+        sensor = temps.get(f"{bank}_temp_c") if isinstance(temps, dict) else None
+        ack = sensor.get("ack") if isinstance(sensor, dict) else None
+        value = ack.get("value") if isinstance(ack, dict) and ack.get("status") == 100 else None
+        blocks[bank] = value / 1000 if type(value) in (int, float) else None
+    return {**fan, "chiller_blocks_c": blocks}
 
 
 @router.post("/operator-controls/deck/record", response_model=None,

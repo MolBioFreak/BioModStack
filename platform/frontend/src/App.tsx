@@ -16,6 +16,7 @@ const NGSToolkit = lazy(() => import('./components/NGSToolkit').then((module) =>
 const BioXpCockpit = lazy(() => import('./components/BioXpCockpit').then((module) => ({ default: module.BioXpCockpit })));
 const StatsToolkitLauncher = lazy(() => import('./components/StatsToolkitLauncher').then((module) => ({ default: module.StatsToolkitLauncher })));
 const AlignmentPage = lazy(() => import('./components/alignments/AlignmentPage'));
+const ToolsInstaller = lazy(() => import('./components/ToolsInstaller').then((module) => ({ default: module.ToolsInstaller })));
 
 function RouteLoadingFallback() {
   return (
@@ -110,6 +111,8 @@ function App() {
             />
             {/* Isolated Stats Toolkit rendered inside the BioModStack workspace. */}
             <Route path="/stats" element={<StatsToolkitLauncher />} />
+            {/* Build or adopt the third-party tools this install uses. */}
+            <Route path="/tools" element={<ToolsInstaller />} />
             {/* Historical analytics route now resolves to Dashboard telemetry. */}
             <Route path="/infra" element={<Navigate replace to="/" />} />
             {/* Saved workflows live inside the BioXP Handler workspace. */}

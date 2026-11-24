@@ -2,8 +2,46 @@
 
 from __future__ import annotations
 
+from services.molbio_ops import reverse_complement
+
 from .common import orient_fragment
-from .types import AssemblyError, AssemblyFragment, AssemblyJunction, AssemblyProduct
+from .gibson_tm import TM_MODEL, gc_percent, overlap_observations, primer_tm, rule_2_4
+from .types import (
+    AssemblyError, AssemblyFragment, AssemblyJunction, AssemblyProduct, OrientedFragment,
+)
+
+
+def effective_sequence(fragment: OrientedFragment) -> tuple[str, list[str]]:
+    """Top-strand string that takes part in overlap evaluation.
+
+    The top-strand span is the fragment's sequence. A 5' protrusion at either
+    end is already counted once: on the top strand at the left end it is part of
+    the span, and on the bottom strand at the right end it pairs with bases the
+    span carries at the other end of a re-ligated site, so it is never appended
+    as extra homology. A 3' protrusion on the top strand at the right end is an
+    unpaired flap and is not counted; a bottom 3' protrusion at the left end is
+    a flap outside the span.
+    """
+    sequence, notes = fragment.sequence, []
+    right = fragment.right_end
+    if right is not None and right.protruding_strand and right.overhang:
+        if right.type == "sticky_5" and right.protruding_strand == "bottom":
+            notes.append(
+                f"{fragment.name}: right 5' protrusion {right.overhang} is part of the fragment's own span "
+                "and is not counted twice as homology"
+            )
+        elif right.type == "sticky_3" and right.protruding_strand == "top" and sequence.endswith(right.overhang):
+            sequence = sequence[: -len(right.overhang)]
+            notes.append(f"{fragment.name}: right 3' protrusion {right.overhang} is an unpaired flap, not counted")
+    left = fragment.left_end
+    if left is not None and left.protruding_strand and left.type == "sticky_3" and left.overhang:
+        notes.append(f"{fragment.name}: left 3' protrusion {left.overhang} is an unpaired flap, not counted")
+    return sequence, notes
+
+
+def _tm_fields(overlap: str) -> dict:
+    return {"overlap_tm": primer_tm(overlap), "overlap_tm_2_4": rule_2_4(overlap), "overlap_tm_model": TM_MODEL,
+            "overlap_gc": gc_percent(overlap)}
 
 
 def _longest_exact_overlap(
@@ -26,21 +64,36 @@ def simulate_gibson(
     minimum_overlap: int,
     preferred_overlap: int | None = None,
     maximum_overlap: int | None = 80,
+    preferred_overlaps: list[int | None] | None = None,
 ) -> AssemblyProduct:
-    if len(fragments) < 2:
-        raise AssemblyError("Gibson assembly requires at least two fragments")
+    """Join ordered fragments by their exact terminal overlaps.
+
+    ``preferred_overlaps`` (one entry per junction, closure last) overrides ``preferred_overlap`` for the
+    junctions a user set individually.
+    """
+    if not fragments or (len(fragments) < 2 and not circular):
+        raise AssemblyError("Gibson assembly requires at least two fragments, or one fragment to circularize")
     if minimum_overlap < 12:
         raise AssemblyError("Gibson minimum overlap must be at least 12 nt")
 
-    oriented = [orient_fragment(fragment) for fragment in fragments]
-    sequence = oriented[0].sequence
-    junctions: list[AssemblyJunction] = []
-    warnings: list[str] = []
+    def preferred_for(index: int) -> int | None:
+        if preferred_overlaps is not None and index < len(preferred_overlaps) and preferred_overlaps[index] is not None:
+            return preferred_overlaps[index]
+        return preferred_overlap
 
-    for left, right in zip(oriented, oriented[1:]):
+    oriented = [orient_fragment(fragment) for fragment in fragments]
+    effective = {}
+    warnings: list[str] = []
+    for item in oriented:
+        effective[item.id], notes = effective_sequence(item)
+        warnings.extend(notes)
+    sequence = effective[oriented[0].id]
+    junctions: list[AssemblyJunction] = []
+
+    for index, (left, right) in enumerate(zip(oriented, oriented[1:])):
         overlap, overlap_length = _longest_exact_overlap(
-            left.sequence,
-            right.sequence,
+            effective[left.id],
+            effective[right.id],
             minimum_overlap,
             maximum_overlap,
         )
@@ -49,11 +102,12 @@ def simulate_gibson(
                 f"Gibson overlap validation failed between '{left.name}' and '{right.name}'; "
                 f"no exact terminal overlap >= {minimum_overlap} nt was found"
             )
-        if preferred_overlap is not None and overlap_length < preferred_overlap:
+        preferred = preferred_for(index)
+        if preferred is not None and overlap_length < preferred:
             warnings.append(
-                f"Overlap {left.name}→{right.name} is {overlap_length} nt; below preferred {preferred_overlap} nt"
+                f"Overlap {left.name}→{right.name} is {overlap_length} nt; below preferred {preferred} nt"
             )
-        sequence += right.sequence[overlap_length:]
+        sequence += effective[right.id][overlap_length:]
         junctions.append(
             AssemblyJunction(
                 left_fragment_id=left.id,
@@ -64,6 +118,7 @@ def simulate_gibson(
                 overlap_sequence=overlap,
                 overlap_length=overlap_length,
                 junction_sequence=overlap,
+                **_tm_fields(overlap),
             )
         )
 
@@ -71,8 +126,8 @@ def simulate_gibson(
         first = oriented[0]
         last = oriented[-1]
         overlap, overlap_length = _longest_exact_overlap(
-            last.sequence,
-            first.sequence,
+            effective[last.id],
+            effective[first.id],
             minimum_overlap,
             maximum_overlap,
         )
@@ -81,9 +136,10 @@ def simulate_gibson(
                 f"Gibson circularization failed between '{last.name}' and '{first.name}'; "
                 f"no exact terminal overlap >= {minimum_overlap} nt was found"
             )
-        if preferred_overlap is not None and overlap_length < preferred_overlap:
+        preferred = preferred_for(len(oriented) - 1)
+        if preferred is not None and overlap_length < preferred:
             warnings.append(
-                f"Circularization overlap {last.name}→{first.name} is {overlap_length} nt; below preferred {preferred_overlap} nt"
+                f"Circularization overlap {last.name}→{first.name} is {overlap_length} nt; below preferred {preferred} nt"
             )
         sequence = sequence[:-overlap_length]
         junctions.append(
@@ -96,8 +152,12 @@ def simulate_gibson(
                 overlap_sequence=overlap,
                 overlap_length=overlap_length,
                 junction_sequence=overlap,
+                **_tm_fields(overlap),
             )
         )
+
+    for junction in junctions:
+        junction.notes.extend(overlap_observations(junction.overlap_sequence or "", sequence, circular))
 
     return AssemblyProduct(
         mode="gibson",

@@ -23,7 +23,9 @@ const tick = async (ms = 5) => act(async () => { await vi.advanceTimersByTimeAsy
 async function mount() { await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><BioXpCockpit initialTab="live-deck" /></MemoryRouter></QueryClientProvider>)); await tick(); }
 const writes = () => requests.filter(r => r.method !== 'get');
 const readReceipts = () => requests.filter(r => r.url.includes('/receipts/'));
-const click = async (element: Element) => { expect(element).toBeTruthy(); await act(async () => element.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))); await tick(); };
+const moveHere = () => [...document.querySelectorAll<HTMLButtonElement>('.bld-popup button')].find(b => b.textContent?.trim() === 'Move here');
+// A well click opens the well menu; its Move here button sends the well intent.
+const click = async (element: Element) => { expect(element).toBeTruthy(); await act(async () => element.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))); const go = element.hasAttribute('data-well') ? moveHere() : undefined; if (go) await act(async () => go.click()); await tick(); };
 const button = (text: string) => [...host.querySelectorAll('button')].find(b => b.textContent?.trim() === text)!;
 const transform = () => host.querySelector('[data-gun-module="0"]')?.getAttribute('transform');
 async function publish(next: Partial<BioXpOperatorUpdates>) { wire = { ...wire, ...next }; await act(async () => { expect(held).toHaveLength(1); held[0].send(structuredClone(wire)); }); await tick(); }

@@ -16,12 +16,15 @@ import { BmsPLDDTQualityAssessment } from './BmsPLDDTQualityAssessment';
 export const MOLSTAR_DIRECT_ENGINE_VERSION = '4.5.0' as const;
 
 export interface BmsMolstarUiOptions {
+    /**
+     * Kept for call-site compatibility. Every viewer now opens view-only (see
+     * `showControls` below), so this no longer changes the initial Mol* layout.
+     */
     readonly hideControls?: boolean;
     readonly alphafoldView?: boolean;
 }
 
 export function createBmsMolstarUiSpec({
-    hideControls = false,
     alphafoldView = false,
 }: BmsMolstarUiOptions = {}): PluginUISpec {
     const defaults = DefaultPluginUISpec();
@@ -44,9 +47,13 @@ export function createBmsMolstarUiSpec({
             initial: {
                 ...defaults.layout?.initial,
                 isExpanded: false,
-                showControls: !hideControls,
-                // Keep stock panels inside the embedded viewer and responsive.
-                // Compact callers collapse chrome initially; they never remove tools.
+                // Mol* `layoutShowControls`: the tools panel (wrench button) starts
+                // closed so a viewer opens as a plain structure view. The button
+                // itself stays available through PluginConfig.Viewport.ShowControls
+                // below, so users open the panel on demand.
+                showControls: false,
+                // Keep stock panels inside the embedded viewer and responsive
+                // once the user opens them.
                 controlsDisplay: 'reactive',
                 regionState: { left: 'collapsed', top: 'full', right: 'full', bottom: 'full' },
             },

@@ -73,6 +73,10 @@ EXPECTED = {
     ('GET', '/depth-offsets'),
     ('PUT', '/depth-offsets'),
     ('POST', '/depth-offsets/remove'),
+    ('GET', '/plate-profiles'),
+    ('PUT', '/plate-profiles/gripper'),
+    ('PUT', '/plate-profiles/station'),
+    ('PUT', '/plate-profiles/loaded'),
     ('GET', '/calibration-settings/runs/{run_id}'),
     ('POST', '/calibration-settings/manual-tip-set'),
     ('POST', '/calibration-settings/runs/{run_id}/decision'),
@@ -117,6 +121,7 @@ EXPECTED = {
     ('POST', '/methods/runs/{job_id}/review'),
     ('GET', '/methods/runs/{job_id}/report'),
     ('POST', '/methods/runs/{job_id}/clone'),
+    ('POST', '/methods/runs/{job_id}/recovery-preview'),
     ('POST', '/methods/runs/{job_id}/recovery-draft'),
     ('GET', '/methods/{collection}'),
     ('POST', '/methods/{collection}'),
@@ -154,7 +159,7 @@ def _inventory() -> set[tuple[str, str]]:
 
 def test_compact_api_inventory_is_exact_and_bounded() -> None:
     assert _inventory() == EXPECTED
-    assert len(_inventory()) == 119
+    assert len(_inventory()) == 120
 
 
 def test_every_non_read_route_carries_the_global_containment_dependency() -> None:
@@ -171,6 +176,7 @@ def test_every_non_read_route_carries_the_global_containment_dependency() -> Non
             "/methods/compile",  # local authoring/persistence or passive original-job read
             "/methods/migrate",  # local authoring/persistence or passive original-job read
             "/methods/runs/{job_id}/clone",  # local authoring/persistence or passive original-job read
+            "/methods/runs/{job_id}/recovery-preview",  # query-only; never submits a decision
             "/methods/runs/{job_id}/recovery-draft",  # local authoring/persistence or passive original-job read
             "/methods/{collection}",  # local authoring/persistence or passive original-job read
             "/methods/{collection}/import",  # local authoring/persistence or passive original-job read

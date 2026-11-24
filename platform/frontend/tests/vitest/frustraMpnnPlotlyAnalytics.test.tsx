@@ -75,13 +75,16 @@ test('unrelated context and parent rerenders retain every figure prop and zoom r
     expect(after[0].layout.xaxis!.range).toEqual([10, 20]);
 });
 
-test('threshold, theme and changed residue inputs refresh without stale figures', () => {
+test('threshold, theme and changed residue inputs refresh without stale figures', async () => {
     const ui = render(view());
     const before = capture.plots.slice(-7);
     ui.rerender(view(residues, -2));
     expect(capture.plots.slice(-7)[1].layout.shapes![0].y0).toBe(-2);
-    document.documentElement.style.setProperty('--bg-secondary', '#ffffff');
-    ui.rerender(view(residues, -2, 'light'));
+    // Theme colors refresh from the root MutationObserver, not context alone.
+    await act(async () => {
+        document.documentElement.style.setProperty('--bg-secondary', '#ffffff');
+        ui.rerender(view(residues, -2, 'light'));
+    });
     capture.plots.slice(-7).forEach((p, i) => { expect(p.layout).not.toBe(before[i].layout); expect(p.layout.plot_bgcolor).toBe('#ffffff'); });
     const partial = structuredClone(residues.slice(0, 1));
     partial[0].slots[1] = { ...partial[0].slots[1], score: null, class: null, status: 'missing', scoreable: false };

@@ -42,7 +42,7 @@ def test_real_core_complete_exports_roundtrip(enzyme, reverse):
     before = result.model_dump(mode="json")
     exports = build_design_exports(req, result)
     restored = read_design_export(exports["design.json"])
-    assert restored.request == req and restored.result == result
+    assert restored.request.model_dump() == req.model_dump() and restored.result.model_dump() == result.model_dump()
     assert result.model_dump(mode="json") == before
     assert build_design_exports(restored.request, restored.result) == exports
     expected = result.solutions[0]

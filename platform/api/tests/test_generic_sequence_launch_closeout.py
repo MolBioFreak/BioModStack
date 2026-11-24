@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 from component_runtime import SourceIdentity
 from model_registry import get_registry
-from routers.jobs import normalize_job_request
+from services.job_requests import normalize_job_request
 from schemas import JobCreate
 from services.nextflow import compile_job_nextflow_invocation, compile_nextflow_invocation
 from services.remote_execution.bundle import compile_remote_dependencies
@@ -175,10 +175,11 @@ async def test_real_job_creation_preserves_sequence_request_without_launch(admis
     from fastapi import BackgroundTasks
     from database import Job
     from routers import jobs
+    from services import job_submission
     typed = request(model, mode, tmp_path)
     before = deepcopy(typed.params)
     tasks = BackgroundTasks()
-    response = await jobs._create_job(typed, tasks, admission)
+    response = await job_submission._create_job(typed, tasks, admission)
     admission.expire_all()
     stored = await admission.get(Job, response.id)
     assert (stored.model_id, stored.mode) == (model, mode)
@@ -193,10 +194,14 @@ async def test_real_job_creation_preserves_sequence_request_without_launch(admis
 @pytest.mark.parametrize('model,mode', ROWS)
 def test_browser_pdb_alias_uses_existing_allowed_path_resolution(model, mode, tmp_path, monkeypatch):
     from routers import files, jobs
+    from services import binder_source_materialization
+    from services import job_requests
     typed = request(model, mode, tmp_path)
     original = typed.params['input_pdb']
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: {'downloads': tmp_path})
+    monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: {'downloads': tmp_path})
     monkeypatch.setattr(jobs, 'resolve_allowed_path', files._allowed_lexical_path)
+    monkeypatch.setattr(job_requests, 'resolve_allowed_path', files._allowed_lexical_path)
     typed.params['input_pdb'] = 'downloads/input.pdb'
     normalized = normalize_job_request(typed)
     assert normalized.params['input_pdb'] == original
@@ -230,6 +235,7 @@ async def test_unimplemented_multichain_mpnn_is_rejected_before_job_or_queue(adm
     from sqlalchemy import select, func
     from database import Job
     from routers import jobs
+    from services import job_submission
     typed = request('proteinmpnn', 'design', tmp_path)
     source = Path(typed.params['input_pdb'])
     text = source.read_text()
@@ -237,7 +243,7 @@ async def test_unimplemented_multichain_mpnn_is_rejected_before_job_or_queue(adm
     source.write_text(text.replace('END\n', atom[:21] + 'B' + atom[22:] + 'END\n'))
     tasks = BackgroundTasks()
     with pytest.raises(HTTPException) as error:
-        await jobs._create_job(typed, tasks, admission)
+        await job_submission._create_job(typed, tasks, admission)
     assert error.value.status_code == 422 and 'multi-chain' in str(error.value.detail)
     assert await admission.scalar(select(func.count()).select_from(Job)) == 0
     assert not tasks.tasks
@@ -254,6 +260,8 @@ async def test_actual_compiled_command_native_wrapper_and_sqlite_consumer(admiss
     from sqlalchemy import select
     from database import Design, Job
     from routers import jobs
+    from services import job_submission
+    from services import job_requests
     from services.result_ingester import ingest_job_results
     spec = importlib.util.spec_from_file_location('sequence_native_transport_fixture',
         ROOT / 'tests/test_generic_sequence_native_transport.py')
@@ -267,6 +275,7 @@ async def test_actual_compiled_command_native_wrapper_and_sqlite_consumer(admiss
     captured_path = os.environ.get('BMS_GENERIC_SEQUENCE_REQUEST_FIXTURE')
     if captured_path:
         from routers import files
+        from services import binder_source_materialization
         captured = json.loads(Path(captured_path).read_text())
         matches = [value for value in captured if value.get('name') == f'generic-native-{model}-{mode}']
         assert len(matches) == 1, 'actual mounted request missing or duplicated'
@@ -275,7 +284,9 @@ async def test_actual_compiled_command_native_wrapper_and_sqlite_consumer(admiss
         source_alias = tmp_path / 'generic-sequence-fixture.pdb'
         source_alias.write_bytes(source.read_bytes())
         monkeypatch.setattr(files, 'get_allowed_roots', lambda: {'inputs': tmp_path})
+        monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: {'inputs': tmp_path})
         monkeypatch.setattr(jobs, 'resolve_allowed_path', files._allowed_lexical_path)
+        monkeypatch.setattr(job_requests, 'resolve_allowed_path', files._allowed_lexical_path)
         # No scientific request field is replaced. Current nextflow.config owns
         # the unsupplied seqs_per_design default of eight.
         expected_count = 8
@@ -283,7 +294,7 @@ async def test_actual_compiled_command_native_wrapper_and_sqlite_consumer(admiss
         typed.params['seqs_per_design'] = 2
         typed.params['fampnn_max_psce' if model == 'fampnn' else 'mpnn_max_score'] = 1.0
         expected_count = 2
-    response = await jobs._create_job(typed, BackgroundTasks(), admission)
+    response = await job_submission._create_job(typed, BackgroundTasks(), admission)
     job = await admission.get(Job, response.id)
     assert job.execution_target_id == typed.execution_target_id
     assert job.params['remote_result_policy'] == typed.execution_policy.remote_result_policy

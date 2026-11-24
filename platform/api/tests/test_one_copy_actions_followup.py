@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from database import Design, Job
 from routers import jobs
+from services import binder_continuation
 from services.binder_continuation import snapshot_selection
 from test_binder_continuation import selected, PDB
 from test_project_workflow_setups import setup_store
@@ -91,6 +92,7 @@ async def test_irrelevant_metadata_no_scan_relevant_metadata_shared_bodies(selec
         return original_glob(path, pattern)
     monkeypatch.setattr(Path, 'glob', no_scan)
     monkeypatch.setattr(jobs, '_materialize_antibody_selection', lambda *a, **k: pytest.fail('body recopied'))
+    monkeypatch.setattr(binder_continuation, '_materialize_antibody_selection', lambda *a, **k: pytest.fail('body recopied'))
     assert snapshot_selection(source, root, designs) == first
     # Relevant emitted provenance gets a new immutable metadata revision, NOT new bodies.
     designs[0].name = 'renamed'
@@ -125,10 +127,11 @@ async def test_native_selection_metadata_revision_retains_every_sidecar(selected
     design.pdb_path = str(cif)
     def prepare():
         return retained_selection(source, root, [design], kind='native',
-            create=lambda: jobs._materialize_protein_local_selection(root, source, [design], 'sequence_design'))
+            create=lambda: binder_continuation._materialize_protein_local_selection(root, source, [design], 'sequence_design'))
     first = prepare()
     assert sorted(p.name for p in first.iterdir()) == ['native.cif', 'native.json', 'native.npz', 'selection_manifest.json']
     monkeypatch.setattr(jobs, '_materialize_protein_local_selection', lambda *a: pytest.fail('native payload recopied'))
+    monkeypatch.setattr(binder_continuation, '_materialize_protein_local_selection', lambda *a: pytest.fail('native payload recopied'))
     design.review_role_map = {'binder': ['A'], 'target': ['B']}
     second = prepare()
     assert second != first and prepare() == second

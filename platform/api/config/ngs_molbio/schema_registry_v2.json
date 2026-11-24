@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "1d41fb50300a4e574670f6a02a0345e597ac9ed4",
   "baseline_source_tree": "af85061039a5fafdcb828336f09ea6355713d1a9",
-  "content_sha256": "28da931f81820d8c2d75b35f87457fbdeb3fb5946af543df48a520a494f4d65d",
+  "content_sha256": "23a461b990752dfa243d899bcae13d01576e8b897ffaea5159551ac46dd89b3a",
   "entries": [
     {
       "path": "schemas/ngs_molbio/domain-experiment-v2.schema.json",
@@ -443,9 +443,9 @@
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-basecall_dna-v1.schema.json",
-      "schema_canonical_sha256": "fdade453afd6cc6f0c567a2edf2fb84796e5c8e8dd2cebaea1431f986aeeeaa2",
+      "schema_canonical_sha256": "2e99d30b94588adca95ced9ff3c3f487ce3b45611d7aca82fa48d41e5f785902",
       "schema_id": "bms.workflow-parameters.ngs.ont.basecall_dna.v1",
-      "schema_sha256": "fef7ef448f8c17f6d9c5b85f24969b86246a6038baf353088c0a79c3e8563699"
+      "schema_sha256": "dd6524dcf28389b5943c59504bbe3934c2ec15d61d476e1c6fba98a254a7c7e2"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-basecall_rna-v1.schema.json",
@@ -492,14 +492,14 @@
     {
       "path": "schemas/ngs_molbio/molbio-golden-gate-workflow-request-v1.schema.json",
       "schema_id": "bms.golden-gate-workflow-request.v1",
-      "schema_sha256": "d598bf377373317f6c08cd8057c4e516bdc7d75bfd03a9236ea1415dd4b0b2a7",
-      "schema_canonical_sha256": "6426d8e21786c5f0172bc5986b9e3630ec05ccb2e2fe28537f4fbe09797704a5"
+      "schema_sha256": "3433de9206f6568a2d25620c4d3153af797ca22710b2913ae35e790360a5072e",
+      "schema_canonical_sha256": "2f470df0bd2b2eddb4a8d6fb43f7f735790d392bb17fca63ac41da934130dc89"
     },
     {
       "path": "schemas/ngs_molbio/molbio-golden-gate-workflow-save-v1.schema.json",
       "schema_id": "bms.golden-gate-workflow-save.v1",
-      "schema_sha256": "7e41df57fccfae1af3612f74f5b56a173950c48bbcd542029d36c772712f653a",
-      "schema_canonical_sha256": "319d6ebd2b0a4f4bd784bf5c55be88785572961c0ea3bbe6bd321f7257c43c73"
+      "schema_sha256": "a7a0cf27345626b584368b2f4bed0a9ec2411d616ad2b14c97eb465711311bf5",
+      "schema_canonical_sha256": "530a78422096e0b1cc88a3a1e087968862461923c04587ad323eb26e2a7a05aa"
     }
   ],
   "schema": "bms.ngs-molbio.schema-registry.v2"

@@ -448,7 +448,7 @@ export function RawReadInspector({
                                 <td className="px-2 py-1">{read.contig || 'unmapped'}{read.start_1based ? `:${read.start_1based}` : ''} · {read.cigar || 'no CIGAR'}</td>
                                 <td className="whitespace-nowrap px-2 py-1">
                                     <button aria-label={`Navigate read ${read.read_id} in IGV`} type="button" onClick={() => onNavigateIgv?.(read)} disabled={!onNavigateIgv || !alignmentReadIgvLocus(read)} className="mr-1 rounded border border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] px-1.5 py-0.5 text-[var(--accent-primary)] disabled:opacity-35">IGV</button>
-                                    <button aria-label={`Open signal for read ${read.read_id}`} type="button" onClick={() => onOpenRawSignal?.(read)} disabled={!rawSignalBinding || !onOpenRawSignal} className="mr-1 rounded border border-[color-mix(in_srgb,var(--success)_40%,transparent)] px-1.5 py-0.5 text-[var(--success)] disabled:opacity-35">Signal</button>
+                                    <button aria-label={`Open signal for read ${read.read_id}`} type="button" onClick={() => onOpenRawSignal?.(read)} disabled={!onOpenRawSignal} className="mr-1 rounded border border-[color-mix(in_srgb,var(--success)_40%,transparent)] px-1.5 py-0.5 text-[var(--success)] disabled:opacity-35">Signal</button>
                                     <button aria-label={`Inspect details for read ${read.read_id}`} type="button" onClick={() => void inspectRead(read)} className="rounded border border-[var(--border-primary)] px-1.5 py-0.5">Detail</button>
                                 </td>
                             </tr>
@@ -469,7 +469,7 @@ export function RawReadInspector({
                         </div>
                         <div className="flex gap-1">
                             <button aria-label={`Navigate selected read ${selected.read_id} in IGV`} type="button" onClick={() => onNavigateIgv?.(selected)} disabled={!onNavigateIgv || !alignmentReadIgvLocus(selected)} className="rounded border border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] px-2 py-1 text-[var(--accent-primary)] disabled:opacity-35">Navigate IGV</button>
-                            <button aria-label={`Open signal for selected read ${selected.read_id}`} type="button" onClick={() => onOpenRawSignal?.(selected)} disabled={!rawSignalBinding || !onOpenRawSignal} className="rounded border border-[color-mix(in_srgb,var(--success)_40%,transparent)] px-2 py-1 text-[var(--success)] disabled:opacity-35">Open signal</button>
+                            <button aria-label={`Open signal for selected read ${selected.read_id}`} type="button" onClick={() => onOpenRawSignal?.(selected)} disabled={!onOpenRawSignal} className="rounded border border-[color-mix(in_srgb,var(--success)_40%,transparent)] px-2 py-1 text-[var(--success)] disabled:opacity-35">Open signal</button>
                         </div>
                     </div>
                     {waveform?.state === 'ready' && waveform.samples && (

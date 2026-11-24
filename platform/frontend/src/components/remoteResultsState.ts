@@ -52,5 +52,5 @@ export function remotePullError(error: unknown): string | null {
 // Existing query families; mark cached output lists stale even when not mounted.
 export const remoteResultQueryKeys = (jobId: string): readonly (readonly string[])[] => [
     ['queue'], ['jobs'], ['job', jobId], ['designs'], ['backboneSummary', jobId],
-    ['structure-files', jobId], ['docking-results', jobId],
+    ['structure-files', jobId],
 ];

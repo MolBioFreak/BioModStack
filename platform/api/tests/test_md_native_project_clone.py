@@ -1,4 +1,5 @@
 """Native Project launch through the real two-store owner and public Clone read."""
+from services import job_submission
 import asyncio
 import copy
 import json
@@ -25,7 +26,7 @@ def test_native_project_adapter_rejects_divergent_handoff(project_context_previe
         "schema_version": "bms.md.launch-preview-request.v1", "intent": intent,
     })
     assert preview.status_code == 200, preview.text
-    create_job = jobs.create_job
+    create_job = job_submission.submit_job
     async def divergent(job_data, *args, **kwargs):
         if change == "effective_request":
             job_data.params["md_job_spec"]["stages"][0]["mdp"]["nsteps"] = 7
@@ -34,7 +35,7 @@ def test_native_project_adapter_rejects_divergent_handoff(project_context_previe
         else:
             job_data.execution_target_id = "vast:changed"
         return await create_job(job_data, *args, **kwargs)
-    monkeypatch.setattr(jobs, "create_job", divergent)
+    monkeypatch.setattr(job_submission, "submit_job", divergent)
     response = store["client"].post("/api/molecular-dynamics/launch", json={
         "schema_version": "bms.md.launch-request.v1", "intent": intent,
         "preview_digest": preview.json()["preview_digest"],
@@ -54,6 +55,7 @@ def test_native_project_route_create_readback_and_clone(project_context_preview_
     from database import Job
     from experiment_models import ExperimentLaunchContext, ExperimentRunAttempt
     from routers import jobs
+    from services import job_requests
     from services import gpu_orchestrator
     from services.global_experiments.launch_contexts import validate_bound_job
     from scripts.bms_md.contract import verify_input_snapshots
@@ -64,6 +66,7 @@ def test_native_project_route_create_readback_and_clone(project_context_preview_
     context_id = store["ids"]["context"]
     monkeypatch.setenv("BMS_FEATURE_MOLECULAR_DYNAMICS", "1")
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(job_requests, "get_registry", lambda: _AcceptingRegistry())
     monkeypatch.setattr(jobs, "get_results_dir", lambda: store["results_root"])
     monkeypatch.setattr(gpu_orchestrator, "estimate_vram", lambda *_a, **_kw: 0)
     preview_body = {"schema_version": "bms.md.launch-preview-request.v1", "intent": intent}

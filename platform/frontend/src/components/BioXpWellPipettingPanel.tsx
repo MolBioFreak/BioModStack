@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BioXpPipetteResults } from './BioXpPipetteResults';
 import { BioXpCalibrationRun } from './BioXpCalibrationRun';
 import { pipetteResults } from '../lib/bioxpPipetteResults';
-import { bioXpErrorText, useBioXpWorkflowJob, useSubmitBioXpProtocol,
+import { bioXpErrorText, useBioXpChildEvidence, useBioXpWorkflowFeedback, useSubmitBioXpProtocol,
     type BioXpDeckDestinationV1, type BioXpWorkflowJob } from '../lib/bioxpClient';
 import { BioXpSourcePipettingEditor, sourceDefaults, sourceLabels } from './BioXpSourcePipettingEditor';
 import { type BioXpSourceStep, manualPipettingDocument, type BioXpManualStep } from '../lib/bioxpManualPipetting';
@@ -17,7 +17,7 @@ const operations: Operation[] = ['move', 'lower', 'lift', 'aspirate', 'dispense'
 const label = (operation: Operation) => operation in sourceLabels ? sourceLabels[operation as BioXpSourceStep['operation']] : operation === 'load_tip' ? 'Load tip' : operation === 'measure_fluid_height' ? 'Measure fluid height' : operation === 'source_fluid_offset' ? 'OEM fluid offset scan' : operation === 'diagnostic_detect_fluid' ? 'OEM Detect Fluid' : operation === 'source_calwith_fluid' ? 'OEM calibrate with fluid' : operation[0].toUpperCase() + operation.slice(1);
 const wells = [...'ABCDEFGH'].flatMap(row => Array.from({ length: 12 }, (_, col) => `${row}${col + 1}`));
 
-export const PIPETTE_SECTIONS = ['Move & pipette', 'Tips', 'Calibration', 'Advanced'] as const;
+export const PIPETTE_SECTIONS = ['Move & pipette', 'Tips', 'Calibration', 'Plates', 'Advanced'] as const;
 export type PipetteSection = typeof PIPETTE_SECTIONS[number];
 
 export function BioXpWellPipettingPanel({ generation, connected, destinations = [], positionTableRevision, visible = true, section }: { visible?: boolean;
@@ -61,15 +61,16 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     const [settledJob, setSettledJob] = useState<string | null>(null);
     const observationId = attempt?.id ?? null;
     const observeJob = documentVisible && (visible || (observationId !== null && settledJob !== observationId));
-    const query = useBioXpWorkflowJob(observationId, attempt?.generation ?? generation, connected && sameConnection && observeJob);
+    const query = useBioXpWorkflowFeedback(observationId, attempt?.generation ?? generation, connected && sameConnection && observeJob);
     useEffect(() => {
         if (query.data?.command?.terminal && query.data.job_id === observationId) {
             setSettledJob(observationId);
             if (query.data.execution?.runtime_state.action_results?.some(result => pipetteResults(result).some(value => value.saved_revision_id !== undefined))) void invalidateSettings();
         }
     }, [query.data, observationId]);
-    const mismatch = !!query.data && !!attempt && (query.data.job_id !== attempt.id || query.data.command?.idempotency_key !== attempt.key);
+    const mismatch = !!query.data && !!attempt && (query.data.job_id !== attempt.id || query.data.command?.idempotency_key != null && query.data.command.idempotency_key !== attempt.key);
     const job = mismatch ? null : query.data ?? accepted;
+    const evidence = useBioXpChildEvidence(job, attempt?.generation ?? generation, connected && sameConnection);
     // Historical jobs, receipts, unavailable observations and unrelated pending
     // controls are evidence, never a new admission lock. Only our HTTP is reserved.
     const enabled = connected && !pending;
@@ -128,6 +129,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         'Move & pipette': ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix'],
         Tips: ['load_tip', 'source_load_tips'],
         Calibration: ['measure_fluid_height', 'source_fluid_offset', 'diagnostic_detect_fluid', 'source_calwith_fluid'],
+        Plates: [],
         Advanced: ['diagnostic_pipette', 'source_mix', 'source_aspirate_air', 'source_dispense_air', 'source_purge'],
     };
     const show = (...ops: Operation[]) => ops.some(op => categories[category].includes(op));
@@ -156,7 +158,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         <div hidden={!show('move', 'lower', 'lift')} className="grid gap-3 sm:grid-cols-4">
             <label>Station<select aria-label="Station" className="block w-full bg-slate-950 p-2" value={destinations.some(d => String(d.location_id) === location) ? location : ''} onChange={e => setLocation(e.target.value)}>
                 <option value="">Select a station</option>
-                {destinations.map(d => <option key={d.target} value={d.location_id}>{d.label}</option>)}
+                {destinations.filter(d => d.xy == null).map(d => <option key={d.target} value={d.location_id}>{d.label}</option>)}
             </select></label>
             <label hidden={!show('move')}>Reference well<select aria-label="Reference well" className="block w-full bg-slate-950 p-2" value={well} onChange={e => setWell(e.target.value)}>
                 <option value="">Select a well</option>{wells.map(value => <option key={value}>{value}</option>)}
@@ -218,7 +220,8 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         {query.error && <p role="alert">Job readback unavailable: {bioXpErrorText(query.error)}</p>}
         {job && <><p role="status">Robot job: {job.command?.status ?? job.status} · {job.execution?.runtime_state.workflow?.phase ?? 'phase unavailable'}. Job acceptance is not physical proof.</p>
             {job.execution?.runtime_state.action_results?.map((result, index) =>
-                <BioXpPipetteResults key={index} value={result} />)}</>}
+                <BioXpPipetteResults key={index} value={result} />)}
+            {evidence.map((value, index) => <BioXpPipetteResults key={`evidence-${index}`} value={value} />)}</>}
         {[...new Set((job?.execution?.runtime_state.action_results ?? []).flatMap(result =>
             pipetteResults(result).flatMap(value => value.run_id ? [value.run_id] : [])))].map(runId =>
             <BioXpCalibrationRun key={`${attempt?.generation}:${runId}`} runId={runId}

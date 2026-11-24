@@ -77,7 +77,7 @@ export function Rfd4Regions({ value, onChange, visual }: { value?: string; onCha
             {tokens.map((token, i) => {
                 const kind = token === '/0' ? 'break' : /^\d+(?:-\d+)?$/.test(token) ? 'generated' : /^[A-Za-z]+\d+-\d+$/.test(token) ? 'fragment' : 'native';
                 return <details key={i} className={`rfd4-region rfd4-region--${kind}`}>
-                    <summary><small>{kind === 'break' ? 'New chain' : kind === 'generated' ? 'Generated linker' : kind === 'fragment' ? 'Source fragment' : 'Native segment'}</small><strong>{token || 'Empty segment'}</strong><span aria-hidden="true">▾</span></summary>
+                    <summary><small>{kind === 'break' ? 'New chain' : kind === 'generated' ? 'Generated linker' : kind === 'fragment' ? 'Source fragment' : 'Native segment'}</small><strong className="font-mono">{token || 'Empty segment'}</strong><span aria-hidden="true">▾</span></summary>
                     <div className="rfd4-region-editor"><label>Region {i + 1}<input aria-label={`Region ${i + 1}`} value={token} onChange={e => update(i, e.target.value)} /></label>
                         <button type="button" disabled={!i} onClick={() => { const next = [...tokens]; [next[i - 1], next[i]] = [next[i], next[i - 1]]; onChange(next.join(',')); }}>Move region {i + 1} earlier</button>
                         <button type="button" disabled={i === tokens.length - 1} onClick={() => { const next = [...tokens]; [next[i + 1], next[i]] = [next[i], next[i + 1]]; onChange(next.join(',')); }}>Move region {i + 1} later</button>
@@ -89,7 +89,7 @@ export function Rfd4Regions({ value, onChange, visual }: { value?: string; onCha
         </div>
         <div className="rfd4-region-actions">
             <button type="button" onClick={() => { if (selected.tokens.length) append(...selected.tokens); }}>Add selected residues as fragment</button>
-            {selected.tokens.length > 0 ? <span className="rfd4-fragment-preview">{selected.tokens.join(' → ')}</span> : <small>{selected.issue}</small>}
+            {selected.tokens.length > 0 ? <span className="rfd4-fragment-preview font-mono">{selected.tokens.join(' → ')}</span> : <small>{selected.issue}</small>}
             <button type="button" onClick={() => append('/0')}>Add chain break</button>
         </div>
         <div className="rfd4-linker-controls"><label>Generated minimum<input aria-label="Generated minimum" type="number" value={minimum} onChange={e => setMinimum(e.target.value)} /></label><span aria-hidden="true">–</span><label>Generated maximum<input aria-label="Generated maximum" type="number" value={maximum} onChange={e => setMaximum(e.target.value)} /></label><button type="button" onClick={() => append(`${minimum}-${maximum}`)}>Append generated region</button></div>

@@ -245,9 +245,9 @@ it('shared invocation editor retains OFF drafts, repeated calls, native modes an
     }
     await mount(<Form />);
     await click('Add Sequence design');
-    await click('Add proteinmpnn call');
+    await click('Add ProteinMPNN');
     await edit('mpnn_temperature', '0.71');
-    await click('Add proteinmpnn call');
+    await click('Add ProteinMPNN');
     expect(latest.stages[0].stage.models).toHaveLength(2);
     const [first, second] = latest.stages[0].stage.models;
     expect(first.invocation_id).not.toBe(second.invocation_id);
@@ -255,7 +255,7 @@ it('shared invocation editor retains OFF drafts, repeated calls, native modes an
     expect(second.params).toEqual({});
     const placement = document.querySelectorAll<HTMLInputElement>('section[aria-label^="Invocation "] input[type="checkbox"]');
     const firstSection = document.querySelector(`section[aria-label="Invocation ${first.invocation_id}"]`)!;
-    const explicit = [...firstSection.querySelectorAll('label')].find(label => label.textContent?.includes('Explicit placement'))!.querySelector('input')!;
+    const explicit = [...firstSection.querySelectorAll('label')].find(label => label.textContent?.includes('Choose run location'))!.querySelector('input')!;
     await act(async () => explicit.click()); await settle();
     expect(latest.stages[0].stage.models[0].execution_target_id).toBeNull();
     expect(Object.hasOwn(latest.stages[0].stage.models[1], 'execution_target_id')).toBe(false);

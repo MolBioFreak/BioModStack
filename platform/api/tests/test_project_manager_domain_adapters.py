@@ -37,7 +37,16 @@ from experiment_services import ValidationFailure
 from services.global_experiments.result_surfaces import result_surface_for_receipt
 PROTEIN_TYPED_CORE_JOB_MODELS = {
     "boltz2", "boltz_cp_experimental", "boltzgen", "esmfold2", "ppiflow",
-    "protein_local_redesign", "protein_modification_experimental", "protenix", "rf3", "template_antibody_denovo",
+    "protein_modification_experimental", "protenix", "rf3", "template_antibody_denovo",
+}
+NATIVE_BINDER_MODELS = {
+    "bindcraft2", "boltzgen", "caliby_experimental", "complexa", "esmfold2", "fampnn",
+    "laproteina", "ligandmpnn", "ppiflow", "protein_cad_experimental",
+    "protein_modification_experimental", "proteinmpnn", "protonpottsmpnn", "rfd4_proteina",
+}
+# Historical normalized child Plans keep their launch adapter ID as a result adapter.
+NATIVE_BINDER_CORE_JOB_ALIASES = {
+    "caliby_experimental", "fampnn", "ligandmpnn", "proteinmpnn", "protonpottsmpnn",
 }
 
 
@@ -72,6 +81,13 @@ EXPECTED_ADAPTER_IDS = {
     "bms.ngs.ont-observation.adapter.v1",
     "bms.ngs.reference-revision.adapter.v1",
     "bms.ngs.result-manifest.adapter.v1",
+    "bms.family-msa.family_msa_protein.adapter.v1",
+    "bms.family-msa.family_msa_nucleic.adapter.v1",
+} | {
+    f"bms.core-job.{model_id}.adapter.v1"
+    for model_id in PROTEIN_TYPED_CORE_JOB_MODELS | NATIVE_BINDER_CORE_JOB_ALIASES
+} | {
+    f"bms.native-binder.{model_id}.adapter.v1" for model_id in NATIVE_BINDER_MODELS
 }
 
 RESULT_SURFACE_SCHEMA = json.loads(
@@ -119,9 +135,7 @@ def _class(name: str):
 
 
 def test_registry_exposes_complete_exact_adapter_id_set() -> None:
-    assert {item["adapter_id"] for item in adapter_module.registry.list()} == EXPECTED_ADAPTER_IDS | {
-        f"bms.core-job.{model_id}.adapter.v1" for model_id in PROTEIN_TYPED_CORE_JOB_MODELS
-    }
+    assert {item["adapter_id"] for item in adapter_module.registry.list()} == EXPECTED_ADAPTER_IDS
     with pytest.raises(adapter_module.AdapterError):
         adapter_module.registry.get("core.rfd3-local-redesign.v1")
 
@@ -569,7 +583,7 @@ async def test_md_molbio_receipt_sequence_qc_and_alignment_use_native_verifiers(
 
     normalized_md_request = {
         "schema": "bms.md.job.v2",
-        "engine": "openmm",
+        "engine": "gromacs",
         "chemistry": {"profile_id": "profile-1", "profile_sha256": "a" * 64},
     }
     aggregate_digest = "b" * 64
@@ -791,7 +805,6 @@ async def test_result_surface_rejects_receipt_authority_or_acknowledgement_misma
 async def test_result_surfaces_dispatch_explicitly_for_every_adapter_entity_kind() -> None:
     broad_surface_kinds = {
         "design": "protein_design",
-        "rfd3_local_redesign_request": "protein_design",
         "conformational_mapping_request": "conformational_mapping",
         "md_result": "molecular_dynamics",
         "frustrampnn_result": "frustrampnn",
@@ -819,11 +832,11 @@ async def test_result_surfaces_dispatch_explicitly_for_every_adapter_entity_kind
         "ngs_result_manifest": "ngs",
         "ngs_evidence_assessment": "ngs",
         "typed_core_job_result": "protein_design",
+        "native_binder_job_result": "protein_design",
+        "family_msa_job_result": "ngs",
     }
     registered = adapter_module.registry.list()
-    assert {item["adapter_id"] for item in registered} == EXPECTED_ADAPTER_IDS | {
-        f"bms.core-job.{model_id}.adapter.v1" for model_id in PROTEIN_TYPED_CORE_JOB_MODELS
-    }
+    assert {item["adapter_id"] for item in registered} == EXPECTED_ADAPTER_IDS
     for adapter in registered:
         entity_kind = adapter["entity_kind"]
         reopen_uri = f"/native/results/entity-1?adapter={adapter['adapter_id']}&view=summary%2Fdetails"
@@ -951,3 +964,51 @@ async def test_unknown_adapter_receipt_returns_schema_valid_unsupported_descript
     assert surface["scientific_acceptance"]["state"] == "not_applicable"
     assert 0 < len(surface["scientific_acceptance"]["reason"]) <= 256
     assert surface["available_actions"] == []
+
+
+@pytest.mark.asyncio
+async def test_analysis_adapter_attaches_a_native_result_without_a_construct_qc_manifest(adapter_stores):
+    """Assembly, methylation and pooled runs publish files, not a QC manifest; they still attach and reopen."""
+    tmp_path, core_factory, _molbio_factory = adapter_stores
+    root = tmp_path / "results" / "clone-job-1"
+    (root / "assembly" / "wf_clone_out").mkdir(parents=True)
+    (root / "methylation").mkdir()
+    (root / "assembly" / "wf_clone_out" / "s.final.fasta").write_text(">s\nACGT\n")
+    (root / "methylation" / "modkit_summary.tsv").write_text("base\tcount\nC\t4\n")
+    (tmp_path / "results" / "empty-job-1").mkdir()
+    async with core_factory() as session:
+        session.add_all([
+            Job(id="clone-job-1", name="Clone", status="completed", model_id="nanopore", mode="clone_validation",
+                params={"ont_workflow_id": "ont_clone_validation", "ont_input_mode": "fastq"}, output_dir=str(root)),
+            Job(id="empty-job-1", name="Empty", status="completed", model_id="nanopore", mode="clone_validation",
+                params={"ont_workflow_id": "ont_clone_validation", "ont_input_mode": "fastq"},
+                output_dir=str(tmp_path / "results" / "empty-job-1")),
+        ])
+        await session.commit()
+        adapter = _class("NgsAnalysisReferenceAdapter")()
+        receipt = await adapter.verify(session, "clone-job-1")
+        again = await adapter.verify(session, "clone-job-1")
+        (root / "methylation" / "modkit_summary.tsv").write_text("base\tcount\nC\t5\n")
+        changed = await adapter.verify(session, "clone-job-1")
+        with pytest.raises(adapter_module.AdapterError) as empty:
+            await adapter.verify(session, "empty-job-1")
+        # The construct-QC adapter keeps requiring its manifest.
+        with pytest.raises(adapter_module.AdapterError) as qc:
+            await _class("SequenceQcReferenceAdapter")().verify(session, "clone-job-1")
+    assert receipt["entity_kind"] == "ngs_analysis_job" and receipt["entity_id"] == "clone-job-1"
+    assert receipt["reopen_uri"] == "/ngs?job_id=clone-job-1"
+    metadata = receipt["metadata"]
+    assert metadata["result_contract_id"] == "ngs_native_publication_v1"
+    assert (metadata["workflow_id"], metadata["input_mode"], metadata["job_status"]) == ("ont_clone_validation", "fastq", "completed")
+    assert metadata["artifact_count"] == 2 and metadata["published_sources"] == ["assembly", "methylation"]
+    assert receipt["content_digest"] == again["content_digest"] == metadata["artifact_set_sha256"]
+    assert changed["content_digest"] != receipt["content_digest"]
+    assert empty.value.code == "source_contract_unavailable"
+    assert qc.value.code == "source_contract_unavailable"
+    surface = adapter_module_surface(receipt)
+    assert surface["surface_kind"] == "ngs" and surface["readiness"] == "ready"
+
+
+def adapter_module_surface(receipt):
+    from services.global_experiments import result_surfaces
+    return result_surfaces._SURFACE_BUILDERS[receipt["entity_kind"]](receipt)

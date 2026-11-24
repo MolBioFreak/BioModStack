@@ -12,6 +12,7 @@ from services.assembly.golden_gate_workflow import run_workflow
 from services.assembly.golden_gate_workflow_persistence import resolve_sources, request_sources, save_workup, read_workup
 from services.assembly.types import AssemblyError
 from routers.molbio_golden_gate_batch import router as batch_router
+from services.assembly.golden_gate_suggest import SuggestRequest, SuggestResult, request_sources as suggest_sources, suggest_golden_gate
 
 router = APIRouter(prefix='/api/molbio/assembly/golden-gate', tags=['Molecular Biology'])
 router.include_router(batch_router)
@@ -38,6 +39,16 @@ async def design(request: WorkflowRequest | WorkflowWire, session: AsyncSession 
     try:
         result = await run_in_threadpool(run_workflow, request, resolve_revision=resolved.__getitem__)
         return _view(result, 'result', view)
+    except (AssemblyError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post('/suggest', response_model=SuggestResult)
+async def suggest(request: SuggestRequest, session: AsyncSession = Depends(get_molbio_session)):
+    """Target-driven proposals from the existing splitter, optimizer and physical design."""
+    resolved, _ = await resolve_sources(session, suggest_sources(request))
+    try:
+        return await run_in_threadpool(suggest_golden_gate, request, resolve_revision=resolved.__getitem__)
     except (AssemblyError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
 

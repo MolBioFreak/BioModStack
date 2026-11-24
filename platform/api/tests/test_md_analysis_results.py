@@ -566,7 +566,7 @@ def test_replica_reporting_never_pools_frames_as_biological_replicates(
     aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
 
     authoritative_spec = raw_job.params["md_job_spec"]
-    raw_job.params = {"md_job_spec": {**authoritative_spec, "engine": "openmm"}}
+    raw_job.params = {"md_job_spec": {**authoritative_spec, "engine": "other"}}
     with pytest.raises(MDResultError) as protocol_mismatch:
         completion_barrier(job)
     assert protocol_mismatch.value.code == "MD_COMPLETION_BLOCKED"
@@ -655,10 +655,10 @@ def test_all_live_md_terminal_writers_route_through_the_md_completion_barrier() 
     nextflow = (REPO_ROOT / "platform/api/services/nextflow.py").read_text()
     orchestrator = (REPO_ROOT / "platform/api/services/gpu_orchestrator.py").read_text()
     completion = (REPO_ROOT / "platform/api/services/md/completion.py").read_text()
-    assert "await validate_and_finalize_md_job(job, session)" in nextflow
+    assert "await validate_and_finalize_md_job(job, session, expected_attempt=expected_attempt)" in nextflow
     assert "await _finalize_local_md_job(job, session, result_output_dir)" in orchestrator
     wrapper = nextflow.split("async def _finalize_local_md_job(", 1)[1].split("\nasync def ", 1)[0]
-    assert "await validate_and_finalize_md_job(job, session)" in wrapper
+    assert "await validate_and_finalize_md_job(job, session, expected_attempt=expected_attempt)" in wrapper
     assert "def validate_and_finalize_md_job" in completion
 
 

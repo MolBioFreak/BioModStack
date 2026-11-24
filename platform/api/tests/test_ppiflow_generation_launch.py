@@ -8,6 +8,9 @@ import pytest
 
 from database import Job
 from routers import jobs, models
+from services import job_submission
+from services import binder_continuation
+from services import job_requests
 from schemas import JobCreate
 from services import nextflow
 from services.ppiflow_generation import (
@@ -26,8 +29,10 @@ def inputs(tmp_path, monkeypatch):
     target.write_text('REMARK non-science transport target\nEND\n')
     framework.write_text('REMARK non-science transport framework\nEND\n')
     results = tmp_path / 'results'
-    monkeypatch.setattr(jobs, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': results})
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: root)
+    monkeypatch.setattr(job_submission, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': results})
+    monkeypatch.setattr(job_requests, 'get_allowed_roots', lambda: {'inputs': root, 'bms_results': results})
+    monkeypatch.setattr(job_submission, 'get_inputs_dir', lambda: root)
+    monkeypatch.setattr(binder_continuation, 'get_inputs_dir', lambda: root)
     import paths
     monkeypatch.setattr(paths, 'get_results_dir', lambda: results)
     monkeypatch.setattr(paths, 'get_inputs_dir', lambda: root)
@@ -53,7 +58,7 @@ def settings(mode, inputs):
 def test_normalization_preserves_native_initial_contract(mode, inputs):
     original = JobCreate(name='initial', model_id='ppiflow', mode=mode, params=settings(mode, inputs))
     before = deepcopy(original.params)
-    normalized = jobs.normalize_job_request(original)
+    normalized = job_requests.normalize_job_request(original)
     assert original.params == before
     assert normalized.params == normalize_ppiflow_generation_params(mode, before)
     assert normalized.params['self_condition'] is False
@@ -64,7 +69,7 @@ def test_normalization_preserves_native_initial_contract(mode, inputs):
 @pytest.mark.parametrize('change', [{'unknown_science': 0}, {'samples_per_target': True}, {'rotation_corrupt': 'false'}])
 def test_invalid_initial_settings_are_rejected_by_native_owner(inputs, change):
     with pytest.raises(HTTPException) as exc:
-        jobs.normalize_job_request(JobCreate(name='invalid', model_id='ppiflow', mode='protein_binder',
+        job_requests.normalize_job_request(JobCreate(name='invalid', model_id='ppiflow', mode='protein_binder',
             params={**settings('protein_binder', inputs), **change}))
     assert exc.value.status_code == 422
 
@@ -143,7 +148,7 @@ async def test_remote_preparation_preview_approval_reuses_owned_sources(admissio
     request = JobCreate(name='remote-initial', model_id='ppiflow', mode='protein_binder',
         params=settings('protein_binder', inputs), execution_target_id='vast:fixture')
     with pytest.raises(HTTPException) as response:
-        await jobs._create_job(request, BackgroundTasks(), admission)
+        await job_submission._create_job(request, BackgroundTasks(), admission)
     assert response.value.status_code == 409
     detail = response.value.detail
     assert detail['code'] == 'remote_prepared_job_review_required'
@@ -153,18 +158,18 @@ async def test_remote_preparation_preview_approval_reuses_owned_sources(admissio
     assert len(calls) == 1
     assert not list(await admission.scalars(select(Job.id)))
     inputs[0].unlink()
-    preview = jobs._execution_plan_preview(prepared)
+    preview = job_requests._execution_plan_preview(prepared)
     assert preview['admissible'], preview['blockers']
     assert preview['input_identities']
     altered = prepared.model_copy(deep=True)
     altered.params['self_condition'] = True
     altered.execution_plan_approval = preview['approval_digest']
     with pytest.raises(HTTPException) as changed:
-        await jobs._create_job(altered, BackgroundTasks(), admission)
+        await job_submission._create_job(altered, BackgroundTasks(), admission)
     assert changed.value.status_code in {409, 422}
     assert not list(await admission.scalars(select(Job.id)))
     prepared.execution_plan_approval = preview['approval_digest']
-    result = await jobs._create_job(prepared, BackgroundTasks(), admission)
+    result = await job_submission._create_job(prepared, BackgroundTasks(), admission)
     job = await admission.get(Job, result.id)
     assert job.status == 'queued'
     assert job.execution_target_id == 'vast:fixture'

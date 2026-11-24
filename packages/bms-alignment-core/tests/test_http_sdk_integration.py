@@ -23,6 +23,7 @@ pytest.importorskip('trimesh')
 from database import Base
 from model_registry import ModelRegistry
 from routers import jobs, models
+from services import job_requests
 
 
 def test_sdk_real_asgi_scratch_jobs(tmp_path, monkeypatch):
@@ -32,6 +33,7 @@ def test_sdk_real_asgi_scratch_jobs(tmp_path, monkeypatch):
     api = Path(__file__).resolve().parents[3] / 'platform' / 'api'
     registry = ModelRegistry(api / 'config' / 'models')
     monkeypatch.setattr(jobs, 'get_registry', lambda: registry)
+    monkeypatch.setattr(job_requests, 'get_registry', lambda: registry)
     engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "jobs.sqlite"}')
     async def setup():
         async with engine.begin() as conn:

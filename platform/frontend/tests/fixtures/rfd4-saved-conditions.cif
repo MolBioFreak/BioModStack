@@ -1,7 +1,7 @@
 data_rfd4-saved-conditions.cif
 #
 _entry.id       rfd4-saved-conditions.cif
-_entry.author   dalab
+_entry.author   user 
 _entry.date     2026-10-25
 _entry.time     17:55:22
 #

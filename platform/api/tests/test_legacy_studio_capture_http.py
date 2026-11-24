@@ -39,8 +39,11 @@ async def test_mounted_legacy_capture_cold_http_prepare(generator, capture_api, 
     app, inputs = capture_api
     import paths
     from routers import jobs
+    from services import job_submission
+    from services import job_requests
     roots = {'inputs': inputs, 'bms_results': tmp_path / 'results'}
-    monkeypatch.setattr(jobs, 'get_allowed_roots', lambda: roots)
+    monkeypatch.setattr(job_submission, 'get_allowed_roots', lambda: roots)
+    monkeypatch.setattr(job_requests, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(paths, 'get_inputs_dir', lambda: inputs)
     monkeypatch.setattr(paths, 'get_data_root', lambda: tmp_path)
     # Replay exact browser-uploaded bytes to the real private file authority.

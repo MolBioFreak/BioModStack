@@ -35,13 +35,6 @@ export const MODE_DISPLAY_NAMES: Record<string, string> = {
     'monomer_motifscaff': 'Motif Scaffold Monomer',
     'monomer_partialdiff': 'Partial Diffusion Monomer',
 
-    // Docking
-    'docking': 'Molecular Docking',
-    'dock': 'Docking',
-    'ntp_dock': 'NTP Docking',
-    'compare': 'Docking Comparison',
-    'consensus': 'Consensus Docking',
-
     // DNA Polymerase
     'dna_polymerase': 'DNA Polymerase Design',
 
@@ -65,8 +58,6 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
     'rfdiffusion': 'RFdiffusion',
     'rfd3': 'RFdiffusion3',
     'boltzgen': 'BoltzGen',
-    'diffdock': 'DiffDock',
-    'unidock': 'Uni-Dock',
     'antiberty': 'AntiBERTy',
     'thermompnn': 'ThermoMPNN',
     'antifold': 'AntiFold',

@@ -9,7 +9,8 @@ import { hasStickyDigestEnds } from '../../lib/retainedDigestFragment';
 import type { RestrictionDigestFragment } from '../../lib/restrictionAnalysis';
 import {
     buildPrimersTsv,
-    canonicalizeExportablePrimer,
+    genbankFeature,
+    genbankPrimerFeatures,
 } from './utils/exportData';
 
 interface ExportDropdownProps {
@@ -54,27 +55,19 @@ interface ExportDropdownProps {
     historyJournal?: HistoryEntry[];
     onExportToProject?: () => void;
     projectExportDisabled?: boolean;
+    onExportBranch?: () => Promise<void>;
+    branchExportDisabled?: boolean;
     className?: string;
 }
 
-function featureLocations(feature: NonNullable<ExportDropdownProps['sequenceData']['features']>[number]) {
-    return (feature.segments && feature.segments.length > 0
-        ? feature.segments
-        : [{ start: feature.start, end: feature.end }]).map((segment) => ({
-            start: segment.start,
-            end: segment.end,
-        }));
+function describeEnds(fragment: RestrictionDigestFragment): string {
+    const end = (e: RestrictionDigestFragment['left_end']) => e.kind === 'blunt' || e.kind === 'natural'
+        ? e.kind
+        : `${e.kind === 'five_prime_overhang' ? "5'" : "3'"} overhang ${e.overhang_sequence_5to3 ?? ''} (${e.protruding_strand ?? '?'} strand)`;
+    return `[sticky ends: left ${end(fragment.left_end)}; right ${end(fragment.right_end)}; top strand only]`;
 }
 
-function formatNotes(feature: NonNullable<ExportDropdownProps['sequenceData']['features']>[number]) {
-    return {
-        ...(feature.notes || {}),
-        ...(feature.qualifiers || {}),
-        provenance: feature.provenance || undefined,
-    };
-}
-
-export function ExportDropdown({ sequenceData, historyJournal = [], className, onExportToProject, projectExportDisabled = false }: ExportDropdownProps) {
+export function ExportDropdown({ sequenceData, historyJournal = [], className, onExportToProject, projectExportDisabled = false, onExportBranch, branchExportDisabled = false }: ExportDropdownProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [exportError, setExportError] = useState<string | null>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -127,22 +120,17 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className, o
         };
     }, [isOpen]);
 
+    const sticky = hasStickyDigestEnds(sequenceData.digestFragment);
+    const stickyNote = sticky && sequenceData.digestFragment ? describeEnds(sequenceData.digestFragment) : '';
+
     const exportAs = async (format: 'genbank' | 'fasta' | 'json' | 'features_tsv' | 'primers_tsv' | 'history_txt') => {
         setExportError(null);
         try {
-            if ((format === 'fasta' || format === 'genbank') && hasStickyDigestEnds(sequenceData.digestFragment)) {
-                throw new Error('This fragment has physical sticky ends. FASTA and this GenBank exporter cannot preserve both strands and end chemistry. Export Toolkit JSON or reopen the saved digest instead.');
-            }
-            if (format === 'genbank' && sequenceData.primers?.some(primer => primer.binding_status === 'needs_review')) {
-                throw new Error('Review primer bindings before GenBank export, or export JSON/primer TSV to retain unplaced oligos.');
-            }
             let content: string;
             let extension: string;
 
             if (format === 'fasta') {
-                const header = sequenceData.description
-                    ? `>${sequenceData.name} ${sequenceData.description}`
-                    : `>${sequenceData.name}`;
+                const header = [`>${sequenceData.name}`, sequenceData.description, stickyNote].filter(Boolean).join(' ');
                 content = `${header}\n${sequenceData.sequence.match(/.{1,80}/g)?.join('\n') || ''}`;
                 extension = 'fasta';
             } else if (format === 'json') {
@@ -178,25 +166,20 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className, o
                 extension = 'history.txt';
             } else {
                 const { jsonToGenbank } = await import('@teselagen/bio-parsers');
+                const length = sequenceData.sequence.length;
+                const circular = Boolean(sequenceData.circular);
                 content = jsonToGenbank({
                     name: sequenceData.name,
                     description: sequenceData.description,
                     sequence: sequenceData.sequence,
                     circular: sequenceData.circular,
                     type: sequenceData.sequenceType === 'rna' ? 'RNA' : 'DNA',
-                    features: (sequenceData.features || []).map((feature) => ({
-                        ...feature,
-                        locations: featureLocations(feature),
-                        notes: formatNotes(feature),
-                    })),
-                    primers: (sequenceData.primers || []).map((primer) => (
-                        canonicalizeExportablePrimer(
-                            primer,
-                            sequenceData.sequence.length,
-                            Boolean(sequenceData.circular),
-                        )
-                    )),
-                }) || '';
+                    comments: stickyNote ? [`${stickyNote} Only the top strand is encoded.`] : undefined,
+                    features: [
+                        ...(sequenceData.features || []).map(genbankFeature),
+                        ...genbankPrimerFeatures(sequenceData.primers || [], length, circular),
+                    ],
+                }, { inclusive1BasedEnd: true }) || '';
                 extension = 'gb';
             }
 
@@ -242,6 +225,7 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className, o
                 <div ref={popupRef} id={popupId} role="group" aria-label="Export formats"
                     style={{ ...position, maxWidth: 'calc(100vw - 16px)', maxHeight: 'calc(100vh - 16px)' }}
                     className="fixed w-56 overflow-y-auto bg-slate-700 border border-slate-600 rounded shadow-lg z-[100]">
+                    {sticky && <p className="border-b border-slate-600 px-3 py-2 text-xs text-slate-300">Sticky ends: FASTA and GenBank encode only the top strand; the ends are noted in the header. Toolkit JSON keeps both.</p>}
                     {onExportToProject && <button type="button" disabled={projectExportDisabled} onClick={() => { setIsOpen(false); onExportToProject(); }} className="w-full border-b border-slate-600 px-3 py-2 text-left text-sm font-semibold text-cyan-300 hover:bg-slate-600 disabled:opacity-50" title={projectExportDisabled ? 'Save this sequence before exporting it to a Project' : 'Add this saved sequence and optional history to a Project'}>Export to Project…</button>}
                     <button
                         onClick={() => exportAs('genbank')}
@@ -279,6 +263,17 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className, o
                     >
                         History Text (.txt)
                     </button>
+                    {onExportBranch && <button type="button" disabled={branchExportDisabled}
+                        title={branchExportDisabled ? 'Save this sequence first to export its branch' : 'Export this molecule with its derivation'}
+                        onClick={async () => {
+                            setExportError(null);
+                            try { await onExportBranch(); setIsOpen(false); buttonRef.current?.focus(); }
+                            catch (error) { setExportError(error instanceof Error ? error.message : 'Export failed'); }
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-slate-600 transition-colors disabled:opacity-50"
+                    >
+                        Branch (.molbio-branch.json)
+                    </button>}
                 </div>, document.body
             )}
         </div>

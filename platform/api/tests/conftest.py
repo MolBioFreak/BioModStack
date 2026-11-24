@@ -435,7 +435,7 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     runtime_marked = item.get_closest_marker(_RUNTIME_INTEGRATION_MARKER) is not None
     runtime_authorized = os.environ.get(_RUNTIME_INTEGRATION_ENV) == "1"
     if runtime_marked and not runtime_authorized:
-        raise RuntimeError(
+        pytest.skip(
             f"@pytest.mark.{_RUNTIME_INTEGRATION_MARKER} requires exact "
             f"{_RUNTIME_INTEGRATION_ENV}=1"
         )

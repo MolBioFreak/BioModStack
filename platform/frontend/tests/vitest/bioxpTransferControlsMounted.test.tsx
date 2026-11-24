@@ -138,9 +138,9 @@ it('shows listed live work without treating the jobs projection as admission', a
     rows = [{ job_id: 'old', command: { status: 'ambiguous', terminal: true } }];
     await render(); expect(button().disabled).toBe(false);
 
-    rows = [{ job_id: 'live', command: { status: 'executing', terminal: false } }];
+    rows = [{ job_id: 'live', dry_run: false, command: { command_id: 'live', status: 'dispatched', terminal: false } }];
     await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'protocols', 'jobs'] }); }); await tick();
-    expect(host.textContent).toContain('Listed job live · executing');
+    expect(host.textContent).toContain('Listed job live · dispatched');
     expect(button().disabled).toBe(false);
 });
 it('reports a mismatched terminal readback without turning the record into an admission gate', async () => {
@@ -188,4 +188,32 @@ it('lists objects and destinations from the backend catalog, including strips an
     await act(async () => button().click()); await tick();
     expect((vi.mocked(api.post).mock.calls[0][1] as any).document.stages[0].actions[0]).toMatchObject({
         kind: 'plate_move', params: { plate_id: 'TROUGH', target_location: 'LOC_OCS' } });
+});
+
+
+it('polls compact observations without an idempotency key and reads full evidence only once at terminal', async () => {
+    const original = vi.mocked(api.get).getMockImplementation()!;
+    vi.mocked(api.get).mockImplementation(async (path, config) => {
+        const response = await original(path, config);
+        if (!String(path).includes('/jobs/') || !config?.params?.observation) return response;
+        const full = (response as any).data;
+        const { idempotency_key, status_path, ...command } = full.command;
+        return { data: { schema_version: 'bioxp.protocol_job_observation.v1', job_id: full.job_id,
+            status: full.status, command, execution: { dry_run: false, runtime_state: { workflow: full.execution.runtime_state.workflow } }, operator: {} } } as never;
+    });
+    await render(); await act(async () => button().click()); await tick();
+    const detailReads = () => vi.mocked(api.get).mock.calls.filter(([path, config]) => String(path).includes('/jobs/') && !config?.params?.observation);
+    const observationReads = () => vi.mocked(api.get).mock.calls.filter(([path, config]) => String(path).includes('/jobs/') && config?.params?.observation);
+    expect(detailReads()).toHaveLength(0);
+    expect(host.textContent).toContain('dispatched · executing');
+    expect(host.textContent).not.toContain('identity mismatch');
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 2100)); }); await tick();
+    expect(observationReads().length).toBeGreaterThan(1); expect(detailReads()).toHaveLength(0);
+    await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'protocols', 'jobs', 9, job.job_id, 'observation'] }); }); await tick();
+    expect(observationReads().length).toBeGreaterThan(1); expect(detailReads()).toHaveLength(0);
+    job = { ...job, status: 'completed', command: { ...job.command, status: 'completed', terminal: true }, execution: { dry_run: false, runtime_state: {
+        workflow: { command_id: job.job_id, phase: 'terminal', child_command_ids: [] }, action_results: [{ ok: true, custody: 'released at destination' }] } } };
+    await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'protocols', 'jobs', 9, job.job_id, 'observation'] }); }); await tick(); await tick();
+    expect(detailReads()).toHaveLength(1); expect(host.textContent).toContain('released at destination');
+    await render(); expect(detailReads()).toHaveLength(1);
 });

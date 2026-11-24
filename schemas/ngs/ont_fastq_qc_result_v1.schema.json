@@ -306,6 +306,7 @@
             },
             "filename_extension": {
               "enum": [
+                "ab1",
                 "bai",
                 "bam",
                 "bed",
@@ -425,6 +426,7 @@
             "filename_extension": {
               "enum": [
                 null,
+                "ab1",
                 "bai",
                 "bam",
                 "bed",
@@ -552,6 +554,7 @@
         "observed_consensus",
         "per_base_metrics",
         "per_base_support",
+        "pileup_chromatogram",
         "read_lengths",
         "reference",
         "reference_index",

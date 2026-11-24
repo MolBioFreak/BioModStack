@@ -101,7 +101,7 @@ def test_v2_normalization_binds_catalog_generation_and_server_resolved_profile()
 
 def test_create_route_keeps_validation_preview_out_of_caller_owned_spec() -> None:
     """The raw request must reach materialization; resolved previews are server-only."""
-    source = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
+    source = (API_ROOT / "services" / "job_requests.py").read_text(encoding="utf-8")
     start = source.index('if job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate":')
     end = source.index("# Skip validation for template jobs", start)
     preview_block = source[start:end]
@@ -179,7 +179,9 @@ def test_v2_run_manifest_truthfully_identifies_its_job_contract(tmp_path: Path) 
 def test_capabilities_advertise_v2_without_removing_retained_v1(monkeypatch: pytest.MonkeyPatch) -> None:
     import main
     from routers import molecular_dynamics
+    from services.md import native_launch
     monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: _catalog())
+    monkeypatch.setattr(native_launch, "get_chemistry_catalog", lambda: _catalog())
     client = TestClient(main.app)
     try:
         response = client.get("/api/molecular-dynamics/capabilities")

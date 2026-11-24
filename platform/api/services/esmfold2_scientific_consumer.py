@@ -45,6 +45,59 @@ def canonical_bytes(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
 
 
+def _resolve_esmfold2_final_root(output_path, job=None):
+    if job is not None:
+        from services.nextflow import sequence_batch_roster
+        params = job.params or {}
+        roster = [row['name'] for row in sequence_batch_roster(params)]
+        count = params.get('num_parallel_jobs', 1)
+        if not roster and type(count) is int and count > 1:
+            name = params.get('sequence_name') or 'predicted'
+            roster = [f'{name}_job{i}' for i in range(count)]
+        if len(roster) > 1:
+            from services.core_protein_result_contract import CandidateIntegrityError
+            root = output_path / 'final/esmfold2'
+            roots = list(root.glob('*/esmfold2_results'))
+            if ({p.parent.name for p in roots} != set(roster) or
+                    any(not p.resolve().is_relative_to(output_path.resolve()) for p in roots)):
+                raise CandidateIntegrityError('candidate_publication_mismatch', 'ESMFold2 task roster mismatch')
+            return root
+
+    esmfold2_root = output_path / "final" / "esmfold2"
+    # The workflow publishes single-sequence jobs under
+    # final/esmfold2/<sequence_name>/esmfold2_results. Keep the older aggregate
+    # directory candidates for backward compatibility, but discover only the
+    # bounded one-level sequence namespace rather than recursively scanning the
+    # job root.
+    sequence_roots = (
+        sorted(esmfold2_root.glob("*/esmfold2_results"))
+        if esmfold2_root.is_dir()
+        else []
+    )
+    candidates = [
+        esmfold2_root / "esmfold2_results",
+        *sequence_roots,
+        esmfold2_root,
+        output_path / "esmfold2_results",
+        output_path / "pdb_files" / "esmfold2_results",
+        output_path,
+    ]
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            manifest = json.loads((candidate / "manifest.json").read_text())
+        except Exception:
+            manifest = None
+        if isinstance(manifest, dict) and str(manifest.get("workflow") or "").strip().lower() in {"esmfold2", "esmfold2_experimental"}:
+            return candidate
+        if any(candidate.glob("*.metrics.json")) and (
+            any(candidate.glob("*.cif")) or any(candidate.glob("*.mmcif")) or any(candidate.glob("*.pdb"))
+        ):
+            return candidate
+    return None
+
+
 async def _verified_publication(job_id, session):
     """Verify one Job's whole publication once; callers select from it."""
     from paths import get_data_root, resolve_runtime_data_path
@@ -57,8 +110,7 @@ async def _verified_publication(job_id, session):
             raise ValueError('missing_producer_publication_root')
         root = Path(job.output_dir)
         root = resolve_runtime_data_path(root) if root.is_absolute() else get_data_root() / root
-        from services.result_ingester import _resolve_esmfold2_final_root
-        root = _resolve_esmfold2_final_root(root)
+        root = _resolve_esmfold2_final_root(root, job)
         if root is None:
             raise ValueError('missing_producer_publication_root')
         rows = list((await session.execute(select(Design).where(
@@ -146,12 +198,14 @@ def scalar_records_from_publication(design, job, read):
     from services.core_protein_result_contract import _persisted_candidate_artifacts
     receipt = job.provenance['core_protein_candidate_publication']
     artifacts = _persisted_candidate_artifacts(receipt, design)
-    manifest = read(receipt['manifest'])
+    from services.core_protein_result_contract import candidate_manifest
+    descriptor = candidate_manifest(receipt, design.name)
+    manifest = read(descriptor)
     if manifest.get('schema_version') != 2 or manifest.get('workflow') != 'esmfold2':
         raise ValueError('foreign scalar manifest')
-    entries = read(receipt['manifest'], index=('samples', 'sample_id'))
+    entries = read(descriptor, index=('samples', 'sample_id'))
     entry = entries[design.name]
-    root = Path(receipt['manifest']['path']).parent
+    root = Path(descriptor['path']).parent
     if (design.source_stage is not None
             or artifacts['structure']['path'] != str(root / entry['cif'])
             or artifacts['metrics']['path'] != str(root / entry['metrics'])):

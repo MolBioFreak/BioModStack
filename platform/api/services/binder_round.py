@@ -80,11 +80,11 @@ def round_state(retained):
 
 async def submit_step(session, experiments, step, *, destination, context):
     """One ordinary Job/Project submission boundary for initial and selected rounds."""
-    from routers.jobs import submit_selected_child_jobs
+    from services.job_submission import submit_selected_child_jobs
     tasks = BackgroundTasks()
     try:
         if step['metadata'].get('route') == 'md_native':
-            from routers.molecular_dynamics import _launch_native_md_job
+            from services.md.native_launch import _launch_native_md_job
             from services.md.starting_structures import MdLaunchRequest
             launch = MdLaunchRequest.model_validate(step['metadata']['md_launch_request'])
             if (launch.intent.execution_target_id and
@@ -292,7 +292,7 @@ async def _plan(session, root, progress, request, *, retry=False, branch=None):
         return await _plan_invocations(session, root, progress, request)
     from services.binder_diagnostic_selection import declared_targets
     from services.binder_round_inputs import candidate_roles, requires_design, design_request, prediction_request
-    from routers.jobs import normalize_job_request
+    from services.job_requests import normalize_job_request
     sources = [(root, design, design.id, None) for design in await session.scalars(
         select(Design).where(Design.job_id == root.id).order_by(Design.id))]
     # Only the exact sequence-design owners in this round contribute descendants.
@@ -388,7 +388,7 @@ async def _plan(session, root, progress, request, *, retry=False, branch=None):
 async def refresh_md_retry(session, replacement):
     if replacement['metadata'].get('route') != 'md_native':
         return
-    from routers.molecular_dynamics import _compile_native_preview, _native_md_job_request
+    from services.md.native_launch import _compile_native_preview, _native_md_job_request
     from services.md.starting_structures import MdLaunchRequest
     launch = MdLaunchRequest.model_validate(replacement['metadata']['md_launch_request'])
     launch.intent.name = replacement['request']['name']

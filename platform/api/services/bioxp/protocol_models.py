@@ -14,7 +14,7 @@ Identity = Annotated[str, Field(min_length=1)]
 Generation = Annotated[StrictInt, Field(ge=0)]
 WorkflowPhase = Literal["queued", "preparing", "starting", "executing", "waiting", "waking", "epilogue", "cleanup", "reconciling", "terminal"]
 WorkflowGate = Literal["ordinary_pause", "deferred_pause", "delaypoint", "review", "error_hold"]
-CommandStatus = Literal["queued", "dispatched", "interrupting", "completed", "failed", "interrupted", "cleared", "ambiguous", "rejected"]
+CommandStatus = Literal["queued", "dispatched", "interrupting", "completed", "failed", "interrupted", "cleared", "ambiguous", "rejected", "outcome_unknown", "reconciliation_required", "issued_pending", "stop_requested", "abort_requested", "stopped", "aborted", "cancelled"]
 
 
 class ProtocolSubmission(ProtocolWireModel):
@@ -88,7 +88,39 @@ class AbortControl(ControlBinding):
     action: Literal["abort"]
 
 
-ProtocolControlRequest = Annotated[PauseControl | WakeControl | ContinueControl | SafeStopControl | AbortControl, Field(discriminator="action")]
+PRESSURE_LIMITS = {'plld_threshold_adc': (1, 1000), 'plld_persistence_ms': (1, 100), 'plld_start_position_increments': (0, 44000), 'plld_speed_increments_s': (100, 1000), 'plld_travel_increments': (500, 44000), 'plld_direction': (0, 1), 'pressure_interval_ms': (1, 20), 'pressure_samples_per_can': (1, 3), 'hybrid_interval_ms': (1, 100)}
+
+
+class RequestedRecovery(ProtocolWireModel):
+    action: Literal["recover"]
+    decision: Literal["retry", "repeat", "skip", "manual_complete"]
+    gate_id: Identity
+    source_occurrence_id: Identity
+    native_action_id: Identity
+    expected_attempt: Annotated[StrictInt, Field(ge=1)]
+    scope: Literal["action", "occurrence"] = "action"
+    overrides: dict[Literal['source_offset_steps', 'destination_offset_steps', 'aspiration_delay_ms', 'dispense_delay_ms', 'on_contact_delay_ms', 'submerge_steps', 'plld_threshold_adc', 'plld_persistence_ms', 'plld_start_position_increments', 'plld_speed_increments_s', 'plld_travel_increments', 'plld_direction', 'pressure_interval_ms', 'pressure_samples_per_can', 'hybrid_interval_ms'], StrictInt] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_edits(self):
+        limits = PRESSURE_LIMITS
+        if self.overrides.get("on_contact_delay_ms", 0) > 5000:
+            raise ValueError("Contact delay exceeds native range")
+        for key, value in self.overrides.items():
+            if key in limits and not limits[key][0] <= value <= limits[key][1]:
+                raise ValueError(f"{key} outside native pressure range")
+            if key not in ("source_offset_steps", "destination_offset_steps") and value < 0:
+                raise ValueError(f"{key} must not be negative")
+        if self.overrides and self.decision not in ("retry", "repeat"):
+            raise ValueError("Only an executing decision accepts overrides")
+        return self
+
+
+class RecoveryControl(ControlBinding, RequestedRecovery):
+    pass
+
+
+ProtocolControlRequest = Annotated[RecoveryControl | PauseControl | WakeControl | ContinueControl | SafeStopControl | AbortControl, Field(discriminator="action")]
 
 
 class ProtocolReviewRequest(ControlBinding):
@@ -115,6 +147,8 @@ class ProtocolObservedCommand(ProtocolWireModel):
     state_version: Generation
     status: CommandStatus
     terminal: StrictBool
+    # Native recovery evidence is opaque JSON, shared by full and compact reads.
+    recovery_resolution: dict[str, JsonValue] | None = None
 
 
 class ProtocolCommand(ProtocolObservedCommand):
@@ -157,7 +191,12 @@ class RequestedTermination(ProtocolWireModel):
     action: Literal["safe_stop", "abort"]
 
 
-RequestedControl = Annotated[RequestedPause | RequestedWake | RequestedContinue | RequestedTermination, Field(discriminator="action")]
+class ObservedRecovery(ProtocolWireModel):
+    action: Literal["recover"]
+    gate_id: Identity
+
+
+RequestedControl = Annotated[ObservedRecovery | RequestedPause | RequestedWake | RequestedContinue | RequestedTermination, Field(discriminator="action")]
 
 
 class ProtocolWorkflowState(ProtocolWireModel):
@@ -166,6 +205,8 @@ class ProtocolWorkflowState(ProtocolWireModel):
     gate: WorkflowGate | None
     gate_id: Identity | None
     source_occurrence_id: Identity | None
+    native_action_id: Identity | None = None
+    attempt: Annotated[StrictInt, Field(ge=1)] | None = None
     requested_control: RequestedControl | None
     last_control_id: Identity | None
     reached_control_id: Identity | None
@@ -281,6 +322,7 @@ class ProtocolJob(ProtocolWireModel):
     created_at: str
     updated_at: str
     status: CommandStatus | Literal["awaiting_review", "running"]
+    recorded_status: CommandStatus | None = None
     protocol: ProtocolSource
     execution: ProtocolExecution
     operator: ProtocolOperator
@@ -316,6 +358,7 @@ class ProtocolJobObservation(ProtocolWireModel):
     schema_version: Literal["bioxp.protocol_job_observation.v1"]
     job_id: Identity
     status: CommandStatus
+    recorded_status: CommandStatus | None = None
     command: ProtocolObservedCommand
     execution: ProtocolObservationExecution
     operator: ProtocolObservationOperator

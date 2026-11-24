@@ -59,7 +59,7 @@ async function mount(rows = fixture(100), options: { failOffset?: number; missin
 }
 async function exported() {
     const link = tree.root.findAllByType('a').find(node => text(node) === 'Native JSON')!;
-    return new Promise<any[]>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(JSON.parse(String(reader.result))); reader.onerror = reject; reader.readAsText(blobs.get(link.props.href)!); });
+    return new Promise<any[]>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(JSON.parse(String(reader.result)).records.map((record: any) => record.native_record)); reader.onerror = reject; reader.readAsText(blobs.get(link.props.href)!); });
 }
 beforeEach(() => {
     reads = []; blobs = new Map(); localStorage.clear(); sessionStorage.clear(); window.history.replaceState({}, '', '/');

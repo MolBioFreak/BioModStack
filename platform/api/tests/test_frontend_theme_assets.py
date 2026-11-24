@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -105,7 +106,11 @@ def test_square_corner_usage_is_explicit_and_contextual() -> None:
         "components/NGSToolkit.tsx",
         "components/BioXpCockpit.tsx",
         "components/conformationalMapping/ConformationalMappingViewer.tsx",
+        # Open thermal step options attach flush under their summary: square top, rounded bottom.
+        "components/BioXpMethodThermalEditor.css",
     }
+    # A zero radius only; 0.5rem and the like are rounded.
+    square = re.compile(r"rounded-none|border-radius: 0(?![.\d])|borderRadius: 0(?![.\d])")
     offenders: list[str] = []
     for path in FRONTEND_SRC.rglob("*"):
         if path.suffix not in {".ts", ".tsx", ".css"}:
@@ -114,7 +119,7 @@ def test_square_corner_usage_is_explicit_and_contextual() -> None:
         if rel in allowed_files:
             continue
         text = read(path)
-        if "rounded-none" in text or "border-radius: 0" in text or "borderRadius: 0" in text:
+        if square.search(text):
             offenders.append(rel)
 
     assert offenders == []
@@ -127,16 +132,17 @@ def test_square_corner_usage_is_explicit_and_contextual() -> None:
 
 def test_font_family_is_owned_by_global_theme_only() -> None:
     """Components may use semantic font weights/mono spans, but not define competing app fonts."""
+    # CSS and inline styles, Tailwind arbitrary fonts, canvas font strings and Plotly families.
+    named_font = re.compile(r"""font-family|fontFamily|font-\[|\.font\s*=\s*['"]|font:\s*\{[^{}]*\bfamily:\s*['"]""")
     offenders: list[str] = []
     for path in FRONTEND_SRC.rglob("*"):
         if path.suffix not in {".ts", ".tsx", ".css"}:
             continue
         rel = path.relative_to(FRONTEND_SRC).as_posix()
-        if rel in {"index.css", "components/NGSToolkit.tsx", "components/MolBioToolkit/RnaStructureViewer.tsx"}:
-            # Canvas/SVG drawing code needs explicit font metadata; app shell typography stays global.
+        # index.css defines the fonts; lib/themeFont.ts reads them for canvas, Plotly and iframes.
+        if rel in {"index.css", "lib/themeFont.ts"}:
             continue
-        text = read(path)
-        if "font-family" in text or "fontFamily" in text or "font-[" in text:
+        if named_font.search(read(path)):
             offenders.append(rel)
 
     assert offenders == []

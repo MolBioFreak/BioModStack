@@ -72,8 +72,8 @@ test('main tab projects embedded telemetry into status, axes and tools without a
     assert.match(dashboard, /motor_temperature_available/);
     assert.match(cockpit, /position_steps/);
     assert.match(dashboard, /run_current/);
-    assert.match(cockpit, /sensor\.label/);
-    assert.match(cockpit, /sensor\.unit/);
+    // Temperatures come from the robot's live readings in the thermal cards, not the aged dashboard list.
+    assert.match(cockpit, /BioXpThermalControls/);
     assert.doesNotMatch(dashboard, /useBioXpOperatorDashboard\(/);
     // R5: current embedded telemetry, not an extra retired dashboard poll.
     // Same-generation read-only catalog polling recovers status observation loss;

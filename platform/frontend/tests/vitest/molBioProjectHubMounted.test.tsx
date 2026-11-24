@@ -189,7 +189,7 @@ describe('mounted MolBio project hub', () => {
         expect(shelf[0]?.reopen_href).toContain('molbio_sequence_id=sequence-pl1480');
         expect(shelf[0]?.reopen_href).not.toContain('molbio_revision_id');
     });
-    it('leads with the approved Project header, tab order, extended DNA sequence cards, and collapsed technical details', async () => {
+    it('leads with the approved Project header, tab order, extended DNA sequence cards, and no routine technical clutter', async () => {
         await renderWorkspace();
 
         expect(container.querySelector('h1')?.textContent).toBe('Syenex New Plasmids');
@@ -206,12 +206,7 @@ describe('mounted MolBio project hub', () => {
         expect(container.textContent).toContain('10 features');
         expect(container.textContent).toContain('Saved Mol Bio experiments');
         expect(container.textContent).toContain('No sequencing data attached');
-        const technicalDetails = container.querySelector<HTMLDetailsElement>('details[data-testid="project-technical-details"]');
-        expect(technicalDetails?.open).toBe(false);
-        technicalDetails?.setAttribute('open', '');
-        expect(technicalDetails?.querySelector('button[aria-label="Copy Project / workspace ID"]')).not.toBeNull();
-        expect(technicalDetails?.querySelector('button[aria-label="Copy Selected state revision"]')).not.toBeNull();
-        expect(technicalDetails?.querySelector('button[aria-label="Copy PL1480 receipt ID"]')).not.toBeNull();
+        expect(container.querySelector('[data-testid="project-technical-details"]')).toBeNull();
         const plasmidCards = Array.from(container.querySelectorAll('article')).filter((article) =>
             ['PL1480', 'PL2190'].includes(article.querySelector('h3')?.textContent ?? ''),
         );
@@ -225,7 +220,7 @@ describe('mounted MolBio project hub', () => {
         expect(Array.from(container.querySelectorAll('a[href*="molbio_sequence_id=sequence-pl1480"]:not([href*="molbio_revision_id"])')).some((link) => link.textContent?.includes('Open DNA sequence'))).toBe(true);
         const miniMap = container.querySelector<HTMLAnchorElement>('a[data-testid="plasmid-mini-map"][href*="molbio_sequence_id=sequence-pl1480"]');
         expect(miniMap?.getAttribute('aria-label')).toBe('Open full DNA sequence map for PL1480, 5,512 bp');
-        expect(miniMap?.querySelector('title')?.textContent).toContain('NeoR/KanR');
+        expect(miniMap?.querySelector('[data-feature-label="NeoR/KanR"] title')?.textContent).toContain('NeoR/KanR');
         expect(miniMap?.querySelector('[data-feature-direction="reverse"]')).not.toBeNull();
         expect(miniMap?.querySelector('[data-feature-label="NeoR/KanR"][tabindex="0"]')).not.toBeNull();
         expect(miniMap?.querySelector('circle[stroke-dasharray^="0 "]')).toBeNull();
@@ -305,6 +300,41 @@ describe('mounted MolBio project hub', () => {
         expect(container.textContent).toContain('Saved Gibson assembly');
         expect(container.textContent).not.toContain('Validation PCR');
         expect(container.textContent).not.toContain('Transient alignment');
+    });
+
+    it('opens the Toolkit in the selected sequence context without promising a tool-specific launch', async () => {
+        await renderWorkspace('workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=experiments&plasmid=sequence-pl2190');
+        const launch = Array.from(container.querySelectorAll('a')).find((link) => link.textContent === 'Open Mol Bio Toolkit');
+        expect(launch?.getAttribute('href')).toBe(plasmids[1].reopen_href);
+        expect(container.querySelector('a[href="/molbio"]')).toBeNull();
+        expect(container.textContent).not.toContain('Start PCR');
+        expect(container.textContent).not.toContain('New digest');
+        expect(container.textContent).not.toContain('Open latest PL1480');
+        expect(container.textContent).toContain('Open latest PL2190');
+        expect(container.querySelector('[data-testid="project-technical-details"]')).toBeNull();
+
+        await renderWorkspace('workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=experiments');
+        const projectLaunch = Array.from(container.querySelectorAll('a')).find((link) => link.textContent === 'Open Mol Bio Toolkit');
+        const destination = new URL(projectLaunch!.getAttribute('href')!, 'https://example.invalid');
+        expect(destination.pathname).toBe('/designer');
+        expect(Object.fromEntries(destination.searchParams)).toEqual({
+            workspace_id: 'project-1', global_experiment_id: 'experiment-1',
+            domain_experiment_id: 'domain-1', state_revision_id: 'state-current',
+        });
+    });
+
+    it('does not present a bounded operations page as complete project counts', async () => {
+        const page = { next_cursor: null, has_more: false, total_count: 0 };
+        apiMocks.fetchProjectHub.mockResolvedValue({ ...readModel, pages: {
+            members: { ...page, total_count: 2 },
+            operations: { next_cursor: 'operations-next', has_more: true, total_count: 105 },
+            evidence: page, activity: page,
+        } });
+        await renderWorkspace('workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=experiments');
+        expect(container.textContent).toContain('Filters and counts apply to this page.');
+        expect(container.textContent).toContain('1 saved on this page');
+        expect(container.textContent).toContain('No matching saved work on this page');
+        expect(container.textContent).not.toContain('No saved restriction digests yet');
     });
 
     it('opens the readable edit dialog, traps focus, closes on Escape, and restores the invoking control', async () => {
@@ -465,6 +495,12 @@ describe('mounted MolBio project hub', () => {
         expect(activityTechnical?.open).toBe(false);
         expect(activityTechnical?.textContent).toContain('molecular_member_attached');
         expect(activityTechnical?.textContent).toContain('event-digest');
+        const technicalDetails = container.querySelector<HTMLDetailsElement>('details[data-testid="project-technical-details"]');
+        expect(technicalDetails?.open).toBe(false);
+        technicalDetails?.setAttribute('open', '');
+        expect(technicalDetails?.querySelector('button[aria-label="Copy Project / workspace ID"]')).not.toBeNull();
+        expect(technicalDetails?.querySelector('button[aria-label="Copy Selected state revision"]')).not.toBeNull();
+        expect(technicalDetails?.querySelector('button[aria-label="Copy PL1480 receipt ID"]')).not.toBeNull();
     });
 });
 

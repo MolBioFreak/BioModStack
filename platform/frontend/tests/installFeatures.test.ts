@@ -13,15 +13,16 @@ import {
 } from '../src/runtime/installFeatures.js';
 
 test('optional hardware features default disabled until backend state is confirmed', () => {
-    assert.deepEqual(DEFAULT_BMS_FEATURES, { bioxp: false });
-    assert.deepEqual(DEFAULT_BMS_DEV_FEATURES, { bioxp: true });
+    assert.deepEqual(DEFAULT_BMS_FEATURES, { bioxp: false, local_msa: false });
+    assert.deepEqual(DEFAULT_BMS_DEV_FEATURES, { bioxp: true, local_msa: false });
     assert.deepEqual(normalizeBmsFeatures(null), DEFAULT_BMS_FEATURES);
     assert.deepEqual(normalizeBmsFeatures({}), DEFAULT_BMS_FEATURES);
 });
 
 test('install feature normalization honors resolved backend flags', () => {
     const features = normalizeBmsFeatures({ features: { bioxp: false } });
-    assert.deepEqual(features, { bioxp: false });
+    assert.deepEqual(features, { bioxp: false, local_msa: false });
+    assert.equal(normalizeBmsFeatures({ features: { bioxp: false, local_msa: true } }).local_msa, true);
     assert.equal(isBmsFeatureEnabled(features, 'bioxp'), false);
 });
 

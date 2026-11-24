@@ -1,6 +1,8 @@
 """Shared helpers for validated assembly workflows."""
 from __future__ import annotations
 
+from collections import Counter
+
 from typing import Iterable
 
 from services.molbio_ops import clean_sequence, reverse_complement
@@ -36,25 +38,77 @@ def normalize_end(end: FragmentEnd | None) -> FragmentEnd | None:
     if end.type == "blunt":
         if overhang:
             raise AssemblyError("Blunt ends must not define an overhang sequence")
-        return FragmentEnd(type="blunt", overhang="", label=end.label)
+        return FragmentEnd(type="blunt", overhang="", label=end.label,
+                           five_prime_phosphate=end.five_prime_phosphate)
     if not overhang:
         raise AssemblyError(f"{end.type} ends require an overhang sequence")
     return FragmentEnd(type=end.type, overhang=overhang, label=end.label,
-                       protruding_strand=end.protruding_strand)
+                       protruding_strand=end.protruding_strand,
+                       five_prime_phosphate=end.five_prime_phosphate)
 
 
 def reverse_complement_end(end: FragmentEnd | None) -> FragmentEnd | None:
     if end is None:
         return None
+    # A rotated end keeps its own phosphate state; only the strand label swaps.
     if end.type == "blunt":
-        return FragmentEnd(type="blunt", overhang="", label=end.label)
+        return FragmentEnd(type="blunt", overhang="", label=end.label,
+                           five_prime_phosphate=end.five_prime_phosphate)
     return FragmentEnd(
         type=end.type,
         overhang=end.overhang if end.protruding_strand else reverse_complement(end.overhang),
         label=end.label,
         protruding_strand=("bottom" if end.protruding_strand == "top" else "top")
         if end.protruding_strand else None,
+        five_prime_phosphate=end.five_prime_phosphate,
     )
+
+
+def reverse_complement_text(sequence: str) -> str:
+    return sequence.translate(str.maketrans("ACGTacgt", "TGCAtgca"))[::-1]
+
+
+def require_unique_junction_classes(junctions) -> None:
+    """A Type IIS cut leaves a unique end per site, so a reused overhang class lets junctions compete
+    for the same partner and the tube can assemble in more than one order. A sequence and its reverse
+    complement are the same class."""
+    classes = Counter(
+        min(sequence, reverse_complement_text(sequence))
+        for junction in junctions
+        if (sequence := junction.overhang_sequence)
+    )
+    for sequence, count in classes.items():
+        if count > 1:
+            raise AssemblyError(
+                f"Duplicate overhang detected: {sequence}/{reverse_complement_text(sequence)} used at {count} junctions"
+            )
+
+
+def require_declared_ends_match_sequence(fragment: AssemblyFragment) -> None:
+    """A top-strand overhang a fragment declares must be the bases its sequence actually has there.
+
+    Joins are built from the sequence bytes, so a declared end that the bytes contradict builds a different
+    junction than the one reported. Runs on the fragment as stored, before any reversal. A bottom-strand
+    overhang is not part of the top bytes, so only its partner end can be checked. An end with no strand label
+    is read as a top overhang only for a left 5' end on a forward fragment (the legacy meaning).
+    """
+    sequence = normalize_sequence(fragment.sequence)
+    forward = (fragment.orientation or "forward") == "forward"
+    left = normalize_end(fragment.left_end)
+    right = normalize_end(fragment.right_end)
+    if left and left.overhang:
+        top = left.protruding_strand == "top" or (left.protruding_strand is None and left.type == "sticky_5" and forward)
+        found = sequence[: len(left.overhang)]
+        if top and found != left.overhang:
+            raise AssemblyError(
+                f"Mismatch detected: {fragment.name} declares left overhang {left.overhang}, sequence starts with {found}"
+            )
+    if right and right.overhang and right.protruding_strand == "top":
+        found = sequence[-len(right.overhang):]
+        if found != right.overhang:
+            raise AssemblyError(
+                f"Mismatch detected: {fragment.name} declares right overhang {right.overhang}, sequence ends with {found}"
+            )
 
 
 def orient_fragment(fragment: AssemblyFragment) -> OrientedFragment:
@@ -95,6 +149,7 @@ def orient_fragment(fragment: AssemblyFragment) -> OrientedFragment:
         source_end=fragment.source_end,
         source_wraps_origin=fragment.source_wraps_origin,
         metadata=dict(fragment.metadata or {}),
+        features=fragment.features,
     )
 
 
@@ -109,7 +164,7 @@ def overhangs_compatible(left: FragmentEnd | None, right: FragmentEnd | None) ->
     if left.type == "blunt" or right.type == "blunt":
         if left.type == right.type == "blunt":
             return True, []
-        return False, ["Blunt ends cannot ligate to sticky ends without end-repair"]
+        return False, ["Blunt ends cannot ligate to sticky ends without end-repair (use Fill in / Remove overhang end operations)"]
 
     if left.type != right.type:
         return False, [f"Incompatible sticky-end polarities: {left.type} vs {right.type}"]
@@ -131,6 +186,11 @@ def overhangs_compatible(left: FragmentEnd | None, right: FragmentEnd | None) ->
     return False, [f"Sticky ends are not compatible: {left.overhang} vs {right.overhang}"]
 
 
+def _phosphate_item(end: FragmentEnd) -> dict[str, str]:
+    """Omitted while unknown so older request records and hashes are unchanged."""
+    return {} if end.five_prime_phosphate == "unknown" else {"five_prime_phosphate": end.five_prime_phosphate}
+
+
 def fragment_provenance_payload(fragments: Iterable[OrientedFragment]) -> list[dict[str, object]]:
     payload: list[dict[str, object]] = []
     for fragment in fragments:
@@ -150,12 +210,14 @@ def fragment_provenance_payload(fragments: Iterable[OrientedFragment]) -> list[d
                 "overhang": fragment.left_end.overhang,
                 "label": fragment.left_end.label,
                 "protruding_strand": fragment.left_end.protruding_strand,
+                **_phosphate_item(fragment.left_end),
             },
             "right_end": None if fragment.right_end is None else {
                 "type": fragment.right_end.type,
                 "overhang": fragment.right_end.overhang,
                 "label": fragment.right_end.label,
                 "protruding_strand": fragment.right_end.protruding_strand,
+                **_phosphate_item(fragment.right_end),
             },
             "metadata": fragment.metadata or None,
         })

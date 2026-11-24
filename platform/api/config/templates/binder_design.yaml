@@ -18,14 +18,14 @@ stages:
     tool: ProteinMPNN
     description: Design amino acid sequences optimized for the generated backbones.
   - name: Structure Validation
-    tool: AlphaFold2
+    tool: Boltz-2
     description: Predict structures to verify designs fold correctly and maintain binding pose.
 
 preset_params:
   rfd_mode: binder_denovo
   diffusion_method: rfd3
   seq_method: mpnn
-  pred_method: af2
+  pred_method: boltz
 
 user_params:
   - name: rfd_input_pdb

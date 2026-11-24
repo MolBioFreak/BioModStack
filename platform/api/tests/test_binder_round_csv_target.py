@@ -73,7 +73,7 @@ async def test_native_csv_export_binds_input_without_reading_pickle(selected, mo
     settings = normalize_request(envelope(binder_chains=['B'], target_chains=['T']))
     child, binding = prediction_request(root, root, sample, settings, ['B'], ['T'], targets[0])
     assert child.params['complex_components'] == [
-        {'id': 'A', 'type': 'protein', 'sequence': 'GGGG'},
+        {'id': 'A', 'type': 'protein', 'sequence': 'GGGG', 'modifications': []},
         {'id': 'B', 'type': 'protein', 'sequence': 'AGS'}]
     assert binding['input_components'][1]['source_chain'] == 'R'
     assert binding['input_components'][1]['reference_residues'] == [None] * 3

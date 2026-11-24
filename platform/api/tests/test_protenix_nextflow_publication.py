@@ -2,7 +2,6 @@
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 
 import pytest
@@ -17,9 +16,9 @@ from test_protenix_publication_writer import native_tree
     ('ProtenixFromComplex', True, False),
 ])
 def test_nextflow_copies_exact_staged_seed_sample_paths(tmp_path, process_name, geometry, validator):
-    nextflow = os.environ.get('BMS_TEST_NEXTFLOW') or shutil.which('nextflow')
-    if nextflow is None:
-        pytest.skip('Nextflow executable is required for the publication execution regression')
+    nextflow_jar = os.environ.get('BMS_TEST_NEXTFLOW_JAR')
+    if nextflow_jar is None:
+        pytest.skip('Pinned offline Nextflow JAR is required for the publication execution regression')
     repository = Path(__file__).resolve().parents[3]
     module = (repository/'modules/protenix.nf').read_text()
     helper = 'def protenixComplexFinalizesGeometry' + module.split('def protenixComplexFinalizesGeometry', 1)[1].split('\nprocess ', 1)[0]
@@ -66,7 +65,7 @@ process.memory = '512 MB'
 ''')
     environment = dict(os.environ, NXF_OFFLINE='true', NXF_ANSI_LOG='false',
                        NXF_HOME=str(tmp_path/'nxf-home'), HOME=str(tmp_path/'home'))
-    completed = subprocess.run([nextflow, 'run', str(workflow), '-c', str(config),
+    completed = subprocess.run(['java', '-jar', nextflow_jar, 'run', str(workflow), '-c', str(config),
         '-work-dir', str(tmp_path/'work')], cwd=tmp_path, env=environment,
         capture_output=True, text=True, timeout=120)
     assert completed.returncode == 0, completed.stdout + completed.stderr

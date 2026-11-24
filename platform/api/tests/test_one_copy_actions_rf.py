@@ -68,7 +68,8 @@ def test_seed_no_clobber_sparse_collisions(tmp_path, monkeypatch, immutable, ind
 
 def test_pinned_native_pdb_trb_writer_collisions(tmp_path):
     import pickle
-    native_root = Path(os.environ.get('RF_ACTION_SOURCE', '/mnt/BioModStack/weights/rfantibody/rfantibody_repo'))
+    from paths import get_weights_root
+    native_root = Path(os.environ.get('RF_ACTION_SOURCE') or get_weights_root() / 'rfantibody' / 'rfantibody_repo')
     if not native_root.exists():
         pytest.skip('set RF_ACTION_SOURCE to pinned native source')
     assert subprocess.check_output(['git', '-C', str(native_root), 'rev-parse', 'HEAD'], text=True).strip() == '8d9d402a99fd63052ad538b3d670e467b800123c'

@@ -11,7 +11,8 @@ from sqlalchemy.orm import sessionmaker
 
 from database import Base, Design, Job
 from routers import jobs as jobs_router
-from routers.jobs import get_rfd3_generation_result
+from services import job_requests
+from routers.job_results import get_rfd3_generation_result
 from services import rfd3_generation as generation_contract
 from services.nextflow import build_nextflow_command, resolve_nextflow_entrypoint
 from services.rfd3_generation import (
@@ -104,12 +105,12 @@ def test_rfd3_is_the_default_general_generation_authority(tmp_path: Path) -> Non
 
 
 def test_general_rfd3_skips_unrelated_antibody_parameter_normalization() -> None:
-    assert jobs_router._should_normalize_antibody_job_params(
+    assert job_requests._should_normalize_antibody_job_params(
         MODEL_ID,
         MODE,
         {"generator": "rfd3"},
     ) is False
-    assert jobs_router._should_normalize_antibody_job_params(
+    assert job_requests._should_normalize_antibody_job_params(
         MODEL_ID,
         MODE,
         {"generator": "disco"},
@@ -124,10 +125,10 @@ def test_native_binder_model_requests_do_not_acquire_antibody_defaults() -> None
             "binder_chain": "B",
             "selected_input_dir": "/owned/input",
         }
-        assert jobs_router._should_normalize_antibody_job_params(
+        assert job_requests._should_normalize_antibody_job_params(
             model_id, "design", params,
         ) is False
-        assert jobs_router._should_normalize_antibody_job_params(
+        assert job_requests._should_normalize_antibody_job_params(
             model_id, "analyze", params,
         ) is False
 

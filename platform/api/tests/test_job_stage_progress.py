@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job
 from routers import jobs
+from services import job_readback
 from schemas import JobResponse
 from services.job_stage_progress import project_execution_stages
 
@@ -165,8 +166,8 @@ def test_antibody_output_discovery_does_not_mutate_completion(tmp_path, monkeypa
         completed.append('file_only')
         outputs['file_only'] = [str(tmp_path / 'candidate.pdb')]
         return completed, outputs
-    monkeypatch.setattr(jobs, 'infer_antibody_stage_state', infer)
-    completed, outputs = jobs._resolve_stage_state_for_response(job)
+    monkeypatch.setattr(job_readback, 'infer_antibody_stage_state', infer)
+    completed, outputs = job_readback._resolve_stage_state_for_response(job)
     assert completed == job.completed_stages == ['recorded']
     assert 'file_only' in outputs
     assert [row['id'] for row in project_execution_stages(job)] == ['recorded']
@@ -243,9 +244,11 @@ async def test_http_summary_full_detail_stages_agree_without_n_plus_one(tmp_path
             assert 'params' not in row and 'provenance' not in row
             # Decoded legacy defaults are covered by frontendDashboardSummary.test.ts.
         selects.clear()
-        assert client.get('/api/jobs?summary=true&limit=1').status_code == 200
-        assert query_count <= 5
-        assert len(selects) <= query_count  # zero-direct terminal rows alone need child counts
+        single = client.get('/api/jobs?summary=true&limit=1&q=remote')
+        assert single.status_code == 200
+        assert [row['id'] for row in single.json()['jobs']] == ['remote']
+        # One parent with children exercises the same batched reads as the cohort.
+        assert query_count == len(selects)
         full = client.get('/api/jobs?limit=100')
         assert full.status_code == 200, full.text
         for row in full.json()['jobs']:

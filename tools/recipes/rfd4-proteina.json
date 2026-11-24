@@ -1,0 +1,106 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "rfd4-proteina",
+  "name": "RFD4-Proteina (with its OpenFold3 and AlphaFold2 oracles)",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://huggingface.co/nvidia/RFD4-Proteina"
+  },
+  "notes": "Nothing is built here: the three images are the ones NVIDIA publishes, downloaded and checked against their hashes. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "rfd4_proteina.sif",
+      "pull": {
+        "uri": "https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/runtime/rfd4-proteina-cu13-amd64.sif",
+        "sha256": "058a27dff02778cd7304cf8955c73115f6baaa4dfc0202540c73a10a403fa957"
+      },
+      "approx_size_gb": 4,
+      "sources": [
+        "https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/runtime/rfd4-proteina-cu13-amd64.sif"
+      ]
+    },
+    {
+      "filename": "af3-open.sif",
+      "pull": {
+        "uri": "https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/openfold3/runtime/of3_af3_refolding_env-cuda13.sif",
+        "sha256": "7bbd35478ed5e95131efa7756d03a2e754f3508e603ad08bb8f8db0bd89484a1"
+      },
+      "approx_size_gb": 3.5,
+      "sources": [
+        "https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/openfold3/runtime/of3_af3_refolding_env-cuda13.sif"
+      ]
+    },
+    {
+      "filename": "af2-open.sif",
+      "pull": {
+        "uri": "https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/alphafold2/runtime/alphafold2-pallas-cuda13-amd64.sif",
+        "sha256": "b5160d179a0f11608e176f8883c8e9c644ab5c6a6b92bf05c2ca5b7a5ecb8d3f"
+      },
+      "approx_size_gb": 6,
+      "sources": [
+        "https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/alphafold2/runtime/alphafold2-pallas-cuda13-amd64.sif"
+      ]
+    }
+  ],
+  "weights": [
+    {
+      "id": "rfd4-proteina",
+      "required": true,
+      "present_if": [
+        "rfd4-proteina/model.safetensors",
+        "rfd4-proteina/config.json"
+      ],
+      "fetch": {
+        "type": "url",
+        "files": [
+          {
+            "url": "https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/model.safetensors",
+            "dest": "rfd4-proteina/model.safetensors",
+            "sha256": "5b549dd61adb2f6c6b5cb95bda13f40f5e31556b4e6c755edc0ca6f011c68fb0"
+          },
+          {
+            "url": "https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/config.json",
+            "dest": "rfd4-proteina/config.json",
+            "sha256": "154ea927ab8005b7eac2d047a792147fb4606ab4878e496aa8414b6b40dad368"
+          }
+        ]
+      },
+      "license": {
+        "id": "BSD-3-Clause",
+        "url": "https://huggingface.co/nvidia/RFD4-Proteina"
+      },
+      "approx_size_gb": 1.8
+    },
+    {
+      "id": "of3-oracle",
+      "required": true,
+      "present_if": [
+        "rfd4-oracles/of3/of3_ported_weights.bin.zst",
+        "rfd4-oracles/of3/of3_ported_weights.provenance.json"
+      ],
+      "fetch": {
+        "type": "url",
+        "files": [
+          {
+            "url": "https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/openfold3/weights/of3_ported_weights.bin.zst",
+            "dest": "rfd4-oracles/of3/of3_ported_weights.bin.zst",
+            "sha256": "7ae00e49f8507593d6a8c5a7c0389e2151fea9a79062069979c42ebb5bbf14d2"
+          },
+          {
+            "url": "https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/openfold3/weights/of3_ported_weights.provenance.json",
+            "dest": "rfd4-oracles/of3/of3_ported_weights.provenance.json",
+            "sha256": "b4e437d93b33c8b736c43c0238e9419c011f1890aafae6bbffc2c77b8a7cf416"
+          }
+        ]
+      },
+      "license": {
+        "id": "Apache-2.0",
+        "url": "https://huggingface.co/nvidia/RFD4-Proteina"
+      },
+      "approx_size_gb": 1.4
+    }
+  ]
+}

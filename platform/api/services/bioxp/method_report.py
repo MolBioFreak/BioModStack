@@ -6,6 +6,24 @@ results. Native children remain individually visible for compound operations.
 from copy import deepcopy
 
 
+def _outcome(evidence, assessment, *, completed=False, stage=None):
+    status = "unknown"
+    # A returned explicit failure takes precedence over a stale cursor.
+    if any(result.get("ok") is False or result.get("status") == "failed" for result in assessment):
+        status = "failed"
+    elif any(result.get("uncertain") is True or result.get("status") == "ambiguous" for result in assessment):
+        status = "unknown"
+    elif any(result.get("pending") is True or result.get("status") == "running" for result in assessment):
+        status = "running"
+    elif evidence and all(result.get("status") in ("skipped", "not_run") for result in assessment):
+        status = "skipped" if any(result.get("status") == "skipped" for result in assessment) else "not_run"
+    elif completed:
+        status = "completed"
+    elif stage is not None:
+        status = {"paused": "paused", "running": "running", "failed": "failed"}.get(stage.status, "unknown")
+    return status
+
+
 def occurrence_outcomes(snapshot, state):
     compilation = (snapshot or {}).get("compilation")
     provenance = compilation.get("provenance", []) if isinstance(compilation, dict) else []
@@ -32,27 +50,37 @@ def occurrence_outcomes(snapshot, state):
             owned = [child for result in evidence for child in result.get("child_outcomes", []) if isinstance(child, dict)]
             assessment = evidence + owned
             stage = current.get(action_id)
-            status = "unknown"
-            # A returned explicit failure takes precedence over a stale cursor.
-            if any(result.get("ok") is False or result.get("status") == "failed" for result in assessment):
-                status = "failed"
-            elif any(result.get("uncertain") is True or result.get("status") == "ambiguous" for result in assessment):
-                status = "unknown"
-            elif any(result.get("pending") is True or result.get("status") == "running" for result in assessment):
-                status = "running"
-            elif evidence and all(result.get("status") in ("skipped", "not_run") for result in assessment):
-                status = "skipped" if any(result.get("status") == "skipped" for result in assessment) else "not_run"
-            elif action_id in completed:
-                status = "completed"
-            elif stage is not None:
-                status = {"paused": "paused", "running": "running", "failed": "failed"}.get(stage.status, "unknown")
-            children.append({"action_id": action_id, "status": status, "results": evidence,
+            summary = {}
+            if any('attempt' in r for r in evidence):
+                grouped = {}
+                for r in evidence:
+                    n = r.get('attempt')
+                    if type(n) is int and n > 0:
+                        grouped.setdefault(n, []).append(r)
+                attempts = []
+                status = 'unknown'
+                for n, records in sorted(grouped.items()):
+                    related = [c for r in records for c in r.get('child_outcomes', []) if isinstance(c, dict)]
+                    # Never use an earlier action's completed cursor to certify a later attempt.
+                    finished = any(r.get('ok') is True and r.get('status') == 'completed' for r in records)
+                    observed = _outcome(records, records + related, completed=finished)
+                    decision = next((r.get('resolution') for r in reversed(records)
+                                     if r.get('resolution') in ('operator_completed', 'skipped')), None)
+                    attempts.append({'attempt': n, 'status': observed, 'resolution': decision})
+                    status = decision or observed
+                summary['attempts'] = attempts
+                if sum(map(len, grouped.values())) != len(evidence):
+                    # Retain unattributed evidence; do not assign it to an arbitrary attempt.
+                    status = 'unknown'
+            else:
+                status = _outcome(evidence, assessment, completed=action_id in completed, stage=stage)
+            children.append({**summary, "action_id": action_id, "status": status, "results": evidence,
                              "reported_applied": [deepcopy(field) for field in applied if field["action_id"] == action_id],
                              "child_outcomes": deepcopy(owned)})
         statuses = {child["status"] for child in children}
         if statuses == {"completed"}:
             status = "completed"
-        elif statuses == {"skipped"} or statuses == {"not_run"}:
+        elif statuses in ({"skipped"}, {"not_run"}, {"operator_completed"}):
             status = next(iter(statuses))
         elif "failed" in statuses:
             status = "failed"
@@ -60,7 +88,7 @@ def occurrence_outcomes(snapshot, state):
             status = "paused"
         elif "running" in statuses:
             status = "running"
-        elif "completed" in statuses:
+        elif "completed" in statuses or "operator_completed" in statuses:
             status = "partial"
         else:
             status = "unknown"
@@ -111,15 +139,25 @@ def duration_report(state):
     their span as the complete method's elapsed execution time.
     """
     import math
+    from datetime import datetime
     intervals = []
     for result in state.action_results:
         receipt = result.get("receipt")
-        if not isinstance(receipt, dict):
-            continue
-        start, end = receipt.get("dispatched_at"), receipt.get("finished_at")
+        if isinstance(receipt, dict):
+            # Jobs recorded before step records carried their own clock.
+            start, end = receipt.get("dispatched_at"), receipt.get("finished_at")
+            command_id, clock = receipt.get("command_id"), "native_receipt_dispatch_to_finish"
+        else:
+            # The native step record carries its own start/finish (ISO UTC).
+            try:
+                start = datetime.fromisoformat(result["started_at"]).timestamp()
+                end = datetime.fromisoformat(result["finished_at"]).timestamp()
+            except (KeyError, TypeError, ValueError):
+                continue
+            command_id, clock = result.get("command_id"), "native_step_start_to_finish"
         if all(type(value) in (int, float) and math.isfinite(value) for value in (start, end)) and end >= start:
             intervals.append({"action_id": result.get("action_id") or result.get("parent_action_id"),
-                "command_id": receipt.get("command_id"), "value": end - start, "unit": "seconds",
-                "start": start, "end": end, "clock": "native_receipt_dispatch_to_finish"})
+                "command_id": command_id, "value": end - start, "unit": "seconds",
+                "start": start, "end": end, "clock": clock})
     return {"value": None, "status": "unknown", "unit": "seconds", "action_intervals": intervals,
             "reason": "No whole-method execution clock; child receipt intervals exclude holds and may overlap"}

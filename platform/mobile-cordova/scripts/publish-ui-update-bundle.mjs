@@ -24,10 +24,15 @@ function parseArgs(argv) {
     channel: '',
     version: '',
     updatesDir: '',
+    refreshOrigin: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
+    if (token === '--refresh-origin') {
+      out.refreshOrigin = true;
+      continue;
+    }
     if (token === '--config') {
       out.config = path.resolve(argv[index + 1]);
       index += 1;
@@ -184,6 +189,31 @@ async function main(argv = process.argv.slice(2)) {
   const indexPath = path.join(outDir, 'index.html');
   const encodedChannel = encodeURIComponent(channel);
   const encodedVersion = encodeURIComponent(version);
+
+  if (args.refreshOrigin) {
+    const retained = await readJson(manifestPath);
+    const retainedVersion = String(retained.version || '');
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(retainedVersion)) {
+      throw new Error('Existing channel has an invalid bundle version.');
+    }
+    const retainedBundle = path.join(updatesDir, 'bundles', channel, `${retainedVersion}.zip`);
+    if (await sha256File(retainedBundle) !== retained.sha256) {
+      throw new Error('Existing bundle digest does not match its channel manifest.');
+    }
+    const retainedBase = `${apiBaseUrl}/api/mobile-ui/files/${encodedChannel}/${encodeURIComponent(retainedVersion)}/`;
+    const refreshed = {
+      ...retained,
+      download_url: `${apiBaseUrl}/api/mobile-ui/bundles/${encodedChannel}/${encodeURIComponent(retainedVersion)}.zip`,
+      asset_base_url: retainedBase,
+      files: retained.files.map((file) => ({ ...file, url: `${retainedBase}${encodePathForUrl(file.path)}` })),
+    };
+    const temporary = `${manifestPath}.origin-refresh-${process.pid}`;
+    await fs.writeFile(temporary, `${JSON.stringify(refreshed, null, 2)}\n`, 'utf8');
+    await fs.rename(temporary, manifestPath);
+    console.log(JSON.stringify({ channel, version: retainedVersion, sha256: retained.sha256,
+      manifestPath, download_url: refreshed.download_url, reusedBundle: true }));
+    return;
+  }
 
   await fs.rm(outDir, { recursive: true, force: true });
   await fs.rm(filesOutputDir, { recursive: true, force: true });

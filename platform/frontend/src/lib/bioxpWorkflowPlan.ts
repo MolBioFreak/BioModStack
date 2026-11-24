@@ -15,7 +15,7 @@ export type WorkflowDeckPlan = {
     tip_racks?: WorkflowTipRack[]; movable_objects?: Record<string, string>; slots?: WorkflowSlot[];
 };
 export const slotDefaults: Record<WorkflowSlotId, WorkflowSlotHolder> = { LOC_TROUGH: 'trough', LOC_OC_COVER_STORAGE: 'cover_storage', LOC_RC_COVER_STORAGE: 'cover_storage' };
-export const slotHolderLabels: Record<WorkflowSlotHolder, string> = { cover_storage: 'Cover storage', trough: 'Trough', tube_holder: 'Tube holder', fluorometer: 'Fluorometer', tool_dock: 'Tool dock', empty: 'Empty' };
+export const slotHolderLabels: Record<WorkflowSlotHolder, string> = { cover_storage: 'Cover storage', trough: 'Bulk reagent holder', tube_holder: 'Tube holder', fluorometer: 'Fluorometer', tool_dock: 'Tool dock', empty: 'Empty' };
 export type WorkflowPreviewAction = {
     index: number; step_id: string; pair_index: number | null; kind: string;
     params: Record<string, unknown>; label: string; station: string | null; well: string | null;

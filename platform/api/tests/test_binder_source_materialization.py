@@ -14,6 +14,7 @@ from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from database import Design, Job, get_session
 from experiment_database import get_experiment_session
 from routers import files
+from services import binder_source_materialization
 from services.bindcraft2_publication import publish_native_results
 from experiment_services import create_project, create_global_experiment, create_domain_experiment, create_dataset, save_dataset_revision
 from services.global_experiments.receipts import attach_verified_entity
@@ -46,6 +47,7 @@ async def source_api(stores, monkeypatch):
     for path in roots.values(): path.mkdir(exist_ok=True)
     monkeypatch.setattr(paths, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: roots)
+    monkeypatch.setattr(binder_source_materialization, 'get_allowed_roots', lambda: roots)
     app = FastAPI(); app.include_router(files.router, prefix='/api/files')
     async with experiments() as experiment_session, core() as session:
         async def core_dep(): yield session

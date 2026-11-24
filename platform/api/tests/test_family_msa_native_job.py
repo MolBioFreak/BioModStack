@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from database import Job, JobArtifact
 from routers import jobs
+from services import job_submission
 from schemas import JobCreate
 from services import gpu_orchestrator, nextflow
 from tests.test_core_protein_scientific_admission import admission
@@ -57,7 +58,7 @@ async def test_scheduler_adapter_to_native_owned_runner(admission, monkeypatch, 
         {'row_id': 'r1', 'header': 'one', 'sequence': seq},
         {'row_id': 'r2', 'header': 'two', 'sequence': seq},
         {'row_id': 'r3', 'header': 'three', 'sequence': seq[:-1] + 'A'}]}, 'settings': settings}
-    created = await jobs._create_job(JobCreate(name='native scratch', model_id=model,
+    created = await job_submission._create_job(JobCreate(name='native scratch', model_id=model,
         mode='family_msa', params=payload), BackgroundTasks(), admission)
     factory = async_sessionmaker(admission.bind, expire_on_commit=False)
     import database

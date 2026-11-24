@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def _runtime_tools() -> tuple[Path, Path]:
     nextflow = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
-    samtools = Path(os.environ.get("BMS_SAMTOOLS_BIN", "/home/dalab/micromamba/bin/samtools"))
+    samtools = Path(os.environ.get("BMS_SAMTOOLS_BIN") or shutil.which("samtools") or "samtools")
     if not (nextflow.is_file() and os.access(nextflow, os.X_OK)):
         pytest.skip(f"real Nextflow launcher unavailable: {nextflow}")
     if not (samtools.is_file() and os.access(samtools, os.X_OK)):
@@ -129,7 +129,7 @@ def test_modified_base_tag_validation_requires_meaningful_pair_on_same_record(
     expected_success: bool,
 ) -> None:
     nextflow = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
-    samtools = Path(os.environ.get("BMS_SAMTOOLS_BIN", "/home/dalab/micromamba/bin/samtools"))
+    samtools = Path(os.environ.get("BMS_SAMTOOLS_BIN") or shutil.which("samtools") or "samtools")
     if not (nextflow.is_file() and os.access(nextflow, os.X_OK)):
         pytest.skip(f"Nextflow unavailable: {nextflow}")
     if not (samtools.is_file() and os.access(samtools, os.X_OK)):
@@ -227,9 +227,11 @@ def test_modified_base_tag_validation_requires_meaningful_pair_on_same_record(
 @pytest.mark.parametrize("workflow", ["ont_plasmid_qc", "ont_basecall_dna"])
 def test_tagged_bam_runs_real_modkit_pileup_and_summary(tmp_path: Path, workflow: str) -> None:
     nextflow = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
-    samtools = Path(os.environ.get("BMS_SAMTOOLS_BIN", "/home/dalab/micromamba/bin/samtools"))
+    samtools = Path(os.environ.get("BMS_SAMTOOLS_BIN") or shutil.which("samtools") or "samtools")
     apptainer = Path(shutil.which("apptainer") or "/usr/bin/apptainer")
-    dorado_sif = Path(os.environ.get("BMS_DORADO_SIF", "/mnt/BioModStack/apptainer/dorado.sif"))
+    if not os.environ.get("BMS_DORADO_SIF"):
+        pytest.skip("BMS_DORADO_SIF not set")
+    dorado_sif = Path(os.environ["BMS_DORADO_SIF"])
     for tool in (nextflow, samtools, apptainer, dorado_sif):
         if not tool.is_file():
             pytest.skip(f"real modkit runtime prerequisite unavailable: {tool}")

@@ -8,6 +8,7 @@ import pytest
 
 from database import Design, Job
 from routers import jobs
+from services import binder_continuation
 
 
 @pytest.mark.parametrize('suffix', ['.cif', '.pdb'])
@@ -28,7 +29,7 @@ def test_sidecars_exclude_resolved_primary_and_keep_distinct_evidence(tmp_path, 
         path.write_bytes(extension.encode())
         sidecars.append(path.resolve())
     design = Design(id='selected-design', job_id='source', name='selected', pdb_path=str(primary))
-    actual = jobs._candidate_sidecar_paths(design, primary)
+    actual = binder_continuation._candidate_sidecar_paths(design, primary)
     assert actual == sidecars
     assert primary.resolve() not in actual
 
@@ -43,6 +44,7 @@ def test_selection_materializes_cif_once_preserving_manifest_and_mutable_source_
     selection = tmp_path / 'selection'
     selection.mkdir()
     monkeypatch.setattr(jobs, '_create_generic_selection_dir', lambda *_: selection)
+    monkeypatch.setattr(binder_continuation, '_create_generic_selection_dir', lambda *_: selection)
     root = Job(id='root', name='root', model_id='protein_local_redesign', mode='redesign')
     producer = Job(id='source', name='source', model_id='protein_local_redesign', mode='redesign')
     design = Design(id='selected-design', job_id='source', name='selected', pdb_path=str(primary))
@@ -54,7 +56,7 @@ def test_selection_materializes_cif_once_preserving_manifest_and_mutable_source_
         return original_copy(src, dst, *args, **kwargs)
 
     monkeypatch.setattr(jobs.shutil, 'copyfile', counted_copy)
-    actual = jobs._materialize_protein_local_selection(root, producer, [design], 'redesign')
+    actual = binder_continuation._materialize_protein_local_selection(root, producer, [design], 'redesign')
     assert actual == selection
     assert [src for src, _ in copied].count(primary.resolve()) == 1
     assert {p.name for p in selection.iterdir()} == {
@@ -96,13 +98,14 @@ async def test_actual_jobs_action_calls_pass_published_custody(tmp_path, monkeyp
                      'campaign_root': 'bindcraft2/campaign', 'attempt': 0,
                      'remote_attempt_id': None,
                  }})
-    tree = ast.parse(Path(jobs.__file__).read_text())
-    owner = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == '_create_job')
-    calls = [node for node in ast.walk(owner) if isinstance(node, ast.Await)
+    from services import job_submission
+    tree = ast.parse(Path(job_submission.__file__).read_text())
+    owners = {node.name: node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)}
+    calls = [node for name in ('_create_job', '_materialize_job_inputs')
+             for node in ast.walk(owners[name]) if isinstance(node, ast.Await)
              and isinstance(node.value, ast.Call) and node.value.args
              and isinstance(node.value.args[0], ast.Name)
              and node.value.args[0].id == 'materialize_native_action']
-    calls.sort(key=lambda node: node.lineno)
     assert len(calls) == 2  # Remote preparation and ordinary local submission.
     output = tmp_path / 'child'
     namespace = dict(asyncio=asyncio, Path=Path, bc2_action_source=source,
@@ -110,7 +113,7 @@ async def test_actual_jobs_action_calls_pass_published_custody(tmp_path, monkeyp
         job_data=SimpleNamespace(params={}),
         published_campaign_immutable=published_campaign_immutable,
         materialize_native_action=partial(materialize_native_action, compiler=compiler))
-    result = await eval(compile(ast.Expression(calls[callsite].value), jobs.__file__, 'eval'), namespace)
+    result = await eval(compile(ast.Expression(calls[callsite].value), job_submission.__file__, 'eval'), namespace)
     received = Path(result['bc2_campaign_dir']) / 'campaign' / retained.relative_to(campaign)
     assert received.samefile(retained) is published
     assert received.read_bytes() == retained.read_bytes()

@@ -48,7 +48,6 @@ from experiment_models import (
     ExperimentResearchRecord,
     ExperimentRevisionEdge,
     ExperimentRevision,
-    ExperimentWorkflowRun,
 )
 from experiment_operations import (
     build_workspace_export,
@@ -70,15 +69,9 @@ from experiment_services import (
 )
 from routers.experiment_workspaces import router as compatibility_router
 from routers.projects import router as projects_router
-from routers.project_manager import _project_bound_job
-from database import Job
 from services.global_experiments.launch_contexts import (
     LaunchContextError,
-    claim_launch_context,
-    consume_launch_context,
     create_launch_context,
-    resolve_launch_context,
-    resolve_launch_context_for_display,
 )
 
 
@@ -117,6 +110,15 @@ def test_workflow_contract_rejects_unknown_and_execution_alias_keys():
 
 @pytest.mark.asyncio
 async def test_dispatch_rejects_unregistered_generic_materializer():
+    from services.resource_usage_evidence import build_resource_admission_handoff
+    handoff = build_resource_admission_handoff(
+        admission_id="admission-generic", run_attempt_id="attempt-generic",
+        canonical_job_id="job-generic", preparation_id="preparation-generic",
+        cpu_threads=1, dram_bytes=1024**3, gpu_index=None, gpu_uuid=None,
+        policy_source="project-scheduler", policy_version="bms.resource-admission-policy.v1",
+        owner="local-application-operator", lease_token="lease-generic",
+        source_revision="1" * 40, source_tree="2" * 40,
+    )
     materializer = ExistingJobMaterializer(None)  # type: ignore[arg-type]
     with pytest.raises(DispatchFailure, match="no registered typed materializer"):
         await materializer.materialize(
@@ -125,6 +127,8 @@ async def test_dispatch_rejects_unregistered_generic_materializer():
                 "scheduler": {
                     "params": {"workflow_adapter": "generic_test"},
                 },
+                "resource_admission": handoff,
+                "scheduler_job_id": "job-generic",
                 "workflow_run_id": "run-generic",
                 "attempt_id": "attempt-generic",
             },
@@ -305,7 +309,7 @@ def _project_payload(name: str = "Project A") -> dict:
 
 def _experiment_payload(name: str = "Experiment A") -> dict:
     return {
-        "schema": "bms.global-experiment.v1",
+        "schema": "bms.global-experiment.v2",
         "name": name,
         "objective": "Compare candidates",
         "scientific_question": "Which candidate is stable?",
@@ -360,6 +364,45 @@ def _domain_payload(kind: str = "protein_in_silico", name: str = "Domain A") -> 
             else {"schema": "bms.ngs-molbio-experiment.v1"}
         ),
     }
+
+
+async def _current_domain_payload(factory, project_id, kind="protein_in_silico", name="Domain A"):
+    payload = _domain_payload(kind, name)
+    digest = _sha("hierarchy fixture")
+    async with factory() as session:
+        receipt = await register_external_entity_receipt(
+            session, workspace_id=project_id, store_id="core", entity_kind="design",
+            entity_id="hierarchy-fixture", generation_or_revision="1", content_digest=digest,
+            acknowledgement={
+                "schema": "bms.global.external-entity-receipt.v1", "store_id": "core",
+                "entity_kind": "design", "entity_id": "hierarchy-fixture", "entity_revision_id": "1",
+                "content_digest": digest, "contract_digest": digest, "source_build_revision": "test-build-sha",
+                "verified_at": "2026-08-09T00:00:00Z", "verifier_id": "test.server-adapter.v1",
+                "availability": "available", "reopen_uri": "/designs/hierarchy-fixture", "metadata": {},
+            }, verification_authority="test.server-adapter.v1",
+        )
+        await session.commit()
+        receipt_id = receipt.id
+    payload.update(schema="bms.domain-experiment.v4", domain_contract_version="3",
+                   source_receipt_ids=[receipt_id], dataset_revision_ids=payload.pop("dataset_ids"))
+    protein = payload["domain_payload"]
+    if kind == "protein_in_silico":
+        protein.update(schema="bms.protein-in-silico-experiment.v3",
+                       planned_capability_ids=[], validation_capability_ids=[],
+                       acceptance_criteria=[], evidence_plan=[])
+        del protein["planned_capabilities"], protein["validation_strategy"]
+        target = protein["targets"][0]
+        del target["entity_receipt_ids"]
+        target.update(source_receipt_ids=[receipt_id], expected_content_sha256=digest,
+                      dataset_member_refs=[], entity_map_reference={
+                          "schema": "bms.protein-entity-map-reference.v1",
+                          "authority_kind": "native_receipt", "receipt_id": receipt_id,
+                          "receipt_sha256": digest, "content_sha256": digest,
+                          "canonical_size_bytes": 2, "entity_count": 1,
+                          "residue_mapping_count": 0, "display_entities": [],
+                      })
+    del payload["created_by"]  # The authenticated HTTP owner supplies this field.
+    return payload
 
 
 @pytest.mark.asyncio
@@ -723,11 +766,11 @@ async def test_project_global_domain_hierarchy_is_typed_and_isolated(project_sto
 
         first_domain_response = await client.post(
             f"/api/projects/{project['id']}/experiments/{experiment['id']}/domains",
-            json=_domain_payload(),
+            json=await _current_domain_payload(factory, project["id"]),
         )
         second_domain_response = await client.post(
             f"/api/projects/{project['id']}/experiments/{experiment['id']}/domains",
-            json=_domain_payload(name="Domain B"),
+            json=await _current_domain_payload(factory, project["id"], name="Domain B"),
         )
         assert first_domain_response.status_code == 201, first_domain_response.text
         assert second_domain_response.status_code == 201, second_domain_response.text
@@ -749,25 +792,25 @@ async def test_project_global_domain_hierarchy_is_typed_and_isolated(project_sto
         )
         foreign_domain = await client.post(
             f"/api/projects/{other_project['id']}/experiments/{other_experiment['id']}/domains",
-            json={**_domain_payload(), "parent_id": experiment["id"]},
+            json={**(await _current_domain_payload(factory, project["id"])), "parent_id": experiment["id"]},
         )
         assert foreign_get.status_code == 404
         assert foreign_domain.status_code == 422
 
         invalid_kind = await client.post(
             f"/api/projects/{project['id']}/experiments/{experiment['id']}/domains",
-            json=_domain_payload("liquid_handler"),
+            json=await _current_domain_payload(factory, project["id"], "liquid_handler"),
         )
         extra_field = await client.post(
             f"/api/projects/{project['id']}/experiments/{experiment['id']}/domains",
-            json={**_domain_payload(), "unexpected": True},
+            json={**(await _current_domain_payload(factory, project["id"])), "unexpected": True},
         )
         assert invalid_kind.status_code == 422
         assert extra_field.status_code == 422
 
         wrong_domain_schema = await client.post(
             f"/api/projects/{project['id']}/experiments/{experiment['id']}/domains",
-            json={**_domain_payload(), "domain_payload": {"schema": "bms.ngs-molbio-experiment.v1"}},
+            json={**(await _current_domain_payload(factory, project["id"])), "domain_payload": {"schema": "bms.ngs-molbio-experiment.v1"}},
         )
         mutable_domain_kind = await client.patch(
             f"/api/projects/{project['id']}/experiments/{experiment['id']}/domains/{first_domain['id']}",
@@ -784,15 +827,10 @@ async def test_project_global_domain_hierarchy_is_typed_and_isolated(project_sto
             f"/api/projects/{project['id']}/experiments",
             json={**_experiment_payload("Invalid archived experiment"), "status": "archived"},
         )
-        incomplete_terminal_review = await client.post(
-            f"/api/projects/{project['id']}/experiments",
-            json={**_experiment_payload("Invalid completed experiment"), "status": "completed"},
-        )
         assert wrong_domain_schema.status_code == 422
         assert mutable_domain_kind.status_code == 422
         assert archived_project_create.status_code == 422
         assert archived_experiment_create.status_code == 422
-        assert incomplete_terminal_review.status_code == 422
 
     async with factory() as session:
         domain_resource = await session.get(ExperimentResource, first_domain["id"])
@@ -825,7 +863,7 @@ async def test_workflow_can_be_owned_by_a_domain_experiment(project_store):
         global_experiment = global_response.json()
         domain_response = await client.post(
             f"/api/projects/{project['id']}/experiments/{global_experiment['id']}/domains",
-            json=_domain_payload(),
+            json=await _current_domain_payload(factory, project["id"]),
         )
         assert domain_response.status_code == 201, domain_response.text
         domain = domain_response.json()
@@ -847,71 +885,17 @@ async def test_workflow_can_be_owned_by_a_domain_experiment(project_store):
 
 
 @pytest.mark.asyncio
-async def test_launch_context_is_one_time_and_keeps_verified_return_binding(project_store):
+async def test_historical_v1_launch_context_cannot_issue_new_authority(project_store):
+    # V1 creation is retired; v2 preparation/reservation owns one-time launch.
     _, factory = project_store
     async with factory() as session:
-        project = await create_project(session, _project_payload("Launch context"))
-        global_experiment = await create_global_experiment(
-            session,
-            project.aggregate_id,
-            _experiment_payload("Launch global"),
-        )
-        domain = await create_domain_experiment(
-            session,
-            project.aggregate_id,
-            global_experiment.aggregate_id,
-            _domain_payload("protein_in_silico"),
-        )
-        return_uri = (
-            f"/projects/{project.aggregate_id}?focus={global_experiment.aggregate_id}"
-            f"&selected=domain_experiment:{domain.aggregate_id}"
-        )
-        context = await create_launch_context(
-            session,
-            project_id=project.aggregate_id,
-            global_experiment_id=global_experiment.aggregate_id,
-            domain_experiment_id=domain.aggregate_id,
-            workflow_id=None,
-            workflow_revision_id=None,
-            return_uri=return_uri,
-        )
-        await session.commit()
-
-        assert (await resolve_launch_context(session, context.launch_context_id)).return_uri == return_uri
-        claimed, token = await claim_launch_context(session, context.launch_context_id)
-        await session.commit()
-        consumed, binding = await consume_launch_context(
-            session,
-            launch_context_id=claimed.launch_context_id,
-            claim_token=token,
-            canonical_job_id="job-bound",
-            canonical_batch_id=None,
-        )
-        await session.commit()
-
-        assert consumed.state == "consumed"
-        assert binding["verified"] is True
-        assert binding["return_uri"] == return_uri
-        assert (
-            await resolve_launch_context_for_display(session, context.launch_context_id)
-        ).canonical_job_id == "job-bound"
-        display_context = await resolve_launch_context_for_display(session, context.launch_context_id)
-        projected = await _project_bound_job(
-            session,
-            display_context,
-            Job(id="job-bound", name="Bound", status="queued", model_id="protenix", mode="predict", params={}),
-            binding,
-        )
-        assert await _project_bound_job(
-            session,
-            display_context,
-            Job(id="job-bound", name="Bound", status="queued", model_id="protenix", mode="predict", params={}),
-            binding,
-        ) == projected
-        assert await session.get(ExperimentWorkflowRun, projected["workflow_run_id"]) is not None
         with pytest.raises(LaunchContextError) as caught:
-            await resolve_launch_context(session, context.launch_context_id)
-        assert caught.value.code == "launch_context_consumed"
+            await create_launch_context(
+                session, project_id="project", global_experiment_id="global",
+                domain_experiment_id="domain", workflow_id=None, workflow_revision_id=None,
+                return_uri="/projects/project",
+            )
+        assert caught.value.code == "launch_context_version_read_only"
 
 
 @pytest.mark.asyncio
@@ -996,7 +980,7 @@ async def test_hierarchy_references_require_verified_project_local_sources_and_b
         source_domain = (
             await client.post(
                 f"/api/projects/{project['id']}/experiments/{source_experiment['id']}/domains",
-                json=_domain_payload(),
+                json=await _current_domain_payload(factory, project["id"]),
             )
         ).json()
         foreign_source_experiment = (
@@ -1008,7 +992,7 @@ async def test_hierarchy_references_require_verified_project_local_sources_and_b
         foreign_source_domain = (
             await client.post(
                 f"/api/projects/{other_project['id']}/experiments/{foreign_source_experiment['id']}/domains",
-                json=_domain_payload(),
+                json=await _current_domain_payload(factory, other_project["id"]),
             )
         ).json()
 
@@ -1194,10 +1178,10 @@ async def test_hierarchy_references_require_verified_project_local_sources_and_b
 
         missing_domain_receipt = await client.post(
             f"/api/projects/{project['id']}/experiments/{global_experiment['id']}/domains",
-            json={**_domain_payload(name="Missing top-level receipt"), "source_receipt_ids": ["missing-receipt"]},
+            json={**(await _current_domain_payload(factory, project["id"], name="Missing top-level receipt")), "source_receipt_ids": ["missing-receipt"]},
         )
-        missing_target_receipt_payload = _domain_payload(name="Missing target receipt")
-        missing_target_receipt_payload["domain_payload"]["targets"][0]["entity_receipt_ids"] = [
+        missing_target_receipt_payload = await _current_domain_payload(factory, project["id"], name="Missing target receipt")
+        missing_target_receipt_payload["domain_payload"]["targets"][0]["source_receipt_ids"] = [
             "missing-receipt"
         ]
         missing_target_receipt = await client.post(
@@ -1206,22 +1190,54 @@ async def test_hierarchy_references_require_verified_project_local_sources_and_b
         )
         missing_domain_dataset = await client.post(
             f"/api/projects/{project['id']}/experiments/{global_experiment['id']}/domains",
-            json={**_domain_payload(name="Missing dataset"), "dataset_ids": ["missing-dataset"]},
+            json={**(await _current_domain_payload(factory, project["id"], name="Missing dataset")), "dataset_revision_ids": ["missing-dataset"]},
         )
         assert missing_domain_receipt.status_code == 422
         assert missing_target_receipt.status_code == 422
         assert missing_domain_dataset.status_code == 422
 
-        valid_domain_payload = _domain_payload(name="Bound domain references")
+        valid_domain_payload = await _current_domain_payload(factory, project["id"], name="Bound domain references")
         valid_domain_payload["source_receipt_ids"] = [valid_receipt_id]
-        valid_domain_payload["dataset_ids"] = [dataset_id]
-        valid_domain_payload["domain_payload"]["targets"][0]["entity_receipt_ids"] = [valid_receipt_id]
+        valid_domain_payload["dataset_revision_ids"] = [dataset_revision.resource_id]
+        valid_domain_payload["domain_payload"]["targets"][0]["dataset_member_refs"] = [
+            {"dataset_revision_id": dataset_revision.resource_id, "member_id": "member-1"}
+        ]
+        valid_domain_payload["domain_payload"]["targets"][0]["source_receipt_ids"] = [valid_receipt_id]
+        valid_domain_payload["domain_payload"]["targets"][0]["expected_content_sha256"] = valid_digest
+        domain_response = await client.post(
+            f"/api/projects/{project['id']}/experiments/{global_experiment['id']}/domains",
+            json=valid_domain_payload,
+        )
+        # An exact revision from another Global's Domain is not inherited authority.
+        assert domain_response.status_code == 422, domain_response.text
+        assert "unauthorized hierarchy" in domain_response.text
+        valid_domain_payload["dataset_revision_ids"] = []
+        valid_domain_payload["domain_payload"]["targets"][0]["dataset_member_refs"] = []
         domain_response = await client.post(
             f"/api/projects/{project['id']}/experiments/{global_experiment['id']}/domains",
             json=valid_domain_payload,
         )
         assert domain_response.status_code == 201, domain_response.text
         domain = domain_response.json()
+        async with factory() as session:
+            local_dataset = await create_dataset(
+                session, project["id"], "Domain dataset", "reference", experiment_id=domain["id"])
+            local_revision = await save_dataset_revision(
+                session, local_dataset.aggregate_id,
+                {"schema": "bms.dataset.v1", "members": [{"identity": "member-1", "value": "A"}]},
+                expected_head_generation=0,
+            )
+            await session.commit()
+        valid_domain_payload["dataset_revision_ids"] = [local_revision.resource_id]
+        valid_domain_payload["domain_payload"]["targets"][0]["dataset_member_refs"] = [
+            {"dataset_revision_id": local_revision.resource_id, "member_id": "member-1"}]
+        revised = await client.patch(
+            f"/api/projects/{project['id']}/experiments/{global_experiment['id']}/domains/{domain['id']}",
+            json={**{key: value for key, value in valid_domain_payload.items() if key != "domain_kind"},
+                  "expected_head_generation": domain["head_generation"]},
+        )
+        assert revised.status_code == 200, revised.text
+        domain = revised.json()
 
     async with factory() as session:
         global_edges = (
@@ -1242,9 +1258,11 @@ async def test_hierarchy_references_require_verified_project_local_sources_and_b
             (valid_receipt_id, valid_digest),
             (dataset_id, dataset_digest),
         }
+        parent_revision = await session.get(ExperimentRevision, global_experiment["current_revision_id"])
         assert {(edge.target_resource_id, edge.expected_sha256) for edge in domain_edges} == {
             (valid_receipt_id, valid_digest),
-            (dataset_id, dataset_digest),
+            (local_revision.resource_id, local_revision.payload_sha256),
+            (parent_revision.resource_id, parent_revision.payload_sha256),
         }
 
 
@@ -1393,7 +1411,7 @@ async def test_archive_restore_is_reversible_and_does_not_archive_children(proje
         )).json()
         domain = (await client.post(
             f"/api/projects/{project['id']}/experiments/{experiment['id']}/domains",
-            json=_domain_payload(),
+            json=await _current_domain_payload(factory, project["id"]),
         )).json()
 
         archived = await client.post(
@@ -1416,7 +1434,7 @@ async def test_archive_restore_is_reversible_and_does_not_archive_children(proje
         assert stale_archive.status_code == 409
         blocked_child = await client.post(
             f"/api/projects/{project['id']}/experiments/{experiment['id']}/domains",
-            json=_domain_payload(name="Blocked under archive"),
+            json=await _current_domain_payload(factory, project["id"], name="Blocked under archive"),
         )
         assert blocked_child.status_code == 422
         child_after_parent_archive = await client.get(

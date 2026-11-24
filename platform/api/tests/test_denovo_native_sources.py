@@ -11,6 +11,8 @@ from httpx import ASGITransport, AsyncClient
 from database import Job, get_session
 from experiment_database import get_experiment_session
 from routers import jobs, files, models
+from services import job_submission
+from services import job_requests
 from schemas import JobCreate
 from tests.test_binder_source_materialization import cif
 from test_project_workflow_setups import setup_store
@@ -35,7 +37,7 @@ async def test_preview_insert_replay_clone_real_stores(isolated_core, setup_stor
         isolate_applied_local_policy, tmp_path, monkeypatch, model, source_kind, experimental):
     import paths
     roots = {'inputs': tmp_path / 'owned/inputs', 'bms_results': tmp_path / 'owned/results'}
-    for module in (paths, jobs, files):
+    for module in (paths, job_submission, job_requests, files):
         monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
     original = roots['inputs'] / 'selected.cif.gz'
     original.write_bytes(gzip.compress(cif(models=(3, 7)).encode()))
@@ -110,7 +112,7 @@ async def test_preview_insert_replay_clone_real_stores(isolated_core, setup_stor
         clone = JobCreate.model_validate({**retained, 'name': 'clone'})
         # A browser-copied closure is never trusted; source custody rebuilds it.
         clone.params.update(rfd4_input_closure='/invented', complexa_request_dir='/invented')
-        await jobs._prepare_selected_structure(clone, session)
+        await job_submission._prepare_selected_structure(clone, session)
         key = 'rfd4_input_closure' if model == 'rfd4_proteina' else 'complexa_request_dir'
         assert clone.params[key] == job.params[key]
     assert document['input_identities'], 'Shared portable-input discovery must include the native closure'
@@ -170,28 +172,35 @@ async def test_file_archive_and_legacy_list(isolated_core, tmp_path, monkeypatch
     payload = JobCreate(name='archive', model_id='rfd4_proteina', mode='generate', params={
         'rfd4_request': native, 'native_sources': {'adapter': {'kind': 'file', 'path': 'inputs/adapter.pt'}}})
     async with isolated_core() as session:
-        await jobs._prepare_selected_structure(payload, session)
+        await job_submission._prepare_selected_structure(payload, session)
         before = copy.deepcopy(payload.params)
         archive.unlink()
-        await jobs._prepare_selected_structure(payload, session)
+        await job_submission._prepare_selected_structure(payload, session)
         assert payload.params == before
         closure = Path(payload.params['rfd4_input_closure'])
         bindings = json.loads(Path(payload.params['rfd4_bindings']).read_text())
         assert (closure / bindings['adapter']).read_bytes() == b'inert archive bytes\x00'
         legacy = JobCreate(name='legacy', model_id='boltz2', mode='predict',
                            params={'sequence': 'ACDE', 'native_sources': [{'path': 'untouched'}]})
-        await jobs._prepare_selected_structure(legacy, session)
+        await job_submission._prepare_selected_structure(legacy, session)
         assert legacy.params['native_sources'] == [{'path': 'untouched'}]
         from fastapi import HTTPException
         changed = paths.resolve_allowed_path(payload.params['native_sources']['adapter']['path'])
         changed.write_bytes(b'changed')
         with pytest.raises(HTTPException, match='Selected source bytes changed'):
-            await jobs._prepare_selected_structure(payload, session)
+            await job_submission._prepare_selected_structure(payload, session)
         absent = JobCreate(name='no sources', model_id='rfd4_proteina', mode='generate',
                           params={'rfd4_request': rfd4()})
         before = copy.deepcopy(absent.params)
-        await jobs._prepare_selected_structure(absent, session)
-        assert absent.params == before
+        await job_submission._prepare_selected_structure(absent, session)
+        assert absent.params['rfd4_request'] == {
+            **before['rfd4_request'], 'version': 'rfd4_request_v1', 'mode': 'generate'}
+        assert absent.params['native_sources'] == {}
+        assert json.loads(Path(absent.params['rfd4_bindings']).read_text()) == {}
+        assert Path(absent.params['rfd4_input_closure']).is_dir()
+        materialized = copy.deepcopy(absent.params)
+        await job_submission._prepare_selected_structure(absent, session)
+        assert absent.params == materialized
 
 
 def test_discovery_slot_annotations():
