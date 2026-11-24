@@ -2,14 +2,14 @@
   "schema": "bms.tool-recipe.v1",
   "id": "frustrampnn",
   "name": "FrustraMPNN",
-  "label": "starting-point",
+  "label": "builds-from-clean",
   "modules": [
     "design"
   ],
   "upstream": {
     "homepage": "https://github.com/schoederlab/frustraMPNN"
   },
-  "notes": "Not yet built from clean by us: expect to fix things.",
+  "notes": "Built from the CUDA 13.5 toolkit image with stable PyTorch cu134. Package and GPU checks do not exercise model outputs.",
   "images": [
     {
       "filename": "frustrampnn.sif",

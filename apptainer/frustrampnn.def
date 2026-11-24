@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+From: nvidia/cuda:13.5.0-cudnn-devel-ubuntu24.04
 
 %labels
     Author BioModStack
@@ -7,55 +7,83 @@ From: nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     Description FrustraMPNN with bundled weights (Blackwell sm_120 compatible)
 
 %post
+    set -eu
     export DEBIAN_FRONTEND=noninteractive
-    FRUSTRAMPNN_SOURCE_COMMIT=bbae1d03edf33dbe6f645d45c5604eb4464962ca
+    FRUSTRAMPNN_SOURCE_COMMIT=1f74d44748c15cc751572b0b980edcc8b0bb26d2
     apt-get -q update
-    apt-get install -y python3.10 python3.10-venv python3-pip curl git
-    
-    # Install UV (10-100x faster than pip)
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="/root/.local/bin:$PATH"
-    
+    apt-get install -y python3.12 python3.12-venv curl git
+
+    # Install pinned uv 0.13.10 with SHA256 verification
+    UV_VERSION="0.13.10"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    curl -fsSL --retry 3 --retry-delay 2 \
+        "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
+        -o "${UV_TMP}/uv.tar.gz"
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
+    uv --version
+
     # Create virtualenv with UV
-    uv venv /opt/venv
+    uv venv --python /usr/bin/python3.12 /opt/venv
     export VIRTUAL_ENV=/opt/venv
     export PATH="/opt/venv/bin:$PATH"
-    
-    # PyTorch release built for CUDA 12.8 (includes RTX 50-series sm_120 kernels).
-    uv pip install --compile torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
-    
+
+    # Hold the chosen CUDA wheels during later tool dependency resolution.
+    export UV_CONSTRAINT=/tmp/bms-gpu-constraints.txt
+    printf '%s\n' 'torch==2.15.0+cu134' 'torchvision==0.29.2+cu134' 'torchaudio==2.11.1+cu134' > "$UV_CONSTRAINT"
+    # PyTorch release built for CUDA 13.4 (includes RTX 50-series sm_120 kernels).
+    uv pip install --python /opt/venv/bin/python --no-cache --compile torch==2.15.0+cu134 torchvision==0.29.2+cu134 --index https://download.pytorch.org/whl/cu134 --default-index https://pypi.org/simple
+
     # Install pytorch-lightning and dependencies
-    uv pip install --compile pytorch-lightning omegaconf click pandas tqdm
-    
+    uv pip install --python /opt/venv/bin/python --no-cache --compile pytorch-lightning omegaconf click pandas tqdm
+
     # Resolve install code and both weight families from one immutable source tree.
     git clone https://github.com/schoederlab/frustraMPNN.git /opt/frustrampnn
     cd /opt/frustrampnn
     git checkout --detach "$FRUSTRAMPNN_SOURCE_COMMIT"
     test "$(git rev-parse HEAD)" = "$FRUSTRAMPNN_SOURCE_COMMIT"
-    uv pip install --compile /opt/frustrampnn
-    
+    uv pip install --python /opt/venv/bin/python --no-cache --compile /opt/frustrampnn
+
     # Download pretrained weights
     mkdir -p /opt/frustrampnn_weights
-    
+
     # Main checkpoint (megascale trained)
     curl --fail --location \
         "https://raw.githubusercontent.com/schoederlab/frustraMPNN/$FRUSTRAMPNN_SOURCE_COMMIT/weights/megascale_train_weights.ckpt" \
         -o /opt/frustrampnn_weights/megascale.ckpt
     echo "eaee71adb7eec366fc672d2aadef87f2c51243042a4518cd897634784dc2da3b  /opt/frustrampnn_weights/megascale.ckpt" | sha256sum --check -
-    
+
     # Also get vanilla_model_weights (required for ProteinMPNN base)
     test "$(git -C /opt/frustrampnn rev-parse HEAD)" = "$FRUSTRAMPNN_SOURCE_COMMIT"
     cp -r /opt/frustrampnn/weights/vanilla_model_weights /opt/frustrampnn_weights/
-    
+
     # Verify weights exist
     ls -la /opt/frustrampnn_weights/
-    
+
     # Test import
     python -c "from frustrampnn import FrustraMPNN; print('FrustraMPNN imported successfully')"
-    
+
     # Generate lockfile for reproducibility
-    uv pip freeze > /opt/venv/requirements.lock
-    
+    /opt/venv/bin/python -c "import torch, torchvision; assert torch.__version__ == '2.15.0+cu134' and torch.version.cuda == '13.4'"
+    uv pip freeze --python /opt/venv/bin/python > /opt/venv/requirements.lock
+
     echo 'export PATH="/opt/venv/bin:$PATH"' >> $APPTAINER_ENVIRONMENT
 
 %environment
@@ -68,25 +96,25 @@ From: nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
 %help
     FrustraMPNN container for per-residue energetic frustration analysis.
-    
+
     Bundled checkpoint: /opt/frustrampnn_weights/megascale.ckpt
-    
+
     Usage:
         apptainer run --nv frustrampnn.sif predict \
             --pdb protein.pdb \
             --checkpoint /opt/frustrampnn_weights/megascale.ckpt \
             --output results.csv
-    
+
     Output columns:
         - frustration_pred: Predicted frustration index
         - position: 0-indexed residue position
         - wildtype: Original amino acid
         - mutation: Mutant amino acid being scored
         - chain: Chain identifier
-    
+
     Frustration thresholds:
         - highly frustrated: <= -1.0 (red)
         - neutral: -1.0 to 0.58 (gray)
         - minimally frustrated: >= 0.58 (green)
-    
+
     Lockfile: /opt/venv/requirements.lock
