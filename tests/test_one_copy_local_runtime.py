@@ -87,7 +87,7 @@ else:
     bin_dir.mkdir()
     uv = bin_dir / 'uv'
     uv.write_text(f'#!{sys.executable}\n' + '''import json,os,sys
-if sys.argv[1] == '--version': print('uv 0.8.22')
+if sys.argv[1] == '--version': print('uv 0.13.9')
 elif sys.argv[1] == 'sync':
     with open(os.environ['TEST_LOG'],'a') as f: f.write('sync\\n')
     print(os.environ.get('TEST_SYNC_REPORT', 'Audited 1 package in 1ms'), file=sys.stderr)

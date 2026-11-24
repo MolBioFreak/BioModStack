@@ -12,8 +12,39 @@ From: python@sha256:97983fa8cc88343512862c62307159a82261c3528dc025f79e5a3f7af43e
     containers/md-analysis/requirements.lock /opt/bms-md-analysis/requirements.lock
 
 %post
-    python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r /opt/bms-md-analysis/requirements.lock
-    python -m pip check
+    set -eux
+    UV_TMP="$(mktemp -d)"
+    python - "${UV_TMP}" <<'PY'
+import hashlib, io, os, platform, sys, tarfile, urllib.request
+from pathlib import Path
+
+UV_VERSION = "0.13.9"
+TARGETS = {
+    "x86_64": ("x86_64-unknown-linux-gnu", "a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5"),
+    "amd64": ("x86_64-unknown-linux-gnu", "a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5"),
+    "aarch64": ("aarch64-unknown-linux-gnu", "0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d"),
+    "arm64": ("aarch64-unknown-linux-gnu", "0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d"),
+}
+machine = platform.machine().lower()
+if machine not in TARGETS:
+    raise SystemExit(f"Unsupported architecture for uv: {machine}")
+target, expected = TARGETS[machine]
+url = f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/uv-{target}.tar.gz"
+with urllib.request.urlopen(url, timeout=180) as resp:
+    data = resp.read()
+actual = hashlib.sha256(data).hexdigest()
+if actual != expected:
+    raise SystemExit(f"uv SHA-256 mismatch: expected {expected}, got {actual}")
+out = Path(sys.argv[1]) / "uv"
+with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+    member = next(m for m in tf.getmembers() if m.isfile() and Path(m.name).name == "uv")
+    out.write_bytes(tf.extractfile(member).read())
+os.chmod(out, 0o755)
+PY
+    "${UV_TMP}/uv" --version
+    "${UV_TMP}/uv" pip install --system --no-cache --require-hashes --only-binary=:all: -r /opt/bms-md-analysis/requirements.lock
+    "${UV_TMP}/uv" pip check --system
+    rm -rf "${UV_TMP}"
 
 %environment
     export PYTHONNOUSERSITE=1

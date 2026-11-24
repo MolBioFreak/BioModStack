@@ -59,9 +59,21 @@ RUN set -eux; \
     install -m 0755 /tmp/slow5tools/slow5tools /usr/local/bin/slow5tools; \
     rm -rf /tmp/slow5tools /tmp/slow5tools.tar.gz
 
-RUN pip install --no-cache-dir --require-hashes -r /opt/bms/requirements.txt
-
 RUN set -eux; \
+    UV_VERSION="0.13.9"; \
+    case "$(uname -m)" in \
+        x86_64|amd64) UV_TARGET="x86_64-unknown-linux-gnu"; UV_SHA256="a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5" ;; \
+        aarch64|arm64) UV_TARGET="aarch64-unknown-linux-gnu"; UV_SHA256="0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d" ;; \
+        *) echo "Unsupported architecture for uv: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    UV_TMP="$(mktemp -d)"; \
+    curl -fsSL --retry 3 --retry-delay 2 \
+        "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
+        -o "${UV_TMP}/uv.tar.gz"; \
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -; \
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"; \
+    UV_BIN="${UV_TMP}/uv-${UV_TARGET}/uv"; \
+    "${UV_BIN}" pip install --system --no-cache --require-hashes -r /opt/bms/requirements.txt; \
     curl -fsSL --retry 3 \
       "https://codeload.github.com/hiruna72/squigualiser/tar.gz/${SQUIGUALISER_COMMIT}" \
       -o /tmp/squigualiser.tar.gz; \
@@ -69,8 +81,8 @@ RUN set -eux; \
     mkdir -p /tmp/squigualiser; \
     tar -xzf /tmp/squigualiser.tar.gz --strip-components=1 -C /tmp/squigualiser; \
     python3 -c 'namespace={}; exec(open("/tmp/squigualiser/src/_version.py", encoding="utf-8").read(), namespace); assert namespace["__version__"] == "0.7.0"'; \
-    pip install --no-cache-dir --no-deps /tmp/squigualiser; \
-    rm -rf /tmp/squigualiser /tmp/squigualiser.tar.gz
+    "${UV_BIN}" pip install --system --no-cache --no-deps --no-build-isolation /tmp/squigualiser; \
+    rm -rf "${UV_TMP}" /tmp/squigualiser /tmp/squigualiser.tar.gz
 
 RUN set -eux; \
     squigualiser --version; \

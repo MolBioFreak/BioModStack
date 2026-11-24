@@ -77,6 +77,18 @@ class PrerequisitesTest(unittest.TestCase):
                                                 'registry = "https://pypi.org/simple"'))
         self.assertIn("bms-alignment-core", p.locked_build_policy(lock)[0])
 
+    def _fake_uv_info(self):
+        return {
+            "uv": str(self.external / "toolchain/bin/uv"),
+            "version": p.UV_VERSION,
+            "target": "x86_64-unknown-linux-gnu",
+            "url": p.uv_release_asset(system="Linux", machine="x86_64", libc="gnu")["url"],
+            "archive_sha256": p.UV_RELEASE_SHA256["x86_64-unknown-linux-gnu"],
+            "binary_sha256": "0" * 64,
+            "reused": False,
+            "stdout": f"uv {p.UV_VERSION} (x86_64-unknown-linux-gnu)",
+        }
+
     def test_source_build_exception_is_recorded_and_scoped_to_locked_sync(self):
         self.source_only_lock()
         commands = []
@@ -85,19 +97,20 @@ class PrerequisitesTest(unittest.TestCase):
             if "sync" in command:
                 self.assertEqual(kwargs["cwd"], self.source / "platform/api")
             return subprocess.CompletedProcess(command, 0)
-        with patch.object(p.subprocess, "run", side_effect=success), \
+        with patch.object(p, "install_pinned_uv", return_value=self._fake_uv_info()), \
+             patch.object(p.subprocess, "run", side_effect=success), \
              patch.object(p, "check_environment", return_value="inventory"), \
              patch.object(p, "refresh_installed_support", return_value=None), \
              patch.object(p, "publish_installed_support", return_value=None):
             result = p.prerequisite_report("python-bootstrap", project_root=self.source)
         self.assertEqual(result["status"], "installed")
         self.assertEqual(result["approved_source_builds"], [p.DOCOPT_SOURCE])
-        self.assertEqual(commands[0][1], "1")
-        self.assertEqual(commands[1][1], "false")
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0][1], "false")
         for flag in ("--frozen", "--no-dev", "--no-install-project", "--no-python-downloads"):
-            self.assertIn(flag, commands[1][0])
-        self.assertIn("--no-build-package", commands[1][0])
-        self.assertIn("future-source-package", commands[1][0])
+            self.assertIn(flag, commands[0][0])
+        self.assertIn("--no-build-package", commands[0][0])
+        self.assertIn("future-source-package", commands[0][0])
         self.assertEqual(p.subprocess_env(self.external)["UV_NO_BUILD"], "1")
 
     def test_launcher_prefers_managed_interpreter_over_unrelated_path_python(self):
@@ -227,7 +240,8 @@ class PrerequisitesTest(unittest.TestCase):
         for previous, expected in [("running", "installed"), ("complete", "already-installed")]:
             with self.subTest(previous=previous):
                 self.receipt(previous)
-                with patch.object(p, "check_environment", return_value="inventory"), \
+                with patch.object(p, "install_pinned_uv", return_value=self._fake_uv_info()), \
+                     patch.object(p, "check_environment", return_value="inventory"), \
                      patch.object(p.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)), \
                      patch.object(p, "refresh_installed_support", return_value=None), \
                      patch.object(p, "publish_installed_support", side_effect=OSError("inert publication failure")):
@@ -253,23 +267,31 @@ class PrerequisitesTest(unittest.TestCase):
 
     def test_failed_command_persisted_and_resumable(self):
         self.receipt("running")
-        with patch.object(p.subprocess, "run", return_value=subprocess.CompletedProcess([], 7)):
+        with patch.object(p, "install_pinned_uv", return_value=self._fake_uv_info()), \
+             patch.object(p.subprocess, "run", return_value=subprocess.CompletedProcess([], 7)):
             result = p.prerequisite_report("python-bootstrap", project_root=self.source)
-        self.assertEqual(result["errors"][0]["code"], "pinned-uv_failed")
+        self.assertEqual(result["errors"][0]["code"], "locked-sync_failed")
         state = json.loads((self.external / "state.json").read_text())
         self.assertEqual(state["status"], "failed")
-        self.assertEqual(state["steps"][0]["exit_code"], 7)
+        self.assertEqual(state["steps"][0]["step"], "pinned-uv")
+        self.assertEqual(state["steps"][0]["method"], "standalone-tarball-sha256")
+        self.assertEqual(state["steps"][0]["version"], p.UV_VERSION)
+        self.assertEqual(state["steps"][1]["step"], "locked-sync")
+        self.assertEqual(state["steps"][1]["exit_code"], 7)
         commands = []
         def success(command, **kwargs):
             commands.append(command)
             return subprocess.CompletedProcess(command, 0)
-        with patch.object(p.subprocess, "run", side_effect=success), patch.object(p, "check_environment", return_value="inventory"):
+        with patch.object(p, "install_pinned_uv", return_value=self._fake_uv_info()), \
+             patch.object(p.subprocess, "run", side_effect=success), \
+             patch.object(p, "check_environment", return_value="inventory"):
             result = p.prerequisite_report("python-bootstrap", project_root=self.source)
         self.assertEqual(result["status"], "installed")
-        self.assertIn("--only-binary=:all:", commands[0])
-        self.assertIn("uv==0.8.22", commands[0])
+        self.assertEqual(len(commands), 1)
+        for cmd in commands:
+            self.assertNotIn("pip", cmd)
         for flag in ("--frozen", "--no-dev", "--no-build", "--no-install-project", "--no-python-downloads"):
-            self.assertIn(flag, commands[1])
+            self.assertIn(flag, commands[0])
         for name in p.MANIFESTS:
             self.assertEqual((self.external / "manifests" / name).read_bytes(), (self.source / "platform/api" / name).read_bytes())
 

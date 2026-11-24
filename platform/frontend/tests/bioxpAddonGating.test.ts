@@ -32,17 +32,18 @@ test('BioXP exposes only its feature-gated navigation route, not a duplicate top
     assert.match(navBlock, /BioXP Handler/);
 });
 
-test('diagnostics menu exposes the BioXP install add-on toggle', () => {
-    const debugBlock = sourceBetween(layoutSource, 'function DebugMenu', 'interface HardwarePowerLimits');
+test('system menu exposes the BioXP install add-on toggle separately from navigation link visibility', () => {
+    const systemBlock = sourceBetween(layoutSource, 'function SystemMenu', 'interface HardwarePowerLimits');
     for (const marker of [
-        'Install add-ons',
-        'Show dev tools',
-        'Reveals BioXP development controls',
+        'BioXP',
+        'Show BioXP Handler link',
+        'Navigation link only; does not enable BioXP',
         'Remove BioXP',
         'Add BioXP',
         "setBmsFeature('bioxp'",
         'restart required',
     ]) {
-        assert.match(debugBlock, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+        assert.match(systemBlock, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
+    assert.doesNotMatch(systemBlock, /Show dev tools|Full Purge/);
 });

@@ -6,9 +6,38 @@ From: ontresearch/medaka@sha256:6794e1b293ffa125b4a57a042cbc7f85db2584f34a44ffd4
 %post
     set -eu
     export PATH=/opt/custflow/epi2meuser/conda/bin:$PATH
+    # Install pinned uv 0.13.9 with SHA256 verification
+    UV_VERSION="0.13.9"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 3 --retry-delay 2 "${UV_URL}" -o "${UV_TMP}/uv.tar.gz"
+    else
+        python -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "${UV_URL}" "${UV_TMP}/uv.tar.gz"
+    fi
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
+    uv --version
     python -m venv --system-site-packages /opt/medaka-current
     export PATH=/opt/medaka-current/bin:$PATH
-    python -m pip install --no-deps --no-cache-dir 'https://files.pythonhosted.org/packages/56/89/e65671bacc8a102a9c1e7017079f1137bc4093a1039298c33948e7daa443/medaka-2.2.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=66a1e1d7202d8ca3d957ccaef4754b357c14d9660be86a22ba1e9ea0982ca91d'
+    uv pip install --python /opt/medaka-current/bin/python --no-deps --no-cache 'https://files.pythonhosted.org/packages/56/89/e65671bacc8a102a9c1e7017079f1137bc4093a1039298c33948e7daa443/medaka-2.2.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=66a1e1d7202d8ca3d957ccaef4754b357c14d9660be86a22ba1e9ea0982ca91d'
     # Download archived profiles at installation, never during a job. The current
     # HAC6 and SUP5.2 profiles ship in the wheel; historical explicit values stay usable.
     for model in dna_r10.4.1_e8.2_400bps_hac@v5.0.0 dna_r10.4.1_e8.2_400bps_hac@v5.2.0 dna_r10.4.1_e8.2_400bps_sup@v5.0.0; do

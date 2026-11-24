@@ -49,8 +49,20 @@ RUN set -eux; \
     pyslow5_wheel="/tmp/pyslow5-${PYSLOW5_VERSION}-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"; \
     curl -fsSL --retry 3 "$pyslow5_url" -o "$pyslow5_wheel"; \
     echo "${PYSLOW5_WHEEL_SHA256}  $pyslow5_wheel" | sha256sum -c -; \
-    pip install --no-cache-dir "$pyslow5_wheel" 'numpy==2.2.6' 'pod5==0.3.35'; \
-    rm "$pyslow5_wheel"
+    UV_VERSION="0.13.9"; \
+    case "$(uname -m)" in \
+        x86_64|amd64) UV_TARGET="x86_64-unknown-linux-gnu"; UV_SHA256="a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5" ;; \
+        aarch64|arm64) UV_TARGET="aarch64-unknown-linux-gnu"; UV_SHA256="0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d" ;; \
+        *) echo "Unsupported architecture for uv: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    UV_TMP="$(mktemp -d)"; \
+    curl -fsSL --retry 3 --retry-delay 2 \
+        "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
+        -o "${UV_TMP}/uv.tar.gz"; \
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -; \
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"; \
+    "${UV_TMP}/uv-${UV_TARGET}/uv" pip install --system --no-cache "$pyslow5_wheel" 'numpy==2.2.6' 'pod5==0.3.35'; \
+    rm -rf "${UV_TMP}" "$pyslow5_wheel"
 
 RUN set -eux; \
     blue-crab --version; \

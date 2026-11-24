@@ -26,6 +26,9 @@ case "$1" in
     [ -n "${FAKE_FAIL_BUILD:-}" ] && { echo "simulated build error"; exit 1; }
     for a in "$@"; do case "$a" in *.sif) out="$a";; esac; done
     echo image > "$out" ;;
+  exec)
+    [ -n "${FAKE_FAIL_SMOKE:-}" ] && { echo "simulated smoke error"; exit 1; }
+    exit 0 ;;
   *) exit 0 ;;
 esac
 """
@@ -43,7 +46,8 @@ def client(tmp_path, monkeypatch):
         "schema": "bms.tool-recipe.v1", "id": "demo", "name": "Demo tool", "label": "starting-point",
         "modules": ["ont"], "upstream": {"homepage": "https://example.org/demo"},
         "license": {"id": "DEMO-1.0", "url": "https://example.org/l"},
-        "images": [{"filename": "demo.sif", "def": "apptainer/demo.def", "approx_size_gb": 0}],
+        "images": [{"filename": "demo.sif", "def": "apptainer/demo.def", "approx_size_gb": 0,
+                    "smoke": [{"name": "version", "argv": ["demo", "--version"]}]}],
     }))
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -132,3 +136,48 @@ def test_changes_are_refused_for_remote_clients(client, monkeypatch):
                                ("post", "/api/tools/demo/verify", None),
                                ("post", "/api/tools/demo/remove", None)):
         assert getattr(client, method)(path, json=body).status_code == 403, path
+
+
+def test_failed_verify_returns_409_instead_of_200(client, monkeypatch):
+    assert client.post("/api/tools/demo/build", json={}).status_code == 200
+    assert _wait_for(client, "demo", {"ready", "failed"})["status"] == "ready"
+    monkeypatch.setenv("FAKE_FAIL_SMOKE", "1")
+    failed = client.post("/api/tools/demo/verify")
+    assert failed.status_code == 409
+    detail = failed.json()["detail"]
+    assert detail["status"] == "failed" and detail["reason_code"] == "smoke_test_failed"
+
+
+def test_multi_sif_adopt_requires_image_and_succeeds_with_image(client, tmp_path):
+    recipe = {
+        "schema": "bms.tool-recipe.v1", "id": "multi", "name": "Multi SIF", "label": "starting-point",
+        "modules": ["ont"], "upstream": {"homepage": "https://example.org/multi"},
+        "images": [
+            {"filename": "one.sif", "def": "apptainer/demo.def", "approx_size_gb": 0},
+            {"filename": "two.sif", "def": "apptainer/demo.def", "approx_size_gb": 0},
+        ],
+        "weights": [],
+    }
+    (tools_installer.REPO_ROOT / "tools" / "recipes" / "multi.json").write_text(json.dumps(recipe))
+    src = tmp_path / "existing.sif"
+    src.write_text("image")
+    missing_name = client.post("/api/tools/multi/adopt", json={"path": str(src)})
+    assert missing_name.status_code == 409
+    assert missing_name.json()["detail"]["reason_code"] == "image_name_required"
+    adopted = client.post("/api/tools/multi/adopt", json={"path": str(src), "image": "one.sif"})
+    assert adopted.status_code == 200
+    body = adopted.json()
+    assert body["status"] == "incomplete"
+    assert {i["filename"]: i["present"] for i in body["images"]} == {"one.sif": True, "two.sif": False}
+
+
+def test_overview_exposes_present_unverified_and_sif_flag(client):
+    target = client.data / "apptainer" / "demo.sif"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("hand-placed")
+    overview = client.get("/api/tools").json()
+    tool = next(t for t in overview["tools"] if t["tool"] == "demo")
+    assert tool["status"] == "present-unverified"
+    assert tool["images"][0]["sif"] is True
+    ont = next(m for m in overview["modules"] if m["module"] == "ont")
+    assert ont["state"] == "present-unverified"

@@ -375,3 +375,136 @@ def test_signal_recipe_is_the_only_build_route_for_its_images():
     for image in recipe["images"]:
         assert (ROOT / image["docker"]["file"]).is_file() and image["docker"]["env"].startswith("BMS_ONT_")
     assert not list((ROOT / "scripts").glob("build_ont_*_runtime.sh"))
+
+
+def test_adopt_same_path_with_copy_keeps_hand_placed_original_on_remove(install):
+    target = install.data / "apptainer" / "demo.sif"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("hand-placed-image")
+    (install.data / "weights" / "demo" / "model").mkdir(parents=True, exist_ok=True)
+    code, status = install("adopt", "demo", str(target), "--copy")
+    assert code == 0 and status["status"] == "ready"
+    code, removed = install("remove", "demo")
+    assert code == 0 and removed["removed"] == []
+    assert str(target) in removed["kept_not_installed_by_tools"]
+    assert target.read_text() == "hand-placed-image"
+
+
+def test_replaced_verified_sif_becomes_present_unverified_and_is_not_deleted(install):
+    code, status = install("build", "demo", "--accept-license", "DEMO-1.0")
+    assert code == 0 and status["status"] == "ready"
+    target = install.data / "apptainer" / "demo.sif"
+    replacement = install.tmp / "external-replacement.sif"
+    replacement.write_text("externally-supplied-replacement-bytes")
+    os.replace(replacement, target)
+    code, after = install("status", "demo")
+    assert code == 0 and after["status"] == "present-unverified"
+    code, removed = install("remove", "demo")
+    assert code == 0 and removed["removed"] == []
+    assert str(target) in removed["kept_not_installed_by_tools"]
+    assert target.read_text() == "externally-supplied-replacement-bytes"
+    assert removed["status"] == "present-unverified"
+
+
+def test_docker_tag_override_change_and_failed_removal_preserve_ownership(install):
+    project = _add_recipe(install, "signal", [{"docker": {"file": "docker/signal.Dockerfile", "tag": "example/signal:1",
+                                                          "env": "DEMO_SIGNAL_IMAGE"},
+                                               "smoke": [{"name": "version", "argv": ["signal", "--version"]}]}])
+    (project / "docker").mkdir(exist_ok=True)
+    (project / "docker" / "signal.Dockerfile").write_text("FROM example\n")
+    images = install.tmp / "docker-images"
+    images.mkdir()
+    fake_docker = """#!/bin/bash
+echo "docker $@" >> "$FAKE_CALLS"
+case "$1 $2" in
+  "build "*)
+    for a in "$@"; do prev2="$prev"; prev="$a"; [ "$prev2" = "--tag" ] && printf '%s\n' "sha256:$(echo "$a" | tr '/:' '__')" > "$FAKE_DOCKER_DIR/$(echo "$a" | tr '/:' '__')"; done ;;
+  "image inspect")
+    f="$FAKE_DOCKER_DIR/$(echo "${@: -1}" | tr '/:' '__')"
+    [ -e "$f" ] || exit 1
+    cat "$f" ;;
+  "image rm")
+    [ -n "${FAKE_FAIL_RM:-}" ] && { echo "simulated rm error" >&2; exit 1; }
+    rm -f "$FAKE_DOCKER_DIR/$(echo "$3" | tr '/:' '__')" ;;
+esac
+exit 0
+"""
+    docker = install.tmp / "bin" / "docker"
+    docker.write_text(fake_docker)
+    docker.chmod(docker.stat().st_mode | stat.S_IEXEC)
+    v1_env = {"FAKE_DOCKER_DIR": str(images), "DEMO_SIGNAL_IMAGE_TAG": "mine/signal:v1"}
+    code, status = install("build", "signal", extra=v1_env)
+    assert code == 0 and status["status"] == "ready"
+    # Simulate an unrelated image at v2 and change the tag override to v2.
+    (images / "mine_signal_v2").write_text("sha256:other_v2\n")
+    v2_env = {"FAKE_DOCKER_DIR": str(images), "DEMO_SIGNAL_IMAGE_TAG": "mine/signal:v2"}
+    # Failed removal must fail, keep v1 ownership, and target v1 (not v2).
+    code, failed = install("remove", "signal", extra={**v2_env, "FAKE_FAIL_RM": "1"})
+    assert code == 3 and failed["status"] == "failed" and failed["reason_code"] == "remove_failed"
+    assert (images / "mine_signal_v1").is_file() and (images / "mine_signal_v2").is_file()
+    state = json.loads((install.tmp / "config" / "biomodstack" / "tools-v1" / "signal" / "state.json").read_text())
+    assert state["owned"]["example/signal:1"]["tag"] == "mine/signal:v1"
+    # Successful removal removes v1 (the built image) and keeps v2.
+    code, removed = install("remove", "signal", extra=v2_env)
+    assert code == 0 and "docker:mine/signal:v1" in removed["removed"]
+    assert not (images / "mine_signal_v1").exists()
+    assert (images / "mine_signal_v2").is_file()
+    assert "docker:mine/signal:v2" in removed["kept_not_installed_by_tools"]
+
+
+def test_malformed_build_flags_returns_valid_json_without_interrupted_state(install):
+    bad = {"BMS_TOOLS_APPTAINER_BUILD_FLAGS": '--fakeroot "unclosed'}
+    code, plan = install("plan", "demo", extra=bad)
+    assert code == 3 and any(b["reason_code"] == "invalid_build_flags" for b in plan["blockers"])
+    code, blocked = install("build", "demo", extra=bad)
+    assert code == 3 and blocked["status"] == "blocked" and blocked["reason_code"] == "invalid_build_flags"
+    assert blocked["log_path"].endswith("demo/build.log")
+    code, status = install("status", "demo")
+    assert code == 0 and status["status"] == "not-installed"
+
+
+def test_plan_reusable_image_skips_build_input_blocker_unless_replace(install):
+    _add_recipe(install, "packed", [{"filename": "packed.sif", "def": "apptainer/demo.def",
+                                     "requires_files": ["apptainer/env.tar.gz"],
+                                     "requires_note": "Pack the environment first."}])
+    target = install.data / "apptainer" / "packed.sif"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("already-built")
+    code, plan = install("plan", "packed")
+    assert code == 0 and plan["status"] == "planned" and plan["blockers"] == []
+    code, replace_plan = install("plan", "packed", "--replace")
+    assert code == 3 and replace_plan["blockers"][0]["reason_code"] == "build_input_missing"
+
+
+def test_modules_distinguish_present_unverified_from_missing_assets_and_ready(install):
+    (install.data / "apptainer").mkdir(parents=True, exist_ok=True)
+    (install.data / "apptainer" / "demo.sif").write_text("hand-placed")
+    (install.data / "weights" / "demo" / "model").mkdir(parents=True, exist_ok=True)
+    code, overview = install("modules")
+    assert code == 0 and {m["module"]: m["state"] for m in overview["modules"]}["ont"] == "present-unverified"
+    code, verified = install("verify", "demo")
+    assert code == 0 and verified["status"] == "ready"
+    code, overview = install("modules")
+    assert {m["module"]: m["state"] for m in overview["modules"]}["ont"] == "ready"
+
+
+def test_invalid_sibling_recipe_skip_weights_and_optional_weight_plan(install):
+    project = install.tmp / "project"
+    (project / "tools" / "recipes" / "broken.json").write_text("{not-json")
+    recipe_path = project / "tools" / "recipes" / "demo.json"
+    recipe = json.loads(recipe_path.read_text())
+    recipe["weights"].append({
+        "id": "opt", "required": False, "license": {"id": "OPT-1.0"},
+        "present_if": ["demo/opt"], "fetch": {"type": "container", "argv": ["make-opt"]},
+    })
+    recipe_path.write_text(json.dumps(recipe))
+    # get_recipe isolates demo from broken.json and marks optional weights selected_by_default=False.
+    code, plan = install("plan", "demo")
+    assert code == 0 and plan["status"] == "planned"
+    by_step = {s["step"]: s for s in plan["steps"]}
+    assert by_step["weights:model"]["selected_by_default"] is True
+    assert by_step["weights:opt"]["selected_by_default"] is False
+    # --skip-weights reports incomplete (not ready) and records published image.
+    code, skipped = install("build", "demo", "--skip-weights")
+    assert code == 0 and skipped["status"] == "incomplete" and skipped["reason_code"] == "weights_missing"
+    assert skipped["published"] == ["demo.sif"]

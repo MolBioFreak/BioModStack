@@ -2,13 +2,20 @@ import React from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { licensesToAccept, type ToolPlan } from './toolsInstallerPlan';
 
+export interface ToolImageRow {
+  filename: string;
+  present: boolean;
+  kind?: string;
+  sif?: boolean;
+}
+
 export interface ToolRow {
   tool: string;
   name: string;
   label: string;
   modules: string[];
   status: string;
-  images: { filename: string; present: boolean }[];
+  images: ToolImageRow[];
   weights: { id: string; required: boolean; present: boolean }[];
   step?: string | null;
   reason_code?: string | null;
@@ -41,14 +48,15 @@ const STATUS_TEXT: Record<string, string> = {
   failed: 'Failed',
   incomplete: 'Incomplete',
   'present-unverified': 'Present, not checked',
-  ready: 'Ready',
-  'ready-recipe-changed': 'Ready, recipe changed',
+  ready: 'Checked',
+  'ready-recipe-changed': 'Checked, recipe changed',
 };
 
 const MODULE_STATE_TEXT: Record<string, string> = {
   included: 'Included',
-  ready: 'Ready',
-  'needs-tools': 'Needs tools',
+  ready: 'Checked',
+  'present-unverified': 'Present, not checked',
+  'needs-tools': 'Missing assets',
   'no-recipe-yet': 'No recipe yet',
 };
 
@@ -68,6 +76,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+function sifImagesFor(tool: ToolRow): ToolImageRow[] {
+  return tool.images.filter((image) => image.sif ?? image.filename.endsWith('.sif'));
+}
+
+export function buildActionLabel(tool: ToolRow): string {
+  const presentCount = tool.images.filter((image) => image.present).length;
+  if (tool.images.length > 0 && presentCount === tool.images.length) {
+    return 'Finish setup (reuses image)';
+  }
+  if (presentCount > 0) {
+    return 'Build missing';
+  }
+  return tool.status === 'failed' ? 'Retry build' : 'Build';
+}
+
 export interface ToolsInstallerViewProps {
   overview: ToolsOverview;
   openTool: string | null;
@@ -77,12 +100,14 @@ export interface ToolsInstallerViewProps {
   error: string | null;
   accepted: string[];
   adoptPath: string;
+  adoptImage?: string;
   onToggleModule: (module: string, selected: boolean) => void;
   onOpen: (tool: string | null) => void;
   onAccept: (licenseId: string, accepted: boolean) => void;
   onAdoptPath: (value: string) => void;
+  onAdoptImage?: (value: string) => void;
   onBuild: (tool: string) => void;
-  onAdopt: (tool: string) => void;
+  onAdopt: (tool: string, image?: string) => void;
   onVerify: (tool: string) => void;
   onRemove: (tool: string) => void;
 }
@@ -90,15 +115,16 @@ export interface ToolsInstallerViewProps {
 export function ToolsInstallerView(props: ToolsInstallerViewProps) {
   const { overview, openTool, plan, logLines, busy, error, accepted } = props;
   const chosen = new Set(overview.modules.filter((row) => row.selected).map((row) => row.module));
+  // Always list detected tools regardless of module selection; selection adds uninstalled tools to install.
   const shown = overview.selection_made
-    ? overview.tools.filter((tool) => tool.modules.some((name) => chosen.has(name)))
+    ? overview.tools.filter((tool) => tool.status !== 'not-installed' || tool.modules.some((name) => chosen.has(name)))
     : overview.tools;
   const pending = plan ? licensesToAccept(plan) : [];
   const allAccepted = pending.every((license) => accepted.includes(license.id));
 
   return (
     <div className="mx-auto max-w-5xl p-6 text-[var(--text-primary)]">
-      <h1 className="text-2xl font-bold">Tools</h1>
+      <h1 className="text-2xl font-bold">Installed tools</h1>
       <p className="mt-2 text-sm text-[var(--text-secondary)]">
         BioModStack does not ship the scientific tools it runs. Each one is built on this machine from its own
         upstream source, or you can point at an image you already built.
@@ -112,7 +138,7 @@ export function ToolsInstallerView(props: ToolsInstallerViewProps) {
         <p role="alert" className="mt-4 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm">{error}</p>
       )}
 
-      <h2 className="mt-6 text-lg font-semibold">What this install uses</h2>
+      <h2 className="mt-6 text-lg font-semibold">Choose additions by module</h2>
       <ul className="mt-2 divide-y divide-[var(--border-primary)] rounded-lg border border-[var(--border-primary)]">
         {overview.modules.map((row) => (
           <li key={row.module} className="flex items-center gap-3 px-3 py-2 text-sm">
@@ -131,12 +157,16 @@ export function ToolsInstallerView(props: ToolsInstallerViewProps) {
 
       <h2 className="mt-6 text-lg font-semibold">Tools</h2>
       {shown.length === 0 && (
-        <p className="mt-2 text-sm text-[var(--text-secondary)]">Nothing to build for the parts you chose.</p>
+        <p className="mt-2 text-sm text-[var(--text-secondary)]">No tools detected and no optional modules selected.</p>
       )}
       <ul className="mt-2 space-y-2">
         {shown.map((tool) => {
           const open = openTool === tool.tool;
           const building = tool.status === 'building';
+          const sifImages = sifImagesFor(tool);
+          const selectedAdoptImage = sifImages.some((img) => img.filename === props.adoptImage)
+            ? props.adoptImage
+            : sifImages[0]?.filename;
           return (
             <li key={tool.tool} className="rounded-lg border border-[var(--border-primary)]">
               <button
@@ -180,6 +210,7 @@ export function ToolsInstallerView(props: ToolsInstallerViewProps) {
                           {step.step.replace(':', ' ')}
                           {step.approx_size_gb ? `, about ${step.approx_size_gb} GB` : ''}
                           {step.already_present ? ' (present)' : ''}
+                          {step.selected_by_default === false ? ' (optional)' : ''}
                           {step.method === 'manual' && !step.already_present && step.instructions
                             ? <span className="block text-[var(--text-secondary)]">{step.instructions}</span>
                             : null}
@@ -211,7 +242,7 @@ export function ToolsInstallerView(props: ToolsInstallerViewProps) {
                       disabled={busy || building || !plan || plan.blockers.length > 0 || !allAccepted}
                       onClick={() => props.onBuild(tool.tool)}
                     >
-                      {tool.status === 'not-installed' ? 'Build' : 'Build again'}
+                      {buildActionLabel(tool)}
                     </button>
                     <button type="button" className={BUTTON} disabled={busy || building} onClick={() => props.onVerify(tool.tool)}>
                       Check
@@ -220,24 +251,40 @@ export function ToolsInstallerView(props: ToolsInstallerViewProps) {
                       Remove
                     </button>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <input
-                      type="text"
-                      aria-label="Path to an image you already built"
-                      placeholder="/path/to/your-image.sif"
-                      className="min-w-[18rem] flex-1 rounded-lg border border-[var(--border-primary)] bg-transparent px-2 py-1"
-                      value={props.adoptPath}
-                      onChange={(event) => props.onAdoptPath(event.target.value)}
-                    />
-                    <button
-                      type="button"
-                      className={BUTTON}
-                      disabled={busy || building || !props.adoptPath.trim()}
-                      onClick={() => props.onAdopt(tool.tool)}
-                    >
-                      Use existing image
-                    </button>
-                  </div>
+                  {sifImages.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      {sifImages.length > 1 && (
+                        <select
+                          aria-label="Target image"
+                          className="rounded-lg border border-[var(--border-primary)] bg-transparent px-2 py-1"
+                          value={selectedAdoptImage ?? ''}
+                          onChange={(event) => props.onAdoptImage?.(event.target.value)}
+                        >
+                          {sifImages.map((image) => (
+                            <option key={image.filename} value={image.filename}>
+                              {image.filename}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      <input
+                        type="text"
+                        aria-label="Path to an image you already built"
+                        placeholder="/path/to/your-image.sif"
+                        className="min-w-[18rem] flex-1 rounded-lg border border-[var(--border-primary)] bg-transparent px-2 py-1"
+                        value={props.adoptPath}
+                        onChange={(event) => props.onAdoptPath(event.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className={BUTTON}
+                        disabled={busy || building || !props.adoptPath.trim() || (sifImages.length > 1 && !selectedAdoptImage)}
+                        onClick={() => props.onAdopt(tool.tool, sifImages.length > 1 ? selectedAdoptImage : undefined)}
+                      >
+                        Use existing image
+                      </button>
+                    </div>
+                  )}
                   {(building || tool.status === 'failed') && logLines.length > 0 && (
                     <details open={building}>
                       <summary className="cursor-pointer text-[var(--text-secondary)]">Build output</summary>
@@ -263,6 +310,7 @@ export function ToolsInstaller() {
   const [error, setError] = React.useState<string | null>(null);
   const [accepted, setAccepted] = React.useState<string[]>([]);
   const [adoptPath, setAdoptPath] = React.useState('');
+  const [adoptImage, setAdoptImage] = React.useState('');
 
   const overviewQuery = useQuery({
     queryKey: ['tools-overview'],
@@ -289,6 +337,7 @@ export function ToolsInstaller() {
   React.useEffect(() => {
     setAccepted([]);
     setAdoptPath('');
+    setAdoptImage('');
     setError(null);
   }, [openTool]);
 
@@ -296,12 +345,17 @@ export function ToolsInstaller() {
     setBusy(true);
     setError(null);
     try {
-      await work();
+      const result = await work();
+      if (result && typeof result === 'object' && (result as { status?: string }).status === 'failed') {
+        const msg = (result as { message?: string }).message;
+        throw new Error(msg || 'The action failed.');
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The request failed.');
     } finally {
       setBusy(false);
       await queryClient.invalidateQueries({ queryKey: ['tools-overview'] });
+      await queryClient.invalidateQueries({ queryKey: ['tools-plan'] });
     }
   }, [queryClient]);
 
@@ -329,8 +383,10 @@ export function ToolsInstaller() {
       error={error}
       accepted={accepted}
       adoptPath={adoptPath}
+      adoptImage={adoptImage}
       onOpen={setOpenTool}
       onAdoptPath={setAdoptPath}
+      onAdoptImage={setAdoptImage}
       onAccept={(licenseId, value) =>
         setAccepted((current) => (value ? [...new Set([...current, licenseId])] : current.filter((id) => id !== licenseId)))}
       onToggleModule={(module, selected) => {
@@ -340,7 +396,10 @@ export function ToolsInstaller() {
         void act(() => request('/api/tools/modules', { method: 'PUT', body: JSON.stringify({ modules: next }) }));
       }}
       onBuild={(tool) => void act(() => post(`/api/tools/${tool}/build`, { accept_licenses: accepted }))}
-      onAdopt={(tool) => void act(() => post(`/api/tools/${tool}/adopt`, { path: adoptPath.trim() }))}
+      onAdopt={(tool, image) => void act(() => post(`/api/tools/${tool}/adopt`, {
+        path: adoptPath.trim(),
+        ...(image ? { image } : {}),
+      }))}
       onVerify={(tool) => void act(() => post(`/api/tools/${tool}/verify`))}
       onRemove={(tool) => void act(() => post(`/api/tools/${tool}/remove`))}
     />

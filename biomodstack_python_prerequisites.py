@@ -8,15 +8,28 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
+import urllib.error
+import urllib.request
 
-UV_VERSION = "0.8.22"
+UV_VERSION = "0.13.9"
+UV_RELEASE_BASE = f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}"
+UV_RELEASE_SHA256 = {
+    "x86_64-unknown-linux-gnu": "a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5",
+    "aarch64-unknown-linux-gnu": "0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d",
+    "x86_64-unknown-linux-musl": "58ccf5f1792b8a5a88d01bc910ea131a8b3db4a319a17ad5fad75e0845a3e271",
+    "aarch64-unknown-linux-musl": "37fbb7c5bc66cf99c12aa881949d216181e201dec449772c4329e56487d61179",
+}
+UV_ARCHIVE_MAX_BYTES = 80 * 1024 * 1024
 SCHEMA = "bms.python-prerequisites.v1"
 ACTIONS = {"python-plan", "python-bootstrap", "python-verify"}
 SETUP_ACTIONS = {"discover", "plan", "configure-preview", "configure", "recover",
@@ -172,6 +185,224 @@ def subprocess_env(root: Path) -> dict:
     return env
 
 
+def uv_version_matches(output: str, version: str = UV_VERSION) -> bool:
+    """Match both 'uv X.Y.Z' and standalone 'uv X.Y.Z (target/commit)' output."""
+    lines = (output or "").strip().splitlines()
+    if not lines:
+        return False
+    parts = lines[0].split()
+    return len(parts) >= 2 and parts[0] == "uv" and parts[1] == version
+
+
+def uv_release_asset(*, system: str | None = None, machine: str | None = None,
+                     libc: str | None = None) -> dict[str, str]:
+    """Resolve the pinned official standalone uv Linux release asset and SHA-256."""
+    sys_name = system if system is not None else platform.system()
+    if sys_name != "Linux":
+        raise PrerequisiteError("uv_platform_unsupported", f"Pinned standalone uv bootstrap supports Linux only (found {sys_name!r})")
+    raw_machine = (machine if machine is not None else platform.machine()).strip().lower()
+    arch_map = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
+    arch = arch_map.get(raw_machine)
+    if not arch:
+        raise PrerequisiteError("uv_platform_unsupported", f"Unsupported Linux architecture for pinned uv {UV_VERSION}: {raw_machine!r}")
+    if libc is None:
+        detected_libc = (platform.libc_ver()[0] or "").strip().lower()
+        resolved_libc = "gnu" if detected_libc == "glibc" else "musl"
+    else:
+        resolved_libc = libc.strip().lower()
+    target = f"{arch}-unknown-linux-{resolved_libc}"
+    expected_sha = UV_RELEASE_SHA256.get(target)
+    if not expected_sha:
+        raise PrerequisiteError("uv_platform_unsupported", f"No pinned uv {UV_VERSION} checksum for target {target!r}")
+    filename = f"uv-{target}.tar.gz"
+    return {
+        "version": UV_VERSION,
+        "target": target,
+        "filename": filename,
+        "url": f"{UV_RELEASE_BASE}/{filename}",
+        "sha256": expected_sha,
+    }
+
+
+def _download_uv_archive(url: str, *, timeout: int = 180) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": f"BioModStack/{SCHEMA}"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            data = response.read(UV_ARCHIVE_MAX_BYTES + 1)
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise PrerequisiteError("pinned-uv_failed", f"Failed to download pinned uv {UV_VERSION} from {url}: {exc}") from exc
+    if len(data) > UV_ARCHIVE_MAX_BYTES:
+        raise PrerequisiteError("pinned-uv_failed", f"Pinned uv archive exceeded {UV_ARCHIVE_MAX_BYTES} byte limit: {url}")
+    return data
+
+
+def _write_atomic_bytes(path: Path, data: bytes, *, mode: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temp_name, mode)
+        os.replace(temp_name, path)
+        dir_fd = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        Path(temp_name).unlink(missing_ok=True)
+
+
+def install_pinned_uv(toolchain_dir: Path, *, env: dict[str, str] | None = None,
+                      log_path: Path | None = None, timeout: int = 180,
+                      libc: str | None = None) -> dict:
+    """Acquire or reuse a SHA-256-verified standalone uv binary without host pip."""
+    bin_dir = toolchain_dir / "bin"
+    uv_bin = bin_dir / "uv"
+    receipt_path = bin_dir / ".uv-release.json"
+    probe_env = env if env is not None else os.environ.copy()
+    asset = uv_release_asset(libc=libc)
+
+    def write_log(lines: list[str]) -> None:
+        if log_path is not None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    if uv_bin.is_file() and not uv_bin.is_symlink() and receipt_path.is_file() and not receipt_path.is_symlink():
+        try:
+            recorded = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            recorded = None
+        if (isinstance(recorded, dict)
+                and recorded.get("version") == UV_VERSION
+                and recorded.get("target") == asset["target"]
+                and recorded.get("archive_sha256") == asset["sha256"]
+                and isinstance(recorded.get("binary_sha256"), str)
+                and hashlib.sha256(uv_bin.read_bytes()).hexdigest() == recorded["binary_sha256"]):
+            try:
+                probe = subprocess.run([str(uv_bin), "--version"], env=probe_env, capture_output=True, text=True, timeout=30)
+            except (OSError, subprocess.SubprocessError):
+                probe = None
+            probe_out = (probe.stdout or "").strip() if probe is not None else ""
+            if probe is not None and probe.returncode == 0 and uv_version_matches(probe_out, UV_VERSION):
+                write_log([
+                    "method=standalone-tarball-sha256",
+                    "reused=true",
+                    f"uv={uv_bin}",
+                    f"version={probe_out}",
+                    f"target={asset['target']}",
+                    f"archive_sha256={asset['sha256']}",
+                    f"binary_sha256={recorded['binary_sha256']}",
+                ])
+                return {
+                    "uv": str(uv_bin),
+                    "version": UV_VERSION,
+                    "target": asset["target"],
+                    "url": recorded.get("url", asset["url"]),
+                    "archive_sha256": asset["sha256"],
+                    "binary_sha256": recorded["binary_sha256"],
+                    "reused": True,
+                    "stdout": probe_out,
+                }
+
+    log_lines = [
+        "method=standalone-tarball-sha256",
+        f"version={asset['version']}",
+        f"target={asset['target']}",
+        f"url={asset['url']}",
+        f"expected_sha256={asset['sha256']}",
+    ]
+    try:
+        archive_bytes = _download_uv_archive(asset["url"], timeout=timeout)
+    except PrerequisiteError as exc:
+        log_lines.append(f"error={exc}")
+        write_log(log_lines)
+        raise
+
+    actual_sha = hashlib.sha256(archive_bytes).hexdigest()
+    log_lines.extend([f"bytes={len(archive_bytes)}", f"actual_sha256={actual_sha}"])
+    if actual_sha != asset["sha256"]:
+        msg = f"Pinned uv {UV_VERSION} archive SHA-256 mismatch for {asset['filename']}: expected {asset['sha256']}, got {actual_sha}"
+        log_lines.append(f"error={msg}")
+        write_log(log_lines)
+        raise PrerequisiteError("pinned-uv_failed", msg)
+
+    extracted: dict[str, bytes] = {}
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as archive:
+            for member in archive.getmembers():
+                member_parts = Path(member.name).parts
+                if ".." in member_parts or any(part.startswith("/") for part in member_parts):
+                    raise PrerequisiteError("pinned-uv_failed", f"Unsafe path in uv archive: {member.name!r}")
+                if not member.isfile():
+                    continue
+                leaf = Path(member.name).name
+                if leaf in {"uv", "uvx"}:
+                    stream = archive.extractfile(member)
+                    if stream is None:
+                        raise PrerequisiteError("pinned-uv_failed", f"Unable to extract {member.name!r} from uv archive")
+                    extracted[leaf] = stream.read()
+    except PrerequisiteError as exc:
+        log_lines.append(f"error={exc}")
+        write_log(log_lines)
+        raise
+    except (tarfile.TarError, OSError, EOFError) as exc:
+        msg = f"Failed to unpack pinned uv {UV_VERSION} archive: {exc}"
+        log_lines.append(f"error={msg}")
+        write_log(log_lines)
+        raise PrerequisiteError("pinned-uv_failed", msg) from exc
+
+    if "uv" not in extracted:
+        msg = f"Pinned uv {UV_VERSION} archive {asset['filename']} missing uv binary"
+        log_lines.append(f"error={msg}")
+        write_log(log_lines)
+        raise PrerequisiteError("pinned-uv_failed", msg)
+
+    for leaf, binary_bytes in extracted.items():
+        _write_atomic_bytes(bin_dir / leaf, binary_bytes, mode=0o755)
+    binary_sha = hashlib.sha256(extracted["uv"]).hexdigest()
+
+    probe = subprocess.run([str(uv_bin), "--version"], env=probe_env, capture_output=True, text=True, timeout=30)
+    probe_out = (probe.stdout or "").strip()
+    probe_err = (probe.stderr or "").strip()
+    log_lines.extend([
+        f"binary_sha256={binary_sha}",
+        f"probe_exit_code={probe.returncode}",
+        f"probe_stdout={probe_out}",
+    ])
+    if probe_err:
+        log_lines.append(f"probe_stderr={probe_err}")
+    if probe.returncode or not uv_version_matches(probe_out, UV_VERSION):
+        msg = f"Extracted uv binary failed version verification (expected uv {UV_VERSION}): {probe_out or probe_err}"
+        log_lines.append(f"error={msg}")
+        write_log(log_lines)
+        raise PrerequisiteError("pinned-uv_failed", msg)
+
+    receipt = {
+        "version": UV_VERSION,
+        "target": asset["target"],
+        "filename": asset["filename"],
+        "url": asset["url"],
+        "archive_sha256": actual_sha,
+        "binary_sha256": binary_sha,
+    }
+    _write_atomic_bytes(receipt_path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"), mode=0o644)
+    log_lines.append("reused=false")
+    write_log(log_lines)
+    return {
+        "uv": str(uv_bin),
+        "version": UV_VERSION,
+        "target": asset["target"],
+        "url": asset["url"],
+        "archive_sha256": actual_sha,
+        "binary_sha256": binary_sha,
+        "reused": False,
+        "stdout": probe_out,
+    }
+
+
 def check_environment(root: Path) -> str:
     python = root / "environment/bin/python"
     uv = root / "toolchain/bin/uv"
@@ -184,7 +415,7 @@ def check_environment(root: Path) -> str:
                 [str(python), "-I", "-B", "-c", "import importlib.metadata as m, json; print(json.dumps(sorted((d.metadata['Name'].lower(), d.version) for d in m.distributions())))"]]
     for index, command in enumerate(commands):
         p = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
-        if p.returncode or (index == 0 and p.stdout.strip() != f"uv {UV_VERSION}"):
+        if p.returncode or (index == 0 and not uv_version_matches(p.stdout, UV_VERSION)):
             raise PrerequisiteError("environment_invalid", f"Offline environment check failed: {command!r}: {p.stdout[-2000:]} {p.stderr[-2000:]}")
 
     return hashlib.sha256(p.stdout.encode()).hexdigest()
@@ -216,8 +447,10 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
         state = read_state(root, expected)
         report["operation_status"] = state.get("status") if state else "absent"
         if action == "python-plan":
+            uv_asset = uv_release_asset()
             report.update(status="planned", steps=[
-                {"step": "pinned-uv", "version": UV_VERSION, "network": True},
+                {"step": "pinned-uv", "version": UV_VERSION, "method": "standalone-tarball-sha256",
+                 "target": uv_asset["target"], "url": uv_asset["url"], "sha256": uv_asset["sha256"], "network": True},
                 {"step": "locked-sync", "flags": ["--frozen", "--no-dev", *build_flags, "--no-install-project"], "network": True},
                 {"step": "offline-check", "network": False}])
             return report
@@ -277,11 +510,39 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
             save(root, state)
             if p.returncode:
                 raise PrerequisiteError(step + "_failed", f"Exit {p.returncode}; see {row['log']}. Re-run python-bootstrap after correcting the blocker")
-        # pip is an explicit base-Python prerequisite; never touch host/site packages.
-        run("pinned-uv", [sys.executable, "-I", "-B", "-m", "pip", "--isolated", "install",
-                          "--disable-pip-version-check", "--no-cache-dir", "--only-binary=:all:",
-                          "--no-deps", "--upgrade", "--index-url", "https://pypi.org/simple",
-                          "--target", str(root / "toolchain"), f"uv=={UV_VERSION}"], 180)
+        # Acquire pinned standalone uv directly with SHA-256 verification; never invoke host pip.
+        uv_asset = uv_release_asset()
+        uv_row = {
+            "step": "pinned-uv",
+            "status": "running",
+            "method": "standalone-tarball-sha256",
+            "version": UV_VERSION,
+            "target": uv_asset["target"],
+            "url": uv_asset["url"],
+            "sha256": uv_asset["sha256"],
+            "log": str(root / "pinned-uv.log"),
+        }
+        state["steps"].append(uv_row)
+        save(root, state)
+        try:
+            uv_info = install_pinned_uv(
+                root / "toolchain", env=env, log_path=Path(uv_row["log"]), timeout=180
+            )
+        except Exception as exc:
+            uv_row.update(status="failed", error=str(exc))
+            save(root, state)
+            if isinstance(exc, PrerequisiteError):
+                raise
+            raise PrerequisiteError(
+                "pinned-uv_failed",
+                f"Pinned uv {UV_VERSION} bootstrap failed: {exc}; see {uv_row['log']}. Re-run python-bootstrap after correcting the blocker",
+            ) from exc
+        uv_row.update(
+            status="complete",
+            reused=uv_info["reused"],
+            binary_sha256=uv_info["binary_sha256"],
+        )
+        save(root, state)
         run("locked-sync", [str(root / "toolchain/bin/uv"), "sync", "--frozen",
                             "--no-dev", *build_flags, "--no-install-project",
                             "--python", sys.executable, "--no-python-downloads"], 900,

@@ -94,10 +94,10 @@ def _recipe_and_where(tool: str):
 
 
 @router.get("/{tool}/plan")
-async def get_plan(tool: str):
+async def get_plan(tool: str, replace: bool = False):
     def work():
         recipe, where = _recipe_and_where(tool)
-        return engine.tool_plan(recipe, where, REPO_ROOT)
+        return engine.tool_plan(recipe, where, REPO_ROOT, replace=replace)
     return await run_in_threadpool(_call, work)
 
 
@@ -147,13 +147,19 @@ async def post_build(request: Request, tool: str, payload: BuildPayload):
     return await run_in_threadpool(_call, work)
 
 
+def _check_action_result(result: dict) -> dict:
+    if result.get("status") == "failed":
+        raise HTTPException(status_code=409, detail=result)
+    return result
+
+
 @router.post("/{tool}/verify")
 async def post_verify(request: Request, tool: str):
     _require_local(request)
 
     def work():
         recipe, where = _recipe_and_where(tool)
-        return engine.verify_tool(recipe, where, REPO_ROOT)
+        return _check_action_result(engine.verify_tool(recipe, where, REPO_ROOT))
     return await run_in_threadpool(_call, work)
 
 
@@ -163,8 +169,10 @@ async def post_adopt(request: Request, tool: str, payload: AdoptPayload):
 
     def work():
         recipe, where = _recipe_and_where(tool)
-        return engine.adopt_tool(recipe, where, Path(payload.path), REPO_ROOT,
-                                 image_name=payload.image, copy=payload.copy_image)
+        return _check_action_result(
+            engine.adopt_tool(recipe, where, Path(payload.path), REPO_ROOT,
+                              image_name=payload.image, copy=payload.copy_image)
+        )
     return await run_in_threadpool(_call, work)
 
 
@@ -174,5 +182,5 @@ async def post_remove(request: Request, tool: str):
 
     def work():
         recipe, where = _recipe_and_where(tool)
-        return engine.remove_tool(recipe, where, REPO_ROOT)
+        return _check_action_result(engine.remove_tool(recipe, where, REPO_ROOT))
     return await run_in_threadpool(_call, work)

@@ -77,8 +77,9 @@ are not scientific readiness or service activation.
 
 ## Python dependency authority
 
-`python-bootstrap` explicitly installs pinned uv **0.8.22** into an owned external
-root, then consumes the repository's `platform/api/uv.lock` using `--frozen
+`python-bootstrap` explicitly downloads pinned standalone uv **0.13.9** (verified
+by archive SHA-256) into an owned external root, then consumes the repository's
+`platform/api/uv.lock` using `--frozen
 --no-dev --no-install-project`. Source builds are forbidden except for the exact
 reviewed `docopt==0.6.2` source archive and SHA-256 recorded by the installer.
 That dependency publishes no wheel; a global `--no-build` rejects the frozen
@@ -89,8 +90,7 @@ policy requires a new external Python root instead of reusing an old receipt.
 No licensed weight, SIF
 store, source lockfile update, interpreter download or service start is part of
 this action. The full executed commands, exit codes and logs are returned/stored
-in its JSON operation receipt. Base Python must supply `pip`; installing that
-base prerequisite is distinct from automatic BMS setup.
+in its JSON operation receipt. Host `pip` is not required or invoked.
 
 Default storage is under `$XDG_DATA_HOME/biomodstack/python/<source-identity>`
 (or `~/.local/share`). `BMS_PYTHON_ROOT` may select another absolute, external

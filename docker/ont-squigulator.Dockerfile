@@ -26,7 +26,21 @@ RUN set -eux; \
     mkdir -p /licenses/squigulator /licenses/slow5lib /licenses/streamvbyte; \
     cp /src/LICENSE /licenses/squigulator/LICENSE; \
     find /src -path '*/slow5lib*/LICENSE*' -type f -print -quit | xargs -r -I{} cp {} /licenses/slow5lib/LICENSE; \
-    find /src -path '*/streamvbyte*/LICENSE*' -type f -print -quit | xargs -r -I{} cp {} /licenses/streamvbyte/LICENSE
+    find /src -path '*/streamvbyte*/LICENSE*' -type f -print -quit | xargs -r -I{} cp {} /licenses/streamvbyte/LICENSE; \
+    UV_VERSION="0.13.9"; \
+    case "$(uname -m)" in \
+        x86_64|amd64) UV_TARGET="x86_64-unknown-linux-gnu"; UV_SHA256="a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5" ;; \
+        aarch64|arm64) UV_TARGET="aarch64-unknown-linux-gnu"; UV_SHA256="0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d" ;; \
+        *) echo "Unsupported architecture for uv: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    UV_TMP="$(mktemp -d)"; \
+    curl -fsSL --retry 3 --retry-delay 2 \
+        "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
+        -o "${UV_TMP}/uv.tar.gz"; \
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -; \
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"; \
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /tmp/uv; \
+    rm -rf "${UV_TMP}"
 
 FROM python:3.12-slim-bookworm@sha256:0f5b26b9518d002b6173fd61daad821fa340635ebfec5bba471013f9ca114579
 ARG SOURCE_DATE_EPOCH
@@ -45,8 +59,9 @@ COPY --from=build /usr/local/bin/squigulator /usr/local/bin/squigulator
 COPY --from=build /usr/local/bin/bms-slow5-index /usr/local/bin/bms-slow5-index
 COPY --from=build /licenses /usr/share/licenses/bms-ont-squigulator
 COPY docker/ont-squigulator-requirements.txt /opt/bms/requirements.txt
+COPY --from=build /tmp/uv /tmp/uv
 COPY scripts/ont_squigulator_runtime.py /opt/bms/ont_squigulator_runtime.py
-RUN pip install --no-cache-dir --require-hashes -r /opt/bms/requirements.txt
+RUN /tmp/uv pip install --system --no-cache --require-hashes -r /opt/bms/requirements.txt && rm -f /tmp/uv
 RUN set -eux; \
     test "$(squigulator --version | awk '{print $2}')" = "$SQUIGULATOR_VERSION"; \
     python3 -c 'import pyslow5'; \

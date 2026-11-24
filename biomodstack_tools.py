@@ -157,10 +157,18 @@ def load_recipes(project_root: Path = PROJECT_ROOT) -> dict[str, dict]:
 
 
 def get_recipe(tool: str, project_root: Path = PROJECT_ROOT) -> dict:
-    recipes = load_recipes(project_root)
-    if tool not in recipes:
-        raise ToolError("unknown_tool", f"No recipe named {tool!r}. Known: {', '.join(sorted(recipes)) or 'none'}")
-    return recipes[tool]
+    if not tool or "/" in tool or chr(92) in tool or tool in (".", "..") or Path(tool).name != tool:
+        raise ToolError("unknown_tool", f"No recipe named {tool!r}.")
+    directory = recipes_dir(project_root)
+    path = directory / f"{tool}.json"
+    if not path.is_file():
+        known = sorted(p.stem for p in directory.glob("*.json")) if directory.is_dir() else []
+        raise ToolError("unknown_tool", f"No recipe named {tool!r}. Known: {', '.join(known) or 'none'}")
+    try:
+        recipe = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ToolError("recipe_invalid", f"{path.name}: {exc}") from exc
+    return _validate_recipe(recipe, path)
 
 
 # ------------------------------------------------------------ locations
@@ -190,6 +198,14 @@ def _write_json(path: Path, value: dict) -> None:
         stream.flush()
         os.fsync(stream.fileno())
     os.replace(temporary, path)
+    try:
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError:
+        pass
 
 
 def _read_state(state_dir: Path, tool: str) -> dict:
@@ -241,15 +257,94 @@ def _docker_tag(image: dict) -> str:
     looks for the image, so a custom tag is built and found under one name.
     """
     spec = image["docker"]
-    override = os.environ.get((spec.get("env") or "") + "_TAG", "").strip() if spec.get("env") else ""
+    env_name = spec.get("env") or ""
+    override = _env_or_selector(f"{env_name}_TAG") if env_name else ""
     return override or spec["tag"]
+
+
+def _host_selectors() -> dict[str, str]:
+    try:
+        import biomodstack_runtime_profile as profiles
+        return profiles.load_host_selectors()
+    except Exception:
+        return {}
+
+
+def _env_or_selector(name: str, selectors: dict[str, str] | None = None) -> str:
+    explicit = os.environ.get(name, "").strip()
+    if explicit:
+        return explicit
+    loaded = _host_selectors() if selectors is None else selectors
+    return str(loaded.get(name, "")).strip()
+
+
+def _apptainer_build_flags() -> list[str]:
+    raw = os.environ.get("BMS_TOOLS_APPTAINER_BUILD_FLAGS", "")
+    try:
+        return shlex.split(raw)
+    except ValueError as exc:
+        raise ToolError("invalid_build_flags",
+                        f"BMS_TOOLS_APPTAINER_BUILD_FLAGS could not be parsed: {exc}") from exc
+
+
+def _sample_sha256(path: Path, size: int) -> str:
+    digest = hashlib.sha256()
+    window = 65536
+    with open(path, "rb") as stream:
+        if size <= window * 2:
+            digest.update(stream.read())
+        else:
+            digest.update(stream.read(window))
+            stream.seek(size - window)
+            digest.update(stream.read(window))
+    return digest.hexdigest()
+
+
+def _file_identity(path: Path) -> dict | None:
+    try:
+        st = path.stat()
+        if not os.path.isfile(path):
+            return None
+        return {"kind": "file", "path": str(path), "size": st.st_size, "mtime_ns": st.st_mtime_ns,
+                "ino": st.st_ino, "dev": st.st_dev, "sample_sha256": _sample_sha256(path, st.st_size)}
+    except OSError:
+        return None
+
+
+def _symlink_identity(path: Path) -> dict | None:
+    try:
+        lst = path.lstat()
+        if not path.is_symlink():
+            return None
+        return {"kind": "symlink", "path": str(path), "target": os.readlink(path),
+                "ino": lst.st_ino, "dev": lst.st_dev}
+    except OSError:
+        return None
+
+
+def _matches_file_identity(path: Path, expected: dict) -> bool:
+    current = _file_identity(path)
+    if not current:
+        return False
+    return all(current.get(k) == expected.get(k) for k in ("size", "mtime_ns", "ino", "dev", "sample_sha256"))
+
+
+def _docker_image_id(runtime: str | None, reference: str) -> str | None:
+    if not runtime or not reference:
+        return None
+    done = subprocess.run([runtime, "image", "inspect", "--format", "{{.Id}}", reference],
+                          capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    if done.returncode != 0:
+        return None
+    return done.stdout.strip() or None
 
 
 def _docker() -> str | None:
     # The installer's own setting, then the runtime the ONT tools are configured to run with,
     # so an image is built where it will be looked for.
+    selectors = _host_selectors()
     for name in ("BMS_TOOLS_CONTAINER_RUNTIME", "BMS_ONT_CONTAINER_RUNTIME", "BMS_CONTAINER_RUNTIME"):
-        chosen = os.environ.get(name, "").strip()
+        chosen = _env_or_selector(name, selectors)
         if chosen:
             return shutil.which(chosen) if chosen in ("docker", "podman") else None
     return shutil.which("docker") or shutil.which("podman")
@@ -269,11 +364,12 @@ _STORE_SELECTORS = {
 
 
 def _store_image(name: str, container_dir: Path) -> Path | None:
+    selectors = _host_selectors()
     selector = _STORE_SELECTORS.get(name, "BMS_RUNTIME_IMAGE_" + re.sub(r"[^A-Za-z0-9]", "_", name).upper())
-    configured = os.environ.get(selector, "").strip()
+    configured = _env_or_selector(selector, selectors)
     if configured and Path(configured).is_file():
         return Path(configured)
-    root = Path(os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip() or container_dir / ".image-store")
+    root = Path(_env_or_selector("BMS_RUNTIME_IMAGE_STORE", selectors) or container_dir / ".image-store")
     try:
         state = json.loads((root / "references" / "state.json").read_text(encoding="utf-8"))
         current, releases = state["current"], state["releases"]
@@ -287,7 +383,7 @@ def _store_image(name: str, container_dir: Path) -> Path | None:
     return None
 
 
-def _sif_path(image: dict, where: dict[str, Path]) -> Path | None:
+def _sif_path(image: dict, where: dict[str, Path], project_root: Path = PROJECT_ROOT) -> Path | None:
     """The image file BMS runs: the one in the container folder, else the managed store's."""
     direct = where["container_dir"] / image["filename"]
     if direct.exists():
@@ -295,7 +391,7 @@ def _sif_path(image: dict, where: dict[str, Path]) -> Path | None:
     if image.get("lock"):  # a lock file in the repository naming the reference build's file
         try:
             named = where["container_dir"] / Path(json.loads(
-                (PROJECT_ROOT / image["lock"]).read_text(encoding="utf-8"))["image_filename"]).name
+                (project_root / image["lock"]).read_text(encoding="utf-8"))["image_filename"]).name
             if named.exists():
                 return named
         except (OSError, ValueError, KeyError, TypeError):
@@ -303,17 +399,27 @@ def _sif_path(image: dict, where: dict[str, Path]) -> Path | None:
     return _store_image(image["filename"], where["container_dir"])
 
 
+def _docker_active_ref(image: dict) -> tuple[str | None, str | None]:
+    runtime = _docker()
+    if not runtime:
+        return None, None
+    env_name = image["docker"].get("env") or ""
+    configured = _env_or_selector(env_name) if env_name else ""
+    for reference in (configured, _docker_tag(image)):
+        if not reference:
+            continue
+        image_id = _docker_image_id(runtime, reference)
+        if image_id is not None:
+            return reference, image_id
+    return None, None
+
+
 def _image_present(image: dict, where: dict[str, Path], project_root: Path = PROJECT_ROOT) -> bool:
     if image["sif"]:
-        return _sif_path(image, where) is not None
+        return _sif_path(image, where, project_root) is not None
     if image["kind"] == "docker":
-        runtime = _docker()
-        # docker.env names a variable that may point at an existing image; it is tried before the tag.
-        configured = os.environ.get(image["docker"].get("env") or "", "").strip()
-        return bool(runtime) and any(subprocess.call(
-            [runtime, "image", "inspect", reference],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL) == 0
-            for reference in (configured, _docker_tag(image)) if reference)
+        reference, _ = _docker_active_ref(image)
+        return reference is not None
     try:
         return subprocess.call([str(a) for a in image["script"]["check_argv"]], cwd=project_root,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -322,10 +428,47 @@ def _image_present(image: dict, where: dict[str, Path], project_root: Path = PRO
         return False
 
 
-def _image_where(image: dict, where: dict[str, Path]) -> str:
+def _image_where(image: dict, where: dict[str, Path], project_root: Path = PROJECT_ROOT) -> str:
     if image["sif"]:
-        return str(_sif_path(image, where) or where["container_dir"] / image["filename"])
+        return str(_sif_path(image, where, project_root) or where["container_dir"] / image["filename"])
+    if image["kind"] == "docker":
+        return f"docker:{_docker_tag(image)}"
     return f"{image['kind']}:{image['filename']}"
+
+
+def _verified_image_identity(image: dict, where: dict[str, Path], project_root: Path = PROJECT_ROOT) -> dict | None:
+    if image["sif"]:
+        found = _sif_path(image, where, project_root)
+        return _file_identity(found) if found else None
+    if image["kind"] == "docker":
+        reference, image_id = _docker_active_ref(image)
+        if reference is None:
+            return None
+        return {"kind": "docker", "tag": reference, "image_id": image_id}
+    return {"kind": "script"}
+
+
+def _matches_verified_images(recipe: dict, where: dict[str, Path], project_root: Path, state: dict) -> bool:
+    recorded = state.get("verified_images")
+    if not isinstance(recorded, dict):
+        return True
+    for image in recipe["images"]:
+        expected = recorded.get(image["filename"])
+        if not isinstance(expected, dict):
+            continue
+        if image["sif"]:
+            found = _sif_path(image, where, project_root)
+            if found is None:
+                return False
+            if expected.get("path") and str(found) != expected.get("path"):
+                return False
+            if not _matches_file_identity(found, expected):
+                return False
+        elif image["kind"] == "docker":
+            reference, image_id = _docker_active_ref(image)
+            if reference != expected.get("tag") or image_id != expected.get("image_id"):
+                return False
+    return True
 
 
 def _weight_file(weights_root: Path, rel: str) -> bool:
@@ -353,7 +496,8 @@ def tool_status(recipe: dict, where: dict[str, Path], project_root: Path = PROJE
     state = _read_state(where["state_dir"], tool)
     images = []
     for image in recipe["images"]:
-        images.append({"filename": image["filename"], "path": _image_where(image, where), "kind": image["kind"],
+        images.append({"filename": image["filename"], "path": _image_where(image, where, project_root),
+                       "kind": image["kind"], "sif": bool(image["sif"]),
                        "present": _image_present(image, where, project_root)})
     weights = [{"id": w["id"], "required": bool(w.get("required", False)),
                 "present": _weight_present(w, where["weights_root"])}
@@ -372,6 +516,8 @@ def tool_status(recipe: dict, where: dict[str, Path], project_root: Path = PROJE
         status = "not-installed"
     elif not all_images or not required_weights:
         status = "incomplete"
+    elif state.get("status") == "ready" and not _matches_verified_images(recipe, where, project_root, state):
+        status = "present-unverified"
     elif state.get("status") == "ready" and state.get("recipe_digest") == _recipe_digest(recipe, project_root):
         status = "ready"
     elif state.get("status") == "ready":
@@ -383,6 +529,7 @@ def tool_status(recipe: dict, where: dict[str, Path], project_root: Path = PROJE
             "origin": state.get("origin"), "verified_at": state.get("verified_at"),
             "step": state.get("step"), "reason_code": state.get("reason_code"),
             "message": state.get("message"), "smoke": state.get("smoke"),
+            "published": state.get("published") or [],
             "log_path": str(where["state_dir"] / tool / "build.log")}
 
 
@@ -399,34 +546,45 @@ def _free_bytes(path: Path) -> int:
     return shutil.disk_usage(ancestor).free
 
 
-def tool_plan(recipe: dict, where: dict[str, Path], project_root: Path = PROJECT_ROOT) -> dict:
+def tool_plan(recipe: dict, where: dict[str, Path], project_root: Path = PROJECT_ROOT, *, replace: bool = False) -> dict:
     blockers = []
     runtime = _apptainer()
     if not runtime and any(i["sif"] for i in recipe["images"]):
         blockers.append({"reason_code": "apptainer_missing",
                          "message": "Install Apptainer (https://apptainer.org/docs/admin/main/installation.html) and re-run."})
-    if not _docker() and any(i["kind"] == "docker" for i in recipe["images"]):
-        blockers.append({"reason_code": "docker_missing",
-                         "message": "This tool is built from a Dockerfile. Install Docker or Podman and re-run "
-                                    "(set BMS_TOOLS_CONTAINER_RUNTIME=docker or podman to choose)."})
+    if os.environ.get("BMS_TOOLS_APPTAINER_BUILD_FLAGS", "").strip():
+        try:
+            _apptainer_build_flags()
+        except ToolError as exc:
+            blockers.append({"reason_code": exc.reason_code, "message": exc.message})
     steps = []
     image_gb = 0.0
+    needs_docker = False
     for image in recipe["images"]:
         source = _image_source(image)
-        if source is not None and not (project_root / source).is_file():
-            blockers.append({"reason_code": "recipe_definition_missing", "message": f"Missing {source}"})
-        for item in image.get("requires_files", []):
-            if not (project_root / item).exists():
-                blockers.append({"reason_code": "build_input_missing",
-                                 "message": f"{image['filename']} needs {item}, which is not shipped. "
-                                            + str(image.get("requires_note", "Create it, then re-run."))})
-        image_gb += float(image.get("approx_size_gb", 0))
+        already_present = _image_present(image, where, project_root)
+        will_build = replace or not already_present
+        if image["kind"] == "docker" and (not image["sif"] or will_build):
+            needs_docker = True
+        if will_build:
+            if source is not None and not (project_root / source).is_file():
+                blockers.append({"reason_code": "recipe_definition_missing", "message": f"Missing {source}"})
+            for item in image.get("requires_files", []):
+                if not (project_root / item).exists():
+                    blockers.append({"reason_code": "build_input_missing",
+                                     "message": f"{image['filename']} needs {item}, which is not shipped. "
+                                                + str(image.get("requires_note", "Create it, then re-run."))})
+            image_gb += float(image.get("approx_size_gb", 0))
         steps.append({"step": f"build:{image['filename']}", "kind": image["kind"],
                       "definition": source or (image.get("pull") or {}).get("uri")
                       or " ".join(str(a) for a in image["script"]["argv"]),
-                      "output": _image_where(image, where), "needs": image.get("needs", []),
+                      "output": _image_where(image, where, project_root), "needs": image.get("needs", []),
                       "sources": image.get("sources", []), "approx_size_gb": image.get("approx_size_gb"),
-                      "already_present": _image_present(image, where, project_root)})
+                      "already_present": already_present})
+    if needs_docker and not _docker():
+        blockers.append({"reason_code": "docker_missing",
+                         "message": "This tool is built from a Dockerfile. Install Docker or Podman and re-run "
+                                    "(set BMS_TOOLS_CONTAINER_RUNTIME=docker or podman to choose)."})
     for weight in recipe.get("weights", []):
         fetch = weight["fetch"]
         steps.append({"step": f"weights:{weight['id']}", "method": fetch["type"],
@@ -458,13 +616,14 @@ class _Run:
         self.dir = where["state_dir"] / recipe["id"]
         self.dir.mkdir(parents=True, exist_ok=True)
         self.log_path = self.dir / "build.log"
-        self.state = _read_state(where["state_dir"], recipe["id"])
         self._lock = open(self.dir / "lock", "a+")
         try:
             fcntl.flock(self._lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
+            self._lock.close()
             raise ToolError("build_already_running",
                             f"{recipe['id']} is already being built. Follow it with: tools log {recipe['id']}") from exc
+        self.state = _read_state(where["state_dir"], recipe["id"])
 
     def save(self, **changes):
         self.state.update(changes)
@@ -493,15 +652,26 @@ def _gpu_available() -> bool:
         ["nvidia-smi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
 
 
-def _smoke(run: _Run, image: dict, path: Path | None) -> list[dict]:
+def _smoke(run: _Run, image: dict, path: Path | None, *, docker_ref: str | None = None) -> list[dict]:
     results = []
     gpu = _gpu_available()
     if not image["sif"]:
         # A Docker image is checked where it lives, without network; a script owns its own checks.
-        for check in image.get("smoke", []) if image["kind"] == "docker" else []:
+        checks = image.get("smoke", []) if image["kind"] == "docker" else []
+        if not checks:
+            return results
+        docker = _docker()
+        if not docker:
+            raise ToolError("docker_missing", "Docker or Podman is required to check this image.")
+        ref = docker_ref or _docker_active_ref(image)[0] or _docker_tag(image)
+        for check in checks:
             name = check.get("name") or " ".join(check["argv"][:2])
-            run.command([_docker(), "run", "--rm", "--network", "none", _docker_tag(image)] + check["argv"],
-                        step=f"smoke:{image['filename']}:{name}", reason_code="smoke_test_failed")
+            if check.get("gpu") and not gpu:
+                results.append({"check": name, "image": image["filename"], "result": "skipped-no-gpu"})
+                run.log(f"skipped (no NVIDIA GPU visible): {name}")
+                continue
+            argv = [docker, "run", "--rm", "--network", "none"] + (["--gpus", "all"] if check.get("gpu") else []) + [ref] + check["argv"]
+            run.command(argv, step=f"smoke:{image['filename']}:{name}", reason_code="smoke_test_failed")
             results.append({"check": name, "image": image["filename"], "result": "passed"})
         return results
     runtime = _apptainer()
@@ -587,16 +757,26 @@ def _fetch_weights(run: _Run, selected: set[str] | None, accepted: set[str]) -> 
             # The same image BMS runs: built, adopted, or in the managed store.
             wanted = fetch.get("image") or recipe["images"][0]["filename"]
             spec = next((item for item in recipe["images"] if item["filename"] == wanted), {"filename": wanted})
-            image = _sif_path(spec, where) or where["container_dir"] / wanted
+            image = _sif_path(spec, where, run.project_root) or where["container_dir"] / wanted
             run.command([_apptainer(), "exec", "--bind", f"{where['weights_root']}:/weights", image] + fetch["argv"],
                         step=step, reason_code="weights_download_failed")
         if not _weight_present(weight, where["weights_root"]):
             raise ToolError("weights_incomplete", f"{weight['id']} finished but expected files are missing: {weight['present_if']}")
 
 
+def _record_verified_images(run: _Run) -> dict[str, dict]:
+    identities = {}
+    for image in run.recipe["images"]:
+        identity = _verified_image_identity(image, run.where, run.project_root)
+        if identity is not None:
+            identities[image["filename"]] = identity
+    return identities
+
+
 def _finish_ready(run: _Run, smoke: list[dict], origin: str) -> None:
     run.save(status="ready", step=None, reason_code=None, message=None, origin=origin, smoke=smoke,
              recipe_digest=_recipe_digest(run.recipe, run.project_root),
+             verified_images=_record_verified_images(run),
              verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
 
 
@@ -606,6 +786,9 @@ def _guard(run: _Run, work) -> dict:
     except ToolError as exc:
         run.log(f"FAILED [{exc.reason_code}] {exc.message}")
         run.save(status="failed", reason_code=exc.reason_code, message=exc.message)
+    except Exception as exc:
+        run.log(f"FAILED [unexpected_error] {exc}")
+        run.save(status="failed", reason_code="unexpected_error", message=str(exc))
     finally:
         run.close()
     return tool_status(run.recipe, run.where, run.project_root)
@@ -613,29 +796,30 @@ def _guard(run: _Run, work) -> dict:
 
 def build_tool(recipe, where, project_root=PROJECT_ROOT, *, replace=False, weights=None,
                accepted_licenses=(), skip_weights=False) -> dict:
-    plan = tool_plan(recipe, where, project_root)
+    plan = tool_plan(recipe, where, project_root, replace=replace)
     if plan["blockers"]:
         first = plan["blockers"][0]
         raise ToolError(first["reason_code"], first["message"])
+    extra = _apptainer_build_flags()
     run = _Run(recipe, where, project_root)
 
     def work():
         run.log_path.write_text("", encoding="utf-8")
         run.save(status="building", reason_code=None, message=None, origin="built", smoke=None,
-                 started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+                 published=[], started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
         staging = where["container_dir"] / ".tools-build" / recipe["id"]
         staging.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ)
         env.setdefault("APPTAINER_TMPDIR", str(staging))
-        extra = shlex.split(os.environ.get("BMS_TOOLS_APPTAINER_BUILD_FLAGS", ""))
         smoke = []
+        published: list[str] = []
         for image in recipe["images"]:
             step = f"build:{image['filename']}"
             target = where["container_dir"] / image["filename"] if image["sif"] else None
-            found = _sif_path(image, where) if target else None
+            found = _sif_path(image, where, project_root) if target else None
             present = (found is not None or target.is_symlink()) if target else _image_present(image, where, project_root)
             if present and not replace:
-                run.log(f"keeping existing {_image_where(image, where)} (use --replace to rebuild it)")
+                run.log(f"keeping existing {_image_where(image, where, project_root)} (use --replace to rebuild it)")
                 smoke.extend(_smoke(run, image, found or target))
                 continue
             for base in image.get("needs", []):
@@ -646,19 +830,25 @@ def build_tool(recipe, where, project_root=PROJECT_ROOT, *, replace=False, weigh
             if image["kind"] == "script":
                 run.command(image["script"]["argv"], step=step, reason_code="image_build_failed",
                             env=env, cwd=project_root)
+                published.append(image["filename"])
+                run.save(published=list(published))
                 continue
             if image["kind"] == "docker":
                 docker, spec, tag = _docker(), image["docker"], _docker_tag(image)
                 run.command([docker, "build", "--file", project_root / spec["file"], "--tag", tag,
                              project_root / spec.get("context", ".")],
                             step=step, reason_code="image_build_failed", cwd=project_root)
-                built = subprocess.run([docker, "image", "inspect", "--format", "{{.Id}}", tag],
-                                       capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()
+                built = _docker_image_id(docker, tag) or ""
                 run.log(f"built {tag} image id {built}")
-                run.save(image_ids={**run.state.get("image_ids", {}), tag: built})
                 if not image["sif"]:
-                    smoke.extend(_smoke(run, image, None))
-                    run.save(installed=sorted(set(run.state.get("installed", [])) | {image["filename"]}))
+                    smoke.extend(_smoke(run, image, None, docker_ref=tag))
+                    owned = dict(run.state.get("owned") or {})
+                    owned[image["filename"]] = {"kind": "docker", "tag": tag, "image_id": built}
+                    published.append(image["filename"])
+                    run.save(image_ids={**run.state.get("image_ids", {}), tag: built},
+                             owned=owned,
+                             installed=sorted(set(run.state.get("installed", [])) | {image["filename"]}),
+                             published=list(published))
                     continue
                 archive = staging / (image["filename"] + ".docker.tar")
                 run.command([docker, "save", "--output", archive, tag], step=step,
@@ -684,32 +874,52 @@ def build_tool(recipe, where, project_root=PROJECT_ROOT, *, replace=False, weigh
             # Checked before it is installed: a failing image never replaces a working one.
             smoke.extend(_smoke(run, {**image, "smoke": [c for c in image.get("smoke", [])]}, candidate))
             os.replace(candidate, target)
-            run.save(installed=sorted(set(run.state.get("installed", [])) | {image["filename"]}))
+            owned = dict(run.state.get("owned") or {})
+            identity = _file_identity(target)
+            if identity is not None:
+                owned[image["filename"]] = identity
+            linked = sorted(set(run.state.get("linked", [])) - {image["filename"]})
+            published.append(image["filename"])
+            run.save(owned=owned, linked=linked,
+                     installed=sorted(set(run.state.get("installed", [])) | {image["filename"]}),
+                     published=list(published))
         shutil.rmtree(staging, ignore_errors=True)
         if not skip_weights:
             _fetch_weights(run, set(weights) if weights else None, set(accepted_licenses))
+        missing = [w["id"] for w in recipe.get("weights", [])
+                   if w.get("required") and not _weight_present(w, where["weights_root"])]
+        if missing:
+            run.save(status="incomplete", step=None, reason_code="weights_missing",
+                     message=f"Images built, but required weights are not present: {', '.join(missing)}",
+                     origin="built", smoke=smoke,
+                     recipe_digest=_recipe_digest(run.recipe, run.project_root),
+                     verified_images=_record_verified_images(run),
+                     verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+            return
         _finish_ready(run, smoke, "built")
     return _guard(run, work)
 
 
+def _verify_locked(run: _Run) -> None:
+    recipe, where, project_root = run.recipe, run.where, run.project_root
+    run.log("verify")
+    smoke = []
+    for image in recipe["images"]:
+        path = _sif_path(image, where, project_root) if image["sif"] else None
+        if not _image_present(image, where, project_root):
+            raise ToolError("image_missing",
+                            f"{_image_where(image, where, project_root)} is not present. Build it or adopt an existing image.")
+        smoke.extend(_smoke(run, image, path))
+    missing = [w["id"] for w in recipe.get("weights", [])
+               if w.get("required") and not _weight_present(w, where["weights_root"])]
+    if missing:
+        raise ToolError("weights_missing", f"Required weights are not present: {', '.join(missing)}")
+    _finish_ready(run, smoke, run.state.get("origin") or "existing")
+
+
 def verify_tool(recipe, where, project_root=PROJECT_ROOT) -> dict:
     run = _Run(recipe, where, project_root)
-
-    def work():
-        run.log("verify")
-        smoke = []
-        for image in recipe["images"]:
-            path = _sif_path(image, where) if image["sif"] else None
-            if not _image_present(image, where, project_root):
-                raise ToolError("image_missing",
-                                f"{_image_where(image, where)} is not present. Build it or adopt an existing image.")
-            smoke.extend(_smoke(run, image, path))
-        missing = [w["id"] for w in recipe.get("weights", [])
-                   if w.get("required") and not _weight_present(w, where["weights_root"])]
-        if missing:
-            raise ToolError("weights_missing", f"Required weights are not present: {', '.join(missing)}")
-        _finish_ready(run, smoke, run.state.get("origin") or "existing")
-    return _guard(run, work)
+    return _guard(run, lambda: _verify_locked(run))
 
 
 def adopt_tool(recipe, where, source: Path, project_root=PROJECT_ROOT, *, image_name=None, copy=False) -> dict:
@@ -723,54 +933,183 @@ def adopt_tool(recipe, where, source: Path, project_root=PROJECT_ROOT, *, image_
     source = source.expanduser().resolve()
     if not source.is_file():
         raise ToolError("adopt_source_missing", f"{source} is not a file")
-    target = where["container_dir"] / name
-    if target.exists() or target.is_symlink():
-        if target.resolve() != source:
-            raise ToolError("image_already_present", f"{target} already exists. Remove it first or verify it as it is.")
-    else:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if copy:
-            shutil.copy2(source, target)
+    run = _Run(recipe, where, project_root)
+    try:
+        target = where["container_dir"] / name
+        created = None
+        if target.exists() or target.is_symlink():
+            if target.resolve() != source:
+                raise ToolError("image_already_present", f"{target} already exists. Remove it first or verify it as it is.")
         else:
-            target.symlink_to(source)
-    state_dir = where["state_dir"] / recipe["id"]
-    state_dir.mkdir(parents=True, exist_ok=True)
-    state = _read_state(where["state_dir"], recipe["id"])
-    state.update({"status": "adopted", "origin": "adopted", "reason_code": None, "message": None})
-    if copy:
-        state["installed"] = sorted(set(state.get("installed", [])) | {name})
-    else:
-        state["linked"] = sorted(set(state.get("linked", [])) | {name})
-    _write_json(state_dir / "state.json", state)
-    if all(_image_present(i, where, project_root) for i in recipe["images"]):
-        return verify_tool(recipe, where, project_root)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                if copy:
+                    staged = target.with_name(f".{target.name}.adopt.{os.getpid()}.tmp")
+                    try:
+                        shutil.copy2(source, staged)
+                        os.replace(staged, target)
+                    except Exception:
+                        staged.unlink(missing_ok=True)
+                        raise
+                    created = "copy"
+                else:
+                    target.symlink_to(source)
+                    created = "link"
+            except OSError as exc:
+                raise ToolError("adopt_failed", f"Could not place {target}: {exc}") from exc
+        owned = dict(run.state.get("owned") or {})
+        installed = set(run.state.get("installed", []))
+        linked = set(run.state.get("linked", []))
+        if created == "copy":
+            identity = _file_identity(target)
+            if identity is not None:
+                owned[name] = identity
+            installed.add(name)
+            linked.discard(name)
+        elif created == "link":
+            identity = _symlink_identity(target)
+            if identity is not None:
+                owned[name] = identity
+            linked.add(name)
+            installed.discard(name)
+        run.save(status="adopted", origin="adopted", reason_code=None, message=None,
+                 owned=owned, installed=sorted(installed), linked=sorted(linked))
+        if all(_image_present(i, where, project_root) for i in recipe["images"]):
+            try:
+                _verify_locked(run)
+            except ToolError as exc:
+                run.log(f"FAILED [{exc.reason_code}] {exc.message}")
+                run.save(status="failed", reason_code=exc.reason_code, message=exc.message)
+            except Exception as exc:
+                run.log(f"FAILED [unexpected_error] {exc}")
+                run.save(status="failed", reason_code="unexpected_error", message=str(exc))
+    finally:
+        run.close()
     return tool_status(recipe, where, project_root)
 
 
 def remove_tool(recipe, where, project_root=PROJECT_ROOT) -> dict:
-    """Remove only what this installer put in place. Adopted originals are never deleted."""
+    """Remove only what this installer put in place. Adopted originals and external replacements are never deleted."""
     run = _Run(recipe, where, project_root)
     try:
-        removed, kept = [], []
+        removed, kept, errors = [], [], []
+        owned = dict(run.state.get("owned") or {})
+        installed = set(run.state.get("installed", []))
+        linked = set(run.state.get("linked", []))
+        image_ids = dict(run.state.get("image_ids") or {})
+        has_owned_map = bool(owned)
         for image in recipe["images"]:
+            filename = image["filename"]
+            rec = owned.get(filename)
             if not image["sif"]:
-                if image["kind"] == "docker" and image["filename"] in run.state.get("installed", []) and _docker():
-                    subprocess.call([_docker(), "image", "rm", _docker_tag(image)], stdin=subprocess.DEVNULL,
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    removed.append(_image_where(image, where))
+                is_owned_docker = image["kind"] == "docker" and (
+                    (isinstance(rec, dict) and rec.get("kind") == "docker")
+                    or (not has_owned_map and filename in installed)
+                )
+                if is_owned_docker:
+                    target_tag = (rec or {}).get("tag") or _docker_tag(image)
+                    expected_id = (rec or {}).get("image_id") or image_ids.get(target_tag)
+                    runtime = _docker()
+                    if not runtime:
+                        errors.append(f"Cannot remove Docker image {target_tag}: Docker/Podman is not available.")
+                        continue
+                    current_id = _docker_image_id(runtime, target_tag)
+                    if current_id is None:
+                        owned.pop(filename, None)
+                        installed.discard(filename)
+                        image_ids.pop(target_tag, None)
+                    elif expected_id and current_id != expected_id:
+                        kept.append(f"docker:{target_tag}")
+                        owned.pop(filename, None)
+                        installed.discard(filename)
+                        image_ids.pop(target_tag, None)
+                    else:
+                        done = subprocess.run([runtime, "image", "rm", target_tag],
+                                              capture_output=True, text=True, stdin=subprocess.DEVNULL)
+                        if done.returncode == 0:
+                            still_id = _docker_image_id(runtime, target_tag)
+                            if still_id is not None and (not expected_id or still_id == expected_id):
+                                errors.append(f"Docker image {target_tag} is still present after removal.")
+                                continue
+                            removed.append(f"docker:{target_tag}")
+                            owned.pop(filename, None)
+                            installed.discard(filename)
+                            image_ids.pop(target_tag, None)
+                        else:
+                            detail = (done.stderr or done.stdout or f"exit {done.returncode}").strip()
+                            errors.append(f"Failed to remove Docker image {target_tag}: {detail}")
+                            continue
+                    current_tag = _docker_tag(image)
+                    if current_tag != target_tag and _image_present(image, where, project_root):
+                        kept.append(_image_where(image, where, project_root))
                 elif _image_present(image, where, project_root):
-                    kept.append(_image_where(image, where))
+                    kept.append(_image_where(image, where, project_root))
                 continue
-            path = where["container_dir"] / image["filename"]
-            if image["filename"] in run.state.get("linked", []) and path.is_symlink():
-                path.unlink()
-                removed.append(str(path))
-            elif image["filename"] in run.state.get("installed", []) and path.is_file() and not path.is_symlink():
-                path.unlink()
-                removed.append(str(path))
+            path = where["container_dir"] / filename
+            is_owned_link = (isinstance(rec, dict) and rec.get("kind") == "symlink") or (not has_owned_map and filename in linked)
+            is_owned_file = (isinstance(rec, dict) and rec.get("kind") == "file") or (not has_owned_map and filename in installed)
+            if is_owned_link:
+                if path.is_symlink():
+                    if not isinstance(rec, dict):
+                        same_link = True
+                    else:
+                        current_link = _symlink_identity(path)
+                        same_link = bool(
+                            current_link
+                            and current_link.get("target") == rec.get("target")
+                            and (rec.get("ino") is None or current_link.get("ino") == rec.get("ino"))
+                            and (rec.get("dev") is None or current_link.get("dev") == rec.get("dev"))
+                        )
+                    if same_link:
+                        try:
+                            path.unlink()
+                            removed.append(str(path))
+                            owned.pop(filename, None)
+                            linked.discard(filename)
+                        except OSError as exc:
+                            errors.append(f"Failed to remove {path}: {exc}")
+                    else:
+                        kept.append(str(path))
+                        owned.pop(filename, None)
+                        linked.discard(filename)
+                elif path.exists():
+                    kept.append(str(path))
+                    owned.pop(filename, None)
+                    linked.discard(filename)
+                else:
+                    owned.pop(filename, None)
+                    linked.discard(filename)
+            elif is_owned_file:
+                if path.is_file() and not path.is_symlink():
+                    same_file = (not isinstance(rec, dict)) or _matches_file_identity(path, rec)
+                    if same_file:
+                        try:
+                            path.unlink()
+                            removed.append(str(path))
+                            owned.pop(filename, None)
+                            installed.discard(filename)
+                        except OSError as exc:
+                            errors.append(f"Failed to remove {path}: {exc}")
+                    else:
+                        kept.append(str(path))
+                        owned.pop(filename, None)
+                        installed.discard(filename)
+                elif path.exists() or path.is_symlink():
+                    kept.append(str(path))
+                    owned.pop(filename, None)
+                    installed.discard(filename)
+                else:
+                    owned.pop(filename, None)
+                    installed.discard(filename)
             elif path.exists() or path.is_symlink():
                 kept.append(str(path))
-        _write_json(run.dir / "state.json", {})
+        if errors:
+            message = "; ".join(errors)
+            run.log(f"FAILED [remove_failed] {message}")
+            run.save(status="failed", reason_code="remove_failed", message=message,
+                     owned=owned, installed=sorted(installed), linked=sorted(linked), image_ids=image_ids)
+        else:
+            _write_json(run.dir / "state.json", {})
     finally:
         run.close()
     status = tool_status(recipe, where, project_root)
@@ -804,6 +1143,8 @@ def modules_overview(where: dict[str, Path], project_root: Path = PROJECT_ROOT) 
             state = "no-recipe-yet"
         elif all(t["status"] == "ready" for t in tools):
             state = "ready"
+        elif all(t["status"] in ("ready", "present-unverified", "ready-recipe-changed") for t in tools):
+            state = "present-unverified"
         else:
             state = "needs-tools"
         modules.append({"module": key, "title": title, "first_party": first_party,
@@ -816,14 +1157,20 @@ def select_modules(where: dict[str, Path], names: list[str]) -> None:
     unknown = [n for n in names if n not in MODULES]
     if unknown:
         raise ToolError("unknown_module", f"Unknown module: {', '.join(unknown)}. Known: {', '.join(MODULES)}")
-    _write_json(_selection_path(where), {"schema": SCHEMA, "modules": sorted(set(names))})
+    where["state_dir"].mkdir(parents=True, exist_ok=True)
+    with open(where["state_dir"] / "selection.lock", "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            _write_json(_selection_path(where), {"schema": SCHEMA, "modules": sorted(set(names))})
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def _render_modules(overview: dict) -> str:
-    lines = [f"{'':<3} {'MODULE':<22} {'STATE':<15} TOOLS"]
+    lines = [f"{'':<3} {'MODULE':<22} {'STATE':<20} TOOLS"]
     for row in overview["modules"]:
         tools = ", ".join(f"{t['tool']} ({t['status']})" for t in row["tools"]) or "-"
-        lines.append(f"{'[x]' if row['selected'] else '[ ]'} {row['module']:<22} {row['state']:<15} {tools}")
+        lines.append(f"{'[x]' if row['selected'] else '[ ]'} {row['module']:<22} {row['state']:<20} {tools}")
     lines.append("")
     lines.append("Choose: ./start_ui.sh tools select MODULE [MODULE ...]   then   ./start_ui.sh tools list --selected")
     return "\n".join(lines)
@@ -883,7 +1230,8 @@ def main(argv=None, project_root: Path = PROJECT_ROOT) -> int:
     add("modules", "show the parts of BioModStack you can choose and what each needs", tool=False)
     select = add("select", "choose which parts this install uses", tool=False)
     select.add_argument("modules", nargs="*", metavar="MODULE")
-    add("plan", "show what building a tool will fetch, build and need")
+    plan_cmd = add("plan", "show what building a tool will fetch, build and need")
+    plan_cmd.add_argument("--replace", action="store_true", help="plan as if rebuilding images that already exist")
     build = add("build", "build the images, fetch selected weights, run the smoke checks")
     build.add_argument("--detach", action="store_true", help="run in the background; follow with status/log")
     build.add_argument("--replace", action="store_true", help="rebuild images that already exist")
@@ -904,7 +1252,13 @@ def main(argv=None, project_root: Path = PROJECT_ROOT) -> int:
     def emit(document, text, ok=True):
         print(json.dumps(document, indent=2, sort_keys=True) if args.json_output else text)
         return 0 if ok else BLOCKED_EXIT
+    where = None
     try:
+        try:
+            import biomodstack_runtime_profile as profiles
+            profiles.apply_host_selectors()
+        except Exception:
+            pass
         where = locations(project_root)
         if args.command == "list":
             rows = [tool_status(r, where, project_root) for r in load_recipes(project_root).values()]
@@ -919,7 +1273,7 @@ def main(argv=None, project_root: Path = PROJECT_ROOT) -> int:
             return emit(overview, _render_modules(overview))
         recipe = get_recipe(args.tool, project_root)
         if args.command == "plan":
-            plan = tool_plan(recipe, where, project_root)
+            plan = tool_plan(recipe, where, project_root, replace=args.replace)
             return emit(plan, _render_plan(plan), not plan["blockers"])
         if args.command == "log":
             path = where["state_dir"] / recipe["id"] / "build.log"
@@ -928,39 +1282,80 @@ def main(argv=None, project_root: Path = PROJECT_ROOT) -> int:
             return emit({"schema": SCHEMA, "tool": recipe["id"], "log_path": str(path), "lines": lines}, "\n".join(lines))
         if args.command == "status":
             status = tool_status(recipe, where, project_root)
+            ok = status["status"] != "failed"
         elif args.command == "verify":
             status = verify_tool(recipe, where, project_root)
+            ok = status["status"] == "ready"
         elif args.command == "adopt":
             status = adopt_tool(recipe, where, args.path, project_root, image_name=args.image, copy=args.copy)
+            ok = status["status"] != "failed"
         elif args.command == "remove":
             status = remove_tool(recipe, where, project_root)
+            ok = status["status"] != "failed"
         elif args.detach:
-            plan = tool_plan(recipe, where, project_root)
+            plan = tool_plan(recipe, where, project_root, replace=args.replace)
             if plan["blockers"]:
                 raise ToolError(plan["blockers"][0]["reason_code"], plan["blockers"][0]["message"])
             if _build_running(where["state_dir"], recipe["id"]):
                 raise ToolError("build_already_running", f"{recipe['id']} is already being built.")
             forwarded = [a for a in (argv if argv is not None else sys.argv[1:]) if a not in ("--detach", "--json")]
-            (where["state_dir"] / recipe["id"]).mkdir(parents=True, exist_ok=True)
-            with open(where["state_dir"] / recipe["id"] / "launch.log", "w") as out:
-                subprocess.Popen([sys.executable, "-B", str(Path(__file__).resolve()), *forwarded],
-                                 stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                 start_new_session=True, cwd=str(project_root))
+            tool_state_dir = where["state_dir"] / recipe["id"]
+            tool_state_dir.mkdir(parents=True, exist_ok=True)
+            state_file = tool_state_dir / "state.json"
+            before_updated_at = _read_state(where["state_dir"], recipe["id"]).get("updated_at")
+            before_stamp = (state_file.stat().st_ino, state_file.stat().st_mtime_ns) if state_file.exists() else None
+            launch_log = tool_state_dir / "launch.log"
+            with open(launch_log, "w") as out:
+                proc = subprocess.Popen([sys.executable, "-B", str(Path(__file__).resolve()), *forwarded],
+                                        stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                        start_new_session=True, cwd=str(project_root))
+            lock_seen = False
             for _ in range(50):
                 if _build_running(where["state_dir"], recipe["id"]):
+                    lock_seen = True
+                    break
+                if proc.poll() is not None:
                     break
                 time.sleep(0.1)
             status = tool_status(recipe, where, project_root)
-            status = {**status, "started": True}
-            return emit({"schema": SCHEMA, **status},
-                        f"Started building {recipe['id']} in the background.\n"
-                        f"Follow: ./start_ui.sh tools status {recipe['id']}   or   tools log {recipe['id']} --tail 40")
+            after_updated_at = _read_state(where["state_dir"], recipe["id"]).get("updated_at")
+            after_stamp = (state_file.stat().st_ino, state_file.stat().st_mtime_ns) if state_file.exists() else None
+            rc = proc.poll()
+            ran = lock_seen or (after_stamp is not None and after_stamp != before_stamp) or (
+                after_updated_at is not None and after_updated_at != before_updated_at
+            )
+            if lock_seen or status["status"] == "building":
+                document = {"schema": SCHEMA, **status, "started": True, "launch_state": "running",
+                            "launch_log_path": str(launch_log)}
+                return emit(document,
+                            f"Started building {recipe['id']} in the background.\n"
+                            f"Follow: ./start_ui.sh tools status {recipe['id']}   or   tools log {recipe['id']} --tail 40")
+            if rc is not None and ran:
+                document = {"schema": SCHEMA, **status, "started": True,
+                            "launch_state": "completed" if rc == 0 else "exited",
+                            "launch_log_path": str(launch_log)}
+                return emit(document, _render_status(status), True)
+            if rc is not None:
+                document = {"schema": SCHEMA, **status, "started": False, "launch_state": "failed",
+                            "launch_log_path": str(launch_log),
+                            "reason_code": status.get("reason_code") or "build_start_failed",
+                            "message": status.get("message") or f"Background build exited with code {rc}. See {launch_log}"}
+                return emit(document, f"BLOCKED [{document['reason_code']}]: {document['message']}", False)
+            document = {"schema": SCHEMA, **status, "started": False, "launch_state": "unconfirmed",
+                        "launch_log_path": str(launch_log),
+                        "reason_code": "build_launch_unconfirmed",
+                        "message": f"Background build did not acquire its lock within 5s. See {launch_log}"}
+            return emit(document, f"BLOCKED [build_launch_unconfirmed]: {document['message']}", False)
         else:
             status = build_tool(recipe, where, project_root, replace=args.replace, weights=args.weights,
                                 accepted_licenses=args.accept_license, skip_weights=args.skip_weights)
-        return emit({"schema": SCHEMA, **status}, _render_status(status), status["status"] != "failed")
+            ok = status["status"] == "ready" or (args.skip_weights and status["status"] == "incomplete")
+        return emit({"schema": SCHEMA, **status}, _render_status(status), ok)
     except ToolError as exc:
-        document = {"schema": SCHEMA, "status": "blocked", "reason_code": exc.reason_code, "message": exc.message}
+        tool_name = getattr(args, "tool", None)
+        log_path = str(where["state_dir"] / tool_name / "build.log") if (where and tool_name) else None
+        document = {"schema": SCHEMA, "status": "blocked", "reason_code": exc.reason_code,
+                    "message": exc.message, "log_path": log_path}
         print(json.dumps(document, indent=2, sort_keys=True) if getattr(args, "json_output", False)
               else f"BLOCKED [{exc.reason_code}]: {exc.message}")
         return BLOCKED_EXIT

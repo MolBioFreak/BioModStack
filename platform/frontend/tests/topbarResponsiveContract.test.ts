@@ -19,7 +19,7 @@ test('mobile top bar collapses utility controls behind a Tools menu', () => {
         'data-bms-mobile-topbar-tools="true"',
         'data-bms-mobile-topbar-tools-panel="true"',
         'Open top-bar controls',
-        'TOOLS',
+        'Controls',
         'fixed right-2 top-14 z-[80]',
         'max-h-[calc(100vh-4rem)]',
         'w-[min(94vw,22rem)]',
@@ -36,7 +36,29 @@ test('Cordova compact shell uses the mobile header independent of scaled CSS vie
     assert.ok(source.includes("classList.contains('bms-cordova-compact')"), 'Cordova compact shell should force mobile topbar mode');
     assert.ok(!source.includes('className="relative md:hidden"'), 'Tools button must not be hidden by Tailwind md rules when APK scale makes CSS width wider than 768px');
     assert.ok(source.includes("? 'order-1 flex w-full items-center justify-between gap-2'"), 'mobile identity row should stay full-width even when md breakpoints would otherwise apply');
-    assert.ok(source.includes("? 'order-2 min-w-0 w-full overflow-x-auto"), 'mobile nav rail should keep full-width horizontal scrolling without md ordering overrides');
+    assert.ok(source.includes("? 'order-2 min-w-0 w-full'"), 'mobile nav rail should stay full-width without md ordering overrides');
+    assert.ok(source.includes("contentClassName={isMobileTopbar ? 'flex w-full flex-wrap items-center gap-1.5'"), 'mobile nav rail should wrap navigation items cleanly in compact mode');
+});
+
+test('System menu hosts Installed tools and Nextflow maintenance without a top-level Tools tab or Full Purge', () => {
+    const layout = layoutSource();
+    const app = appSource();
+    const railStart = layout.indexOf('<DragScrollRail');
+    const railEnd = layout.indexOf('</DragScrollRail>', railStart);
+    assert.ok(railStart !== -1 && railEnd !== -1, 'expected primary nav rail');
+    const navRail = layout.slice(railStart, railEnd);
+    assert.ok(!navRail.includes('to="/tools"'), 'primary navigation must not keep a top-level Tools tab');
+    assert.ok(app.includes('path="/tools"'), '/tools route must stay mounted in App.tsx');
+    const systemStart = layout.indexOf('function SystemMenu');
+    const systemEnd = layout.indexOf('interface HardwarePowerLimits', systemStart);
+    assert.ok(systemStart !== -1 && systemEnd !== -1, 'expected SystemMenu');
+    const systemMenu = layout.slice(systemStart, systemEnd);
+    for (const marker of ['System', 'to="/tools"', 'Installed tools', 'Nextflow work files', 'Clean 7+ days', 'Clean 30+ days']) {
+        assert.ok(systemMenu.includes(marker), `missing SystemMenu marker: ${marker}`);
+    }
+    assert.ok(!layout.includes('function DebugMenu'), 'DebugMenu should be renamed to SystemMenu');
+    assert.ok(!systemMenu.includes('Full Purge'), 'Full Purge shortcut must be removed');
+    assert.ok(!systemMenu.includes('runCleanup(0)'), 'Full Purge cleanup(0) call must be removed');
 });
 
 test('NGS primary navigation clears unrelated page query state', () => {

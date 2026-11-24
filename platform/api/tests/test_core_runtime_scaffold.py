@@ -394,8 +394,10 @@ def test_api_dockerfile_uses_prebuilt_venv_at_runtime() -> None:
     assert "FROM scratch AS api-runtime" in dockerfile
     assert "UV_COMPILE_BYTECODE=0" in dockerfile
     assert "UV_CACHE_DIR=/tmp/uv-cache" in dockerfile
-    assert 'Path("/usr/local/lib/python3.10/site-packages/uv")' in dockerfile
-    assert 'root.rglob("__pycache__")' in dockerfile
+    assert 'UV_VERSION="0.13.9"' in dockerfile
+    assert "sha256sum -c -" in dockerfile
+    assert "pip install" not in dockerfile
+    assert 'venv.rglob("__pycache__")' in dockerfile
     assert "&& uv sync --frozen --no-dev" in dockerfile
     assert 'rm -rf "${UV_CACHE_DIR}" /home/biomodstack/.cache/uv' in dockerfile
     assert "/var/log/dpkg.log" in dockerfile

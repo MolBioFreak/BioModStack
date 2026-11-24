@@ -369,7 +369,7 @@ function TopbarUtilityControls({
             {showSystemMenus && <PowerControlMenu />}
 
             {showSystemMenus && <MsaHub />}
-            <DebugMenu
+            <SystemMenu
                 showDevFeatures={showDevFeatures}
                 onSetShowDevFeatures={onSetShowDevFeatures}
             />
@@ -424,7 +424,7 @@ function MobileTopbarTools({
                     color: isOpen ? 'var(--accent-primary)' : 'var(--text-secondary)',
                 }}
             >
-                TOOLS
+                Controls
                 <span aria-hidden="true" className="text-[10px] leading-none">{isOpen ? '▲' : '▼'}</span>
             </button>
 
@@ -652,18 +652,6 @@ export function Layout({ children }: LayoutProps) {
                                     title="BioModStack Stats Toolkit"
                                 >
                                     Stats Toolkit
-                                </Link>
-                                <Link
-                                    to="/tools"
-                                    data-bms-primary-nav-active={isActive('/tools') ? 'true' : undefined}
-                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
-                                    style={{
-                                        backgroundColor: isActive('/tools') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                        color: isActive('/tools') ? 'var(--accent-primary)' : 'var(--text-secondary)'
-                                    }}
-                                    title="Build or adopt the tools this install uses"
-                                >
-                                    Tools
                                 </Link>
 
                                 {showBioXpDevFeature && (
@@ -954,7 +942,7 @@ function DiagnosticsMenu() {
     );
 }
 
-function DebugMenu({
+function SystemMenu({
     showDevFeatures,
     onSetShowDevFeatures,
 }: {
@@ -968,8 +956,8 @@ function DebugMenu({
     const queryClient = useQueryClient();
     const bmsFeatures = useBmsFeatures();
 
-    const runCleanup = async (days: number) => {
-        const label = days === 0 ? 'full' : `${days}d`;
+    const runCleanup = async (days: 7 | 30) => {
+        const label = `${days}d`;
         setLoading(label);
         setResult(null);
         try {
@@ -1011,7 +999,7 @@ function DebugMenu({
         }
     };
 
-    const addOnButtonClass = 'px-2 py-1 rounded border border-slate-600 text-[11px] text-slate-200 disabled:opacity-50 hover:bg-slate-700';
+    const actionButtonClass = 'px-2 py-1 rounded border border-slate-600 text-[11px] text-slate-200 disabled:opacity-50 hover:bg-slate-700';
 
     return (
         <div className="relative">
@@ -1022,7 +1010,7 @@ function DebugMenu({
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
                 </svg>
-                Debug
+                System
             </button>
 
             {isOpen && (
@@ -1040,14 +1028,34 @@ function DebugMenu({
                         data-bms-drag-scroll-ignore="true"
                     >
                         <div className="px-3 py-2 border-b border-slate-700">
-                            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Navigation</p>
+                            <Link
+                                to="/tools"
+                                onClick={() => setIsOpen(false)}
+                                className="flex items-center justify-between rounded-lg px-2 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-700 transition-colors"
+                            >
+                                <span>Installed tools</span>
+                                <span className="text-xs text-slate-400">→</span>
+                            </Link>
                         </div>
 
-                        <div className="p-2 border-b border-slate-700">
-                            <label className="flex items-center justify-between gap-3 px-2 py-2 rounded-lg hover:bg-slate-700/40 transition-colors">
+                        <div className="px-3 py-2 border-b border-slate-700 space-y-2">
+                            <div className="flex items-center justify-between gap-3">
+                                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">BioXP</p>
+                                <span className="text-[10px] text-slate-500">restart required</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                                <button
+                                    onClick={() => void setBmsFeature('bioxp', !bmsFeatures.bioxp)}
+                                    disabled={featureAction === 'bioxp-add' || featureAction === 'bioxp-remove'}
+                                    className={actionButtonClass}
+                                >
+                                    {bmsFeatures.bioxp ? 'Remove BioXP' : 'Add BioXP'}
+                                </button>
+                            </div>
+                            <label className="flex items-center justify-between gap-3 px-2 py-1.5 rounded-lg hover:bg-slate-700/40 transition-colors">
                                 <span>
-                                    <span className="block text-sm text-slate-300">Show dev tools</span>
-                                    <span className="block text-[11px] text-slate-500">Reveals BioXP development controls</span>
+                                    <span className="block text-sm text-slate-300">Show BioXP Handler link</span>
+                                    <span className="block text-[11px] text-slate-500">Navigation link only; does not enable BioXP</span>
                                 </span>
                                 <input
                                     type="checkbox"
@@ -1058,54 +1066,27 @@ function DebugMenu({
                             </label>
                         </div>
 
-                        <div className="px-3 py-2 border-b border-slate-700">
-                            <div className="mb-2 flex items-center justify-between gap-3">
-                                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Install add-ons</p>
-                                <span className="text-[10px] text-slate-500">restart required</span>
+                        <div className="px-3 py-2 space-y-2">
+                            <div>
+                                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Maintenance</p>
+                                <p className="text-[11px] text-slate-500">Nextflow work files</p>
                             </div>
                             <div className="grid grid-cols-2 gap-2">
                                 <button
-                                    onClick={() => void setBmsFeature('bioxp', !bmsFeatures.bioxp)}
-                                    disabled={featureAction === 'bioxp-add' || featureAction === 'bioxp-remove'}
-                                    className={addOnButtonClass}
+                                    onClick={() => runCleanup(7)}
+                                    disabled={loading !== null}
+                                    className={actionButtonClass}
                                 >
-                                    {bmsFeatures.bioxp ? 'Remove BioXP' : 'Add BioXP'}
+                                    {loading === '7d' ? 'Cleaning…' : 'Clean 7+ days'}
                                 </button>
-
+                                <button
+                                    onClick={() => runCleanup(30)}
+                                    disabled={loading !== null}
+                                    className={actionButtonClass}
+                                >
+                                    {loading === '30d' ? 'Cleaning…' : 'Clean 30+ days'}
+                                </button>
                             </div>
-                        </div>
-
-                        <div className="px-3 py-2 border-b border-slate-700">
-                            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Cache Cleanup</p>
-                        </div>
-
-                        <div className="p-2 space-y-1">
-                            <button
-                                onClick={() => runCleanup(7)}
-                                disabled={loading !== null}
-                                className="w-full px-3 py-2 text-left text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition-all flex items-center justify-between disabled:opacity-50"
-                            >
-                                <span>Purge 7+ day old cache</span>
-                                {loading === '7d' && <span className="text-xs text-accent">Running...</span>}
-                            </button>
-
-                            <button
-                                onClick={() => runCleanup(30)}
-                                disabled={loading !== null}
-                                className="w-full px-3 py-2 text-left text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition-all flex items-center justify-between disabled:opacity-50"
-                            >
-                                <span>Purge 30+ day old cache</span>
-                                {loading === '30d' && <span className="text-xs text-accent">Running...</span>}
-                            </button>
-
-                            <button
-                                onClick={() => runCleanup(0)}
-                                disabled={loading !== null}
-                                className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-red-500/10 rounded-lg transition-all flex items-center justify-between disabled:opacity-50"
-                            >
-                                <span>Full Purge (clear all)</span>
-                                {loading === 'full' && <span className="text-xs text-red-400">Running...</span>}
-                            </button>
                         </div>
 
                         {result && (

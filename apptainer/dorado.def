@@ -29,7 +29,6 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
         libncurses-dev \
         libdeflate-dev \
         python3 \
-        python3-pip \
         python3-venv
 
     # ── samtools 1.25 Bayesian consensus ─────────────────────────────────
@@ -49,10 +48,37 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
     test "$(samtools --version | awk 'NR == 1 {print $2}')" = "${SAMTOOLS_VERSION}"
     rm -rf "/tmp/samtools-${SAMTOOLS_VERSION}" "${SAMTOOLS_TARBALL}"
 
+    # Install pinned uv 0.13.9 with SHA256 verification
+    UV_VERSION="0.13.9"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    curl -fsSL --retry 3 --retry-delay 2 \
+        "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
+        -o "${UV_TMP}/uv.tar.gz"
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
+    uv --version
+
     # ── igv-reports (pinned static-report generator) ───────────────────────
     IGV_REPORTS_VERSION="1.17.0"
-    python3 -m venv /opt/igv-reports
-    /opt/igv-reports/bin/pip install --no-cache-dir --disable-pip-version-check \
+    uv venv /opt/igv-reports --python python3
+    uv pip install --python /opt/igv-reports/bin/python --no-cache \
         "igv-reports==${IGV_REPORTS_VERSION}"
     ln -s /opt/igv-reports/bin/create_report /usr/local/bin/create_report
     IGV_JS_VERSION="3.5.2"
@@ -119,7 +145,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
     test -x /usr/local/bin/create_report
     test "$(sha256sum /opt/bms/igv-reports/igv.min.js | awk '{print $1}')" = "0efd638a0997aa90791ce6c83a8b33912d4bc06aed5e28741fc74f32a20998d6"
     grep -F 'src="file:///opt/bms/igv-reports/igv.min.js"' /opt/bms/igv-reports/igv_variant_standalone.html
-    igv_metadata="$(/opt/igv-reports/bin/pip show igv-reports)"
+    igv_metadata="$(uv pip show --python /opt/igv-reports/bin/python igv-reports)"
     case "${igv_metadata}" in
         *"Version: 1.17.0"*) ;;
         *) echo "igv-reports 1.17.0 is missing" >&2; exit 1 ;;

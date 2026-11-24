@@ -56,7 +56,7 @@ def observed_files():
 
 
 before = observed_files()
-run('inventory', ['bash','-c', 'id; uname -a; systemd-detect-virt; cat /etc/os-release; cat /proc/self/cgroup; cat /proc/meminfo; command -v python3 pip3 node npm uv pnpm apptainer singularity docker; python3 --version; node --version; npm --version; systemctl --user is-system-running; dpkg-query -W python3 python3-pip python3-venv git curl'])
+run('inventory', ['bash','-c', 'id; uname -a; systemd-detect-virt; cat /etc/os-release; cat /proc/self/cgroup; cat /proc/meminfo; command -v python3 pip3 node npm uv pnpm apptainer singularity docker; python3 --version; node --version; npm --version; systemctl --user is-system-running; dpkg-query -W python3 python3-venv git curl'])
 cli('discover-before', 'discover', '--runtime', 'dev')
 cli('plan-before', 'plan', '--runtime', 'dev')
 cli('python-plan', 'python-plan')
