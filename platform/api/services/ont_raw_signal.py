@@ -155,7 +155,7 @@ def raw_signal_runtime_identity() -> dict[str, Any]:
         or policy.get("schema") != "bms.ont-raw-signal-runtime-policy.v1"
         or policy.get("network") != "none"
         or not isinstance(tools, dict)
-        or tools != {"blue_crab": "0.5.0", "slow5tools": "1.4.0", "pyslow5": "1.4.0"}
+        or tools != {"blue_crab": "0.6.0", "slow5tools": "1.5.0", "pyslow5": "1.5.0"}
     ):
         raise RuntimeError("raw-signal runtime policy manifest is invalid")
     image, digest = local_image_identity(

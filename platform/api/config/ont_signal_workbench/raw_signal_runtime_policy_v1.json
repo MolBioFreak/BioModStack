@@ -1,11 +1,11 @@
 {
   "network": "none",
-  "oci_digest": "sha256:fd35a378b7ae1e447a2403fadf154f37dddf6a0392572685c697f48915c54567",
-  "runtime_id": "sha256:fd35a378b7ae1e447a2403fadf154f37dddf6a0392572685c697f48915c54567",
+  "oci_digest": "sha256:9d073acc6afb39a7b424f646d01402714163b4701664d6b50f2382b116fdc4ff",
+  "runtime_id": "sha256:9d073acc6afb39a7b424f646d01402714163b4701664d6b50f2382b116fdc4ff",
   "schema": "bms.ont-raw-signal-runtime-policy.v1",
   "tools": {
-    "blue_crab": "0.5.0",
-    "pyslow5": "1.4.0",
-    "slow5tools": "1.4.0"
+    "blue_crab": "0.6.0",
+    "slow5tools": "1.5.0",
+    "pyslow5": "1.5.0"
   }
 }

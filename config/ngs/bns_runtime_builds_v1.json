@@ -2,7 +2,7 @@
   "build_inputs": {
     "apptainer/dorado.def": "d78f5371d2a2d5c1fecc0c0df9809370382de2d69848c2ec47d4fabcb4329411",
     "apptainer/medaka.def": "0f00e60206e31ab66638f439813156cae3846cdc0373f050f421748b5467a3d3",
-    "docker/ont-raw-signal.Dockerfile": "bebf47cb27b6edb392fad82f1e65487cd0fc5f1ace49ac251a65e31933bb816b",
+    "docker/ont-raw-signal.Dockerfile": "ab75d740e00f157dc15bafe4423b8e2aa8ec4e97850f2948d1b2fdf2d6b828ee",
     "docker/ont-squigualiser-comparison.Dockerfile": "58c5d52d0af08a6db1d0a934dfd4a85826aa57a99bd7ed716b6a57dfb2a37c4a",
     "docker/ont-squigualiser-requirements.txt": "d85b091a4240195b162c6ba3dd3cb28936f05124c1aff1adcd2510d0edeec9b6",
     "docker/ont-squigualiser.Dockerfile": "97a2e10069a1d06d0ba3e97b80c131e28f3b71d94ecf473ffd18c7d75f60c246",
@@ -10,7 +10,7 @@
   },
   "builds": [
     {
-      "edition_image_id": "sha256:fd35a378b7ae1e447a2403fadf154f37dddf6a0392572685c697f48915c54567",
+      "edition_image_id": "sha256:9d073acc6afb39a7b424f646d01402714163b4701664d6b50f2382b116fdc4ff",
       "policy": "raw_signal_runtime_policy_v1.json",
       "upstream_image_id": "sha256:1faa098a72bf7f22242e642ac1e6fb61175c72945f74070f0ffefc952b13d4f3"
     },

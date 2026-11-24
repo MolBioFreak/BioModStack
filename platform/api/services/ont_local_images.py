@@ -14,7 +14,7 @@ import subprocess
 from services.container_cli_environment import container_cli_environment
 
 DEFAULT_TAGS = {
-    "BMS_ONT_SLOW5TOOLS_IMAGE": "biomodstack/ont-raw-signal:blue-crab-0.5.0-slow5tools-1.4.0",
+    "BMS_ONT_SLOW5TOOLS_IMAGE": "biomodstack/ont-raw-signal:blue-crab-0.6.0-slow5tools-1.5.0",
     "BMS_ONT_SQUIGUALISER_IMAGE": "biomodstack/ont-squigualiser:0.7.0",
     "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE": "biomodstack/ont-squigualiser-comparison:0.7.0",
     "BMS_ONT_SQUIGULATOR_IMAGE": "biomodstack/ont-squigulator:0.5.0",
