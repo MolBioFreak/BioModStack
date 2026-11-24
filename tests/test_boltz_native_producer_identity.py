@@ -106,6 +106,32 @@ class NativeIdentityTest(unittest.TestCase):
     def build(self):
         return build_manifest(predictions_root=self.pred,producer_method='boltz',producer_sample='sample',formats=['pdb'],protein_science_contract_revision=1,boltz_native_root=self.native)
 
+    def test_current_confidence_with_declared_provider_and_preserved_old_files(self):
+        from lib.boltz_native_identity import derive_boltz_native_identity, verify_boltz_native_identity, _BOLTZ_CURRENT_REVISION
+        path = self.orig / 'confidence_input_model_0.json'
+        old = json.loads(path.read_bytes())
+        ids = {'7':'T', '9':'H', '2':'L'}
+        extra = dict(chain_ids=ids, structure_checks_passed=True,
+                     chiral_centers_checked=0, chiral_centers_inverted=0, chiral_centers_flattened=0,
+                     bonds_checked=0, bonds_out_of_range=0)
+        for suffix in ('', '_unweighted'):
+            extra.update({k+suffix: v for k,v in dict(complex_pae=1., complex_ipae=None, chains_pae={i:1. for i in ids},
+                pair_chains_pae={i:{j:1. for j in ids} for i in ids}).items()})
+        kwargs = dict(source=self.structure.read_bytes(), structure_name=self.structure.name,
+            ledger_bytes=self.ledger.read_bytes(), pae_bytes=(self.orig/'pae_input_model_0.npz').read_bytes(),
+            plddt_bytes=(self.orig/'plddt_input_model_0.npz').read_bytes(), candidate_id='candidate', document_id='doc')
+        native = dict(old, **extra)
+        kwargs['confidence_bytes'] = json.dumps(native).encode()
+        candidate = derive_boltz_native_identity(provider_revision=_BOLTZ_CURRENT_REVISION, **kwargs)
+        self.assertEqual(verify_boltz_native_identity(candidate, **kwargs), candidate)
+        self.assertEqual(candidate['provider_revision'], _BOLTZ_CURRENT_REVISION)
+        self.assertEqual(derive_boltz_native_identity(**kwargs)['provider_revision'], 'unrecorded')
+        for key,value in [('chain_ids',{}),('complex_pae',-1),('bonds_checked',True),('pair_chains_pae',{})]:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                verify_boltz_native_identity(candidate, **dict(kwargs, confidence_bytes=json.dumps(dict(native, **{key:value})).encode()))
+        with self.assertRaises(ValueError):
+            verify_boltz_native_identity(dict(candidate,provider_revision='bogus'), **kwargs)
+
     def test_scripts_only_native_publication(self):
         """The model task sees scripts, not platform/api or its service imports."""
         import os

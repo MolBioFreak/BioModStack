@@ -43,8 +43,27 @@ def _producer_rank(method: str, name: str) -> int | None:
     return int(match.group(1)) if match is not None else None
 
 
-# Identity rules are pinned to apptainer/boltz2.def, not an installed-version guess.
-_BOLTZ_REVISION = "7ebf1be087d4d61a02234c878402838bf3712d8b"
+def _installed_boltz_revision():
+    """Record package identity when available; never require Git to publish."""
+    from importlib.metadata import PackageNotFoundError, version
+    from pathlib import Path
+    import subprocess
+    try:
+        release = version('boltz-community')
+    except PackageNotFoundError:
+        return None
+    # Both BMS recipe generations retain the build checkout. Do not invent a
+    # source hash for a wheel-only installation, or block it for lacking one.
+    try:
+        if Path('/boltz/.git').is_dir():
+            git = subprocess.run(['git', '-C', '/boltz', 'rev-parse', 'HEAD'],
+                                 text=True, capture_output=True, timeout=3)
+            actual = git.stdout.strip()
+            if git.returncode == 0 and re.fullmatch(r'[0-9a-f]{40}', actual):
+                return actual
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return 'boltz-community@' + release
 
 
 def validate_native_options(revision: int | None, method: str, native_root: Path | None) -> None:
@@ -79,7 +98,7 @@ def boltz_native_identity(*, native_root: Path, predictions_root: Path,
     evidence = derive_boltz_native_identity(
         source=source, structure_name=structure.name, ledger_bytes=ledger_bytes,
         pae_bytes=snapshots["pae"], plddt_bytes=snapshots["plddt"], confidence_bytes=snapshots["confidence"],
-        candidate_id=candidate_id, document_id=document_id)
+        candidate_id=candidate_id, document_id=document_id, provider_revision=_installed_boltz_revision())
     transported = [(name, snapshots[key], native_dir / name) for key, name in names.items()]
     transported.append((evidence["processed_structure"]["artifact_key"], ledger_bytes,
                         native_root / "processed" / "structures" / f"{record_id}.npz"))

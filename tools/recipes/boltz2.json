@@ -9,16 +9,16 @@
     "also": ["https://github.com/Novel-Therapeutics/boltz-community"]
   },
   "license": {"id": "MIT", "url": "https://github.com/jwohlwend/boltz/blob/main/LICENSE"},
-  "notes": "Builds the boltz-community fork at a fixed commit on a CUDA 12.8 base. The definition installs the PyTorch 2.11.0 release for CUDA 12.8. Prediction needs an NVIDIA GPU.",
+  "notes": "Builds the boltz-community fork at a fixed commit on a CUDA 13.5 base. The definition installs the PyTorch 2.15.0 release for CUDA 13.4. Prediction needs an NVIDIA GPU.",
   "images": [
     {
       "filename": "boltz2.sif",
       "def": "apptainer/boltz2.def",
       "approx_size_gb": 12,
       "sources": [
-        "nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04",
-        "https://github.com/Novel-Therapeutics/boltz-community @ 7ebf1be087d4d61a02234c878402838bf3712d8b",
-        "https://download.pytorch.org/whl/cu128 (torch 2.11.0)"
+        "nvidia/cuda:13.5.0-cudnn-devel-ubuntu24.04",
+        "https://github.com/Novel-Therapeutics/boltz-community @ d91963a31900df736accc2eaf6e722b8ebf9f586",
+        "https://download.pytorch.org/whl/cu134 (torch 2.15.0)"
       ],
       "smoke": [
         {"name": "boltz-help", "argv": ["boltz", "--help"]},

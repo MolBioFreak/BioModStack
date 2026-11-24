@@ -18,11 +18,44 @@ from write_sequence_producer_manifest import _reject_duplicate_keys, _reject_jso
 
 _BOLTZ_REVISION = "7ebf1be087d4d61a02234c878402838bf3712d8b"
 
+_BOLTZ_CURRENT_REVISION = "d91963a31900df736accc2eaf6e722b8ebf9f586"
+
+
+def _validate_current_confidence(confidence, chain_map):
+    # These additional fields are saved by 2.15.1. Keep the old format strict
+    # and do not reinterpret new summary values as per-token measurements.
+    ids = {str(c['native_asym_id']): c['chain_id'] for c in chain_map}
+    if confidence['chain_ids'] != ids:
+        raise ValueError('native confidence chain labels disagree with ledger')
+    def distance(v):
+        return v is None or (type(v) in (int, float) and np.isfinite(v) and v >= 0)
+    def keyed(v):
+        return isinstance(v, dict) and v.keys() == ids.keys()
+    for suffix in ('', '_unweighted'):
+        diagonal = confidence['chains_pae' + suffix]
+        pairs = confidence['pair_chains_pae' + suffix]
+        if not (distance(confidence['complex_pae' + suffix]) and distance(confidence['complex_ipae' + suffix])
+                and keyed(diagonal) and all(distance(x) for x in diagonal.values()) and keyed(pairs)
+                and all(keyed(row) and all(distance(x) for x in row.values()) for row in pairs.values())):
+            raise ValueError('invalid native PAE summary')
+    if type(confidence['structure_checks_passed']) is not bool or any(
+        type(confidence[k]) is not int or confidence[k] < 0 for k in _CHECK_COUNTS
+    ):
+        raise ValueError('invalid native structure check summary')
+
+
+_CHECK_COUNTS = {'chiral_centers_checked', 'chiral_centers_inverted', 'chiral_centers_flattened',
+                 'bonds_checked', 'bonds_out_of_range'}
+_CURRENT_EXTRA = _CHECK_COUNTS | {'chain_ids', 'structure_checks_passed'} | {
+    k + suffix for k in ('complex_pae', 'complex_ipae', 'chains_pae', 'pair_chains_pae') for suffix in ('', '_unweighted')
+}
+
 
 def derive_boltz_native_identity(*, source: bytes, structure_name: str,
                                  ledger_bytes: bytes, pae_bytes: bytes,
                                  plddt_bytes: bytes, confidence_bytes: bytes,
-                                 candidate_id: str, document_id: str) -> dict[str, Any]:
+                                 candidate_id: str, document_id: str,
+                                 provider_revision: str | None = None) -> dict[str, Any]:
     for identity in (candidate_id, document_id):
         if not isinstance(identity, str) or not identity.strip():
             raise ValueError("empty producer identity")
@@ -138,10 +171,22 @@ def derive_boltz_native_identity(*, source: bytes, structure_name: str,
     confidence = json.loads(confidence_bytes, object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_json_constant)
     scalar_keys = {"confidence_score", "ptm", "iptm", "ligand_iptm", "protein_iptm",
                    "complex_plddt", "complex_iplddt", "complex_pde", "complex_ipde"}
-    if not isinstance(confidence, dict) or set(confidence) != scalar_keys | {"chains_ptm", "pair_chains_iptm"}:
+    base = scalar_keys | {"chains_ptm", "pair_chains_iptm"}
+    if not isinstance(confidence, dict) or set(confidence) not in (base, base | _CURRENT_EXTRA):
         raise ValueError("native confidence JSON fields are not exact")
+    extra = set(confidence) != base
+    if provider_revision is None:
+        # Reproduce legacy receipts byte-for-byte. A newer file shape alone is
+        # not evidence of a particular Git revision.
+        provider_revision = "unrecorded" if extra else _BOLTZ_REVISION
+    if provider_revision not in (_BOLTZ_REVISION, _BOLTZ_CURRENT_REVISION):
+        provider_revision = 'unrecorded'
+    if (provider_revision == _BOLTZ_REVISION and extra) or (provider_revision == _BOLTZ_CURRENT_REVISION and not extra):
+        raise ValueError("native confidence fields disagree with recorded release")
     if any(type(confidence[k]) not in (int, float) or not np.isfinite(confidence[k]) or confidence[k] < 0 for k in scalar_keys):
         raise ValueError("non-finite or negative native confidence scalar")
+    if extra:
+        _validate_current_confidence(confidence, chain_map)
     keys = {str(c["native_asym_id"]) for c in chain_map}
     chain_values = confidence.get("chains_ptm")
     pairs = confidence.get("pair_chains_iptm")
@@ -154,7 +199,7 @@ def derive_boltz_native_identity(*, source: bytes, structure_name: str,
     ):
         raise ValueError("invalid native chain confidence values/keys")
     ledger_key = f"native_structure_{record_id}.npz"
-    return dict(schema_name="boltz_native_identity", schema_version=1, provider_revision=_BOLTZ_REVISION,
+    return dict(schema_name="boltz_native_identity", schema_version=1, provider_revision=provider_revision,
                 source_axis="boltz_native_tokens", native_token_count=n, token_to_structure=token_map,
                 structure_sha256=hashlib.sha256(source).hexdigest(),
                 processed_structure=dict(artifact_key=ledger_key, artifact_sha256=hashlib.sha256(ledger_bytes).hexdigest()),
@@ -170,7 +215,9 @@ def verify_boltz_native_identity(claimed: Any, **snapshots) -> dict[str, Any]:
     A consistently reordered sidecar is still false if it disagrees with native
     token order. JSON comparison also distinguishes true/1 and exact field types.
     """
-    expected = derive_boltz_native_identity(**snapshots)
+    if not isinstance(claimed, dict):
+        raise ValueError("invalid native identity claim")
+    expected = derive_boltz_native_identity(**snapshots, provider_revision=claimed.get("provider_revision"))
     try:
         matches = json.dumps(claimed, sort_keys=True, allow_nan=False) == json.dumps(expected, sort_keys=True, allow_nan=False)
     except (TypeError, ValueError):

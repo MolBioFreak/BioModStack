@@ -1,92 +1,66 @@
-# Build stage - install dependencies and compile
 Bootstrap: docker
-Stage: build
-From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+From: nvidia/cuda:13.5.0-cudnn-devel-ubuntu24.04
 
 %post
-    # install build deps
-    apt-get -q update
-    DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
-        git \
-        wget \
-        curl \
-        python3.10 \
-        python3.10-dev \
-        python3-venv \
-        python3-pip \
-        build-essential
-
-    # Install UV package manager (10-100x faster than pip)
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="/root/.local/bin:$PATH"
-
-    # create and activate virtual environment
-    python3.10 -m venv /opt/venv
-    . /opt/venv/bin/activate
-
-    # PyTorch release built for CUDA 12.8 (covers RTX 50-series, sm_120).
-    # A fixed release is used because nightly builds are withdrawn after a few
-    # weeks, which makes a definition that names them impossible to rebuild.
-    uv pip install --compile --no-cache-dir torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
-
-    # install boltz-community pinned to a reviewed community fork commit
-    # while keeping the BioModStack external contract stable. The fork still
-    # exposes the `boltz` CLI, but the Python distribution name is
-    # `boltz-community`.
-    #
-    # CUDA kernels live in the optional [cuda] extra; without it, runtime
-    # inference crashes on triangle kernels with ModuleNotFoundError for
-    # cuequivariance_torch / cuequivariance_ops_torch.
-    git clone https://github.com/Novel-Therapeutics/boltz-community.git /boltz && cd /boltz && git checkout 7ebf1be087d4d61a02234c878402838bf3712d8b
-    uv pip install --compile --no-cache-dir '.[cuda]'
-
-    # cleanup build dependencies but KEEP python3.10-dev (needed for Triton JIT on RTX 5090)
-    apt-mark manual python3.10-dev
-    apt-get autoremove -y
+    set -eu
+    apt-get update -q
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates git curl python3.12 python3.12-dev python3.12-venv build-essential
+    UV_VERSION="0.13.10"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    curl -fsSL --retry 3 --retry-delay 2 \
+        "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
+        -o "${UV_TMP}/uv.tar.gz"
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
+    uv --version
+    python3.12 -m venv /opt/venv
+    git clone --filter=blob:none --branch v2.15.1 --depth 1 https://github.com/Novel-Therapeutics/boltz-community.git /boltz
+    cd /boltz
+    test "$(git rev-parse HEAD)" = d91963a31900df736accc2eaf6e722b8ebf9f586
+    printf '%s\n' 'torch==2.15.0+cu134' > /tmp/boltz-torch-constraint.txt
+    uv pip install --no-cache --python /opt/venv/bin/python --index https://download.pytorch.org/whl/cu134 --default-index https://pypi.org/simple 'torch==2.15.0+cu134'
+    uv pip install --no-cache --python /opt/venv/bin/python -c /tmp/boltz-torch-constraint.txt '.[cuda]'
+    uv pip check --python /opt/venv/bin/python
     apt-get clean
-    
-    # link venv
-    echo '. /opt/venv/bin/activate' >> $APPTAINER_ENVIRONMENT
-    
+    rm -rf /var/lib/apt/lists/*
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export VIRTUAL_ENV=/opt/venv
+
 %runscript
     cd /boltz
-    if [ $# -eq 0 ]; then
-        exec /bin/bash --norc
-    else
-        exec "$@"
-    fi
+    if [ "$#" -eq 0 ]; then exec /bin/bash --norc; fi
+    exec "$@"
 
 %test
-    . /opt/venv/bin/activate
-    cd /boltz
-    export NUMBA_CACHE_DIR=/tmp
-    export XDG_CONFIG_HOME=/tmp
-    export TRITON_CACHE_DIR=/tmp
-    boltz --help
-    boltz predict --help | grep -q -- '--max_parallel_samples'
-    python - <<'PY'
-import importlib.util
-import subprocess
-from importlib import metadata
+    set -eu
+    /usr/local/bin/uv --version | grep -F 'uv 0.13.10'
+    /opt/venv/bin/python -c "import importlib.metadata as m, torch; assert m.version('boltz-community') == '2.15.1' and torch.__version__ == '2.15.0+cu134'; import importlib.util as u; assert all(u.find_spec(n) for n in ('cuequivariance_torch','cuequivariance_ops_torch','cuequivariance_ops'))"
+    /opt/venv/bin/boltz --help
+    /opt/venv/bin/boltz predict --help | grep -F -- --max_parallel_samples
 
-required = [
-    'boltz',
-    'cuequivariance_torch',
-    'cuequivariance_ops_torch',
-    'cuequivariance_ops',
-]
-for name in required:
-    assert importlib.util.find_spec(name) is not None, f'missing required module: {name}'
-
-predict_help = subprocess.run(['boltz', 'predict', '--help'], check=True, capture_output=True, text=True)
-assert '--max_parallel_samples' in predict_help.stdout + predict_help.stderr
-
-print('boltz-community', metadata.version('boltz-community'))
-print('cuequivariance_torch', metadata.version('cuequivariance_torch'))
-print('cuequivariance-ops-torch-cu12', metadata.version('cuequivariance-ops-torch-cu12'))
-print('cuequivariance-ops-cu12', metadata.version('cuequivariance-ops-cu12'))
-PY
-    echo "Build tests completed sucessfully"
+%labels
+    org.opencontainers.image.revision d91963a31900df736accc2eaf6e722b8ebf9f586
+    bms.pytorch 2.15.0+cu134
+    bms.uv 0.13.10
 
 %help
-    Boltz-community v2.9.5 container with CUDA 12.8 runtime
+    Boltz-community 2.15.1 with CUDA Toolkit 13.5.0 and stable PyTorch 2.15.0 (cu134).
