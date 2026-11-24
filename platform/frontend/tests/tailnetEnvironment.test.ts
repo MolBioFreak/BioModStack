@@ -14,7 +14,7 @@ test('Tailnet detection and Stats Toolkit entry stay same-origin on the stable h
   assert.equal(isTailnetHostname('127.0.0.1'), false);
   assert.equal(
     resolveStatsToolkitEntryUrl('http://127.0.0.1:18180/stats/', 'node.example.ts.net'),
-    '/stats/embed/?ui=66882da',
+    '/stats/embed/',
   );
   assert.equal(
     resolveStatsToolkitEntryUrl('http://127.0.0.1:18180/stats/', '127.0.0.1'),
@@ -29,7 +29,7 @@ test('Tailnet detection and Stats Toolkit entry stay same-origin on the stable h
 test('packaged UI routes Stats to its configured Tailnet API owner, never phone loopback', () => {
   const api = 'https://node.example.ts.net';
   for (const entry of ['/stats/embed/', 'http://127.0.0.1:18180/stats/']) {
-    assert.equal(resolveStatsToolkitEntryUrl(entry, 'localhost', api), `${api}/stats/embed/?ui=66882da`);
+    assert.equal(resolveStatsToolkitEntryUrl(entry, 'localhost', api), `${api}/stats/embed/`);
   }
   assert.equal(resolveConfiguredTailnetOrigin(api + '/'), api);
   for (const invalid of [undefined, '', 'not a URL', 'http://127.0.0.1:8000']) {

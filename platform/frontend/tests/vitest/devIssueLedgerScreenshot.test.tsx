@@ -47,7 +47,7 @@ it('packaged Stats uses the configured server origin and keeps exact theme-origi
     vi.stubGlobal('__BMS_API_BASE_URL__', 'https://node.example.ts.net');
     await mountStats();
     const frame = container.querySelector('iframe')!;
-    expect(frame.getAttribute('src')).toBe('https://node.example.ts.net/stats/embed/?ui=66882da');
+    expect(frame.getAttribute('src')).toBe('https://node.example.ts.net/stats/embed/');
     const post = vi.spyOn(frame.contentWindow!, 'postMessage');
     await act(async () => frame.dispatchEvent(new Event('load'))); await flush();
     expect(post).toHaveBeenCalledWith(expect.any(Object), 'https://node.example.ts.net');
