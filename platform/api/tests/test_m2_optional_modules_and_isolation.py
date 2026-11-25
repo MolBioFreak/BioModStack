@@ -161,8 +161,8 @@ def test_stats_disabled_blocks_stats_toolkit_endpoint_and_keeps_readback(monkeyp
 
 def test_workflow_adapter_offline_to_online_starts_orchestrator_once_and_cancels_cleanly(monkeypatch) -> None:
     monkeypatch.setenv("BMS_FEATURE_NGS_ONT", "1")
-    bms_main = _reload_main()
-    bms_main._orchestrator = None
+    import worker as bms_worker
+    bms_worker._orchestrator = None
 
     probes = iter([(False, "unavailable"), (False, "unavailable"), (True, "http_200")])
     started: list[str] = []
@@ -177,30 +177,30 @@ def test_workflow_adapter_offline_to_online_starts_orchestrator_once_and_cancels
         async def start(self):
             started.append("started")
 
-    monkeypatch.setattr(bms_main, "workflow_adapter_base_url", lambda: "http://127.0.0.1:18001")
-    monkeypatch.setattr(bms_main, "http_readiness", fake_readiness)
-    monkeypatch.setattr(bms_main, "GPUOrchestrator", _FakeOrchestrator)
+    monkeypatch.setattr(bms_worker, "workflow_adapter_base_url", lambda: "http://127.0.0.1:18001")
+    monkeypatch.setattr(bms_worker, "http_readiness", fake_readiness)
+    monkeypatch.setattr(bms_worker, "GPUOrchestrator", _FakeOrchestrator)
 
     async def _scenario():
-        await bms_main._wait_and_start_workflow_orchestrator(poll_interval_seconds=0.01)
+        await bms_worker._wait_and_start_workflow_orchestrator(poll_interval_seconds=0.01)
         # Calling start helper again must be idempotent.
-        await bms_main._start_workflow_orchestrator()
+        await bms_worker._start_workflow_orchestrator()
 
     asyncio.run(_scenario())
     assert started == ["started"]
-    assert bms_main._orchestrator is not None
+    assert bms_worker._orchestrator is not None
 
     # Also verify cancellation exits cleanly without starting an orchestrator.
-    bms_main._orchestrator = None
+    bms_worker._orchestrator = None
     started.clear()
-    monkeypatch.setattr(bms_main, "http_readiness", lambda _url: asyncio.sleep(0, result=(False, "unavailable")))
+    monkeypatch.setattr(bms_worker, "http_readiness", lambda _url: asyncio.sleep(0, result=(False, "unavailable")))
 
     async def _cancel_scenario():
-        task = asyncio.create_task(bms_main._wait_and_start_workflow_orchestrator(poll_interval_seconds=0.05))
+        task = asyncio.create_task(bms_worker._wait_and_start_workflow_orchestrator(poll_interval_seconds=0.05))
         await asyncio.sleep(0.02)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(_cancel_scenario())
     assert started == []
-    assert bms_main._orchestrator is None
+    assert bms_worker._orchestrator is None

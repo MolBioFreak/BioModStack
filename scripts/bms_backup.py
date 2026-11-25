@@ -53,6 +53,7 @@ verify_sqlite_backup = _sqlite_backup.verify_sqlite_backup
 SCHEMA_VERSION = 1
 DEFAULT_WRITER_UNITS = (
     "biomodstack-api.service",
+    "biomodstack-worker.service",
     "biomodstack-development-workflow-adapter.service",
 )
 OPTIONAL_DATA_ARTIFACT_DIRS = (

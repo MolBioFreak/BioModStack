@@ -29,6 +29,7 @@ COMPOSE_FILE = PROJECT_ROOT / "compose.core-runtime.yml"
 GENERATED_OWNERSHIP_NORMALIZER = PROJECT_ROOT / "scripts" / "normalize_generated_ownership.py"
 ALL_SERVICES = (
     "bms-api",
+    "bms-worker",
     "bms-host-agent",
     "bms-cpu-power",
     "bms-web",
@@ -36,6 +37,7 @@ ALL_SERVICES = (
 DEFAULT_SERVICES = ALL_SERVICES
 OPTIONAL_PROFILE_SERVICES: dict[str, tuple[str, ...]] = {}
 SERVICE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "bms-worker": ("bms-api",),
     "bms-web": ("bms-api",),
 }
 MAX_RECOVERIES = int(os.getenv("BMS_RUNTIME_MAX_RECOVERIES", "2"))
@@ -251,6 +253,7 @@ def dependencies_ready(service: str, rows: Mapping[str, Mapping[str, Any]]) -> b
 def expected_container_names() -> dict[str, str]:
     return {
         "bms-api": "biomodstack-api",
+        "bms-worker": "biomodstack-worker",
         "bms-web": "biomodstack-web",
         "bms-host-agent": "biomodstack-host-agent",
         "bms-cpu-power": "biomodstack-cpu-power",

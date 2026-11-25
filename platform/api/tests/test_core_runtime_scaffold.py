@@ -92,6 +92,7 @@ def test_compose_core_runtime_contract() -> None:
 
     assert set(compose["services"]) == {
         "bms-api",
+        "bms-worker",
         "bms-cpu-power",
         "bms-host-agent",
         "bms-web",

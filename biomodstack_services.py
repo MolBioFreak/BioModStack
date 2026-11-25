@@ -39,6 +39,7 @@ from biomodstack_runtime_profile import (
 )
 
 API_SERVICE = "biomodstack-api.service"
+WORKER_SERVICE = "biomodstack-worker.service"
 FRONTEND_SERVICE = "biomodstack-frontend.service"
 TELEMETRY_SERVICE = "biomodstack-telemetry.service"
 DEVELOPMENT_LANE = "development"
@@ -68,6 +69,10 @@ SYSTEMD_RESOURCE_LIMITS: dict[str, tuple[str, dict[str, str]]] = {
     API_SERVICE: (
         "API",
         {"MemoryHigh": "12G", "MemoryMax": "16G", "TasksMax": "2048", "LimitNOFILE": "131072"},
+    ),
+    WORKER_SERVICE: (
+        "WORKER",
+        {"MemoryHigh": "8G", "MemoryMax": "12G", "TasksMax": "2048", "LimitNOFILE": "131072"},
     ),
     FRONTEND_SERVICE: (
         "FRONTEND",
@@ -141,6 +146,7 @@ _CONFIG_HOME = Path(os.getenv("XDG_CONFIG_HOME", str(Path.home() / ".config"))).
 LOG_DIR = _STATE_HOME / "biomodstack" / "logs"
 MOBILE_UPDATE_PUBLISHER_ENV = _CONFIG_HOME / "biomodstack" / "mobile-update-publisher.env"
 API_LOG = LOG_DIR / "api.log"
+WORKER_LOG = LOG_DIR / "worker.log"
 FRONTEND_LOG = LOG_DIR / "frontend.log"
 TELEMETRY_LOG = LOG_DIR / "telemetry.log"
 MOBILE_UPDATE_PUBLISHER_LOG = LOG_DIR / "mobile-update-publisher.log"
@@ -442,7 +448,7 @@ def runtime_service_names(runtime_mode: str | None = None) -> tuple[str, ...]:
     mode = resolve_runtime_mode(runtime_mode)
     if mode == CONTAINER_RUNTIME_MODE:
         return (PRODUCTION_WORKFLOW_ADAPTER_SERVICE, CORE_RUNTIME_SERVICE)
-    return (DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, API_SERVICE, FRONTEND_SERVICE)
+    return (DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, API_SERVICE, WORKER_SERVICE, FRONTEND_SERVICE)
 
 
 def runtime_target_unit(runtime_mode: str | None = None) -> str:
@@ -453,6 +459,7 @@ def runtime_target_unit(runtime_mode: str | None = None) -> str:
 def all_runtime_service_names() -> tuple[str, ...]:
     return (
         API_SERVICE,
+        WORKER_SERVICE,
         FRONTEND_SERVICE,
         TELEMETRY_SERVICE,
         DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE,
@@ -599,6 +606,7 @@ def runtime_log_descriptors(runtime_mode: str | None = None) -> list[dict[str, s
     if mode == CONTAINER_RUNTIME_MODE:
         return [
             {"id": "api", "label": "API backend log", "path": "docker:biomodstack-api", "fallback_path": str(API_LOG)},
+            {"id": "worker", "label": "Background worker log", "path": "docker:biomodstack-worker", "fallback_path": str(WORKER_LOG)},
             {"id": "frontend", "label": "Frontend/web log", "path": "docker:biomodstack-web", "fallback_path": str(FRONTEND_LOG)},
             {
                 "id": "workflow-adapter",
@@ -614,6 +622,7 @@ def runtime_log_descriptors(runtime_mode: str | None = None) -> list[dict[str, s
             "path": str(DEVELOPMENT_WORKFLOW_ADAPTER_LOG),
         },
         {"id": "api", "label": "API backend log", "path": str(API_LOG)},
+        {"id": "worker", "label": "Background worker log", "path": str(WORKER_LOG)},
         {"id": "frontend", "label": "Frontend/web log", "path": str(FRONTEND_LOG)},
     ]
 
@@ -1488,6 +1497,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         }
 
     api_runner = root / "scripts" / "run_biomodstack_api.sh"
+    worker_runner = root / "scripts" / "run_biomodstack_worker.sh"
     frontend_runner = root / "scripts" / "run_biomodstack_frontend.sh"
     mobile_update_publisher_runner = root / "scripts" / "run_biomodstack_mobile_update_publisher.sh"
     tailnet_global_installer = root / "scripts" / "install_tailnet_global_routes.py"
@@ -1569,6 +1579,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         "\n", "\n            "
     )
     api_limits = render_systemd_resource_boundaries(API_SERVICE).replace("\n", "\n        ")
+    worker_limits = render_systemd_resource_boundaries(WORKER_SERVICE).replace("\n", "\n        ")
     frontend_limits = render_systemd_resource_boundaries(FRONTEND_SERVICE).replace("\n", "\n        ")
     mobile_update_publisher_limits = render_systemd_resource_boundaries(MOBILE_UPDATE_PUBLISHER_SERVICE).replace(
         "\n", "\n        "
@@ -1780,6 +1791,70 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         """
     )
 
+    worker_unit = dedent(
+        f"""\
+        [Unit]
+        Description=BioModStack background worker service
+        PartOf={DEV_TARGET_UNIT}
+        After=network-online.target {DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE}
+        Wants=network-online.target {DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE}
+        StartLimitIntervalSec=300
+        StartLimitBurst=3
+
+        [Service]
+        Type=simple
+        Environment={systemd_value(f"BMS_HOME={root}")}
+        Environment={systemd_value(f"BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}")}
+        Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}")}
+        Environment={systemd_value(f"BMS_CM_API_RUNTIME_DIR={support_payload_root}")}
+        {python_root_directive}
+        {annotation_environment}
+        Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
+        Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(DEVELOPMENT_LANE)}")}
+        Environment={systemd_value(f"BMS_DATA={dev_data_root}")}
+        Environment={systemd_value(f"BMS_STATE_DIR={dev_data_root}")}
+        Environment={systemd_value(f"BMS_INPUTS={dev_inputs_dir}")}
+        Environment={systemd_value(f"BMS_DB_PATH={dev_db_path}")}
+        Environment={systemd_value(f"BMS_TELEMETRY_DB_PATH={telemetry_db}")}
+        Environment={systemd_value(f"BMS_WORK={dev_work_dir}")}
+        Environment={systemd_value(f"BMS_ANALYSIS_CACHE={dev_analysis_cache_dir}")}
+        Environment={systemd_value(f"BMS_RESULTS_DIR={dev_results_root}")}
+        Environment={systemd_value(f"BMS_RESULTS_ROOT={dev_results_root}")}
+        Environment={systemd_value(f"BMS_LOCAL_CPU_THREADS={local_policy.cpu_threads}")}
+        Environment={systemd_value(f"BMS_LOCAL_MEMORY_BYTES={local_policy.memory_bytes}")}
+        Environment={systemd_value(f"BMS_CONTAINER_DIR={dev_container_dir}")}
+        {("Environment=" + systemd_value(f"BMS_CM_CONFORNETS_CONTAINER_PATH={dev_confornets_container}")) if dev_confornets_container else ""}
+        {("Environment=" + systemd_value(f"BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}")) if dev_ngs_runtime_sif else ""}
+        Environment={systemd_value(f"BMS_RUNTIME_IMAGE_STORE={runtime_image_store}")}
+        Environment=BMS_RUNTIME_IMAGE_LANE=development
+        {publication_environment}
+        {_runtime_reference_directive(runtime_image_store, 'development')}
+        Environment={systemd_value(f"BMS_WEIGHTS={dev_weights_root}")}
+        Environment={systemd_value(f"BMS_COLABFOLD_DB={dev_colabfold_db}")}
+        Environment={systemd_value(f"BMS_MSA_CACHE={dev_msa_cache_dir}")}
+        Environment={systemd_value(f"BMS_SABDAB_CACHE={dev_sabdab_cache_dir}")}
+        Environment=BMS_CPU_POWER_STRICT=0
+        {ont_runtime_environment}
+        Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
+        Environment={systemd_value(f"BMS_BUILD_ID={build_id}")}
+        Environment={systemd_value(f"BMS_BUILD_TIME={build_time}")}
+        Environment=PYTHONUNBUFFERED=1
+        ExecStartPre=/usr/bin/mkdir -p {systemd_exec_arg(dev_data_root)} {systemd_exec_arg(dev_inputs_dir)} {systemd_exec_arg(dev_work_dir)} {systemd_exec_arg(dev_results_root)} {systemd_exec_arg(dev_weights_root)} {systemd_exec_arg(dev_msa_cache_dir)} {systemd_exec_arg(dev_sabdab_cache_dir)} {systemd_exec_arg(dev_container_dir)}
+        ExecStartPre=/usr/bin/env python3 {systemd_exec_arg(log_rotator)}
+        ExecStart={systemd_exec_arg(worker_runner)}
+        Restart=on-failure
+        RestartSec=10
+        TimeoutStopSec=20
+        KillMode=process
+        {worker_limits}
+        StandardOutput=append:{systemd_value(WORKER_LOG)}
+        StandardError=append:{systemd_value(WORKER_LOG)}
+
+        [Install]
+        WantedBy={DEV_TARGET_UNIT}
+        """
+    )
+
     frontend_unit = dedent(
         f"""\
         [Unit]
@@ -1822,7 +1897,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         f"""\
         [Unit]
         Description=BioModStack development UI target
-        Wants={TELEMETRY_SERVICE} {DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE} {WORKFLOW_ROOT_SLICE} {DEVELOPMENT_WORKFLOW_SLICE} {API_SERVICE} {FRONTEND_SERVICE}
+        Wants={TELEMETRY_SERVICE} {DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE} {WORKFLOW_ROOT_SLICE} {DEVELOPMENT_WORKFLOW_SLICE} {API_SERVICE} {WORKER_SERVICE} {FRONTEND_SERVICE}
 
         [Install]
         WantedBy=default.target
@@ -1842,6 +1917,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         WORKFLOW_ROOT_SLICE: workflow_root_slice,
         DEVELOPMENT_WORKFLOW_SLICE: development_workflow_slice,
         API_SERVICE: api_unit,
+        WORKER_SERVICE: worker_unit,
         FRONTEND_SERVICE: frontend_unit,
         MOBILE_UPDATE_PUBLISHER_SERVICE: mobile_update_publisher_unit,
         TAILNET_GLOBAL_SERVICE: tailnet_global_unit,
@@ -2476,6 +2552,8 @@ def start_all(
             services_to_start.append(TELEMETRY_SERVICE)
         if not service_is_active(API_SERVICE, project_root=root) and not url_is_ready(runtime_api_health_url(mode, project_root=root)):
             services_to_start.append(API_SERVICE)
+        if not service_is_active(WORKER_SERVICE, project_root=root):
+            services_to_start.append(WORKER_SERVICE)
         if not service_is_active(FRONTEND_SERVICE, project_root=root):
             services_to_start.append(FRONTEND_SERVICE)
         if services_to_start:
@@ -2558,7 +2636,7 @@ def stop_all(project_root: Path | None = None, runtime_mode: str | None = None) 
         )
         return
 
-    run_systemctl("stop", DEV_TARGET_UNIT, FRONTEND_SERVICE, check=False, project_root=root)
+    run_systemctl("stop", DEV_TARGET_UNIT, FRONTEND_SERVICE, WORKER_SERVICE, check=False, project_root=root)
     cleanup_legacy_listener("frontend", root)
     if service_is_active(API_SERVICE, project_root=root):
         run_systemctl("stop", API_SERVICE, check=False, project_root=root)
@@ -2586,13 +2664,14 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
     if mode == DEV_RUNTIME_MODE:
         local_api_active = service_is_active(API_SERVICE, project_root=root)
         run_systemctl("restart", TELEMETRY_SERVICE, project_root=root)
-        run_systemctl("stop", DEV_TARGET_UNIT, FRONTEND_SERVICE, check=False, project_root=root)
+        run_systemctl("stop", DEV_TARGET_UNIT, FRONTEND_SERVICE, WORKER_SERVICE, check=False, project_root=root)
         cleanup_legacy_listener("frontend", root)
         services_to_start: list[str] = []
         if local_api_active or not url_is_ready(runtime_api_health_url(mode, project_root=root)):
             run_systemctl("stop", API_SERVICE, check=False, project_root=root)
             cleanup_legacy_listener("api", root, runtime_mode=mode)
             services_to_start.append(API_SERVICE)
+        services_to_start.append(WORKER_SERVICE)
         services_to_start.append(FRONTEND_SERVICE)
         # An operator restart is deliberate: clear systemd's crash-loop counter so
         # back-to-back deploys do not trip StartLimitBurst on the adapter or API.
@@ -2715,10 +2794,13 @@ def status_lines(project_root: Path | None = None, runtime_mode: str | None = No
         ]
 
     services_by_name = {item["name"]: item["active"] for item in descriptor["services"]}
+    worker_unit_state = "active" if services_by_name.get(WORKER_SERVICE, False) else "inactive"
     frontend_unit_state = "unit active" if services_by_name.get(FRONTEND_SERVICE, False) else "unit inactive"
     return [
         f"API: {'ready' if descriptor['health']['api_ready'] else 'not ready'} ({api_health_url})",
+        f"Worker: {worker_unit_state} ({WORKER_SERVICE})",
         f"Frontend: {'ready' if descriptor['health']['frontend_ready'] else 'not ready'} ({FRONTEND_SERVICE} {frontend_unit_state}; {descriptor['frontend_url']})",
         f"API log: {API_LOG}",
+        f"Worker log: {WORKER_LOG}",
         f"Frontend log: {FRONTEND_LOG}",
     ]

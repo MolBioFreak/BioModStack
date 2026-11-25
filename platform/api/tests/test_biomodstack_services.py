@@ -95,6 +95,7 @@ def test_runtime_descriptor_for_dev_mode(tmp_path: Path, monkeypatch) -> None:
             services.TELEMETRY_SERVICE,
             services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE,
             services.API_SERVICE,
+            services.WORKER_SERVICE,
             services.FRONTEND_SERVICE,
         },
     )
@@ -138,6 +139,7 @@ def test_runtime_descriptor_for_dev_mode(tmp_path: Path, monkeypatch) -> None:
     assert descriptor["services"] == [
         {"name": services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, "active": True},
         {"name": services.API_SERVICE, "active": True},
+        {"name": services.WORKER_SERVICE, "active": True},
         {"name": services.FRONTEND_SERVICE, "active": True},
     ]
 
@@ -209,6 +211,12 @@ def test_runtime_descriptor_for_container_mode(tmp_path: Path, monkeypatch) -> N
             "label": "API backend log",
             "path": "docker:biomodstack-api",
             "fallback_path": str(services.API_LOG),
+        },
+        {
+            "id": "worker",
+            "label": "Background worker log",
+            "path": "docker:biomodstack-worker",
+            "fallback_path": str(services.WORKER_LOG),
         },
         {
             "id": "frontend",
@@ -632,6 +640,7 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
         services.WORKFLOW_ROOT_SLICE,
         services.DEVELOPMENT_WORKFLOW_SLICE,
         services.API_SERVICE,
+        services.WORKER_SERVICE,
         services.FRONTEND_SERVICE,
         services.TELEMETRY_SERVICE,
         services.MOBILE_UPDATE_PUBLISHER_SERVICE,
@@ -703,7 +712,7 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     target_unit = units[services.DEV_TARGET_UNIT]
     assert (
         f"Wants={services.TELEMETRY_SERVICE} {services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE} {services.WORKFLOW_ROOT_SLICE} "
-        f"{services.DEVELOPMENT_WORKFLOW_SLICE} {services.API_SERVICE} {services.FRONTEND_SERVICE}"
+        f"{services.DEVELOPMENT_WORKFLOW_SLICE} {services.API_SERVICE} {services.WORKER_SERVICE} {services.FRONTEND_SERVICE}"
         in target_unit
     )
     assert services.TAILNET_GLOBAL_SERVICE not in target_unit
@@ -772,7 +781,7 @@ def test_start_all_dev_enables_global_publisher_without_runtime_ownership(monkey
         services,
         "service_is_active",
         lambda service_name, project_root=None: service_name
-        in {services.TELEMETRY_SERVICE, services.API_SERVICE, services.FRONTEND_SERVICE, services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE},
+        in {services.TELEMETRY_SERVICE, services.API_SERVICE, services.WORKER_SERVICE, services.FRONTEND_SERVICE, services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE},
     )
     monkeypatch.setattr(services, "url_is_ready", lambda *args, **kwargs: True)
     monkeypatch.setattr(
@@ -818,7 +827,7 @@ def test_stop_all_dev_never_stops_global_mobile_update_publisher(monkeypatch, tm
 
     services.stop_all(project_root=project_root, runtime_mode="dev")
 
-    assert systemctl_calls == [("stop", services.DEV_TARGET_UNIT, services.FRONTEND_SERVICE)]
+    assert systemctl_calls == [("stop", services.DEV_TARGET_UNIT, services.FRONTEND_SERVICE, services.WORKER_SERVICE)]
     assert all(services.MOBILE_UPDATE_PUBLISHER_SERVICE not in call for call in systemctl_calls)
 
 
@@ -1374,7 +1383,7 @@ def test_start_all_dev_mode_keeps_container_runtime_and_starts_only_dev_frontend
 
     assert calls == [
         ("ensure", "dev"),
-        ("systemctl", ("start", services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, services.TELEMETRY_SERVICE, services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT)),
+        ("systemctl", ("start", services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, services.TELEMETRY_SERVICE, services.WORKER_SERVICE, services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT)),
         ("wait", services.workflow_adapter_health_url_for_lane(services.DEVELOPMENT_LANE)),
         ("wait", services.runtime_api_health_url("dev", project_root=project_root)),
         ("wait", "http://127.0.0.1:18082/"),
@@ -1393,7 +1402,7 @@ def test_start_all_dev_mode_starts_missing_telemetry_when_api_and_frontend_are_a
     monkeypatch.setattr(
         services,
         "service_is_active",
-        lambda service_name, project_root=None: service_name in {services.API_SERVICE, services.FRONTEND_SERVICE},
+        lambda service_name, project_root=None: service_name in {services.API_SERVICE, services.WORKER_SERVICE, services.FRONTEND_SERVICE},
     )
     monkeypatch.setattr(
         services,
@@ -1482,12 +1491,14 @@ def test_status_lines_do_not_mutate_runtime_state(monkeypatch, tmp_path: Path) -
             "runtime_mode": "dev",
             "services": [
                 {"name": services.API_SERVICE, "active": True},
+                {"name": services.WORKER_SERVICE, "active": True},
                 {"name": services.FRONTEND_SERVICE, "active": False},
             ],
             "health": {"api_ready": True, "frontend_ready": False},
             "frontend_url": "http://127.0.0.1:5173/",
             "logs": [
                 {"id": "api", "label": "API log", "path": str(services.API_LOG)},
+                {"id": "worker", "label": "Background worker log", "path": str(services.WORKER_LOG)},
                 {"id": "frontend", "label": "Frontend log", "path": str(services.FRONTEND_LOG)},
             ],
         },
@@ -1497,8 +1508,10 @@ def test_status_lines_do_not_mutate_runtime_state(monkeypatch, tmp_path: Path) -
 
     assert lines == [
         f"API: ready ({services.runtime_api_health_url('dev', project_root=project_root)})",
+        f"Worker: active ({services.WORKER_SERVICE})",
         f"Frontend: not ready ({services.FRONTEND_SERVICE} unit inactive; http://127.0.0.1:5173/)",
         f"API log: {services.API_LOG}",
+        f"Worker log: {services.WORKER_LOG}",
         f"Frontend log: {services.FRONTEND_LOG}",
     ]
 
@@ -1698,9 +1711,9 @@ def test_restart_all_dev_waits_for_adapter_before_api_and_frontend(
 
     assert ("systemctl", ("restart", services.TELEMETRY_SERVICE)) in calls
     assert calls.index(("systemctl", ("restart", services.TELEMETRY_SERVICE))) < calls.index(
-        ("systemctl", ("stop", services.DEV_TARGET_UNIT, services.FRONTEND_SERVICE))
+        ("systemctl", ("stop", services.DEV_TARGET_UNIT, services.FRONTEND_SERVICE, services.WORKER_SERVICE))
     )
-    reset = calls.index(("systemctl", ("reset-failed", services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, services.API_SERVICE, services.FRONTEND_SERVICE)))
+    reset = calls.index(("systemctl", ("reset-failed", services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, services.API_SERVICE, services.WORKER_SERVICE, services.FRONTEND_SERVICE)))
     assert reset < next(i for i, call in enumerate(calls) if call[0] == "systemctl" and call[1][0] == "start")
     wait_calls = [call for call in calls if call[0] == "wait"]
     assert wait_calls == [
@@ -1759,14 +1772,14 @@ def test_core_runtime_compose_bounds_docker_json_logs() -> None:
     assert "x-bms-json-logging: &bms-json-logging" in compose
     assert "max-size: ${BMS_DOCKER_LOG_MAX_SIZE:-10m}" in compose
     assert "max-file: \"${BMS_DOCKER_LOG_MAX_FILE:-5}\"" in compose
-    assert compose.count("logging: *bms-json-logging") == 4
+    assert compose.count("logging: *bms-json-logging") == 5
 
 
 def test_core_runtime_compose_disables_docker_restart_policy() -> None:
     compose = (services.get_project_root() / "compose.core-runtime.yml").read_text(encoding="utf-8")
 
     assert "restart: unless-stopped" not in compose
-    assert compose.count('restart: "no"') == 4
+    assert compose.count('restart: "no"') == 5
 
 
 def test_stop_all_container_mode_is_prod_scoped(monkeypatch, tmp_path: Path) -> None:
@@ -1822,7 +1835,7 @@ def test_stop_all_dev_mode_stops_dev_frontend_without_touching_container_api(mon
 
     assert calls == [
         ("ensure", "dev"),
-        ("systemctl", ("stop", services.DEV_TARGET_UNIT, services.FRONTEND_SERVICE)),
+        ("systemctl", ("stop", services.DEV_TARGET_UNIT, services.FRONTEND_SERVICE, services.WORKER_SERVICE)),
         ("cleanup", "frontend"),
     ]
 

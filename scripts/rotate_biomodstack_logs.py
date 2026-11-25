@@ -14,6 +14,7 @@ STATE_HOME = Path(os.getenv("XDG_STATE_HOME", str(Path.home() / ".local" / "stat
 LOG_DIR = STATE_HOME / "biomodstack" / "logs"
 LOG_PATHS = [
     LOG_DIR / "api.log",
+    LOG_DIR / "worker.log",
     LOG_DIR / "frontend.log",
     LOG_DIR / "workflow-adapter.log",
     LOG_DIR / "core-runtime.log",

@@ -57,10 +57,68 @@ def derive(raw, previous):
 
 
 class RemoteTelemetry:
-    def __init__(self):
+    def __init__(self, *, persist: bool = False):
         self.entries = {}
         self.epoch = uuid.uuid4().hex
         self.sequence = 0
+        self._persist = persist
+
+    @staticmethod
+    def _snapshot_path() -> Path:
+        from paths import get_data_dir
+        return get_data_dir() / "remote_telemetry_state.json"
+
+    @staticmethod
+    def _key_str(key: tuple) -> str:
+        return json.dumps(list(key), separators=(",", ":"))
+
+    def _write_snapshot(self) -> None:
+        if not self._persist:
+            return
+        try:
+            path = self._snapshot_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "epoch": self.epoch,
+                "sequence": self.sequence,
+                "entries": {
+                    self._key_str(key): {
+                        "epoch": entry.get("epoch", self.epoch),
+                        "history": [
+                            [seq, wall_ts, sample]
+                            for seq, _mono, wall_ts, sample in entry["history"]
+                        ],
+                    }
+                    for key, entry in self.entries.items()
+                    if entry.get("history")
+                },
+            }
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            pass
+
+    def _load_shared_entry(self, key: tuple) -> tuple[dict | None, int | None]:
+        if not self._persist:
+            return None, None
+        try:
+            path = self._snapshot_path()
+            if not path.is_file():
+                return None, None
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            raw_entry = (payload.get("entries") or {}).get(self._key_str(key))
+            if not isinstance(raw_entry, dict) or not raw_entry.get("history"):
+                return None, None
+            seq = int(payload.get("sequence", 0))
+            history = deque(
+                (int(item[0]), float(item[1]), item[2])
+                for item in raw_entry["history"]
+                if isinstance(item, list) and len(item) == 3
+            )
+            return {"epoch": raw_entry.get("epoch", payload.get("epoch", self.epoch)), "history": history}, seq
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return None, None
 
     def read(self, target, since=None, *, include_history=True):
         from .targets import _target_response, telemetry_eligible
@@ -70,12 +128,19 @@ class RemoteTelemetry:
         if target is None or not telemetry_eligible(target):
             return base
         base['target'] = _target_response(target).model_dump(mode='json')
-        entry = self.entries.get(identity(target))
+        key = identity(target)
+        entry = self.entries.get(key)
+        shared_seq = None
+        using_wall_clock = False
+        if not entry or not entry['history']:
+            entry, shared_seq = self._load_shared_entry(key)
+            using_wall_clock = entry is not None
         if not entry or not entry['history']:
             return {**base, 'error': 'Waiting for background worker sample'}
         stream = entry.get('epoch', self.epoch)
-        base['cursor'] = f'{stream}:{self.sequence}'
-        now = time.monotonic()
+        current_sequence = shared_seq if shared_seq is not None else self.sequence
+        base['cursor'] = f'{stream}:{current_sequence}'
+        now = time.time() if using_wall_clock else time.monotonic()
         self._prune(entry, now)
         if not entry['history']:
             return {**base, 'error': 'Remote telemetry has expired'}
@@ -87,13 +152,15 @@ class RemoteTelemetry:
                     cursor = int(value)
             except (ValueError, TypeError):
                 pass
-        base['reset'] = cursor < 0 or cursor > self.sequence
+        base['reset'] = cursor < 0 or cursor > current_sequence
         if base['reset']:
             cursor = -1
         latest = entry['history'][-1]
-        base.update(deepcopy(latest[2]))
-        base['history'] = [deepcopy(sample) for seq, _, sample in entry['history'] if seq > cursor] if include_history else []
-        if latest[2]['available'] and now - latest[1] > FRESH_SECONDS:
+        latest_sample = latest[-1]
+        latest_ts = latest[1]
+        base.update(deepcopy(latest_sample))
+        base['history'] = [deepcopy(item[-1]) for item in entry['history'] if item[0] > cursor] if include_history else []
+        if latest_sample['available'] and now - latest_ts > FRESH_SECONDS:
             base.update(available=False, gpus=[], error='Remote telemetry is stale')
         return base
 
@@ -156,8 +223,10 @@ class RemoteTelemetry:
         sample['collection_duration_ms'] = round((time.monotonic() - started) * 1000, 2)
         self.sequence += 1
         sample['sequence'] = self.sequence
-        entry['history'].append((self.sequence, observed, sample))
+        wall_observed = time.time() - max(0.0, time.monotonic() - observed)
+        entry['history'].append((self.sequence, observed, wall_observed, sample))
         self._prune(entry, time.monotonic())
+        self._write_snapshot()
         # Success: period is INTERVAL from collection START (collection time
         # is not added). Failures keep the backoff measured from completion.
         if entry['failures']:
@@ -208,6 +277,7 @@ class RemoteTelemetry:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             self.entries.clear()
+            self._write_snapshot()
 
 
-remote_telemetry = RemoteTelemetry()
+remote_telemetry = RemoteTelemetry(persist=True)

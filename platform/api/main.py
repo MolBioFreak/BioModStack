@@ -38,22 +38,15 @@ from runtime_policy import (
     workflow_mutation_admission,
 )
 from biomodstack_runtime_profile import install_feature_enabled
-from services.analysis_worker import AnalysisWorker
-from services.boltz_api_jobs import BoltzApiJobWorker
-from services.external_imports.worker import ExternalImportWorker
-from services.gpu_orchestrator import GPUOrchestrator
-from services.md.reconcile import MdReconcilerWorker
 from services.ont_raw_signal_worker import OntRawSignalWorker
 from services.ont_signal_worker import OntSignalWorker
-from services.frustrampnn.statistics_jobs import FrustraMPNNStatisticsWorker
 from services.global_experiments.worker import (
     GlobalExperimentWorker,
     install_global_experiment_worker,
 )
 from services.ngs_molbio_n5 import reconcile_startup_admissions
-from routers.gpu import get_gpu_stats
-from services.workflow_adapter import workflow_adapter_base_url
 from services.restriction_catalog import catalog_authority
+from worker import wait_for_workflow_adapter_admission  # noqa: F401 - compatibility re-export
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -64,108 +57,22 @@ for _noisy in ("httpx", "httpcore"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-# Global orchestrator instance
-_orchestrator: GPUOrchestrator = None
-_analysis_worker: AnalysisWorker = None
-_external_import_worker: ExternalImportWorker | None = None
-_boltz_api_job_worker: BoltzApiJobWorker | None = None
-_md_reconciler: MdReconcilerWorker | None = None
+# API-owned background controllers (remaining loops live in worker.py / biomodstack-worker).
 _global_experiment_worker: GlobalExperimentWorker | None = None
 _ont_raw_signal_worker: OntRawSignalWorker | None = None
 _ont_signal_worker: OntSignalWorker | None = None
-_frustrampnn_statistics_worker: FrustraMPNNStatisticsWorker | None = None
 _ont_run_monitor = None
-_adapter_wait_task: asyncio.Task[None] | None = None
-
-
-async def _start_workflow_orchestrator() -> None:
-    global _orchestrator
-    if _orchestrator is not None:
-        return
-    _orchestrator = GPUOrchestrator(
-        db_session_factory=async_session,
-        get_gpu_stats_fn=get_gpu_stats,
-        launch_nextflow_job_fn=_orchestrator_launch_job,
-        poll_interval=3.0,
-    )
-    await _orchestrator.start()
-    logger.info("[STARTUP] GPU Orchestrator started")
-
-
-async def _wait_and_start_workflow_orchestrator(
-    *,
-    poll_interval_seconds: float = 0.5,
-) -> None:
-    """Wait in the background until the workflow adapter answers, then start the scheduler once."""
-    base_url = workflow_adapter_base_url()
-    if not base_url:
-        await _start_workflow_orchestrator()
-        return
-    health_url = f"{base_url}/api/workflow-adapter/health"
-    while True:
-        ready, _ = await http_readiness(health_url)
-        if ready:
-            await _start_workflow_orchestrator()
-            return
-        await asyncio.sleep(max(0.05, float(poll_interval_seconds)))
-
-
-async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
-    """Delegate a scheduler-owned job whose durable state is already running."""
-    from services.nextflow import launch_nextflow_job_detached
-
-    logger.info(f"[ORCHESTRATOR] Launching job {job_id} on GPU {params.get('gpu_id', 0)}")
-    launch_nextflow_job_detached(
-        job_id=job_id,
-        model_id=model_id,
-        mode=mode,
-        params=params,
-        output_dir=output_dir,
-        allow_running_job=True,
-    )
-
-
-async def wait_for_workflow_adapter_admission(
-    *,
-    timeout_seconds: float = 30.0,
-    poll_interval_seconds: float = 0.25,
-) -> None:
-    """Block scheduler admission until the configured adapter answers health probes."""
-    base_url = workflow_adapter_base_url()
-    if not base_url:
-        return
-    health_url = f"{base_url}/api/workflow-adapter/health"
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + max(0.0, float(timeout_seconds))
-    last_status = "unavailable"
-    while True:
-        ready, last_status = await http_readiness(health_url)
-        if ready:
-            return
-        if loop.time() >= deadline:
-            raise RuntimeError(
-                f"Configured workflow adapter is not ready for scheduler admission: {last_status}"
-            )
-        await asyncio.sleep(max(0.0, float(poll_interval_seconds)))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize database and GPU orchestrator on startup."""
-    global _orchestrator
-    global _analysis_worker
-    global _external_import_worker
-    global _boltz_api_job_worker
-    global _md_reconciler
+    """Initialize databases and API-owned controllers on startup."""
     global _global_experiment_worker
     global _ont_raw_signal_worker
     global _ont_signal_worker
-    global _frustrampnn_statistics_worker
-    global _adapter_wait_task
     bioxp_runtime = None
     global _ont_run_monitor
     ngs_ont_enabled = install_feature_enabled("ngs_ont")
-    protein_compute_enabled = install_feature_enabled("protein_compute")
     bioxp_enabled = install_feature_enabled("bioxp")
     
     # Required checked-in scientific authority must be complete before workers start.
@@ -173,23 +80,12 @@ async def lifespan(app: FastAPI):
 
     # Initialize independently owned core, global experiment, and MolBio state stores (fatal on error).
     await init_db()
-    from services.remote_execution.targets import AttachmentController, invalidate_vast_inventory, run_vast_inventory_refresh
+    from services.remote_execution.targets import AttachmentController
     from services.remote_execution.preloading import PreloadController
     app.state.preload_controller = PreloadController(async_session)
     await app.state.preload_controller.recover()
     app.state.attachment_controller = AttachmentController(async_session)
     await app.state.attachment_controller.recover()
-    async with async_session() as inventory_session:
-        await invalidate_vast_inventory(inventory_session)
-    vast_inventory_stop = asyncio.Event()
-    vast_inventory_task = asyncio.create_task(
-        run_vast_inventory_refresh(async_session, vast_inventory_stop), name="vast-inventory-refresh"
-    )
-    from services.remote_execution.telemetry import remote_telemetry
-    remote_telemetry_stop = asyncio.Event()
-    remote_telemetry_task = asyncio.create_task(
-        remote_telemetry.run(async_session, remote_telemetry_stop), name="remote-telemetry"
-    )
     await init_experiment_db()
     await init_molbio_db()
 
@@ -202,13 +98,6 @@ async def lifespan(app: FastAPI):
             logger.warning("[STARTUP] MolBio/NGS store unavailable (NGS routes will return 503): %s", exc)
     else:
         set_molbio_ngs_startup_error(None)
-
-    if protein_compute_enabled:
-        _frustrampnn_statistics_worker = FrustraMPNNStatisticsWorker(async_session)
-        await _frustrampnn_statistics_worker.start()
-        logger.info("[STARTUP] FrustraMPNN statistics worker started")
-    else:
-        _frustrampnn_statistics_worker = None
 
     if ngs_ont_enabled and get_molbio_ngs_startup_error() is None:
         try:
@@ -227,14 +116,10 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning("[STARTUP] NGS startup admission reconciliation failed: %s", exc)
     
-    # Initialize workflow workers only when this runtime is allowed to own workflow launches.
-    # Never block API boot waiting on the workflow adapter; start the scheduler once it answers.
-    _orchestrator = None
-    _adapter_wait_task = None
+    # Initialize GlobalExperimentWorker only when this runtime owns workflow launches.
+    # Background scheduling, MD reconciliation, remote telemetry/inventory, analysis,
+    # external imports, Boltz API, and FrustraMPNN statistics run in biomodstack-worker.
     if workflow_launches_allowed():
-        _md_reconciler = MdReconcilerWorker(async_session, poll_interval=5.0)
-        await _md_reconciler.start()
-        logger.info("[STARTUP] MD lifecycle reconciler started")
         _global_experiment_worker = GlobalExperimentWorker(
             experiment_session_factory,
             async_session,
@@ -247,29 +132,11 @@ async def lifespan(app: FastAPI):
             "[STARTUP] Global experiment dispatcher/reconciler lease=%s",
             _global_experiment_worker.lease_state,
         )
-        adapter_url = workflow_adapter_base_url()
-        if not adapter_url:
-            await _start_workflow_orchestrator()
-        else:
-            adapter_ready, adapter_status = await http_readiness(f"{adapter_url}/api/workflow-adapter/health")
-            if adapter_ready:
-                await _start_workflow_orchestrator()
-            else:
-                logger.warning(
-                    "[STARTUP] Workflow adapter not ready (%s); API starting and deferring GPU Orchestrator until adapter answers",
-                    adapter_status,
-                )
-                _adapter_wait_task = asyncio.create_task(
-                    _wait_and_start_workflow_orchestrator(),
-                    name="workflow-adapter-admission-wait",
-                )
     else:
-        _orchestrator = None
-        _md_reconciler = None
         _global_experiment_worker = None
         _ont_raw_signal_worker = None
         install_global_experiment_worker(None)
-        logger.warning("[STARTUP] %s", workflow_launch_block_detail("start the GPU workflow scheduler"))
+        logger.warning("[STARTUP] %s", workflow_launch_block_detail("start the global experiment worker"))
 
     if ngs_ont_enabled:
         from services.ont_local_images import (
@@ -319,25 +186,6 @@ async def lifespan(app: FastAPI):
         _ont_run_monitor = None
         _ont_signal_worker = None
 
-    _analysis_worker = AnalysisWorker(
-        db_session_factory=async_session,
-        poll_interval=2.0,
-    )
-    
-    await _analysis_worker.start()
-    logger.info("[STARTUP] Analysis worker started")
-
-    _external_import_worker = ExternalImportWorker(async_session, poll_interval=2.0)
-    await _external_import_worker.start()
-    logger.info("[STARTUP] External result import worker started")
-
-    if protein_compute_enabled:
-        _boltz_api_job_worker = BoltzApiJobWorker(async_session)
-        await _boltz_api_job_worker.start()
-        logger.info("[STARTUP] Boltz API submission worker started")
-    else:
-        _boltz_api_job_worker = None
-
     app.state.bioxp_runtime = None
     app.state.bioxp_startup_error = None
     if bioxp_enabled:
@@ -363,46 +211,16 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Cleanup on shutdown. Cancel the two polling loops rather than wait for
-    # them: the Vast refresh can sit in a 15 s provider request and remote
-    # telemetry in an SSH probe, and waiting for either pushed the stop past
-    # systemd's 20 s TimeoutStopSec, so restarts ended in SIGKILL.
-    if _adapter_wait_task is not None:
-        _adapter_wait_task.cancel()
-        await asyncio.gather(_adapter_wait_task, return_exceptions=True)
-        _adapter_wait_task = None
-    remote_telemetry_stop.set()
-    vast_inventory_stop.set()
-    for task in (remote_telemetry_task, vast_inventory_task):
-        task.cancel()
-    await asyncio.gather(remote_telemetry_task, vast_inventory_task, return_exceptions=True)
+    # Cleanup API-owned controllers on shutdown.
     await app.state.preload_controller.close()
     await app.state.attachment_controller.close()
     if bioxp_runtime is not None:
         await bioxp_runtime.close()
         logger.info("[SHUTDOWN] BioXP control plane closed")
-    if _orchestrator:
-        await _orchestrator.stop()
-        logger.info("[SHUTDOWN] GPU Orchestrator stopped")
-    if _md_reconciler:
-        await _md_reconciler.stop()
-        logger.info("[SHUTDOWN] MD lifecycle reconciler stopped")
     if _global_experiment_worker:
         await _global_experiment_worker.stop()
         install_global_experiment_worker(None)
         logger.info("[SHUTDOWN] Global experiment dispatcher/reconciler stopped")
-    if _analysis_worker:
-        await _analysis_worker.stop()
-        logger.info("[SHUTDOWN] Analysis worker stopped")
-    if _frustrampnn_statistics_worker:
-        await _frustrampnn_statistics_worker.stop()
-        logger.info("[SHUTDOWN] FrustraMPNN statistics worker stopped")
-    if _boltz_api_job_worker:
-        await _boltz_api_job_worker.stop()
-        logger.info("[SHUTDOWN] Boltz API submission worker stopped")
-    if _external_import_worker:
-        await _external_import_worker.stop()
-        logger.info("[SHUTDOWN] External result import worker stopped")
     if _ont_raw_signal_worker:
         await _ont_raw_signal_worker.stop()
         logger.info("[SHUTDOWN] ONT raw-signal lease-recovery worker stopped")
