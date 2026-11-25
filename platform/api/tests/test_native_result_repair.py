@@ -88,7 +88,7 @@ async def test_addressed_read_preserves_trust_boundary(tmp_path, damage):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('model', ['esmfold2', 'esmfold2_experimental', 'protenix', 'fampnn', 'boltzgen_child', 'antibody_child'])
+@pytest.mark.parametrize('model', ['esmfold2', 'protenix', 'fampnn', 'boltzgen_child', 'antibody_child'])
 async def test_marked_spatial_applicability_agrees_with_routes(tmp_path, monkeypatch, model):
     publication(tmp_path)
     factory, engine = await setup(tmp_path)
@@ -123,7 +123,7 @@ async def test_marked_spatial_applicability_agrees_with_routes(tmp_path, monkeyp
                 assert detail.status_code == 200, detail.text
                 assert detail.json()['scientific_structure_document'] is None
                 structure = await client.get(f'/designs/{row.id}/pdb')
-                if model in {'protenix', 'esmfold2', 'esmfold2_experimental'}:
+                if model in {'protenix', 'esmfold2'}:
                     assert structure.status_code == 409  # copied Boltz custody is not Protenix authority
                 else:
                     assert structure.status_code == 200 and b'ATOM' in structure.content
@@ -132,7 +132,7 @@ async def test_marked_spatial_applicability_agrees_with_routes(tmp_path, monkeyp
                     assert response.status_code == 200, response.text
                     assert response.json()['reason'] == ('missing_or_invalid_protenix_native_evidence'
                         if model == 'protenix' else 'missing_or_invalid_esmfold2_native_evidence'
-                        if model in {'esmfold2', 'esmfold2_experimental'} else 'unsupported_model_native_spatial_metric')
+                        if model == 'esmfold2' else 'unsupported_model_native_spatial_metric')
             from routers.designs import get_residue_metrics, get_chain_metrics, get_pae_data
             from services.core_protein_scientific_contract import compute_persisted_native_metric, compute_persisted_pae
             for name, endpoint in [('residue_plddt', get_residue_metrics), ('chain_metrics', get_chain_metrics)]:
@@ -141,13 +141,13 @@ async def test_marked_spatial_applicability_agrees_with_routes(tmp_path, monkeyp
                 assert direct.model_dump(mode='json') == expected.model_dump(mode='json')
                 assert direct.reason == ('missing_or_invalid_protenix_native_evidence'
                     if model == 'protenix' else 'missing_or_invalid_esmfold2_native_evidence'
-                        if model in {'esmfold2', 'esmfold2_experimental'} else 'unsupported_model_native_spatial_metric')
+                        if model == 'esmfold2' else 'unsupported_model_native_spatial_metric')
             expected, _, _ = await compute_persisted_pae(row, {}, session)
             direct = await get_pae_data(row.id, 300, session)
             assert direct.reason == expected['reason']
             from services.analysis_subprocess import _dispatch_ipsae_interface
             assert (await _dispatch_ipsae_interface(row, {}, session))[0]['reason'] == (
-                'missing_or_invalid_producer_identity_or_roles' if model in {'protenix', 'esmfold2', 'esmfold2_experimental'} else expected['reason'])
+                'missing_or_invalid_producer_identity_or_roles' if model in {'protenix', 'esmfold2'} else expected['reason'])
             if model == 'esmfold2':
                 # Actual persisted-analysis worker must publish the same explicit
                 # unsupported state as the direct endpoint, not a Boltz error.

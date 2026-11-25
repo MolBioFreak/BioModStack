@@ -38,7 +38,6 @@ PROTECTED_HIGH_PRESSURE_MODELS = {
     "maturation_child",
     "ppiflow",
     "esmfold2",
-    "esmfold2_experimental",
 }
 
 
@@ -78,10 +77,8 @@ def test_scheduler_defaults_keep_headroom_and_bound_high_pressure_models() -> No
     assert PROTECTED_HIGH_PRESSURE_MODELS <= gpu_config.PROTECTED_CONCURRENCY_LIMITS
     assert all(config["concurrency_limits"][model] >= 1 for model in PROTECTED_HIGH_PRESSURE_MODELS)
     assert config["concurrency_limits"]["esmfold2"] == 1
-    assert config["concurrency_limits"]["esmfold2_experimental"] == 1
     assert VRAM_PROFILES["esmfold2"]["base"] >= 22_000
-    assert VRAM_PROFILES["esmfold2_experimental"]["base"] >= 22_000
-    assert {"esmfold2", "esmfold2_experimental"} <= HEAVY_MODELS
+    assert "esmfold2" in HEAVY_MODELS
     assert "esmfold" not in HEAVY_MODELS
     assert SchedulerGlobalConfig().vram_safety_margin_mb == config["global"]["vram_safety_margin_mb"]
     assert SchedulerGPUOverride().vram_safety_margin_mb is None
@@ -175,7 +172,7 @@ async def test_protected_concurrency_limit_rejects_delete(monkeypatch) -> None:
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await gpu_router.delete_concurrency_limit("esmfold2_experimental")
+        await gpu_router.delete_concurrency_limit("esmfold2")
 
     assert exc_info.value.status_code == 400
     assert "mandatory safety cap" in exc_info.value.detail

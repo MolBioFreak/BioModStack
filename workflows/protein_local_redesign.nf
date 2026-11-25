@@ -6,7 +6,7 @@ params.plr_validator_suite_active = true
 include { RunFAMPNN ; FilterFAMPNN } from '../modules/fampnn.nf'
 include { RunMPNN ; FilterMPNN } from '../modules/proteinmpnn.nf'
 include { PrepBoltz ; RunBoltz } from '../modules/boltz.nf'
-include { ESMFold2FromPdb } from '../modules/esmfold2_experimental.nf'
+include { ESMFold2FromPdb } from '../modules/esmfold2.nf'
 include { ProtenixFromComplex } from '../modules/protenix.nf'
 
 def shellQuote(value) {

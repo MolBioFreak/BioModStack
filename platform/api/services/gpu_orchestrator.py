@@ -268,7 +268,6 @@ VRAM_PROFILES = {
     'antibody_child': {'base': 6000, 'scale': 25},  # Antibody validation (Boltz + scoring) ~6-8GB
     'maturation_child': {'base': 18500, 'scale': 25},  # PPIFlow child jobs need one-per-24/32GB GPU, not startup VRAM
     'esmfold2': {'base': 22000, 'scale': 35},  # Canonical ESMFold2 high-pressure profile
-    'esmfold2_experimental': {'base': 22000, 'scale': 35},  # Compatibility alias
 
     'nanopore': {'base': 12288, 'scale': 0},        # Display estimate; packing books nanopore_vram_fraction of the card
     'default': {'base': 6000, 'scale': 25},     # Conservative fallback
@@ -280,7 +279,6 @@ HEAVY_MODELS = {
     'rf3',
     'maturation_child',
     'esmfold2',
-    'esmfold2_experimental',
 }
 PROTENIX_MODELS = {'protenix', 'protenix_esm', 'protenix_mini_esm'}
 

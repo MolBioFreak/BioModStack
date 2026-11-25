@@ -127,7 +127,7 @@ def _should_normalize_antibody_job_params(
     if normalized_model_id in {"bindcraft2", "ligandmpnn"}:
         return False
     if (
-        normalized_model_id in {"boltz2", "protenix", "esmfold2", "esmfold2_experimental", "rf3", "template_structure_prediction"}
+        normalized_model_id in {"boltz2", "protenix", "esmfold2", "rf3", "template_structure_prediction"}
         and normalized_mode in {"predict", "complex", "structure_prediction"}
         and not _is_antibody_launch(model_id, params)
     ):
@@ -412,7 +412,7 @@ def _default_structure_prediction_pred_method(model_id: str) -> str:
         return "rf3"
     if normalized_model_id == "protenix":
         return "protenix"
-    if normalized_model_id in {"esmfold2", "esmfold2_experimental"}:
+    if normalized_model_id == "esmfold2":
         return "esmfold2"
     return "boltz"
 
@@ -461,7 +461,7 @@ def _normalize_structure_prediction_pred_method(
         raise HTTPException(status_code=422, detail={"validation_errors": [
             f"Unsupported structure predictor: {requested_pred_method}; explicit selections are never replaced"
         ]})
-    if normalized_model_id in {"esmfold2", "esmfold2_experimental"} and requested_pred_method == "boltz_protenix":
+    if normalized_model_id == "esmfold2" and requested_pred_method == "boltz_protenix":
         raise HTTPException(status_code=422, detail={"validation_errors": [
             "ESMFold2 cannot execute boltz_protenix; use the Boltz or Protenix prediction route"
         ]})

@@ -954,18 +954,16 @@ test('mounted canonical viewer navigation and lifecycle controls use typed CM ro
     retried.client.clear();
 });
 
-test('mounted JobSubmission catalog routes open the canonical and legacy CM launchers', async () => {
+test('mounted JobSubmission catalog routes open the canonical CM launcher', async () => {
     const originalAdapter = api.defaults.adapter;
     api.defaults.adapter = async (config) => {
         const url = String(config.url || '');
         let data: unknown = [];
         if (url === '/api/models') data = [
             { id: 'conformational_mapping', name: 'Conformational Mapping', category: 'structure' },
-            { id: 'confornets_experimental', name: 'ConforNets', category: 'structure' },
         ];
         else if (url === '/api/templates') data = [
             { id: 'conformational_mapping', name: 'Conformational Mapping', description: 'Canonical typed CM' },
-            { id: 'confornets_experimental', name: 'ConforNets', description: 'Legacy CM entry' },
         ];
         else if (url.startsWith('/api/templates/')) {
             const id = url.split('/').at(-1)!;
@@ -974,7 +972,7 @@ test('mounted JobSubmission catalog routes open the canonical and legacy CM laun
         return { data, status: 200, statusText: 'OK', headers: {}, config };
     };
     try {
-        for (const templateId of ['conformational_mapping', 'confornets_experimental']) {
+        for (const templateId of ['conformational_mapping']) {
             const queryClient = client();
             let renderer: ReactTestRenderer | undefined;
             try {

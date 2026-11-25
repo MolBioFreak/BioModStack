@@ -48,7 +48,7 @@ def request_params():
                     {'type': 'ligand', 'id': 'E', 'ccd': ['GTP']}])
 
 
-@pytest.mark.parametrize('model', ['esmfold2', 'esmfold2_experimental'])
+@pytest.mark.parametrize('model', ['esmfold2'])
 def test_explicit_opt_in_schema_and_old_defaults(model):
     from model_registry import ModelRegistry
     fields = {p.name: p for p in ModelRegistry().get_model(model).params}

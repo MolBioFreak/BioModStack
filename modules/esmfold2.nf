@@ -68,7 +68,7 @@ def esmfold2ContractInputs(inputs, settings) {
 
 // Future-only contract lane; legacy callers retain their existing arity/defaults.
 // Closed outputs retain independent names; cache hits republish too.
-def esmfold2experimentalPublishMode(workDir, outputDir) {
+def esmfold2PublishMode(workDir, outputDir) {
     def destination = file(outputDir).toAbsolutePath()
     while (!java.nio.file.Files.exists(destination)) destination = destination.parent
     java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
@@ -79,8 +79,8 @@ process ESMFold2MSAPredict {
     label 'ESMFold2'
     label 'gpu'
     stageInMode 'copy'
-    publishDir "${params.out_dir}/final/esmfold2/${request.esmf_sequence_name}", mode: "${esmfold2experimentalPublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*'
-    publishDir "${params.out_dir}/pdb_files", mode: "${esmfold2experimentalPublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*.cif'
+    publishDir "${params.out_dir}/final/esmfold2/${request.esmf_sequence_name}", mode: "${esmfold2PublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*'
+    publishDir "${params.out_dir}/pdb_files", mode: "${esmfold2PublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*.cif'
     input:
     tuple val(producer_meta), val(request), val(source_paths), path(staged_files, stageAs: 'inputs/input??/*')
     output:
@@ -124,11 +124,11 @@ process ESMFold2Predict {
     label 'ESMFold2'
     label 'gpu'
 
-    publishDir "${params.out_dir}/final/esmfold2/${sequence_name}", mode: "${esmfold2experimentalPublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*.cif'
-    publishDir "${params.out_dir}/final/esmfold2/${sequence_name}", mode: "${esmfold2experimentalPublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*.json'
-    publishDir "${params.out_dir}/final/esmfold2/${sequence_name}", mode: "${esmfold2experimentalPublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*.confidence.npz'
-    publishDir "${params.out_dir}/final/esmfold2/${sequence_name}", mode: "${esmfold2experimentalPublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*.tsv'
-    publishDir "${params.out_dir}/pdb_files", mode: "${esmfold2experimentalPublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*.cif'
+    publishDir "${params.out_dir}/final/esmfold2/${sequence_name}", mode: "${esmfold2PublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*.cif'
+    publishDir "${params.out_dir}/final/esmfold2/${sequence_name}", mode: "${esmfold2PublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*.json'
+    publishDir "${params.out_dir}/final/esmfold2/${sequence_name}", mode: "${esmfold2PublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*.confidence.npz'
+    publishDir "${params.out_dir}/final/esmfold2/${sequence_name}", mode: "${esmfold2PublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*.tsv'
+    publishDir "${params.out_dir}/pdb_files", mode: "${esmfold2PublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*.cif'
 
     input:
     tuple val(producer_meta), val(sequence), val(sequence_name)
@@ -230,7 +230,7 @@ process ESMFold2FromPdb {
     label 'gpu'
     errorStrategy 'ignore'
 
-    publishDir "${params.out_dir}/validation/esmfold2/${candidate_name}", mode: "${esmfold2experimentalPublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*'
+    publishDir "${params.out_dir}/validation/esmfold2/${candidate_name}", mode: "${esmfold2PublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*'
 
     input:
     tuple val(producer_meta), path(source_pdb), val(candidate_name)

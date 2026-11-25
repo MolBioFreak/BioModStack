@@ -135,9 +135,7 @@ test('workflow model inventory is source-grounded and exposes the total unique m
   assert.equal(workflowsById.has('protein_local_redesign'), false);
   assert.equal(workflowsById.has('protein_cad_experimental'), false);
   assert.equal(workflowsById.has('esmfold2'), false);
-  assert.deepEqual(getWorkflowModelTopics('esmfold2_experimental'), ['boltz2', 'fold_cp', 'protenix', 'esmfold2', 'frustrampnn']);
-  assert.equal(workflowsById.has('confornets_experimental'), false);
-  assert.deepEqual(getWorkflowModelTopics('confornets_experimental'), ['confornets', 'protenix']);
+  assert.deepEqual(getWorkflowModelTopics('esmfold2'), ['boltz2', 'fold_cp', 'protenix', 'esmfold2', 'frustrampnn']);
 
   for (const workflow of WORKFLOW_MODEL_INVENTORY) {
     assert.ok(workflow.sourceFiles.length > 0, `${workflow.workflowId} should name source files`);
@@ -174,9 +172,6 @@ test('JobSubmission keeps workflow cards concise, hides Advanced Models, and rou
 
   requireSnippet(source, "return 'NVIDIA Fold-CP predictor inside Structure Prediction.';");
   requireSnippet(source, 'const visibleApiTemplates = useMemo(() => visibleLauncherTemplates(');
-  assert.deepEqual(visibleLauncherTemplates([
-    { id: 'confornets_experimental' }, { id: 'conformational_mapping' },
-  ]), [{ id: 'conformational_mapping' }]);
   rejectSnippet(source, "return 'Standalone ESMFold2 protein/complex fold.';");
 
   rejectSnippet(source, "if (template.id === 'esmfold2' || template.id === 'esmfold2_experimental') return 'EF';");
@@ -200,7 +195,6 @@ test('JobSubmission keeps workflow cards concise, hides Advanced Models, and rou
   requireSnippet(source, "'Model Orchestration'");
   requireSnippet(source, "'Outputs'");
   requireSnippet(source, 'templateManagerParams');
-  requireSnippet(source, "data.model_id === 'confornets_experimental'");
   requireSnippet(source, "setSelectedTemplateId('conformational_mapping')");
   requireSnippet(source, 'const matchedApiTemplate = apiTemplateId');
   requireSnippet(source, 'setSelectedTemplateId(apiTemplateId)');

@@ -15,8 +15,8 @@ import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 
 include { ProtenixPredict ; ProtenixFromComplex ; PrepProtenixComplex } from './protenix.nf'
-include { ESMFold2Predict } from './esmfold2_experimental.nf'
-include { ESMFold2MSAPredict; esmfold2ContractInputs; esmfold2ComponentDocument } from './esmfold2_experimental.nf'
+include { ESMFold2Predict } from './esmfold2.nf'
+include { ESMFold2MSAPredict; esmfold2ContractInputs; esmfold2ComponentDocument } from './esmfold2.nf'
 
 def resolveBooleanParam(value, defaultValue) {
     if (value == null) {

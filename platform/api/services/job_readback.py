@@ -490,7 +490,7 @@ async def read_job(
         select(func.count(FrustraMPNNResult.invocation_id)).where(FrustraMPNNResult.parent_job_id == job.id)
     )).scalar_one())
     conformational_mapping_request_id = None
-    if job.model_id in {"conformational_mapping", "confornets_experimental"}:
+    if job.model_id == "conformational_mapping":
         conformational_mapping_request_id = await session.scalar(
             select(ConformationalMappingRequest.request_id).where(
                 ConformationalMappingRequest.job_id == job.id,

@@ -223,7 +223,7 @@ _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
     ),
     ResultContractDefinition(
         contract_id="structure_prediction_v1",
-        model_ids=["boltz2", "boltz_cp_experimental", "protenix", "esmfold2_experimental", "esmfold2"],
+        model_ids=["boltz2", "boltz_cp_experimental", "protenix", "esmfold2"],
         stage_families=["validation", "boltz2", "protenix", "esmfold2"],
         artifact_classes=["validated_complex", "imported_structure"],
         result_sets=["validated"],
@@ -302,7 +302,7 @@ _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
     ),
     ResultContractDefinition(
         contract_id="confornets_monomer_v1",
-        model_ids=["confornets_experimental", "confornets"],
+        model_ids=["confornets"],
         stage_families=["confornets"],
         artifact_classes=["monomer_conformation"],
         result_sets=[],

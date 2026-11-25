@@ -16,7 +16,7 @@ import { ConfidenceProfile, type ConfidenceChainMetric } from './ConfidenceProfi
 export type ConfidenceStructure = ReactNode | ((selection: readonly AtomRef[], onSelection: (selection: MetricSelection) => void, companion: ReactNode) => ReactNode);
 
 export const isStandaloneStructurePrediction = (modelId?: string | null) =>
-    ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(modelId ?? '');
+    ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2'].includes(modelId ?? '');
 const asRecord = (value: unknown): Record<string, unknown> | null => value != null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const chainId = (ref: AtomRef) => ref.authAsymId ?? ref.labelAsymId ?? '';
 const axisLabel = (ref: AtomRef) => `${chainId(ref)}:${ref.authSeqId ?? ref.labelSeqId}${ref.insertionCode ?? ''} ${ref.componentId ?? ''}${ref.labelAtomId ? ` / ${ref.labelAtomId}` : ''}`;
@@ -206,7 +206,7 @@ export function StructurePredictionResults({ designs, selectedDesignId, onSelect
     if (!enabled) return <>{typeof structure === 'function' ? structure([], () => {}, null) : structure}</>;
     if (!design) return <p>No saved predictions loaded.</p>;
     const select = onSelectDesign ?? setLocalId;
-    const labels: Record<string, string> = { protenix: 'Protenix', boltz2: 'Boltz-2', boltz_cp_experimental: 'Boltz-2 via Fold-CP', esmfold2: 'Biohub ESMFold2', esmfold2_experimental: 'Biohub ESMFold2' };
+    const labels: Record<string, string> = { protenix: 'Protenix', boltz2: 'Boltz-2', boltz_cp_experimental: 'Boltz-2 via Fold-CP', esmfold2: 'Biohub ESMFold2' };
     const external = asRecord(design.provenance?.external_import);
     const modelLabel = external?.provider === 'boltz_api' ? 'Boltz API' : labels[modelId ?? String(design.provenance?.producer_model_id ?? design.provenance?.model_id ?? '')] ?? 'Structure prediction';
     return <section aria-label="Structure prediction confidence" className="prediction-results space-y-4 text-[var(--text-primary)]">

@@ -93,7 +93,7 @@ def test_consumed_producers(tmp_path, model, mode, method, expected):
         'ProtenixPredict': protenix + f'--producer-sample ${{sequence_name}} --sequence-metadata-base64 {metadata}',
         'ProtenixFromComplex': protenix + '--producer-sample ${input_sample}',
     })
-    (tmp_path / 'esmfold2_experimental.nf').symlink_to(ROOT / 'modules/esmfold2_experimental.nf')
+    (tmp_path / 'esmfold2.nf').symlink_to(ROOT / 'modules/esmfold2.nf')
     if complex_input:
         (tmp_path / 'NO_MSA').touch()
         wf, channel = 'complex_prediction_wf', 'canonical_candidates'

@@ -89,7 +89,7 @@ def _resolve_esmfold2_final_root(output_path, job=None):
             manifest = json.loads((candidate / "manifest.json").read_text())
         except Exception:
             manifest = None
-        if isinstance(manifest, dict) and str(manifest.get("workflow") or "").strip().lower() in {"esmfold2", "esmfold2_experimental"}:
+        if isinstance(manifest, dict) and str(manifest.get("workflow") or "").strip().lower() == "esmfold2":
             return candidate
         if any(candidate.glob("*.metrics.json")) and (
             any(candidate.glob("*.cif")) or any(candidate.glob("*.mmcif")) or any(candidate.glob("*.pdb"))
@@ -104,7 +104,7 @@ async def _verified_publication(job_id, session):
     from services.core_protein_result_contract import prepare_esmfold2_publication, revalidate_prepared_publication
     with session.no_autoflush:
         job = await session.scalar(select(Job).where(Job.id == job_id))
-        if job is None or revision_for_job(job) != 1 or job.model_id not in ('esmfold2', 'esmfold2_experimental'):
+        if job is None or revision_for_job(job) != 1 or job.model_id != 'esmfold2':
             raise ValueError('missing_esmfold2_publication_authority')
         if not isinstance(job.output_dir, str) or not job.output_dir:
             raise ValueError('missing_producer_publication_root')

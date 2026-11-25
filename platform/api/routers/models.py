@@ -294,7 +294,7 @@ def _native_parameter_schema(model_id: str, mode_id: str) -> dict | None:
     if model_id == 'complexa' and mode_id in ('generate', 'evaluate'):
         from services.complexa import parameter_schema
         return parameter_schema()
-    if model_id in {'boltz2', 'esmfold2', 'esmfold2_experimental'} and mode_id in ('predict', 'complex'):
+    if model_id in {'boltz2', 'esmfold2'} and mode_id in ('predict', 'complex'):
         from services.structure_native_schemas import parameter_schema
         return parameter_schema(model_id)
     if model_id == 'protenix' and mode_id in ('predict', 'complex'):

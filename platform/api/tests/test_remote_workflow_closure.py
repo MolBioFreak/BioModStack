@@ -719,7 +719,6 @@ def test_launch_callers_structurally_share_helper_and_forward_command():
 @pytest.mark.parametrize('model,mode,entrypoint,params,expected', [
     ('protein_cad_experimental', 'design', 'protein_cad_experimental', {'pcad_backend': 'disco'}, {'PrepProteinCadRequest', 'RunDISCO'}),
     ('protein_cad_experimental', 'design', 'protein_cad_experimental', {'pcad_backend': 'laproteina'}, {'PrepProteinCadRequest', 'RunLaProteina'}),
-    ('confornets_experimental', 'design', 'confornets_experimental', {'cn_skip_msa': True}, {'PrepConforNetsRequest', 'RunConforNets', 'FinalizeConforNetsOutputs'}),
     ('boltz_cp_experimental', 'design', 'boltz_cp_experimental', {'run_frustrampnn': False}, {'RunBoltzCPExperimental', 'FinalizeBoltzCPExperimental'}),
     ('antibody_child', 'validation_batch', 'antibody_child', {'structure_validator': 'boltz2'}, {'BatchBoltzValidation', 'AlignBoltzValidation'}),
     ('protein_local_redesign', 'local_redesign', 'protein_local_redesign', {'plr_seq_method': 'mpnn'}, {'PrepProteinLocalMPNN', 'RunMPNN', 'ExportProteinLocalMPNNResults'}),
@@ -1021,7 +1020,7 @@ def test_native_process_annotations_retain_current_output_requiredness():
     'modules/ppiflow.nf', 'workflows/binder_refinement.nf',
     'workflows/maturation_child_core.nf', 'modules/protenix.nf',
     'modules/boltz_cp_experimental.nf',
-    'modules/shape_blueprint.nf', 'modules/esmfold2_experimental.nf',
+    'modules/shape_blueprint.nf', 'modules/esmfold2.nf',
 ])
 def test_refinement_publication_descriptors_match_actual_process_sections(source):
     """Reverse I/O comparison catches newly emitted outputs, not only stale ones."""

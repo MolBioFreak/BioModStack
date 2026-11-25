@@ -51,7 +51,6 @@ DEFAULT_SCHEDULER_CONFIG: Dict[str, Any] = {
         "maturation_child": 2,
         "ppiflow": 2,
         "esmfold2": 1,
-        "esmfold2_experimental": 1,
     },
 }
 
@@ -61,7 +60,6 @@ MANDATORY_CONCURRENCY_CAPS = {
     "maturation_child": 2,
     "ppiflow": 2,
     "esmfold2": 1,
-    "esmfold2_experimental": 1,
 }
 PROTECTED_CONCURRENCY_LIMITS = frozenset(MANDATORY_CONCURRENCY_CAPS)
 

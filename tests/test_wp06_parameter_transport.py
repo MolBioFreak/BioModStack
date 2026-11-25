@@ -151,7 +151,7 @@ def test_real_workflow_non_model_capture(tmp_path, monkeypatch, component_mode, 
     jar = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR', str(Path.home() / '.nextflow' / 'framework' / '25.10.1' / 'nextflow-25.10.1-one.jar')))
     if not jar.is_file():
         pytest.skip('installed native Nextflow jar unavailable; do not use production Docker wrapper')
-    module = ROOT / 'modules/esmfold2_experimental.nf'
+    module = ROOT / 'modules/esmfold2.nf'
     msa = tmp_path / 'selected.a3m'
     msa.write_text('>query\nACDE\n')
     fixture = tmp_path / 'fixture.nf'

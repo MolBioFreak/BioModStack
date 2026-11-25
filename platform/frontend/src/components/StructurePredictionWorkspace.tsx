@@ -12,7 +12,7 @@ import { usePredictionScalars, type ScalarEvidence } from './predictionScalarEvi
 import { useThemeColors } from './useThemeColors';
 import './StructurePredictionWorkspace.css';
 
-const MODEL_LABELS: Record<string, string> = { protenix: 'Protenix', boltz2: 'Boltz-2', boltz_cp_experimental: 'Boltz-2 via Fold-CP', esmfold2: 'Biohub ESMFold2', esmfold2_experimental: 'Biohub ESMFold2' };
+const MODEL_LABELS: Record<string, string> = { protenix: 'Protenix', boltz2: 'Boltz-2', boltz_cp_experimental: 'Boltz-2 via Fold-CP', esmfold2: 'Biohub ESMFold2' };
 const PLDDT_KEYS = ['complex_plddt', 'plddt', 'plddt_mean', 'plddt_overall'];
 const PDE_KEYS = ['gpde', 'complex_pde'];
 const RANK_KEYS = ['ranking_score', 'confidence_score'];

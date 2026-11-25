@@ -216,7 +216,7 @@ def nextflow(tmp_path, workflow, params, resume=False):
 
 def test_all_owned_modules_parse_without_native_execution(tmp_path):
     owners = {
-        'structure_prediction': 'BoltzFromSequenceTask', 'esmfold2_experimental': 'ESMFold2MSAPredict',
+        'structure_prediction': 'BoltzFromSequenceTask', 'esmfold2': 'ESMFold2MSAPredict',
         'boltzgen': 'CollectBoltzGenOutputs', 'caliby': 'RunCaliby', 'proteinmpnn': 'RunMPNN',
         'fampnn': 'RunFAMPNN', 'ppiflow': 'RunMaturationFAMPNN', 'compress': 'Compress',
         'boltz_cp_experimental': 'RunBoltzCPExperimental', 'binder_blind_pose': 'BinderBlindPoseESMFold2',
@@ -333,7 +333,7 @@ workflow {{ Compress('fixture', file('{source}')) }}
 
 @pytest.mark.parametrize('module,process,tree,outputs,published', [
     ('structure_prediction', 'BoltzFromSequenceTask', 'predictions', "path 'predictions/*'", ['scientific/boltz/retained/predictions/candidate.pdb', 'pdb_files/predictions/candidate.pdb']),
-    ('esmfold2_experimental', 'ESMFold2MSAPredict', 'esmfold2_results', "path 'esmfold2_results/*'", ['final/esmfold2/fixture/esmfold2_results/candidate.cif', 'pdb_files/esmfold2_results/candidate.cif']),
+    ('esmfold2', 'ESMFold2MSAPredict', 'esmfold2_results', "path 'esmfold2_results/*'", ['final/esmfold2/fixture/esmfold2_results/candidate.cif', 'pdb_files/esmfold2_results/candidate.cif']),
     ('boltzgen', 'RunBoltzGen', 'output/designs', "path 'output/designs/*'", ['pdb_files/candidate.pdb', 'collected/boltzgen_raw/candidate.pdb']),
     ('caliby', 'RunCaliby', 'results', "path 'results/*'", ['pdb_files/candidate.pdb', 'collected/caliby_raw/candidate.pdb']),
     ('proteinmpnn', 'RunMPNN', 'mpnn_canonical', "path 'mpnn_canonical/*'\n    path 'mpnn_native_output'", ['pdb_files/candidate.pdb', 'run/mpnn/raw/candidate.pdb']),
@@ -347,7 +347,7 @@ def test_literal_final_publishers_shared_payload_and_cached_republish(tmp_path, 
     helper = re.search(r'def ' + name + r'\(workDir, outputDir\) \{.*?^\}', text, re.S | re.M).group()
     block = text.split('process ' + process + ' {', 1)[1].split('    input:', 1)[0]
     directives = '\n'.join(line for line in block.splitlines() if 'publishDir ' in line and name in line)
-    extension = 'cif' if module == 'esmfold2_experimental' else 'pdb'
+    extension = 'cif' if module == 'esmfold2' else 'pdb'
     body = f"mkdir -p {tree}; printf 'INERT PUBLICATION FIXTURE' > {tree}/candidate.{extension}"
     if module == 'proteinmpnn':
         body += '; cp -a -l mpnn_canonical mpnn_native_output'

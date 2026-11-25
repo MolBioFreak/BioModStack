@@ -22,8 +22,6 @@ const labelForModel = (modelId: string): string => {
         rfd3: 'RFD3',
         fampnn: 'FA-MPNN',
         esmfold2: 'ESMFold2',
-        esmfold2_experimental: 'ESMFold2 (retained alias)',
-        confornets_experimental: 'ConforNets (historical results)',
         conformational_mapping: 'Conformational Mapping',
         protenix_v2: 'Protenix V2',
         protein_modification_experimental: 'All results',

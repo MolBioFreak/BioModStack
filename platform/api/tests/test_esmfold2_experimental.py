@@ -71,7 +71,7 @@ def test_esmfold2_result_root_resolves_sequence_scoped_publish_dir(tmp_path: Pat
     final_root = output_root / "final" / "esmfold2" / "1UBQ" / "esmfold2_results"
     final_root.mkdir(parents=True)
     (final_root / "manifest.json").write_text(
-        json.dumps({"workflow": "esmfold2_experimental", "samples": []}),
+        json.dumps({"workflow": "esmfold2", "samples": []}),
         encoding="utf-8",
     )
 
@@ -181,7 +181,7 @@ async def test_esmfold2_ingestion_does_not_fall_through_to_loose_fampnn_synthesi
             Job(
                 id="job-esmf2-partial",
                 name="partial-esmfold2-output",
-                model_id="esmfold2_experimental",
+                model_id="esmfold2",
                 mode="predict",
                 params={"model_variant": "fast"},
                 output_dir=str(output_root),
@@ -202,7 +202,8 @@ async def test_esmfold2_ingestion_does_not_fall_through_to_loose_fampnn_synthesi
 def test_model_registry_loads_historical_esmfold2_metadata_without_launch_entrypoint() -> None:
     registry = ModelRegistry()
 
-    model = registry.get_model("esmfold2_experimental")
+    assert registry.get_model("esmfold2_experimental") is None
+    model = registry.get_model("esmfold2")
 
     assert model is not None
     assert model.name == "ESMFold2"
@@ -230,10 +231,10 @@ def test_model_registry_loads_historical_esmfold2_metadata_without_launch_entryp
     }:
         assert any(param.name == required_gap_param for param in model.params), required_gap_param
 
-    assert registry.validate_job_params("esmfold2_experimental", "predict", {"sequence": "MQIFVKTLTGKT"}) == []
-    assert registry.validate_job_params("esmfold2_experimental", "predict", {}) == []
+    assert registry.validate_job_params("esmfold2", "predict", {"sequence": "MQIFVKTLTGKT"}) == []
+    assert registry.validate_job_params("esmfold2", "predict", {}) == []
     assert registry.validate_job_params(
-        "esmfold2_experimental",
+        "esmfold2",
         "predict",
         {"sequence": "MQIFVKTLTGKT", "model_variant": "msa"},
     ) == ["Invalid value for model_variant: must be one of ['fast', 'full']"]
@@ -243,12 +244,12 @@ def test_template_registry_does_not_expose_esmfold2_as_a_standalone_launcher() -
     registry = TemplateRegistry(API_ROOT / "config" / "templates")
 
     assert registry.get_template("esmfold2") is None
-    assert registry.get_template("esmfold2_experimental") is None
+    assert registry.get_template("esmfold2") is None
 
 
 def test_esmfold2_model_config_remains_available_for_runtime_and_historical_metadata() -> None:
     model_registry = ModelRegistry()
-    model = model_registry.get_model("esmfold2_experimental")
+    model = model_registry.get_model("esmfold2")
     assert model is not None
 
     model_param_names = {param.name for param in model.params}
@@ -274,10 +275,10 @@ def test_esmfold2_model_config_remains_available_for_runtime_and_historical_meta
 
 def test_esmfold2_compatibility_id_routes_through_active_structure_prediction(tmp_path) -> None:
     assert "esmfold2_experimental" not in WORKFLOW_ENTRYPOINTS
-    assert resolve_nextflow_entrypoint(effective_profile="esmfold2_experimental") == "workflows/structure_prediction.nf"
+    assert resolve_nextflow_entrypoint(effective_profile="esmfold2") == "workflows/structure_prediction.nf"
 
     cmd = build_nextflow_command(
-        "esmfold2_experimental",
+        "esmfold2",
         "predict",
         {
             "sequence": "MQIFVKTLTGKTITLEVEPSDTI",
@@ -306,7 +307,7 @@ def test_esmfold2_compatibility_id_routes_through_active_structure_prediction(tm
     assert _flag_value(cmd, "--sequence_input") == "MQIFVKTLTGKTITLEVEPSDTI"
 
     complex_cmd = build_nextflow_command(
-        "esmfold2_experimental",
+        "esmfold2",
         "predict",
         {
             "sequence": "",
@@ -341,7 +342,7 @@ def test_esmfold2_compatibility_id_routes_through_active_structure_prediction(tm
     assert _flag_value(complex_cmd, "--esmf_complex_components_json").startswith('[{"type":"protein"')
 
     canonical_complex_cmd = build_nextflow_command(
-        "esmfold2_experimental",
+        "esmfold2",
         "predict",
         {
             "sequence": "MQIFVKTLTGKTITLEVEPSDTI",
@@ -379,7 +380,7 @@ def test_esmfold2_compatibility_id_routes_through_active_structure_prediction(tm
 
 def test_esmfold2_visible_ui_params_override_legacy_prefixed_defaults() -> None:
     cmd = build_nextflow_command(
-        "esmfold2_experimental",
+        "esmfold2",
         "predict",
         {
             "sequence": "MQIFVKTLTGKTITLEVEPSDTI",
@@ -411,7 +412,7 @@ def test_esmfold2_visible_ui_params_override_legacy_prefixed_defaults() -> None:
     assert _flag_value(cmd, "--esmf_device") == "cuda"
 
     cloned_legacy_cmd = build_nextflow_command(
-        "esmfold2_experimental",
+        "esmfold2",
         "predict",
         {
             "sequence": "MQIFVKTLTGKTITLEVEPSDTI",
@@ -427,7 +428,7 @@ def test_esmfold2_visible_ui_params_override_legacy_prefixed_defaults() -> None:
     assert _flag_value(cloned_legacy_cmd, "--esmf_model_id_or_path") == "biohub/ESMFold2"
 
     preset_cmd = build_nextflow_command(
-        "esmfold2_experimental",
+        "esmfold2",
         "predict",
         {
             "sequence": "MQIFVKTLTGKTITLEVEPSDTI",
@@ -454,12 +455,13 @@ def test_esmfold2_live_api_exposes_model_metadata_but_no_standalone_template() -
     models = models_payload.get("data", models_payload) if isinstance(models_payload, dict) else models_payload
     templates = templates_payload.get("data", templates_payload) if isinstance(templates_payload, dict) else templates_payload
 
-    model = next((item for item in models if item["id"] == "esmfold2_experimental"), None)
-    template = next((item for item in templates if item["id"] == "esmfold2_experimental"), None)
+    model = next((item for item in models if item["id"] == "esmfold2"), None)
+    template = next((item for item in templates if item["id"] == "esmfold2"), None)
     assert model is not None
     assert model["experimental"] is False
     assert template is None
-    assert client.get("/api/templates/esmfold2_experimental").status_code == 404
+    assert client.get("/api/templates/esmfold2").status_code == 404
+    assert client.get("/api/models/esmfold2_experimental").status_code == 404
 
 
 def test_esmfold2_runner_parses_pdb_and_component_json_without_runtime_imports(tmp_path) -> None:

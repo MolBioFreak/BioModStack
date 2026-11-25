@@ -135,7 +135,7 @@ test('Fold-CP is a normal Structure predictor with its own execution identity', 
 });
 
 test('esmfold2 compatibility IDs no longer create dedicated structure launch variants', () => {
-    for (const compatibilityId of ['esmfold2', 'esmfold2_experimental']) {
+    for (const compatibilityId of ['esmfold2']) {
         const config = resolveStructureLaunchConfig({
             template_model_id: compatibilityId,
             structure_launch_variant: compatibilityId,

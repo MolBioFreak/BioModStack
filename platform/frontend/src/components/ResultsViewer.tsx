@@ -134,7 +134,7 @@ const REVIEW_TAB_DEFINITIONS = [
 ] as const;
 
 type TabId = typeof REVIEW_TAB_DEFINITIONS[number]['id'];
-const STRUCTURE_PREDICTION_MODELS = new Set(['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental']);
+const STRUCTURE_PREDICTION_MODELS = new Set(['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2']);
 const MAX_BULK_SELECTION_DESIGNS = 500;
 const SERVER_SORT_FIELDS = new Set<DesignSortField>([
     'name',
@@ -2508,7 +2508,7 @@ function ResultsViewerContent() {
     const backboneFilterApplies = outputSourceFilter === 'all' || outputSourceFilter === 'rfantibody' || outputSourceFilter === 'boltzgen';
     const scopedModelId = resultSurface !== 'workflow' && resultSurface !== 'frustrampnn' && resultSurface !== primaryResultModelId
         ? resultSurface : undefined;
-    const nativeResultsAvailable = ['boltz', 'boltz2', 'protenix', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(scopedModelId ?? primaryResultModelId);
+    const nativeResultsAvailable = ['boltz', 'boltz2', 'protenix', 'boltz_cp_experimental', 'esmfold2'].includes(scopedModelId ?? primaryResultModelId);
     const nativeResults = nativeResultsAvailable && nativeQuery !== null;
     const useClientSourcePagination = !nativeResults && (outputSourceFilter !== 'all' || resultSetFilter !== 'all');
     const requiresClientOnlySort = useClientRenderedValueSort
@@ -3234,7 +3234,7 @@ function ResultsViewerContent() {
     // A validator's producer owns its result semantics, not the enclosing workflow.
     const predictionModelId = String(selectedDesign?.provenance?.producer_model_id ?? activeJob?.model_id ?? '');
     const predictionDataTable = STRUCTURE_PREDICTION_MODELS.has(predictionModelId);
-    const tableHasNativeConfidence = ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) || tableDesigns.some(canonicalScalars);
+    const tableHasNativeConfidence = ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2'].includes(predictionModelId) || tableDesigns.some(canonicalScalars);
     const legacyTableScalars = usePredictionScalars(tableDesigns, activeTab === 'table' && !nativeResults);
     // Inspection uses the selected detail document; table cells stay page-bound.
     const inspectionDesigns = useMemo(() => {
@@ -5378,7 +5378,7 @@ function ResultsViewerContent() {
         </nav>
     ) : null}</>;
 
-    if (activeJob && !['conformational_mapping', 'confornets_experimental'].includes(activeJob.model_id)
+    if (activeJob && activeJob.model_id !== 'conformational_mapping'
         && !designsLoading && new URLSearchParams(location.search).has('result_model')
         && !resultModelHierarchy.some(item => item.modelId === resultSurface)) {
         return <div role="alert">Requested model {resultSurface} is unavailable in this Job lineage. {resultModelSelector}</div>;
@@ -5388,7 +5388,7 @@ function ResultsViewerContent() {
         return <div role="alert">Requested Design {requestedDesignId} is unavailable in this Job lineage. No other candidate has been selected.</div>;
     }
 
-    if (activeJob?.model_id === 'conformational_mapping' || (activeJob?.model_id === 'confornets_experimental' && activeJob.conformational_mapping_request_id)) {
+    if (activeJob?.model_id === 'conformational_mapping') {
         if (!activeJob.conformational_mapping_request_id) {
             return <div role="alert" className="mx-auto mt-12 max-w-3xl rounded-xl border border-red-500/30 bg-red-500/10 p-6 text-red-200">
                 Conformational Mapping request identity is unavailable for this job.
@@ -5737,7 +5737,7 @@ function ResultsViewerContent() {
                             </div>
                         )}
 
-                        {['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) && !exactArtifactId
+                        {['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2'].includes(predictionModelId) && !exactArtifactId
                             ? <SelectedCandidateOperations key={`prediction-operations-${activeJob.id}`} count={selectedDesignIds.length + selectedNativeSources.length}>{selectedCandidateControls}</SelectedCandidateOperations>
                             : selectedCandidateControls}
 
@@ -6826,7 +6826,7 @@ function ResultsViewerContent() {
                                         onOpenStructure={() => setActiveTab('structure')} onCompare={() => setActiveTab('compare_designs')}
                                         actions={mdHandoffAvailable ? mdHandoffButton(true) : null}
                                         operationIds={selectedDesignIds} onOperationToggle={(id, checked) => setSelectedDesignIds(ids => checked ? (ids.includes(id) ? ids : [...ids, id]) : ids.filter(item => item !== id))} /></div>}
-                                    {activeTab === 'overview' && !['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) && overviewStats && (
+                                    {activeTab === 'overview' && !['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2'].includes(predictionModelId) && overviewStats && (
                                         <div className="p-6 space-y-6">
                                             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
                                                 {selectedDesignSupportsAntibodyAnalysis && isPostRFantibodyReview ? (
@@ -7280,7 +7280,7 @@ function ResultsViewerContent() {
                                             </div>
                                         </div>
                                     )}
-                                    {activeTab === 'overview' && !['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) && !overviewStats && (
+                                    {activeTab === 'overview' && !['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2'].includes(predictionModelId) && !overviewStats && (
                                         <div className="flex min-h-[360px] items-center justify-center px-6 py-12">
                                             <div className="max-w-xl rounded-xl border border-slate-700/60 bg-slate-900/60 p-6 text-center">
                                                 <div className="text-sm font-semibold text-slate-100">No overview data loaded</div>
@@ -7298,12 +7298,12 @@ function ResultsViewerContent() {
                                             <StructurePredictionResults
                                                 modelId={predictionModelId}
                                                 fullPaeRequested={typeof activeJob?.params?.write_full_pae === 'boolean' ? activeJob.params.write_full_pae : undefined}
-                                                enabled={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId)}
+                                                enabled={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2'].includes(predictionModelId)}
                                                 designs={inspectionDesigns} selectedDesignId={selectedDesignId} onSelectDesign={selectDesign}
                                                 structure={(selection, onSelection, companion) => <StructureViewerPane
                                                 confidenceCharts={companion}
                                                 confidenceSelection={selection} onConfidenceSelection={onSelection}
-                                                confidenceCompanion={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId)}
+                                                confidenceCompanion={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2'].includes(predictionModelId)}
                                                 selectedDesignId={selectedDesignId}
                                                 setSelectedDesignId={selectDesign}
                                                 designs={inspectionDesigns}
@@ -9002,7 +9002,7 @@ function ResultsViewerContent() {
 
                                     {/* COMPARE TAB */}
                                     {activeTab === 'compare' && (
-                                        <BatchComparePane initialJobId={selectedJobId} nativeMetrics={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId)} />
+                                        <BatchComparePane initialJobId={selectedJobId} nativeMetrics={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2'].includes(predictionModelId)} />
                                     )}
 
                                     {/* Compare Designs Pane */}

@@ -162,14 +162,12 @@ def test_plr_actual_compiler_producer_consumer(invocation, tmp_path, provider):
     ('protein_local_redesign', {'plr_structure_validators': ['protenix_v2']}, False),
     ('protein_local_redesign', {'plr_structure_validators': ['protenix_v2'], 'plr_validator_suite_active': True, 'protenix_prepared_msa_dir': '/supplied'}, False),
     ('protein_local_redesign', {'plr_structure_validators': ['protenix_v2'], 'plr_validator_suite_active': True, 'protenix_use_msa': False}, False),
-    ('confornets_experimental', {'cn_skip_msa': False}, True),
 ])
 def test_canonical_service_roster(workflow, params, supported):
     params = dict(msa_provider='colabfold_api', **params)
     model_id, mode = {
         'protein_local_redesign': ('protein_modification_experimental', 'region_redesign'),
         'conformational_mapping': ('conformational_mapping', 'map'),
-        'confornets_experimental': ('confornets_experimental', 'design'),
     }[workflow]
     plan = nextflow.build_selected_execution_plan(model_id=model_id, mode=mode,
         entrypoint='workflows/' + workflow + '.nf', requested=canonical_bytes(params),
@@ -178,7 +176,7 @@ def test_canonical_service_roster(workflow, params, supported):
 
 
 @pytest.mark.parametrize('authority', ['', 'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble:forged',
-    'modules/confornets_experimental.nf:RunConforNets:forged', 'modules/protenix.nf:ProtenixPredict',
+    'modules/conformational_mapping.nf:CMConforNets:forged', 'modules/protenix.nf:ProtenixPredict',
     'modules/protenix.nf:ProtenixFromComplex:forged'])
 def test_identifier_alone_never_grants_service(authority):
     assert not handoff.generated_msa_service_supported(dict(logical_id='protenix:generated_msa',

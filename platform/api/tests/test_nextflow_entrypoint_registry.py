@@ -39,7 +39,6 @@ EXPECTED_PROFILE_ENTRYPOINTS = {
 
 
     "boltz_cp_experimental": "workflows/boltz_cp_experimental.nf",
-    "confornets_experimental": "workflows/confornets_experimental.nf",
     "conformational_mapping": "workflows/conformational_mapping.nf",
     "molecular_dynamics": "workflows/experimental/molecular_dynamics/orchestrator.nf",
 

@@ -20,15 +20,11 @@ EXPERIMENTAL_WORKFLOW_ENTRYPOINTS = {
 
 
     "boltz_cp_experimental": ("design", "workflows/boltz_cp_experimental.nf", "BOLTZ_CP_EXPERIMENTAL"),
-    "confornets_experimental": ("design", "workflows/confornets_experimental.nf", "CONFORNETS_EXPERIMENTAL"),
 }
 
 MINIMAL_PARAMS = {
     "protein_local_redesign": {"input_pdb": "/tmp/input.pdb", "design_chains": "A", "redesign_ranges": "1-5"},
     "protein_cad_experimental": {},
-
-
-    "confornets_experimental": {"sequence": "ACDEFGHIK"},
 }
 
 

@@ -209,7 +209,7 @@ async def app_for(factory):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('model_id', ['esmfold2', 'esmfold2_experimental'])
+@pytest.mark.parametrize('model_id', ['esmfold2'])
 @pytest.mark.parametrize('cif', [CIF, NATIVE_CIF], ids=['occupancy_present', 'native_occupancy_absent'])
 async def test_producer_ingest_fresh_api_sample_binding(tmp_path, monkeypatch, model_id, cif):
     root, samples = produce(tmp_path, monkeypatch, cif=cif)

@@ -494,7 +494,6 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
 
 
     "boltz_cp_experimental": "workflows/boltz_cp_experimental.nf",
-    "confornets_experimental": "workflows/confornets_experimental.nf",
     "conformational_mapping": "workflows/conformational_mapping.nf",
     "molecular_dynamics": "workflows/experimental/molecular_dynamics/orchestrator.nf",
 
@@ -541,8 +540,6 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("esmfold2", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("esmfold2", "complex"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("esmfold2", "blind_pose"): "workflows/binder_blind_pose.nf",
-    ("esmfold2_experimental", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
-    ("esmfold2_experimental", "complex"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("boltz2", "complex"): COMPLEX_PREDICTION_ENTRYPOINT,
     ("protenix", "complex"): COMPLEX_PREDICTION_ENTRYPOINT,
 
@@ -639,7 +636,7 @@ def resolve_nextflow_entrypoint(
         "nanopore_methylation": "ont_methylation_analysis",
     }
     requested_profile = str(effective_profile or "").strip()
-    if requested_profile in {"esmfold2", "esmfold2_experimental"}:
+    if requested_profile == "esmfold2":
         return STRUCTURE_PREDICTION_ENTRYPOINT
     if requested_profile == "boltzgen":
         raise ValueError(
@@ -3138,7 +3135,7 @@ async def launch_nextflow_job(
             prepared_params = launch_params if checkpoint_resume or model_id in {'family_msa_protein', 'family_msa_nucleic'} else await _prepare_launch_msa_on_controller(
                 session, job, model_id, msa_params, Path(output_dir) / 'prepared-msa', remote_launch_authority,
                 native_invocation=prepared_invocation)
-            if model_id in {'esmfold2', 'esmfold2_experimental'} and 'esmf_msa_preparation' in prepared_params:
+            if model_id == 'esmfold2' and 'esmf_msa_preparation' in prepared_params:
                 # Persist controller-generated source authority, never rewrite requested science.
                 prepared_authority = prepared_params.pop('esmf_msa_preparation')
                 provenance = {**dict(job.provenance or {}), 'esmf_msa_preparation': prepared_authority}
@@ -4444,7 +4441,7 @@ def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: b
         from services.ont_ngs_contract import replay_expected_plasmid_size
         prepared = replay_expected_plasmid_size(prepared, job.provenance, mode=job.mode)
     msa_authority = (job.provenance or {}).get('esmf_msa_preparation')
-    if job.model_id in {'esmfold2', 'esmfold2_experimental'} and msa_authority is not None:
+    if job.model_id == 'esmfold2' and msa_authority is not None:
         prepared['esmf_msa_preparation_json'] = json.dumps(msa_authority, allow_nan=False, sort_keys=True)
     fields: dict[str, Any] = dict(job_id=job.id, requested_params=requested,
                                  source_identity=source, requested_identity_json=requested_json)
@@ -5802,7 +5799,7 @@ def compile_nextflow_invocation(
             return 'protenix'
         if normalized == 'rf3':
             return 'rf3'
-        if normalized in {'esmfold2', 'esmfold2_experimental'}:
+        if normalized == 'esmfold2':
             return 'esmfold2'
         return 'boltz'
 
@@ -5846,7 +5843,6 @@ def compile_nextflow_invocation(
         ('protein_modification_experimental', 'region_redesign'): 'protein_local_redesign',
 
         ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',
-        ('confornets_experimental', 'design'): 'confornets_experimental',
         ('molecular_dynamics', 'simulate'): 'molecular_dynamics_coordinator',
         ('molecular_dynamics', 'replica'): 'molecular_dynamics',
         ('molecular_dynamics', 'analyze'): 'molecular_dynamics_analysis',
@@ -5864,8 +5860,6 @@ def compile_nextflow_invocation(
         ('esmfold2', 'blind_pose'): 'esmfold2',
         ('esmfold2', 'predict'): 'esmfold2',
         ('esmfold2', 'complex'): 'esmfold2',
-        ('esmfold2_experimental', 'predict'): 'esmfold2',
-        ('esmfold2_experimental', 'complex'): 'esmfold2',
         # Nanopore/ONT product workflows: live device control is outside Nextflow;
         # these modes analyze existing POD5/FAST5/FASTQ/BAM outputs.
         ('nanopore', 'basecall_dna'): 'ont_basecall_dna',
@@ -5907,7 +5901,7 @@ def compile_nextflow_invocation(
             validator = 'boltz2'
         if validator == 'protenix':
             return 'protenix'
-        if validator in {'esmfold2', 'esmfold2_experimental'}:
+        if validator == 'esmfold2':
             return 'esmfold2'
         return 'boltz'
     
@@ -6599,7 +6593,7 @@ def compile_nextflow_invocation(
         from services.protenix_chemistry import stage_component_files
         params = stage_component_files(params, output_dir=output_dir, write_input=plan_input)
     task_chemistry = {}
-    if model_id in {'esmfold2', 'esmfold2_experimental'} and isinstance(params.get('complex_components'), dict):
+    if model_id == 'esmfold2' and isinstance(params.get('complex_components'), dict):
         document = params['complex_components']
         params['complex_components'] = document.get('components', document.get('sequences', []))
         for key in ('covalent_bonds', 'distogram_conditioning'):
@@ -6609,7 +6603,7 @@ def compile_nextflow_invocation(
         task_chemistry = {key: params.pop(key) for key in ('covalent_bonds', 'constraint', 'constraints') if key in params}
     if model_id == 'boltz2' or params.get('pred_method') in {'boltz', 'boltz_protenix'}:
         task_chemistry.update({key: params.pop(key) for key in ('constraints', 'templates', 'properties') if key in params})
-    if model_id in {'esmfold2', 'esmfold2_experimental'}:
+    if model_id == 'esmfold2':
         # Keep the ESM-native numeric atom/index dialect at its own compiler.
         for key in ('covalent_bonds', 'distogram_conditioning'):
             if key in params or 'esmf_' + key in params:
@@ -6846,72 +6840,6 @@ def compile_nextflow_invocation(
             params['rfd_mode'] = 'protein_cad_experimental'
         if model_id == 'protein_modification_experimental':
             params['modification_mode'] = 'de_novo_design'
-    elif model_id == 'confornets_experimental':
-        confornets_mappings = {
-            'task': 'cn_task',
-            'sequence': 'cn_sequence',
-            'chain_id': 'cn_chain_id',
-            'benchmark_name': 'cn_benchmark_name',
-            'test_case_name': 'cn_test_case_name',
-            'reference_pdb_1': 'cn_reference_pdb_1',
-            'reference_name_1': 'cn_reference_name_1',
-            'reference_pdb_2': 'cn_reference_pdb_2',
-            'reference_name_2': 'cn_reference_name_2',
-            'checkpoint_path': 'cn_checkpoint_path',
-            'config_yaml': 'cn_config_yaml',
-            'confornets_repo_path': 'cn_confornets_repo_path',
-            'skip_msa': 'cn_skip_msa',
-            'num_runs': 'cn_num_runs',
-            'k_confornets': 'cn_k_confornets',
-            'num_samples': 'cn_num_samples',
-            'max_steps': 'cn_max_steps',
-            'save_steps': 'cn_save_steps',
-            'num_recycles': 'cn_num_recycles',
-            'num_diffusion_steps': 'cn_num_diffusion_steps',
-            'lr': 'cn_lr',
-            'grad_clip': 'cn_grad_clip',
-            'compute_confidence': 'cn_compute_confidence',
-            'save_full_confidence': 'cn_save_full_confidence',
-            'compute_evaluation': 'cn_compute_evaluation',
-            'confornet_path': 'cn_confornet_path',
-            'mse_dir': 'cn_mse_dir',
-            'source_test_cases': 'cn_source_test_cases',
-        }
-        for src_key, dest_key in confornets_mappings.items():
-            if src_key == dest_key:
-                continue
-            if src_key in params:
-                if dest_key not in params:
-                    params[dest_key] = params[src_key]
-                params.pop(src_key, None)
-
-        # Launcher-only documentation/model-selection metadata. ConforNets is the
-        # current backend, so do not forward doc topic fields into Nextflow.
-        params.pop('workflow_model_topic', None)
-        params.pop('model_documentation_topic', None)
-        params.pop('mapping_model', None)
-
-        params.setdefault('cn_task', 'diversity')
-        params.setdefault('cn_chain_id', 'A')
-        params.setdefault('cn_benchmark_name', 'bms_confornets')
-        params.setdefault('cn_test_case_name', 'monomer_case')
-        params.setdefault('cn_num_runs', 2)
-        params.setdefault('cn_k_confornets', 2)
-        params.setdefault('cn_num_samples', 5)
-        params.setdefault('cn_max_steps', 21)
-        params.setdefault('cn_save_steps', '5,10,15,20')
-        params.setdefault('cn_num_recycles', 0)
-        params.setdefault('cn_num_diffusion_steps', 200)
-        params.setdefault('cn_lr', 0.001)
-        params.setdefault('cn_grad_clip', 10.0)
-        params.setdefault('cn_skip_msa', False)
-        params.setdefault('cn_compute_confidence', True)
-        params.setdefault('cn_save_full_confidence', False)
-        params.setdefault('cn_compute_evaluation', True)
-        if 'cn_num_samples' in params and 'rfd_num_designs' not in params:
-            params['rfd_num_designs'] = params['cn_num_samples']
-        if not params.get('rfd_mode'):
-            params['rfd_mode'] = 'confornets_experimental'
     elif model_id == 'boltz_cp_experimental':
         boltz_cp_mappings = {
             'input_path': 'bcp_input_path',
@@ -7052,7 +6980,7 @@ def compile_nextflow_invocation(
         if missing:
             raise ValueError('Selected blind pose missing ' + ', '.join(missing))
         params = {key: params[key] for key in allowed if key in params}
-    elif model_id in {'esmfold2', 'esmfold2_experimental'} and mode != 'blind_pose':
+    elif model_id == 'esmfold2' and mode != 'blind_pose':
         if 'core_protein_scientific_contract' in params:
             # Validate typed values before stringifying them into Nextflow flags.
             # This import is route-free and never imports the scientific runtime.

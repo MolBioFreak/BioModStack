@@ -30,7 +30,7 @@ def resolve_search_backend(value: Any) -> str:
 
 def requires_msa_search(model_id: str, params: Mapping[str, Any]) -> bool:
     """Admission scope only; never proves an arbitrary path is a verified MSA."""
-    if model_id in {"esmfold2", "esmfold2_experimental"} and params.get("esmf_use_msa") is not True:
+    if model_id == "esmfold2" and params.get("esmf_use_msa") is not True:
         return False
     flag = {"boltz2": "boltz_use_msa", "protenix": "protenix_use_msa"}.get(model_id)
     if flag and params.get(flag) in (False, "false", "0", 0):
@@ -50,7 +50,7 @@ def apply_msa_policy(model_id: str, params: Mapping[str, Any] | None) -> dict[st
     or invent no-MSA support. Existing model validators own those contracts.
     """
     effective = dict(params or {})
-    if model_id in {"esmfold2", "esmfold2_experimental"}:
+    if model_id == "esmfold2":
         if type(effective.get("esmf_use_msa", False)) is not bool:
             raise ValueError("esmf_use_msa must be boolean")
         if effective.get("esmf_use_msa"):
@@ -104,7 +104,7 @@ def apply_msa_policy(model_id: str, params: Mapping[str, Any] | None) -> dict[st
         for key in ("msa_neurosnap_force_uppercase", "msa_neurosnap_pad_sequences"):
             if effective[key]:
                 raise ValueError(f"{key}=true is unsupported for Protenix A3M consumption; saved intent is not reset.")
-    if model_id in {"esmfold2", "esmfold2_experimental"} and effective.get("esmf_use_msa"):
+    if model_id == "esmfold2" and effective.get("esmf_use_msa"):
         if effective.get("model_variant", effective.get("esmf_model_variant", "fast")) != "full":
             raise ValueError("Hosted ESMFold2 MSA policy requires Full; Fast lacks the dedicated MSA encoder but accepts supplied MSA-derived features")
         if effective.get("msa_provider") == "colabfold_api" and effective.get("colabfold_pairing_mode") != "unpaired":

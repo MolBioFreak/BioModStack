@@ -112,8 +112,7 @@ workflow {{
 
 
 
-@pytest.mark.parametrize('module,process', [('confornets_experimental', 'RunConforNets'),
-                                           ('conformational_mapping_confornets', 'RunCanonicalConforNets')])
+@pytest.mark.parametrize('module,process', [('conformational_mapping_confornets', 'RunCanonicalConforNets')])
 def test_existing_confornets_groovy_with_cached_jar(confor_compiled, tmp_path, monkeypatch, module, process):
     from test_remote_close_confornets import test_native_groovy_caller_uses_managed_source_and_service
     monkeypatch.setenv('BMS_TEST_NEXTFLOW_JAR', str(JAR))

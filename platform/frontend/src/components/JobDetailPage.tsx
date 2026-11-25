@@ -51,8 +51,7 @@ export function JobDetailPage() {
     const isMolecularDynamicsJob = job?.model_id === 'molecular_dynamics' ||
         job?.mode === 'molecular_dynamics' ||
         job?.mode === 'md';
-    const isConformationalMappingJob = job?.model_id === 'conformational_mapping' ||
-        job?.model_id === 'confornets_experimental';
+    const isConformationalMappingJob = job?.model_id === 'conformational_mapping';
     const isRFD3GenerationJob = isRFD3GenerationResultJob(job);
     const isNgsResultJob = job ? isNgsJob(job) : false;
 
@@ -95,12 +94,6 @@ export function JobDetailPage() {
 
     if (isNgsResultJob) {
         return <Navigate replace to={ngsResultHref(job.id, location.search)} />;
-    }
-
-    // Historical ConforNets Designs belong to the existing legacy Results owner,
-    // not a canonical CM request that was never created.
-    if (job.model_id === 'confornets_experimental' && !job.conformational_mapping_request_id) {
-        return <Navigate replace to={`/designs/${job.id}${location.search}`} />;
     }
 
     if (isConformationalMappingJob) {

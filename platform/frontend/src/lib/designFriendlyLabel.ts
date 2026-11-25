@@ -12,6 +12,6 @@ export function predictionJobLabel(job: { name: string; model_id: string }): str
     const validation = job.name.match(/^(.+?)[-_]design_l\d+_[a-f0-9]+_candidate(\d+)$/i);
     if (validation) return `${validation[1].replace(/[-_]+/g, ' ')} · candidate ${validation[2]}`;
     if (!/[a-f0-9]{24,}|[a-f0-9]{8}-[a-f0-9-]{27,}/i.test(job.name)) return job.name;
-    const model = ({ protenix: 'Protenix', boltz2: 'Boltz-2', boltz_cp_experimental: 'Fold-CP', esmfold2: 'ESMFold2', esmfold2_experimental: 'ESMFold2' } as Record<string, string>)[job.model_id];
+    const model = ({ protenix: 'Protenix', boltz2: 'Boltz-2', boltz_cp_experimental: 'Fold-CP', esmfold2: 'ESMFold2' } as Record<string, string>)[job.model_id];
     return model ? `${model} prediction` : job.name;
 }

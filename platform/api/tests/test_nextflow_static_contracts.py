@@ -25,7 +25,6 @@ DIRECT_ENTRYPOINTS = {
 
 
     "boltz_cp_experimental": "workflows/boltz_cp_experimental.nf",
-    "confornets_experimental": "workflows/confornets_experimental.nf",
 
     "protein_design": "workflows/protein_design.nf",
     "structure_prediction": "workflows/structure_prediction.nf",
@@ -70,7 +69,6 @@ MIGRATED_SYMBOLS = (
     "PROTEIN_CAD_EXPERIMENTAL",
     "CALIBY_EXPERIMENTAL",
     "BOLTZ_CP_EXPERIMENTAL",
-    "CONFORNETS_EXPERIMENTAL",
     "ESMFOLD2_EXPERIMENTAL",
     "STRUCTURE_PREDICTION",
     "COMPLEX_PREDICTION",
@@ -232,7 +230,7 @@ def test_direct_workflow_entrypoints_expose_unnamed_workflows() -> None:
 
 def test_protein_local_redesign_uses_peer_validator_suite_contract() -> None:
     workflow_text = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
-    esmfold_text = (REPO_ROOT / "modules" / "esmfold2_experimental.nf").read_text(encoding="utf-8")
+    esmfold_text = (REPO_ROOT / "modules" / "esmfold2.nf").read_text(encoding="utf-8")
     model_text = (REPO_ROOT / "platform" / "api" / "config" / "models" / "protein_modification_experimental.yaml").read_text(encoding="utf-8")
 
     assert "['boltz2', 'esmfold2', 'protenix_v2']" in workflow_text

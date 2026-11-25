@@ -119,7 +119,7 @@ def projection(design, *, records=(), invalid_reason=None, model_id=None, source
         if model_id == 'boltz_api':
             expected = {k:v for k,v in _BOLTZ.items() if k != 'confidence_score'}
             expected['structure_confidence'] = ('dimensionless', 'provider_native_structure_confidence')
-        if model_id in ('esmfold2', 'esmfold2_experimental'):
+        if model_id == 'esmfold2':
             from services.esmfold2_scientific_consumer import DESCRIPTORS
             expected = {d['metric_key']: (d['unit'], d['scope']) for d in DESCRIPTORS}
         if model_id in ('boltzgen', 'boltzgen_child'):
@@ -201,7 +201,7 @@ async def persisted_projection(design, session):
                 from services.boltz_scientific_consumer import verified_boltz_design
                 selected = await verified_boltz_design(design, session)
                 return projection(design, records=selected['block']['metrics'])
-            if job.model_id in ('esmfold2', 'esmfold2_experimental'):
+            if job.model_id == 'esmfold2':
                 from services.esmfold2_scientific_consumer import verified_esmfold2_design
                 selected = await verified_esmfold2_design(design, session)
                 return projection(design, records=selected['block']['metrics'])
@@ -303,7 +303,7 @@ async def bulk_scalar_projections(designs, owners, session):
                     continue
                 if job.model_id in ('boltz', 'boltz2'):
                     from services.boltz_scientific_consumer import scalar_records_from_publication
-                elif job.model_id in ('esmfold2', 'esmfold2_experimental'):
+                elif job.model_id == 'esmfold2':
                     from services.esmfold2_scientific_consumer import scalar_records_from_publication
                 elif job.model_id == 'protenix':
                     from services.protenix_scientific_consumer import scalar_records_from_publication

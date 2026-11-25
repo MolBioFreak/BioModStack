@@ -177,9 +177,8 @@ def test_design_result_expectation_is_explicit_or_known_model_only() -> None:
     assert job_expects_design_results(_job("normalized-alias", model_id="Boltz-2")) is True
     assert job_expects_design_results(_job("af2", model_id="af2")) is True
     assert job_expects_design_results(_job("alphafold2", model_id="AlphaFold2")) is True
-    assert job_expects_design_results(_job("confornets", model_id="confornets_experimental")) is True
     assert job_expects_design_results(_job("esmfold2", model_id="esmfold2")) is True
-    assert job_expects_design_results(_job("esmfold2-alias", model_id="esmfold2_experimental")) is True
+    assert job_expects_design_results(_job("esmfold2-alias", model_id="esmfold2_experimental")) is False
     assert job_expects_design_results(_job("frustrampnn-analysis", model_id="frustrampnn", mode="analyze")) is False
     assert job_expects_design_results(_job("substring-collision", model_id="custom_boltz_report")) is False
     assert job_expects_design_results(_job("af2-substring-collision", model_id="custom_af2_report")) is False

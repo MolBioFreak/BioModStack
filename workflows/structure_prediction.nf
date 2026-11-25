@@ -19,7 +19,7 @@ import groovy.json.JsonSlurper
 import java.util.Arrays
 
 include { normalizeProteinDesignSequenceBatchEntries } from '../modules/sequence_submission.nf'
-include { esmfold2ComponentDocument } from '../modules/esmfold2_experimental.nf'
+include { esmfold2ComponentDocument } from '../modules/esmfold2.nf'
 include { structure_prediction_wf } from '../modules/structure_prediction.nf'
 include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
 include { RemoteCanonicalFrustraMPNN } from '../modules/frustrampnn_remote.nf'

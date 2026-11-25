@@ -41,7 +41,6 @@ describe('workflow-only capability boundaries', () => {
     it('routes supported ESMFold2 compatibility IDs into structure prediction', () => {
         const jobSubmission = src('components/JobSubmission.tsx');
         assert.equal(jobSubmission.includes("esmfold2: 'structure_prediction'"), true);
-        assert.equal(jobSubmission.includes("esmfold2_experimental: 'structure_prediction'"), true);
         assert.equal(jobSubmission.includes("pred_method: 'esmfold2'"), true);
     });
 

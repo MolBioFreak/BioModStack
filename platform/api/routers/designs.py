@@ -2067,7 +2067,7 @@ def _design_to_response(
 
     capabilities = set(contract.viewer_capabilities)
     if job is not None and job.model_id in ('boltz', 'boltz2', 'boltz_cp_experimental',
-                                            'protenix', 'esmfold2', 'esmfold2_experimental', 'biohub_esmfold2'):
+                                            'protenix', 'esmfold2', 'biohub_esmfold2'):
         # A prediction is not a FAMPNN coordinate product. Preserve persisted
         # upstream sequence/mutation evidence; a missing sidecar says nothing
         # about its validity. Filename matches cannot establish producer identity.
@@ -3569,7 +3569,7 @@ async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depen
             # for PAE and never inferred from a launch/save flag.
             structure_key = Path(keys['structure'])
             keys['pde'] = (structure_key.parent / f'pde_{structure_key.stem}.npz').as_posix()
-        elif job and revision_for_job(job) == 1 and job.model_id in ('protenix', 'esmfold2', 'esmfold2_experimental'):
+        elif job and revision_for_job(job) == 1 and job.model_id in ('protenix', 'esmfold2'):
             if job.model_id == 'protenix':
                 from services.protenix_scientific_consumer import verified_native_design
             else:
@@ -3623,7 +3623,7 @@ async def download_confidence_artifact(design_id: str, role: str, session: Async
         raise HTTPException(status_code=404, detail='Native artifact not found')
     if job.model_id == 'protenix':
         from services.protenix_scientific_consumer import verified_native_design
-    elif job.model_id in ('esmfold2', 'esmfold2_experimental'):
+    elif job.model_id == 'esmfold2':
         from services.esmfold2_scientific_consumer import verified_native_design
     else:
         raise HTTPException(status_code=404, detail='Native artifact not found')

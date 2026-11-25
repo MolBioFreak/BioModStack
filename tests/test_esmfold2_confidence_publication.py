@@ -30,7 +30,7 @@ def test_native_module_publishes_optional_confidence(tmp_path, sidecar):
         runner.retain_native_confidence(SimpleNamespace(plddt=np.array([.3, .7]), pae=np.array([[0., 2.], [3., 0.]])), seed, 'fixture')
     fixture = tmp_path / 'fixture.nf'
     fixture.write_text(f'''nextflow.enable.dsl=2
-include {{ ESMFold2MSAPredict }} from '{ROOT}/modules/esmfold2_experimental.nf'
+include {{ ESMFold2MSAPredict }} from '{ROOT}/modules/esmfold2.nf'
 workflow {{
     ESMFold2MSAPredict(Channel.of(tuple([id:'fixture'], [core_protein_scientific_contract:1, esmf_sequence:'AC', esmf_sequence_name:'fixture'], [], [])))
 }}

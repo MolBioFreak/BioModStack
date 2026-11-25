@@ -100,7 +100,6 @@ acquisition metadata.** Explicit resolvable artifact blockers:
 |---|---|
 | protenix | image `protenix.sif`; weights `protenix` |
 | esmfold2 | image `esmfold2.sif`; weights `esmfold2` |
-| esmfold2_experimental | image `esmfold2.sif`; weights `esmfold2` |
 | fampnn | image `fampnn.sif` |
 
 `frustrampnn` is in the incremental independent-closure allowlist, but public
@@ -111,7 +110,7 @@ bypassing that availability gate.
 Other closure-unavailable entries (also no approved acquisition metadata):
 `af2`, `antibody_child`, `antibody_denovo`, `boltz2`, `boltz_cp_experimental`,
 `boltzgen`, `boltzgen_child`, `caliby_experimental`, `conformational_mapping`,
-`confornets_experimental`, `fampnn_child`, `ligandmpnn`,
+`fampnn_child`, `ligandmpnn`,
 `molecular_dynamics`, `nanopore`, `oligo_design`, `protein_cad_experimental`,
 `protein_local_redesign`,
 `protein_modification_experimental`, `proteinmpnn`, `rf3`, `rfdiffusion`.

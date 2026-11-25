@@ -1895,7 +1895,6 @@ def select_structure_model(raw: bytes, format: str, model_number: int) -> bytes:
 _ACCEPTED_PREDICTION_PRODUCERS = frozenset(
     {
         ("esmfold2", "predict"),
-        ("esmfold2_experimental", "predict"),
         # Fold-CP's retained prediction transport uses mode="design".
         ("boltz_cp_experimental", "design"),
         ("boltz2", "predict"),

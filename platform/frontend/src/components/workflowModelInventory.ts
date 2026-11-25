@@ -112,14 +112,12 @@ export const UNIQUE_WORKFLOW_MODEL_TOPICS = Array.from(
 
 export const getWorkflowModelTopics = (workflowId: string | null | undefined): ModelDocumentationTopic[] => {
     if (!workflowId) return [];
-    const canonicalWorkflowId = workflowId === 'esmfold2_experimental' || workflowId === 'esmfold2'
+    const canonicalWorkflowId = workflowId === 'esmfold2'
         ? 'structure_prediction'
         : workflowId === 'protein_cad_experimental'
             ? 'protein_modification_experimental'
             : workflowId === 'protein_local_redesign'
                 ? 'protein_modification_experimental'
-            : workflowId === 'confornets_experimental'
-                ? 'conformational_mapping'
                 : workflowId;
     return WORKFLOW_MODEL_INVENTORY.find((workflow) => workflow.workflowId === canonicalWorkflowId)?.modelTopics ?? [];
 };

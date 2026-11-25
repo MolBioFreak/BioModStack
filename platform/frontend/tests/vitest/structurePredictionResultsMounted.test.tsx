@@ -166,7 +166,7 @@ it('fixed-scale comparison is lazy and every tile keeps its own native values', 
     expect(maps).toHaveLength(3);
     expect(maps[2].data[0].z).toEqual(b.pae.pae_matrix);
 });
-it.each(['esmfold2', 'esmfold2_experimental'])('%s uses native residue confidence, not a scalar token mean', async modelId => {
+it.each(['esmfold2'])('%s uses native residue confidence, not a scalar token mean', async modelId => {
     transport({ residueConfidence: true });
     await mount(<AnalyticsDashboard modelId={modelId} designs={[designs[0]]} structure={<div />} />);
     expect(profilePlot().data.map((trace: any) => trace.y)).toEqual([[.5],[80],[40]]);
@@ -235,7 +235,7 @@ it('sampled token plots retain source indices instead of relabeling as residues 
 });
 it('scope excludes conformational mapping, ConforNets and historical launchers', () => {
     for (const id of ['conformational_mapping','confornets_experimental','rf3','alphafold2']) expect(isStandaloneStructurePrediction(id)).toBe(false);
-    for (const id of ['esmfold2','esmfold2_experimental','boltz_cp_experimental']) expect(isStandaloneStructurePrediction(id)).toBe(true);
+    for (const id of ['esmfold2','boltz_cp_experimental']) expect(isStandaloneStructurePrediction(id)).toBe(true);
 });
 it.each(['Charts', 'Structure'])('real Results %s routing separates charts from structure and preserves selection', async view => {
     transport();
@@ -355,7 +355,7 @@ it('native Boltz null-column wire renders canonical summary and saved row withou
 });
 it.each([
     ['esmfold2', 'fraction', 'model_token_mean', 0.7823242545127869],
-    ['esmfold2_experimental', 'fraction', 'model_token_mean', 0.7823242545127869],
+    ['esmfold2', 'fraction', 'model_token_mean', 0.7823242545127869],
     ['protenix', 'percent', 'model_atom_mean', 78.23242545127869],
 ])('%s scalar scope and units remain distinct from the profile', async (model, unit, scope, value) => {
     if (model === 'protenix' && process.env.BMS_PROTENIX_SCALAR_DESIGNS && process.env.BMS_PROTENIX_SCALAR_POINTS) {

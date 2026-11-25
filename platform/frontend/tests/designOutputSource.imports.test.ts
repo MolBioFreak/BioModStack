@@ -174,7 +174,7 @@ test('classifies ESMFold2 experimental rows from provenance rather than FA-MPNN-
             },
         },
         provenance: {
-            model_id: 'esmfold2_experimental',
+            model_id: 'esmfold2',
             artifact_group: 'esmfold2',
             stage_family: 'esmfold2',
         },

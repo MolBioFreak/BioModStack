@@ -55,7 +55,7 @@ def compile_and_discover(request, roots):
     return output, refs
 
 
-@pytest.mark.parametrize('model', ['esmfold2', 'esmfold2_experimental'])
+@pytest.mark.parametrize('model', ['esmfold2'])
 @pytest.mark.parametrize('form', ['list', 'components', 'sequences'])
 def test_preview_records_nested_msa_and_compiler_relocates(roots, tmp_path, monkeypatch, model, form):
     components = []
@@ -122,7 +122,7 @@ def test_preview_records_nested_msa_and_compiler_relocates(roots, tmp_path, monk
     assert request.model_dump() == original
 
 
-@pytest.mark.parametrize('model', ['esmfold2', 'esmfold2_experimental'])
+@pytest.mark.parametrize('model', ['esmfold2'])
 @pytest.mark.parametrize('kind', ['outside', 'symlink'])
 def test_preview_and_packaging_share_existing_containment_diagnostic(roots, tmp_path, model, kind):
     outside = tmp_path / 'outside.a3m'

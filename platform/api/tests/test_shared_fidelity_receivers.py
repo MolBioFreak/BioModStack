@@ -103,7 +103,7 @@ def test_ensemble_preserves_task_chemistry_and_stages_file(tmp_path, compiler_en
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('model_id', ['esmfold2', 'esmfold2_experimental'])
+@pytest.mark.parametrize('model_id', ['esmfold2'])
 async def test_esm_original_inventory_and_download_scratch_sqlite(tmp_path, monkeypatch, model_id):
     from test_esmfold2_native_confidence import produce, setup, job, app_for
     from services.result_ingester import ingest_esmfold2_results

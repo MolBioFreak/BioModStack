@@ -22,7 +22,7 @@ REVISION = 1
 # complex is deliberately absent: its registry admits only predict today.
 SUPPORTED_CALLERS = MappingProxyType({
     **{(model, mode): "structure_prediction" for model in ("boltz2", "protenix") for mode in ("predict", "complex")},
-    **{(model, "predict"): "structure_prediction" for model in ("esmfold2", "esmfold2_experimental")},
+    ("esmfold2", "predict"): "structure_prediction",
     **{("boltzgen", mode): "boltzgen" for mode in (
         "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking", "nanobody_binder", "peptide_binder", "protein_binder", "antibody_binder")},
     **{("boltzgen_child", mode): "boltzgen" for mode in ("nanobody_binder", "peptide_binder", "protein_binder")},
@@ -227,7 +227,7 @@ async def native_spatial_consumer(design, session):
         if job.model_id == 'protenix':
             from services import protenix_scientific_consumer
             return protenix_scientific_consumer
-        if job.model_id in ('esmfold2', 'esmfold2_experimental'):
+        if job.model_id == 'esmfold2':
             from services import esmfold2_scientific_consumer
             return esmfold2_scientific_consumer
     return None

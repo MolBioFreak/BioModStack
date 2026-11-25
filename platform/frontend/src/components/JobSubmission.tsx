@@ -131,11 +131,9 @@ const getCompactTemplateDescription = (template: UntypedApiValue): string => {
             return 'Generate new proteins or remodel selected regions of an existing structure.';
         case 'boltz_cp_experimental':
             return 'NVIDIA Fold-CP predictor inside Structure Prediction.';
-        case 'confornets_experimental':
         case 'conformational_mapping':
             return 'Complete-complex Protenix v2 ensembles, canonical ConforNets/import alternatives, residue mapping, FrustraMPNN landscapes, and support-ranked comparison.';
         case 'esmfold2':
-        case 'esmfold2_experimental':
             return 'ESMFold2 engine inside Structure Prediction.';
         case 'mutagenesis':
             return 'Build variant libraries and predict structures.';
@@ -217,14 +215,14 @@ export function JobSubmission() {
     const urlTemplate = searchParams.get('template');
     const routeTemplateId = bc2DirectEntry ? 'antibody_denovo' : isDeNovoModel(urlTemplate) || isDeNovoModel(searchParams.get('model'))
         ? DE_NOVO_TEMPLATE
-        : urlTemplate === 'confornets_experimental' ? 'conformational_mapping' : urlTemplate;
+        : urlTemplate;
     const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(routeTemplateId);
     const [engineChooserOpen, setEngineChooserOpen] = useState(false);
 
     const pendingTemplateRoute = useRef<string | null | undefined>(undefined);
     // Wrapper to sync state with URL
     const setSelectedTemplateId = useCallback((id: string | null) => {
-        const canonicalId = id === 'confornets_experimental' ? 'conformational_mapping' : id;
+        const canonicalId = id;
         pendingTemplateRoute.current = canonicalId;
         setSelectedTemplateIdInternal(canonicalId);
         setEngineChooserOpen(false);
@@ -549,7 +547,7 @@ export function JobSubmission() {
                     setClonedValues({ ...data.params, name: data.name, ...(data.mode !== undefined ? { mode: data.mode } : {}) });
                 }
                 else if ((data.params?.mutagenesis_variants || data.params?.mutation_variant)
-                    && ['boltz2', 'esmfold2', 'esmfold2_experimental'].includes(data.model_id)) {
+                    && ['boltz2', 'esmfold2'].includes(data.model_id)) {
                     setWizardMode('templates');
                     setSelectedTemplateId('mutagenesis');
                     // Expanded child Jobs retain only their own sequence and components, not the library.
@@ -558,7 +556,7 @@ export function JobSubmission() {
                             sequence: data.params.sequence, mutations: [], complex_components: data.params.complex_components }]
                         : data.params.mutagenesis_variants;
                     setClonedValues({ ...data.params, name: data.name, model_id: data.model_id,
-                        pred_method: ['esmfold2', 'esmfold2_experimental'].includes(data.model_id) ? 'esmfold2' : 'boltz',
+                        pred_method: data.model_id === 'esmfold2' ? 'esmfold2' : 'boltz',
                         mutagenesis_variants: variants });
                     setDedicatedTemplateVersion(version => version + 1);
                 }
@@ -574,7 +572,7 @@ export function JobSubmission() {
                     });
                 }
                 // 4. ESMFold2 compatibility IDs reopen the parent Structure Prediction workflow.
-                else if (data.model_id === 'esmfold2' || data.model_id === 'esmfold2_experimental') {
+                else if (data.model_id === 'esmfold2') {
                     setWizardMode('templates');
                     setSelectedTemplateId('structure_prediction');
                     setClonedValues({
@@ -602,30 +600,7 @@ export function JobSubmission() {
                     setClonedValues({ ...data.params, name: data.name, denovo_generator: 'boltzgen' });
                 }
 
-                // 6. Legacy and canonical conformational-mapping jobs reopen the one published canonical launcher.
-                else if (data.model_id === 'confornets_experimental' || data.params?.template_model_id === 'confornets_experimental') {
-                    sessionStorage.removeItem('bms.conformational-mapping.launcher.v1');
-                    setWizardMode('templates');
-                    setSelectedTemplateId('conformational_mapping');
-                    const legacyDefaults = getDedicatedTemplateInitialValues('conformational_mapping') || {};
-                    const legacyConfornets = {
-                        ...(
-                            legacyDefaults.confornets
-                            && typeof legacyDefaults.confornets === 'object'
-                            && !Array.isArray(legacyDefaults.confornets)
-                                ? legacyDefaults.confornets as Record<string, unknown>
-                                : {}
-                        ),
-                    };
-                    delete legacyConfornets.output_count;
-                    setClonedValues({
-                        ...legacyDefaults,
-                        name: data.name,
-                        backend: 'confornets',
-                        confornets: legacyConfornets,
-                    });
-                    setJobName(data.name || data.params?.job_name || data.params?.sequence_name || '');
-                }
+                // 6. Canonical conformational-mapping jobs reopen the one published canonical launcher.
                 else if (data.model_id === 'conformational_mapping') {
                     sessionStorage.removeItem('bms.conformational-mapping.launcher.v1');
                     setWizardMode('templates');
@@ -706,9 +681,7 @@ export function JobSubmission() {
         protein_cad_experimental: 'protein_modification_experimental',
         boltz_cp_experimental: 'structure_prediction',
         conformational_mapping: 'conformational_mapping',
-        confornets_experimental: 'conformational_mapping',
         esmfold2: 'structure_prediction',
-        esmfold2_experimental: 'structure_prediction',
     };
     const visibleApiTemplates = useMemo(() => visibleLauncherTemplates(
         templatesData?.data ?? [], Boolean((window as UntypedApiValue).__DEBUG_MODE__)
@@ -791,11 +764,9 @@ export function JobSubmission() {
             return;
         }
         const rawApiTemplateId = typeof template.base_template_id === 'string' ? template.base_template_id : null;
-        const apiTemplateId = rawApiTemplateId === 'confornets_experimental'
-            ? 'conformational_mapping'
-            : rawApiTemplateId === 'boltz_cp_experimental'
-                ? 'structure_prediction'
-                : rawApiTemplateId;
+        const apiTemplateId = rawApiTemplateId === 'boltz_cp_experimental'
+            ? 'structure_prediction'
+            : rawApiTemplateId;
         const matchedApiTemplate = apiTemplateId
             ? visibleApiTemplates.find((candidate: UntypedApiValue) => candidate.id === apiTemplateId)
             : null;
@@ -824,7 +795,7 @@ export function JobSubmission() {
 
         if (dedicatedTemplateId) {
             const templateModelId = template.model_id || template.params?.template_model_id;
-            const isLegacyEsmfold2 = templateModelId === 'esmfold2' || templateModelId === 'esmfold2_experimental';
+            const isLegacyEsmfold2 = templateModelId === 'esmfold2';
             const isLegacyFoldCp = templateModelId === 'boltz_cp_experimental' || rawApiTemplateId === 'boltz_cp_experimental';
             const isLegacyBoltzGen = templateModelId === 'boltzgen';
             if (dedicatedTemplateId === 'conformational_mapping') {
@@ -915,7 +886,7 @@ export function JobSubmission() {
         }
     });
 
-    const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_modification_experimental', 'protein_cad_experimental', 'protein_local_redesign', 'boltz_cp_experimental', 'confornets_experimental', 'conformational_mapping', 'esmfold2', 'esmfold2_experimental'].includes(model.id));
+    const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_modification_experimental', 'protein_cad_experimental', 'protein_local_redesign', 'boltz_cp_experimental', 'conformational_mapping', 'esmfold2'].includes(model.id));
     const isNativeBinderGeneration = wizardMode === 'manual' && ['ppiflow', 'boltzgen'].includes(selectedModelId ?? '') && !!selectedModeId;
     const hasProteinBinderRound = isNativeBinderGeneration
         && ['protein_binder', 'peptide_binder', 'antibody_binder', 'nanobody_binder'].includes(selectedModeId ?? '');
@@ -1127,7 +1098,6 @@ export function JobSubmission() {
 
 
         if (template.id === 'boltz_cp_experimental') return 'CP';
-        if (template.id === 'confornets_experimental') return 'CM';
         if (template.id === 'conformational_mapping') return 'CM';
 
         return template.icon === 'target' ? 'TG'

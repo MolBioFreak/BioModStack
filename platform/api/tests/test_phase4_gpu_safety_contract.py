@@ -34,7 +34,6 @@ def _point_config_at(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         {"esmfold2": "auto"},
         {"esmfold2": 99},
         {"esmfold2": None},
-        {"esmfold2_experimental": "auto"},
     ],
 )
 def test_persisted_scheduler_config_always_applies_mandatory_effective_caps(
@@ -51,7 +50,6 @@ def test_persisted_scheduler_config_always_applies_mandatory_effective_caps(
     assert limits["maturation_child"] <= 2
     assert limits["ppiflow"] <= 2
     assert limits["esmfold2"] == 1
-    assert limits["esmfold2_experimental"] == 1
     assert "esmfold" not in limits
 
 
@@ -86,13 +84,12 @@ def test_global_margin_inheritance_and_explicit_zero_override_change_admission()
 
 def test_canonical_esmfold2_has_heavy_22gb_reservation() -> None:
     assert VRAM_PROFILES["esmfold2"]["base"] >= 22000
-    assert VRAM_PROFILES["esmfold2_experimental"]["base"] >= 22000
-    assert {"esmfold2", "esmfold2_experimental"} <= HEAVY_MODELS
+    assert "esmfold2" in HEAVY_MODELS
     assert "esmfold" not in HEAVY_MODELS
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model_type", ["esmfold2", "esmfold2_experimental"])
+@pytest.mark.parametrize("model_type", ["esmfold2"])
 async def test_protected_limit_rejects_null_delete_and_over_cap(
     monkeypatch: pytest.MonkeyPatch,
     model_type: str,

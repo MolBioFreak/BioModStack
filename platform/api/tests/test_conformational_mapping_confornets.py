@@ -634,8 +634,6 @@ def test_cm4_008_native_manifest_complete(tmp_path: Path) -> None:
 
 def test_cm4_009_legacy_artifacts_semantically_preserved(tmp_path: Path) -> None:
     protected = [
-        REPO_ROOT / "modules" / "confornets_experimental.nf",
-        REPO_ROOT / "workflows" / "confornets_experimental.nf",
         REPO_ROOT / "scripts" / "prep_confornets_request.py",
         REPO_ROOT / "scripts" / "run_confornets_inference.py",
     ]

@@ -270,9 +270,7 @@ export const inferJobOutputSource = (job: OutputSourceJob | null | undefined): O
         mode.includes('esmfold2') ||
         stageFamily.includes('esmfold2') ||
         stageMode.includes('esmfold2') ||
-        String(params.rfd_mode || '').toLowerCase().includes('esmfold2') ||
-        String(params.structure_launch_variant || '').toLowerCase() === 'esmfold2_experimental' ||
-        String(params.template_model_id || '').toLowerCase() === 'esmfold2_experimental'
+        String(params.rfd_mode || '').toLowerCase().includes('esmfold2')
     ) {
         return 'esmfold2';
     }
@@ -614,9 +612,7 @@ const inferJobAnalysisLens = (job: AnalysisLensJob | null | undefined): Analysis
         modelId.includes('esmfold2') ||
         mode.includes('esmfold2') ||
         stageFamily.includes('esmfold2') ||
-        stageMode.includes('esmfold2') ||
-        String(params.structure_launch_variant || '').toLowerCase() === 'esmfold2_experimental' ||
-        String(params.template_model_id || '').toLowerCase() === 'esmfold2_experimental'
+        stageMode.includes('esmfold2')
     ) {
         return 'validation';
     }

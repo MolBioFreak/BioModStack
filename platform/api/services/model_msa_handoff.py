@@ -70,7 +70,6 @@ def generated_msa_service_supported(service) -> bool:
             'modules/antibody_batch.nf:BatchProtenixValidation',
             'modules/protenix.nf:ProtenixFromComplex',
             'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble',
-            'modules/confornets_experimental.nf:RunConforNets',
             'modules/conformational_mapping_confornets.nf:RunCanonicalConforNets'},
         'shape:boltz2:generated_msa': {'modules/shape_blueprint.nf:RunShapeBoltzValidator'},
         'shape:protenix_v2:generated_msa': {'modules/shape_blueprint.nf:RunShapeProtenixValidator'},
@@ -273,7 +272,7 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path, *, native
         effective['protenix_prepared_msa_dir'] = str(destination.resolve())
         effective['protenix_prepared_msa_sha256'] = digest((destination / 'msa-inputs.json').read_bytes())
         return effective
-    if model_id not in {'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental', 'rf3'}:
+    if model_id not in {'boltz2', 'boltz_cp_experimental', 'esmfold2', 'rf3'}:
         return effective
     if model_id == 'rf3':
         if enabled(params.get('rf3_use_msa')):

@@ -1140,44 +1140,6 @@ def test_cm3_007_unknown_backend_fails() -> None:
     assert "fallback" not in workflow_text.lower()
 
 
-def test_cm3_008_confornets_experimental_unchanged(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(nextflow, "resolve_nextflow_executable", lambda: "/usr/bin/nextflow")
-    legacy_params = {
-        "task": "transfer",
-        "sequence": "MKTIIALSYIFCLVFADYKDDDDA",
-        "source_test_cases": "open_ref,closed_ref",
-        "num_runs": 2,
-        "k_confornets": 2,
-        "num_samples": 5,
-    }
-    original = json.loads(json.dumps(legacy_params))
-    command = nextflow.build_nextflow_command(
-        "confornets_experimental",
-        "design",
-        legacy_params,
-        str(tmp_path),
-        job_id="legacy-cn",
-    )
-
-    assert nextflow.resolve_nextflow_entrypoint(
-        effective_profile="confornets_experimental",
-        model_id="confornets_experimental",
-        mode="design",
-    ) == "workflows/confornets_experimental.nf"
-    assert _flag_value(command, "-profile") == (
-        "confornets_experimental,workstation_ryzen7960x"
-    )
-    assert _flag_value(command, "--cn_source_test_cases") == "open_ref,closed_ref"
-    assert _flag_value(command, "--cn_task") == "transfer"
-    assert legacy_params == original
-    assert ModelRegistry().get_model("confornets_experimental") is not None
-    assert TemplateRegistry(API_ROOT / "config" / "templates").get_template(
-        "confornets_experimental"
-    ) is not None
-
-
 def test_published_conformational_mapping_replaces_legacy_experimental_copy() -> None:
     models = ModelRegistry()
     templates = TemplateRegistry(API_ROOT / "config" / "templates")
@@ -1190,9 +1152,8 @@ def test_published_conformational_mapping_replaces_legacy_experimental_copy() ->
     assert canonical_model is not None and canonical_model.experimental is False
     assert canonical_template is not None and canonical_template.experimental is False
     assert canonical_template.enabled is True
-    assert legacy_model is not None and legacy_model.experimental is True
-    assert legacy_template is not None and legacy_template.experimental is True
-    assert legacy_template.enabled is False
+    assert legacy_model is None
+    assert legacy_template is None
     assert {template.id for template in templates.list_templates(enabled_only=True)} & {
         "conformational_mapping",
         "confornets_experimental",

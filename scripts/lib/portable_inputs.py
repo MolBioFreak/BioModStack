@@ -561,7 +561,7 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
             else:
                 for i, state in enumerate(params.get('structures', [])):
                     visit(state['path'], None, ('structures', i, 'path'))
-    if model_id in {'esmfold2', 'esmfold2_experimental'}:
+    if model_id == 'esmfold2':
         # Preview sees public components before the compiler writes their native
         # document. Reuse its typed MSA fields and the existing visit/roots owner;
         # esmf_use_msa controls search, not explicitly supplied component inputs.

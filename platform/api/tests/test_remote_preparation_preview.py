@@ -75,8 +75,7 @@ async def test_scoped_image_catalog_is_not_composed_model_closure(assets, monkey
     catalog = [r.model_dump() for r in await provision_catalog()]
     target = SimpleNamespace(id='one', host='worker', port=22, username='root', remote_root='/worker', host_key_sha256='c'*64)
     for model, image in [('boltzgen', 'boltzgen.sif'),
-                         ('molecular_dynamics', 'gromacs-md-2025.3.sif'),
-                         ('confornets_experimental', 'confornets.sif')]:
+                         ('molecular_dynamics', 'gromacs-md-2025.3.sif')]:
         assert {'kind': 'image', 'model_id': model} in catalog
         assert {'kind': 'model', 'model_id': model} not in catalog
         (assets[0] / image).write_bytes(b'controlled image')

@@ -5,8 +5,7 @@ category: structure_prediction
 description: >
   First-class ESMFold2 path for active local all-atom folding of proteins,
   protein complexes, optional DNA/RNA chains, ligands, and PDB-derived sequence
-  sources. The UI reuses the production Structure Prediction launcher and the
-  historical esmfold2_experimental ID remains a compatibility alias.
+  sources. The UI reuses the production Structure Prediction launcher.
 container: esmfold2.sif
 
 ui_icon: sparkles

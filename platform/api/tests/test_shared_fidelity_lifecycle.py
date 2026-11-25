@@ -12,7 +12,7 @@ from test_protenix_chemistry_transport import science
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('model_id', ['esmfold2', 'esmfold2_experimental', 'protenix'])
+@pytest.mark.parametrize('model_id', ['esmfold2', 'protenix'])
 @pytest.mark.parametrize('independent_source', [False, True])
 async def test_historical_psce_readback_keeps_upstream_metadata(tmp_path, model_id, independent_source):
     factory, engine = await setup(tmp_path)
