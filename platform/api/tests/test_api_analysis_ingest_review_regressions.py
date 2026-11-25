@@ -439,18 +439,6 @@ def test_rfantibody_review_metadata_refresh_detects_missing_source_backed_fields
         }
     }
 
-    monkeypatch.setattr(
-        "services.stage_review.load_rfantibody_trb_summary",
-        lambda _path: {
-            "rfa_metadata": {"device": "cuda:0"},
-            "rfa_hotspot_min_distance": 2.1,
-            "rfa_hotspot_avg_min_distance": 2.4,
-            "rfa_plddt_final": 88.5,
-            "rfa_design_loops": ["H3"],
-            "rfa_hotspots": ["A52"],
-        },
-    )
-
     assert _rfantibody_review_metadata_refresh_required(row, screening_by_name, {}) is True
 
 
@@ -468,7 +456,5 @@ def test_rfantibody_review_metadata_refresh_skips_rows_without_source_metadata(
         pdb_path=str(pdb_path),
         created_at=datetime.utcnow(),
     )
-
-    monkeypatch.setattr("services.stage_review.load_rfantibody_trb_summary", lambda _path: {})
 
     assert _rfantibody_review_metadata_refresh_required(row, {}, {}) is False

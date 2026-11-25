@@ -71,7 +71,6 @@ import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { CandidateRoundProgress } from './CandidateRoundProgress';
 import { ProteinDesignPanel } from './ProteinDesignWorkflow';
 import { readRoundStorage, type CandidateRef } from '../lib/binderSelectedRound';
-import { RFantibodyCandidateResults } from './RFantibodyCandidateResults';
 import NativeSequenceResults, { nativeSequenceResultKind } from './NativeSequenceResults';
 import { fetchNativeBinderGeneration, isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
 import { fetchRFD3Generation } from '../lib/api';
@@ -1822,7 +1821,6 @@ function ResultsViewerContent() {
     const [debouncedJobSelectorSearch, setDebouncedJobSelectorSearch] = useState('');
     const [showOverviewAnalysisMenu, setShowOverviewAnalysisMenu] = useState(false);
     const [activeTab, setActiveTab] = useState<TabId>(() => new URLSearchParams(location.search).get('view') === 'structure' ? 'structure' : 'overview');
-    const [rfWorkbenchJob, setRfWorkbenchJob] = useState<string>();
     const returnParams = new URLSearchParams(location.search);
     const returnTo = returnParams.get('return_to') ?? '';
     const safeReturnTo = /^\/designs\/[^\\\s?#]+(?:[?#][^\\\r\n]*)?$/.test(returnTo) ? returnTo : null;
@@ -5665,7 +5663,7 @@ function ResultsViewerContent() {
                         <CandidateRoundProgress key={`sequence-${activeJob.id}`} jobId={activeJob.id} kind="sequence" />
                     </ProteinDesignPanel>
                 )}
-                {activeJob && ['rfantibody', 'template_antibody_denovo'].includes(activeJob.model_id) && (
+                {activeJob && activeJob.model_id === 'template_antibody_denovo' && (
                     <BinderPredictionEvidence jobId={selectedDesign?.job_id || selectedJobId} sourceDesignId={selectedDesign?.job_id ? selectedDesign.id : undefined} launchContextId={destinationLaunchContextId} />
                 )}
                 {activeJob && ((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
@@ -5674,15 +5672,9 @@ function ResultsViewerContent() {
                         launchContextId={destinationLaunchContextId}
                             sourceModelId={activeJob.model_id} sourceParams={activeJob.params}
                         selectedDesignIds={selectedDesignIds} resultJob={activeJob} onOpenJob={handleSelectJob} />}
-                {activeJob?.model_id === 'rfantibody' && (rfWorkbenchJob === activeJob.id || !!requestedDesignId) && <button type="button" onClick={() => { setRfWorkbenchJob(undefined); const query = new URLSearchParams(location.search); ['design_id', 'artifact_id', 'target_state'].forEach(key => query.delete(key)); navigate(`/designs/${activeJob.id}?${query}`); }}>Back to RFantibody candidates</button>}
                 {activeJob && (
                     isShapeResultJob(activeJob) ? (
                         <ShapeResultsWorkspace key={activeJob.id} job={activeJob} />
-                    ) : activeJob.model_id === 'rfantibody' && rfWorkbenchJob !== activeJob.id && !requestedDesignId ? (
-                        <><RFantibodyCandidateResults jobId={activeJob.id} status={activeJob.status} launchContextId={destinationLaunchContextId}
-                            selectedDesignIds={selectedDesignIds} onSelectedDesignIdsChange={setSelectedDesignIds}
-                            selectedNativeSources={selectedNativeSources} onSelectedNativeSourcesChange={setSelectedNativeSources}
-                            onOpenWorkbench={(id, document) => { setSelectedDesignId(id); setActiveTab('structure'); setRfWorkbenchJob(activeJob.id); if (document?.artifact_id) navigate(nativeCandidateRoute(activeJob.id, id, { ...document, artifact_id: document.artifact_id }, destinationLaunchContextId)); }} />{selectedCandidateControls}</>
                     ) : nativeSequenceResultKind(activeJob) ? (
                         <><NativeSequenceResults key={activeJob.id} job={activeJob} launchContextId={destinationLaunchContextId} />{selectedCandidateControls}</>
                     ) : activeJob.model_id === 'bindcraft2' ? (

@@ -44,7 +44,6 @@ from database import (
     ShapeDesignRequest,
 )
 from paths import get_data_root, resolve_runtime_data_path
-from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
 from .aligned_error_utils import detect_aligned_error_artifact, load_aligned_error_artifact
 from .ipsae import compute_ipsae_interface
@@ -5015,31 +5014,9 @@ async def _ingest_job_results(
                         created_at=datetime.utcnow()
                     )
 
-                    rfa_trb = load_rfantibody_trb_summary(structure_path) if structure_path else {}
-                    if rfa_trb:
-                        design.plddt_overall = safe_float(rfa_trb.get("plddt_overall"))
-                        design.residue_plddt = rfa_trb.get("residue_plddt")
-                        design.rfa_hotspot_min_distance = safe_float(rfa_trb.get("rfa_hotspot_min_distance"))
-                        design.rfa_hotspot_avg_min_distance = safe_float(rfa_trb.get("rfa_hotspot_avg_min_distance"))
-                        design.rfa_runtime_seconds = safe_float(rfa_trb.get("rfa_runtime_seconds"))
-                        design.rfa_device = rfa_trb.get("rfa_device")
-                        design.rfa_diffusion_steps = safe_int(rfa_trb.get("rfa_diffusion_steps"))
-                        design.rfa_noise_scale_ca = safe_float(rfa_trb.get("rfa_noise_scale_ca"))
-                        design.rfa_noise_scale_frame = safe_float(rfa_trb.get("rfa_noise_scale_frame"))
-                        design.rfa_guide_scale = safe_float(rfa_trb.get("rfa_guide_scale"))
-                        design.rfa_plddt_initial = safe_float(rfa_trb.get("rfa_plddt_initial"))
-                        design.rfa_plddt_final = safe_float(rfa_trb.get("rfa_plddt_final"))
-                        design.rfa_plddt_delta = safe_float(rfa_trb.get("rfa_plddt_delta"))
-                        design.rfa_plddt_selected = safe_float(rfa_trb.get("rfa_plddt_selected"))
-                        design.rfa_plddt_nonselected = safe_float(rfa_trb.get("rfa_plddt_nonselected"))
-                        design.rfa_design_loops = rfa_trb.get("rfa_design_loops")
-                        design.rfa_hotspots = rfa_trb.get("rfa_hotspots")
-                        design_provenance["rfantibody"] = rfa_trb
                     combined_confidence: Dict[str, Any] = {}
                     if fampnn_record:
                         combined_confidence["fampnn"] = fampnn_record
-                    if rfa_trb:
-                        combined_confidence["rfantibody"] = rfa_trb.get("rfa_metadata") or rfa_trb
                     if combined_confidence:
                         design.confidence_metrics = combined_confidence
                     lineage = await _resolve_parent_design_lineage(
@@ -7335,19 +7312,12 @@ async def ingest_loose_files(
                     allow_structure_psce=job_context.get("stage_family") == "fampnn" and not is_fold_cp)
                 fampnn_record = _build_fampnn_payload(fam_payload, fam_metrics)
                     
-                # For raw RFantibody outputs, the meaningful confidence lives in the
-                # .trb sidecar rather than the output PDB B-factors.
-                rfa_trb = load_rfantibody_trb_summary(structure_path)
-                if rfa_trb:
-                    plddt = safe_float(rfa_trb.get("plddt_overall"))
-                    residue_plddt = rfa_trb.get("residue_plddt")
-                else:
-                    plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
-                    if fampnn_record and str(job_context.get("stage_family") or "").strip().lower() == "fampnn":
-                        if plddt is not None and plddt <= 0:
-                            plddt = None
-                        if isinstance(residue_plddt, list) and not any(safe_float(value) and safe_float(value) > 0 for value in residue_plddt):
-                            residue_plddt = None
+                plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
+                if fampnn_record and str(job_context.get("stage_family") or "").strip().lower() == "fampnn":
+                    if plddt is not None and plddt <= 0:
+                        plddt = None
+                    if isinstance(residue_plddt, list) and not any(safe_float(value) and safe_float(value) > 0 for value in residue_plddt):
+                        residue_plddt = None
                 structure_cdr_lengths = _parse_hlt_cdr_lengths(Path(structure_path))
                 epitope_contact_count = None
                 epitope_min_distance = None
@@ -7371,9 +7341,6 @@ async def ingest_loose_files(
                 if fampnn_record:
                     design_provenance["fampnn"] = fampnn_record
                     combined_confidence["fampnn"] = fampnn_record
-                if rfa_trb:
-                    design_provenance["rfantibody"] = rfa_trb
-                    combined_confidence["rfantibody"] = rfa_trb.get("rfa_metadata") or rfa_trb
                     
                 design = Design(
                     id=str(uuid.uuid4()),
@@ -7402,21 +7369,6 @@ async def ingest_loose_files(
                     mpnn_score=fam_metrics.get("mpnn_score"),
                     fampnn_psce=fam_metrics.get("avg_psce"),
                     binder_length=fam_metrics.get("binder_length"),
-                    rfa_hotspot_min_distance=safe_float(rfa_trb.get("rfa_hotspot_min_distance")),
-                    rfa_hotspot_avg_min_distance=safe_float(rfa_trb.get("rfa_hotspot_avg_min_distance")),
-                    rfa_runtime_seconds=safe_float(rfa_trb.get("rfa_runtime_seconds")),
-                    rfa_device=rfa_trb.get("rfa_device"),
-                    rfa_diffusion_steps=safe_int(rfa_trb.get("rfa_diffusion_steps")),
-                    rfa_noise_scale_ca=safe_float(rfa_trb.get("rfa_noise_scale_ca")),
-                    rfa_noise_scale_frame=safe_float(rfa_trb.get("rfa_noise_scale_frame")),
-                    rfa_guide_scale=safe_float(rfa_trb.get("rfa_guide_scale")),
-                    rfa_plddt_initial=safe_float(rfa_trb.get("rfa_plddt_initial")),
-                    rfa_plddt_final=safe_float(rfa_trb.get("rfa_plddt_final")),
-                    rfa_plddt_delta=safe_float(rfa_trb.get("rfa_plddt_delta")),
-                    rfa_plddt_selected=safe_float(rfa_trb.get("rfa_plddt_selected")),
-                    rfa_plddt_nonselected=safe_float(rfa_trb.get("rfa_plddt_nonselected")),
-                    rfa_design_loops=rfa_trb.get("rfa_design_loops"),
-                    rfa_hotspots=rfa_trb.get("rfa_hotspots"),
                     confidence_metrics=combined_confidence or None,
                     cdr_h1_length=structure_cdr_lengths.get("H1"),
                     cdr_h2_length=structure_cdr_lengths.get("H2"),

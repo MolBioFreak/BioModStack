@@ -41,7 +41,6 @@ from services.result_ingester import (
     safe_int,
 )
 from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
-from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.structure_utils import load_structure
 
 from services.plr_validator_scores import apply_validator_scores
@@ -967,30 +966,6 @@ def _rfantibody_review_metadata_refresh_required(
 
     structure_path = Path(sample_pdb_path)
     screening = screening_row_for_structure(structure_path, screening_by_name, screening_by_backbone)
-    rfa_trb = load_rfantibody_trb_summary(structure_path) or {}
-
-    trb_field_sources = {
-        "confidence_metrics": rfa_trb.get("rfa_metadata"),
-        "rfa_hotspot_min_distance": safe_float(rfa_trb.get("rfa_hotspot_min_distance")),
-        "rfa_hotspot_avg_min_distance": safe_float(rfa_trb.get("rfa_hotspot_avg_min_distance")),
-        "rfa_runtime_seconds": safe_float(rfa_trb.get("rfa_runtime_seconds")),
-        "rfa_device": rfa_trb.get("rfa_device"),
-        "rfa_diffusion_steps": safe_int(rfa_trb.get("rfa_diffusion_steps")),
-        "rfa_noise_scale_ca": safe_float(rfa_trb.get("rfa_noise_scale_ca")),
-        "rfa_noise_scale_frame": safe_float(rfa_trb.get("rfa_noise_scale_frame")),
-        "rfa_guide_scale": safe_float(rfa_trb.get("rfa_guide_scale")),
-        "rfa_plddt_initial": safe_float(rfa_trb.get("rfa_plddt_initial")),
-        "rfa_plddt_final": safe_float(rfa_trb.get("rfa_plddt_final")),
-        "rfa_plddt_delta": safe_float(rfa_trb.get("rfa_plddt_delta")),
-        "rfa_plddt_selected": safe_float(rfa_trb.get("rfa_plddt_selected")),
-        "rfa_plddt_nonselected": safe_float(rfa_trb.get("rfa_plddt_nonselected")),
-        "rfa_design_loops": rfa_trb.get("rfa_design_loops"),
-        "rfa_hotspots": rfa_trb.get("rfa_hotspots"),
-    }
-    for field_name, source_value in trb_field_sources.items():
-        if not _metadata_value_present(getattr(row, field_name, None)) and _metadata_value_present(source_value):
-            return True
-
     if not isinstance(screening, dict):
         return False
 
@@ -1380,11 +1355,7 @@ async def _ensure_stage_review_rows_owned(session: AsyncSession, job: Job, force
             structure_path=structure_path,
             source_identity=_read_json(structure_path.with_suffix(".json")),
         )
-        rfa_trb = load_rfantibody_trb_summary(structure_path) if uses_rfantibody_review else {}
-        if uses_rfantibody_review:
-            avg_plddt = safe_float(rfa_trb.get("plddt_overall"))
-            residue_plddt = rfa_trb.get("residue_plddt")
-        elif stage in {"post_fampnn", "post_caliby", "post_ppiflow_generator"}:
+        if stage in {"post_fampnn", "post_caliby", "post_ppiflow_generator"}:
             # Refinement can retain the input's B-factor column. It does not
             # constitute fresh predictor confidence for this descendant.
             avg_plddt, residue_plddt = None, None
@@ -1517,31 +1488,12 @@ async def _ensure_stage_review_rows_owned(session: AsyncSession, job: Job, force
                 rfa_loop_metrics=_coerce_json_value((screening or {}).get("rfa_loop_metrics")),
                 rfa_hotspot_metrics=_coerce_json_value((screening or {}).get("rfa_hotspot_metrics")),
                 rfa_hotspot_covered_count=safe_int((screening or {}).get("rfa_hotspot_covered_count")),
-                rfa_hotspot_min_distance=safe_float(rfa_trb.get("rfa_hotspot_min_distance")),
-                rfa_hotspot_avg_min_distance=safe_float(rfa_trb.get("rfa_hotspot_avg_min_distance")),
-                rfa_runtime_seconds=safe_float(rfa_trb.get("rfa_runtime_seconds")),
-                rfa_device=rfa_trb.get("rfa_device"),
-                rfa_diffusion_steps=safe_int(rfa_trb.get("rfa_diffusion_steps")),
-                rfa_noise_scale_ca=safe_float(rfa_trb.get("rfa_noise_scale_ca")),
-                rfa_noise_scale_frame=safe_float(rfa_trb.get("rfa_noise_scale_frame")),
-                rfa_guide_scale=safe_float(rfa_trb.get("rfa_guide_scale")),
-                rfa_plddt_initial=safe_float(rfa_trb.get("rfa_plddt_initial")),
-                rfa_plddt_final=safe_float(rfa_trb.get("rfa_plddt_final")),
-                rfa_plddt_delta=safe_float(rfa_trb.get("rfa_plddt_delta")),
-                rfa_plddt_selected=safe_float(rfa_trb.get("rfa_plddt_selected")),
-                rfa_plddt_nonselected=safe_float(rfa_trb.get("rfa_plddt_nonselected")),
-                rfa_design_loops=rfa_trb.get("rfa_design_loops"),
-                rfa_hotspots=rfa_trb.get("rfa_hotspots"),
-                confidence_metrics=(
-                    rfa_trb.get("rfa_metadata")
-                    if uses_rfantibody_review
-                    else _coerce_json_value(
+                confidence_metrics=_coerce_json_value(
                         boltzgen_metrics.get("confidence_metrics")
                         if stage == "post_boltzgen"
                         else caliby_metrics.get("confidence_metrics") if stage == "post_caliby"
                         else None
-                    )
-                ),
+                    ),
                 cdr_h1_length=structure_cdr_lengths.get("H1"),
                 cdr_h2_length=structure_cdr_lengths.get("H2"),
                 cdr_h3_length=structure_cdr_lengths.get("H3"),

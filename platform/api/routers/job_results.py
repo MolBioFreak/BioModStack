@@ -95,8 +95,6 @@ def _terminal_closeout_design_count(output_path: Path) -> int:
             pass
 
     for relative_dir in (
-        Path("run") / "rfantibody",
-        Path("collected") / "rfantibody_raw",
         Path("results"),
     ):
         artifact_dir = output_path / relative_dir

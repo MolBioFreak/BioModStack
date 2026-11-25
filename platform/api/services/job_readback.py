@@ -23,7 +23,6 @@ from schemas import CandidateRef
 def _resolve_requested_design_count(job: Job) -> Optional[int]:
     params = job.params if isinstance(job.params, dict) else {}
     for key in (
-        "rfantibody_num_designs",
         "rfd_num_designs",
         "num_designs",
         "num_samples",

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 
-@pytest.mark.parametrize("family", ["rfantibody", "fampnn", "maturation", "antibody"])
+@pytest.mark.parametrize("family", ["fampnn", "maturation", "antibody"])
 def test_native_antibody_spawners_keep_grouping_and_settings(family, tmp_path, monkeypatch):
     import importlib
     import json
@@ -25,11 +25,7 @@ def test_native_antibody_spawners_keep_grouping_and_settings(family, tmp_path, m
             "ATOM      1  CA  ALA H   1       0.000   0.000   0.000  1.00 20.00           C\n")
     settings = {"seed": 73, "fampnn_temperature": 0.31, "pinned_gpus": [2]}
     common = dict(parent_job_id="root", batch_name="batch", params_json=json.dumps(settings))
-    if family == "rfantibody":
-        result = module.spawn_rfantibody_jobs(total_designs=5, designs_per_job=2,
-            target_pdb_path=str(tmp_path / "design0.pdb"), epitope_residues="T1",
-            framework_type="nanobody", framework_pdb=None, **common)
-    elif family == "fampnn":
+    if family == "fampnn":
         result = module.spawn_fampnn_jobs(pdb_dir=str(tmp_path), pdbs_per_job=2,
                                          seqs_per_design=7, **common)
     elif family == "maturation":
