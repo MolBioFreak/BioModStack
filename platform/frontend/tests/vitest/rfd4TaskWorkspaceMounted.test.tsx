@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
@@ -461,4 +461,35 @@ it.each(['protein_binder', 'ligand_binder', 'AME', 'monomer_motif_indexed', 'mon
     }
     const saved = JSON.parse(JSON.stringify(draft)); await unmount(); await mount('complexa', saved);
     expect(draft.complexa_request).toEqual(saved.complexa_request);
+});
+
+it('pre-populates boolean condition value, disables empty native condition apply, and navigates to /designs/:id on Generate', async () => {
+    let currentPath = '/';
+    function LocationSpy() { currentPath = useLocation().pathname; return null; }
+    const el = document.createElement('div'); document.body.append(el); root = createRoot(el);
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
+    await act(async () => root!.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/submit?template=de_novo&model=rfd4_proteina']}><LocationSpy /><DeNovoNativeGenerationSettings model="rfd4_proteina" mode="generate" initialValues={{}} onDraftChange={v => { draft = v; }} /></MemoryRouter></QueryClientProvider>));
+    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[data-rfd4-task-workspace]')).not.toBeNull(); });
+    await edit('RFD4 task', 'motif'); await click('Add conditioned example');
+
+    const valueInput = document.querySelector<HTMLInputElement>('[aria-label="Native condition value"]')!;
+    expect(valueInput.value).toBe('true');
+    const applyBtn = () => [...document.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === 'Apply native condition')!;
+    expect(applyBtn().disabled).toBe(true);
+
+    await edit('Selection expression', "sel('A/*/[1-5]')");
+    expect(applyBtn().disabled).toBe(false);
+
+    await edit('Condition family', 'C_HB');
+    expect(valueInput.value).toBe('');
+    expect(applyBtn().disabled).toBe(true);
+
+    await edit('Condition family', 'C_SEQ');
+    expect(valueInput.value).toBe('true');
+    expect(applyBtn().disabled).toBe(false);
+    await click('Apply native condition');
+    expect(draft.rfd4_request.input.examples[0].conditions.C_SEQ).toEqual({ true: [{ select: "sel('A/*/[1-5]')" }] });
+
+    await click('Generate candidates');
+    expect(currentPath).toBe('/designs/inert');
 });

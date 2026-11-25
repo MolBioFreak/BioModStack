@@ -202,7 +202,7 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
         {!isFile && prepared?.current?.geometry?.result && <div><button type="button" disabled={busy} aria-label={`Use constructed geometry for ${slot}`} onClick={() => void adoptPrepared()}>Use constructed geometry</button><p className="text-xs text-slate-400">Explicitly selects the current positioned PDB. Graph bonds, charges, recipe and atom correspondence are retained separately; native engine chemistry compatibility is not implied.</p></div>}
         {picking && !isFile && <TargetAntigenSelector requiredFormat="native" label={`Native document for ${slot}`} onSelect={source => void select(source)} />}
         {nativePicking && !isFile && <DeNovoNativeDocumentPicker onSelect={source => void acquire(source)} />}
-        {browser && <FileBrowser title={`Native source ${slot}`} allowDirectory={isFile} accept={isFile ? undefined : '.pdb,.cif,.mmcif,.bcif,.pdb.gz,.cif.gz,.mmcif.gz,.bcif.gz'} onCancel={() => setBrowser(false)} onSelect={path => {
+        {browser && <FileBrowser title={`Native source ${slot}`} initialPath={isFile ? '/' : '/inputs'} allowDirectory={isFile} accept={isFile ? undefined : '.pdb,.cif,.mmcif,.bcif,.pdb.gz,.cif.gz,.mmcif.gz,.bcif.gz'} onCancel={() => setBrowser(false)} onSelect={path => {
             if (isFile) { epoch.current++; onChange({ kind: 'file', path }); setBrowser(false); }
             else void acquire({ path, output_format: 'native' });
         }} />}

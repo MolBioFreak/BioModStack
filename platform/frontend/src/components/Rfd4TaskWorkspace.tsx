@@ -55,8 +55,20 @@ export { Rfd4Regions } from './Rfd4VisualWorkbench';
 type Visual = Rfd4VisualSelection;
 export type Rfd4ConditionInspection = { exampleIndex: number; family: string; value: string; rowIndex: number; select: string; group?: string };
 function Conditions({ value, families, visual, onChange, onInspect, advanced }: { advanced?: boolean; value: Record<string, any>; families: string[]; visual?: Visual; onChange: (v: Record<string, any>) => void; onInspect?: (row: Omit<Rfd4ConditionInspection, 'exampleIndex'>) => void }) {
-    const [family, setFamily] = useState('C_CRD'); const [conditionValue, setConditionValue] = useState('');
+    const [family, setFamily] = useState('C_CRD');
+    const [conditionValue, setConditionValue] = useState(() => conditionTypes.C_CRD?.kind === 'boolean' ? 'true' : '');
     const [expression, setExpression] = useState(''); const [group, setGroup] = useState('');
+    const canApplyCondition = conditionValue.trim() !== '' && expression.trim() !== '';
+    const selectFamily = (nextFamily: string) => {
+        const prevKind = conditionTypes[family]?.kind;
+        const nextKind = conditionTypes[nextFamily]?.kind;
+        setFamily(nextFamily);
+        if (nextKind === 'boolean') {
+            if (conditionValue !== 'true' && conditionValue !== 'false') setConditionValue('true');
+        } else if (prevKind === 'boolean' && (conditionValue === 'true' || conditionValue === 'false')) {
+            setConditionValue('');
+        }
+    };
     const [undo, setUndo] = useState<{ before: Record<string, any>; after: Record<string, any> }>();
     const change = (next: Record<string, any>) => { setUndo({ before: value, after: next }); onChange(next); };
     return <fieldset className="space-y-3"><legend>Residue conditions</legend>
@@ -71,7 +83,7 @@ function Conditions({ value, families, visual, onChange, onInspect, advanced }: 
             <label>Group<input aria-label={`${name} ${val} group ${i + 1}`} value={row.group ?? ''} onChange={e => change({ ...value, [name]: { ...entries, [val]: rows.map((r: any, n: number) => n === i ? patchNative(r, 'group', e.target.value || undefined) : r) } })} /></label></details>
             <button type="button" onClick={() => { const entriesNext = { ...entries, [val]: rows.filter((_: any, n: number) => n !== i) }; if (!entriesNext[val].length) delete entriesNext[val]; change(Object.keys(entriesNext).length ? { ...value, [name]: entriesNext } : patchNative(value, name, undefined)); }}>Remove {name} {val} row {i + 1}</button>
         </div>)))}
-        <details open={advanced || undefined}><summary>More conditions and native expressions</summary><h4>Assign a condition</h4><div className="flex flex-wrap gap-3"><label>Condition family<select aria-label="Condition family" value={family} onChange={e => setFamily(e.target.value)}>{families.map(f => <option key={f} value={f}>{rfd4ConditionName(f)} · {f}</option>)}</select></label>
+        <details open={advanced || undefined}><summary>More conditions and native expressions</summary><h4>Assign a condition</h4><div className="flex flex-wrap gap-3"><label>Condition family<select aria-label="Condition family" value={family} onChange={e => selectFamily(e.target.value)}>{families.map(f => <option key={f} value={f}>{rfd4ConditionName(f)} · {f}</option>)}</select></label>
             <label>Native condition value<input aria-label="Native condition value" value={conditionValue} onChange={e => setConditionValue(e.target.value)} /></label>
             {(conditionTypes[family]?.kind === 'boolean' || conditionTypes[family]?.kind === 'enum') && <label>Known native value<select aria-label="Known native value" value={conditionValue} onChange={e => setConditionValue(e.target.value)}><option value="">Choose explicitly</option>{conditionTypes[family].kind === 'boolean' ? ['true', 'false'].map(v => <option key={v}>{v}</option>) : Object.entries(conditionTypes[family].values).map(([name, code]) => <option key={name} value={name}>{name} ({code})</option>)}{conditionValue && !['true', 'false', ...Object.keys(conditionTypes[family].values)].includes(conditionValue) && <option value={conditionValue}>Manual: {conditionValue}</option>}</select></label>}
             <p className="text-xs whitespace-pre-wrap">{conditionTypes[family]?.description} {family === 'C_IDX' && 'For false, provide a group label; equal labels share native index offsets.'} {family === 'C_CRDGRP' && 'Use -1 for unknown, 0 for absolute coordinates, or a positive internal group ID. Saved internal targets are separate from current coordinates.'}</p>
@@ -79,7 +91,8 @@ function Conditions({ value, families, visual, onChange, onInspect, advanced }: 
             <label>Selection expression<input aria-label="Selection expression" value={expression} onChange={e => setExpression(e.target.value)} /></label>
             <label>New condition group<input aria-label="New condition group" value={group} onChange={e => setGroup(e.target.value)} /></label></div>
         {visual && <><p role="status" className="rfd4-condition-query font-mono">{visual.issue ?? `Selection from ${visual.slot}`}</p><button type="button" onClick={() => { if (visual.expression !== undefined) setExpression(visual.expression); }}>Use visual selection in new condition</button></>}
-        <button type="button" onClick={() => change({ ...value, [family]: { ...nativeRecord(value[family]), [conditionValue]: [...(nativeRecord(value[family])[conditionValue] ?? []), { select: expression, ...(group !== '' ? { group } : {}) }] } })}>Apply native condition</button></details>
+        <button type="button" disabled={!canApplyCondition} onClick={() => { if (!canApplyCondition) return; change({ ...value, [family]: { ...nativeRecord(value[family]), [conditionValue]: [...(nativeRecord(value[family])[conditionValue] ?? []), { select: expression, ...(group !== '' ? { group } : {}) }] } }); }}>Apply native condition</button>
+        {!canApplyCondition && <p role="note" className="text-xs text-[var(--text-secondary)]">Enter both a native condition value and a selection expression to apply.</p>}</details>
         <button type="button" disabled={!undo || JSON.stringify(value) !== JSON.stringify(undo.after)} onClick={() => { if (undo) { onChange(undo.before); setUndo(undefined); } }}>Undo condition edit</button>
     </fieldset>;
 }

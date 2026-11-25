@@ -154,9 +154,23 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
         preparation.current = prepare;
         return () => { if (preparation.current === prepare) preparation.current = null; };
     }, [preparation]);
+    const extractJobId = (data: unknown): string | null => {
+        if (!data || typeof data !== 'object') return null;
+        const rec = data as Record<string, unknown>;
+        const launched = rec.launched_job && typeof rec.launched_job === 'object' ? rec.launched_job as Record<string, unknown> : null;
+        if (typeof rec.id === 'string' && rec.id) return rec.id;
+        if (typeof rec.job_id === 'string' && rec.job_id) return rec.job_id;
+        if (typeof launched?.id === 'string' && launched.id) return launched.id;
+        return null;
+    };
     const submit = useMutation({ mutationFn: async () => submitJob({ ...await prepareCurrent.current(),
         execution_target_id: sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) || null } as Partial<Job>),
-        onSuccess: async response => { client.invalidateQueries({ queryKey: ['jobs'] }); navigate(await completeCurrentLaunchContext(response.data) ?? '/'); } });
+        onSuccess: async response => {
+            client.invalidateQueries({ queryKey: ['jobs'] });
+            const jobId = extractJobId(response?.data);
+            navigate(await completeCurrentLaunchContext(response?.data) ?? (jobId ? `/designs/${encodeURIComponent(jobId)}` : '/'));
+        } });
+    const submittedJobId = extractJobId(submit.data?.data);
     const patch = (key: string, value: unknown) => setNativeDraft(previous => {
         const next = { ...previous.request }; if (value === undefined) delete next[key]; else next[key] = value;
         if (recipe && model === 'rfd4_proteina') return { ...previous, request: next };
@@ -283,7 +297,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
         <ProteinDesignRun stickyAction jobName={name} onJobNameChange={setName} pending={submit.isPending} onSubmit={() => submit.mutate()} submitLabel={model === 'complexa' && request.operation === 'design' ? 'Generate, filter, evaluate and analyze' : model === 'complexa' && request.operation === 'analysis' ? 'Evaluate and analyze' : activeMode === 'evaluate' ? 'Evaluate candidates' : 'Generate candidates'}>
             <DeNovoRunScope task={`${model === 'rfd4_proteina' ? 'RFD4' : 'Complexa'} · ${taskLabel} · ${request.operation ?? activeMode}`} documents={consumedDocuments} operations={payload.sequence_design} />
             <ExecutionTargetPicker workflowRequest={payload as Partial<Job>} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
-            {runDetails}{submit.error && <p role="alert">{submit.error.message}</p>}
+            {runDetails}{submit.isSuccess && <p role="status" className="text-sm text-emerald-400">Submitted job{submittedJobId ? ` ${submittedJobId}` : ''} — opening results…</p>}{submit.error && <p role="alert">{submit.error.message}</p>}
         </ProteinDesignRun>
     </div></BioXpSchemaControlContext.Provider></DeNovoDocumentEditors></DocumentCaptureContext.Provider>;
 }

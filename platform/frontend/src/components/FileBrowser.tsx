@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchFiles, uploadFile } from '../lib/api';
 
@@ -9,17 +9,32 @@ export interface FileBrowserProps {
     accept?: string;
     title?: string;
     allowDirectory?: boolean;
+    /** Starting directory; omitted preserves the historical root view. */
+    initialPath?: string;
 }
 
-export function FileBrowser({ onSelect, onCancel, accept, title = 'Select File', allowDirectory = false }: FileBrowserProps) {
-    const [path, setPath] = useState('/');
+function formatEntryName(name: string): { label: string; digest?: string } {
+    const match = /^(.+)-([0-9a-f]{64})(\.[^.]+(?:\.gz)?)$/i.exec(name);
+    if (!match) return { label: name };
+    return { label: `${match[1]}${match[3]}`, digest: match[2].slice(0, 8) };
+}
+
+export function FileBrowser({ onSelect, onCancel, accept, title = 'Select File', allowDirectory = false, initialPath = '/' }: FileBrowserProps) {
+    const [path, setPath] = useState(initialPath);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const queryClient = useQueryClient();
 
+    const fellBackRef = useRef(false);
     const { data: files, error: browseError } = useQuery({
         queryKey: ['files', path],
         queryFn: () => fetchFiles(path),
     });
+    useEffect(() => {
+        if (browseError && !fellBackRef.current && initialPath !== '/' && path === initialPath) {
+            fellBackRef.current = true;
+            setPath('/');
+        }
+    }, [browseError, initialPath, path]);
 
     const uploadMutation = useMutation({
         mutationFn: (file: File) => uploadFile(path === '/' ? 'inputs' : path, file),
@@ -119,7 +134,15 @@ export function FileBrowser({ onSelect, onCancel, accept, title = 'Select File',
                             }`}>
                                 {entry.is_directory ? 'Dir' : 'File'}
                             </span>
-                            <span className="flex-1 truncate">{entry.name}</span>
+                            {(() => {
+                                const formatted: { label: string; digest?: string } = entry.is_directory ? { label: entry.name } : formatEntryName(entry.name);
+                                return (
+                                    <span className="flex-1 min-w-0 flex items-center gap-1.5" title={entry.name}>
+                                        <span className="truncate">{formatted.label}</span>
+                                        {formatted.digest && <span className="shrink-0 font-mono text-[11px] text-[var(--text-secondary)]">({formatted.digest})</span>}
+                                    </span>
+                                );
+                            })()}
                             {!entry.is_directory && (
                                 <span className="text-xs text-[var(--text-secondary)]">
                                     {(entry.size_bytes / 1024).toFixed(1)} KB

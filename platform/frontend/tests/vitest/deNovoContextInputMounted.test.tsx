@@ -125,3 +125,19 @@ it('shows managed browse and upload failures without changing the selected sourc
     expect(container.querySelector('[role=alert]')?.textContent).toBe('Upload refused');
     expect(change).not.toHaveBeenCalled();
 });
+
+it('shortens 64-hex digest suffixes in FileBrowser display while preserving exact selection path and initialPath fallback', async () => {
+    const digest = 'a'.repeat(64);
+    const fullName = `1UBQ-${digest}.cif`;
+    transport.files.mockImplementation(async (p: string) => {
+        if (p === '/inputs') throw new Error('Access denied to this path');
+        return { data: { entries: [file(fullName, `/inputs/annotated_structures/${fullName}`)] } };
+    });
+    await render(<FileBrowser initialPath="/inputs" onSelect={change} onCancel={() => {}} accept=".cif" />);
+    await vi.waitFor(async () => { await settle(); expect(transport.files).toHaveBeenCalledWith('/'); });
+    const row = container.querySelector(`[title="${fullName}"]`);
+    expect(row?.textContent).toContain('1UBQ.cif');
+    expect(row?.textContent).toContain('(aaaaaaaa)');
+    await act(async () => (row!.closest('div') as HTMLElement).click()); await settle();
+    expect(change).toHaveBeenLastCalledWith(`/inputs/annotated_structures/${fullName}`);
+});
