@@ -82,11 +82,13 @@ def test_domain_store_migration_installs_pragmas_digest_guards_and_immutability(
                 """
                 INSERT INTO molbio_ngs_domain_state_revisions(
                     id, global_domain_experiment_id,
-                    global_domain_experiment_revision_id, revision_number, binding_revision_id,
+                    global_domain_experiment_revision_id, project_id, global_experiment_id,
+                    revision_number, binding_receipt_id,
                     schema_name, schema_version, canonical_payload, payload_sha256,
                     membership_graph_sha256, created_at
                 ) VALUES (
-                    'state-rev-bad', 'domain-1', 'global-domain-rev-1', 1, 'domain-1-binding',
+                    'state-rev-bad', 'domain-1', 'global-domain-rev-1', 'project-1', 'global-experiment-1',
+                    1, 'domain-1-binding',
                     'bms.molbio-ngs.domain-state-revision', '1', ?, ?, ?,
                     '2026-08-08T00:00:00Z'
                 )
@@ -97,11 +99,13 @@ def test_domain_store_migration_installs_pragmas_digest_guards_and_immutability(
             """
             INSERT INTO molbio_ngs_domain_state_revisions(
                 id, global_domain_experiment_id,
-                global_domain_experiment_revision_id, revision_number, binding_revision_id,
+                global_domain_experiment_revision_id, project_id, global_experiment_id,
+                revision_number, binding_receipt_id,
                 schema_name, schema_version, canonical_payload, payload_sha256,
                 membership_graph_sha256, created_at
             ) VALUES (
-                'state-rev-1', 'domain-1', 'global-domain-rev-1', 1, 'domain-1-binding',
+                'state-rev-1', 'domain-1', 'global-domain-rev-1', 'project-1', 'global-experiment-1',
+                1, 'domain-1-binding',
                 'bms.molbio-ngs.domain-state-revision', '1', ?, ?, ?,
                 '2026-08-08T00:00:00Z'
             )
@@ -123,38 +127,6 @@ def test_domain_store_migration_installs_pragmas_digest_guards_and_immutability(
             )
         with pytest.raises(sqlite3.IntegrityError, match="state revision is immutable"):
             connection.execute("DELETE FROM molbio_ngs_domain_state_revisions WHERE id='state-rev-1'")
-        authority_updates = {
-            "global_domain_experiment_id": "domain-other",
-            "global_domain_experiment_revision_id": "global-domain-rev-other",
-            "global_domain_experiment_revision_digest": "1" * 64,
-            "project_id": "project-other",
-            "project_generation": "4",
-            "project_digest": "2" * 64,
-            "project_receipt_id": "project-receipt-other",
-            "project_reopen_destination": _canonical({"surface": "project", "params": {"project_id": "project-other"}}),
-            "project_acknowledgement": _canonical({"ack": "other"}),
-            "global_experiment_id": "global-experiment-other",
-            "global_experiment_generation": "3",
-            "global_experiment_digest": "3" * 64,
-            "global_experiment_receipt_id": "experiment-receipt-other",
-            "global_experiment_reopen_destination": _canonical({"surface": "global-experiment", "params": {"experiment_id": "other"}}),
-            "global_experiment_acknowledgement": _canonical({"ack": "other"}),
-            "created_at": "2026-08-08T00:00:01Z",
-        }
-        for column, value in authority_updates.items():
-            with pytest.raises(sqlite3.IntegrityError, match="binding revision authority is immutable"):
-                connection.execute(
-                    f"UPDATE molbio_ngs_global_binding_revisions SET {column}=? WHERE global_domain_experiment_id='domain-1'",
-                    (value,),
-                )
-        connection.execute(
-            """
-            UPDATE molbio_ngs_global_binding_revisions
-               SET binding_state='stale', last_verified_at='2026-08-08T00:00:01Z',
-                   last_error='verification unavailable', updated_at='2026-08-08T00:00:01Z'
-             WHERE global_domain_experiment_id='domain-1'
-            """
-        )
 
         with pytest.raises(sqlite3.IntegrityError, match="domain state current revision"):
             connection.execute(
@@ -463,23 +435,6 @@ def test_online_backup_atomic_restore_and_exact_attestation(tmp_path: Path, monk
                 "2026-08-08T00:00:00Z",
             ),
         )
-        payload_json = _canonical({"schema": "bms.molbio-ngs.backup-proof.v1"})
-        connection.execute(
-            """
-            INSERT INTO molbio_ngs_outbox_events(
-                id, global_domain_experiment_id, state_revision_id, event_type,
-                payload_json, payload_sha256, status, retry_count, created_at, updated_at,
-                binding_revision_id, event_stream, stream_generation
-            ) VALUES ('backup-outbox-1', 'backup-domain', NULL, 'backup.proof',
-                      ?, ?, 'pending', 0, ?, ?, 'backup-domain-binding', 'binding', 1)
-            """,
-            (
-                payload_json,
-                _sha(payload_json),
-                "2026-08-08T00:00:00Z",
-                "2026-08-08T00:00:00Z",
-            ),
-        )
         connection.commit()
 
     # A populated, already-migrated startup does not read retained artifact bytes.
@@ -511,34 +466,12 @@ def test_online_backup_atomic_restore_and_exact_attestation(tmp_path: Path, monk
     assert manifest_path.read_text(encoding="utf-8") == _canonical(manifest) + "\n"
     assert manifest["backup_sha256"] == hashlib.sha256(backup.read_bytes()).hexdigest()
     assert manifest["backup_size_bytes"] == backup.stat().st_size
-    assert manifest["schema_version"] == 4
-    assert manifest["migration_ledger"] == [
-        {
-            "version": 1,
-            "name": "molbio_ngs_domain_state_v1",
-            "checksum": manifest["migration_ledger"][0]["checksum"],
-        },
-        {
-            "version": 2,
-            "name": "molbio_ngs_samples_references_v2",
-            "checksum": manifest["migration_ledger"][1]["checksum"],
-        },
-        {
-            "version": 3,
-            "name": "molbio_ngs_immutable_evidence_assessments_v3",
-            "checksum": manifest["migration_ledger"][2]["checksum"],
-        },
-        {
-            "version": 4,
-            "name": "molbio_ngs_versioned_bindings_ordered_outbox_v4",
-            "checksum": manifest["migration_ledger"][3]["checksum"],
-        },
-    ]
+    assert manifest["schema_version"] == 6
+    assert [row["version"] for row in manifest["migration_ledger"]] == [1, 2, 3, 4, 5, 6]
     assert manifest["member_receipts"] == {
         "count": 1,
         "by_kind": {"molecular_revision": 1},
     }
-    assert manifest["outbox_events"] == {"count": 1, "by_status": {"pending": 1}}
     expected_artifact_inventory = [
         {
             "artifact_id": "backup-artifact",
@@ -559,12 +492,12 @@ def test_online_backup_atomic_restore_and_exact_attestation(tmp_path: Path, monk
 
     with sqlite3.connect(source) as connection:
         connection.execute(
-            "DROP TRIGGER trg_molbio_ngs_outbox_payload_immutable_update"
+            "DROP TRIGGER trg_molbio_ngs_state_revisions_immutable_update"
         )
         connection.execute(
             """
-            CREATE TRIGGER trg_molbio_ngs_outbox_payload_immutable_update
-            BEFORE UPDATE ON molbio_ngs_outbox_events BEGIN SELECT 1; END
+            CREATE TRIGGER trg_molbio_ngs_state_revisions_immutable_update
+            BEFORE UPDATE ON molbio_ngs_domain_state_revisions BEGIN SELECT 1; END
             """
         )
         connection.commit()
@@ -606,7 +539,6 @@ def test_online_backup_atomic_restore_and_exact_attestation(tmp_path: Path, monk
     }
     with sqlite3.connect(target) as connection:
         assert connection.execute("SELECT count(*) FROM molbio_ngs_member_receipts").fetchone()[0] == 1
-        assert connection.execute("SELECT count(*) FROM molbio_ngs_outbox_events").fetchone()[0] == 1
     Path(f"{target}-wal").unlink(missing_ok=True)
     Path(f"{target}-shm").unlink(missing_ok=True)
 
@@ -774,67 +706,10 @@ def _binding():
 
 
 @pytest.mark.asyncio
-async def test_acknowledge_rejects_hierarchy_drift_without_rewriting_v4_binding(domain_store):
-    from dataclasses import replace
-
-    from molbio_ngs_models import MolBioNGSGlobalBinding
-    from molbio_ngs_services import GlobalBindingError, acknowledge_global_binding
-
-    _db_path, _engine, factory = domain_store
-    async with factory() as session:
-        binding = _binding()
-        initialized = await initialize_managed_domain(
-            session, binding, idempotency_key="initialize-authority-immutability", created_by="tester",
-        )
-        await session.commit()
-        revision_id = initialized.current_binding_revision_id
-        stored = await session.get(MolBioNGSGlobalBinding, revision_id)
-        assert stored is not None
-        columns = tuple(column.name for column in MolBioNGSGlobalBinding.__table__.columns)
-        original = tuple(getattr(stored, column) for column in columns)
-        assert stored.global_binding_receipt_sha256 is not None
-
-        changed_authority = {
-            "global_domain_experiment_revision_id": "global-domain-rev-other",
-            "global_domain_experiment_revision_digest": "1" * 64,
-            "project_id": "project-other", "project_generation": "4", "project_digest": "2" * 64,
-            "global_experiment_id": "global-experiment-other",
-            "global_experiment_generation": "3", "global_experiment_digest": "3" * 64,
-        }
-        for field_name, changed_value in changed_authority.items():
-            with pytest.raises(GlobalBindingError, match="global binding authority changed"):
-                await acknowledge_global_binding(session, replace(binding, **{field_name: changed_value}))
-
-        # v4's persisted combined receipt owns these projections. A read-only
-        # compatibility acknowledgement neither trusts nor rewrites duplicates.
-        ignored_legacy_metadata = {
-            "project_receipt_id": "project-receipt-other",
-            "project_reopen_destination": {"surface": "project", "params": {"project_id": "other"}},
-            "project_acknowledgement": {"ack": "other"},
-            "global_experiment_receipt_id": "experiment-receipt-other",
-            "global_experiment_reopen_destination": {"surface": "global-experiment", "params": {"experiment_id": "other"}},
-            "global_experiment_acknowledgement": {"ack": "other"},
-            "verified_at": "2026-08-08T00:00:01Z",
-        }
-        for field_name, changed_value in ignored_legacy_metadata.items():
-            await acknowledge_global_binding(session, replace(binding, **{field_name: changed_value}))
-        await session.commit()
-
-    # Fresh native SQL read proves no hidden receipt, projection or timestamp write.
-    async with factory() as session:
-        stored = await session.get(MolBioNGSGlobalBinding, revision_id)
-        assert stored is not None
-        assert tuple(getattr(stored, column) for column in columns) == original
-        assert stored.binding_state == "acknowledged"
-        assert stored.last_error is None
-
-
-@pytest.mark.asyncio
 async def test_state_service_is_global_keyed_revisioned_idempotent_and_audited(domain_store):
     from molbio_ngs_models import (
         MolBioNGSAuditEvent,
         MolBioNGSDomainStateMember,
-        MolBioNGSOutboxEvent,
     )
     from molbio_ngs_services import (
         IdempotencyConflict,
@@ -851,10 +726,6 @@ async def test_state_service_is_global_keyed_revisioned_idempotent_and_audited(d
 
     _db_path, _engine, factory = domain_store
     async with factory() as session:
-        from molbio_ngs_services import GlobalAdapterUnavailable, initialize_domain_state
-        with pytest.raises(GlobalAdapterUnavailable, match="owned by the managed connector"):
-            await initialize_domain_state(session, _binding(), idempotency_key="ungoverned-init")
-        await session.rollback()
         initialized = await initialize_managed_domain(
             session,
             _binding(),
@@ -932,16 +803,6 @@ async def test_state_service_is_global_keyed_revisioned_idempotent_and_audited(d
         assert len(stored_members) == 1
         assert stored_members[0].receipt_id == member_receipt.receipt_id
         assert len((await session.execute(select(MolBioNGSAuditEvent))).scalars().all()) == 2
-        events = (await session.execute(select(MolBioNGSOutboxEvent))).scalars().all()
-        assert sorted(event.event_type for event in events) == sorted([
-            "molbio_ngs.domain_state.initialized",
-            "molbio_ngs.binding.acknowledged",
-            "molbio_ngs.binding.health_published",
-            "molbio_ngs.member_receipt.published",
-            "molbio_ngs.domain_state.revision_saved",
-        ])
-        assert all(_sha(event.payload_json) == event.payload_sha256 for event in events)
-        assert all(event.binding_revision_id == initialized.current_binding_revision_id for event in events)
 
         with pytest.raises(IdempotencyConflict):
             await save_state_revision(
@@ -997,16 +858,6 @@ async def test_state_service_is_global_keyed_revisioned_idempotent_and_audited(d
     )
     assert concurrent_results == ["domain-concurrent", "domain-concurrent"]
     async with factory() as verification_session:
-        assert len(
-            (
-                await verification_session.execute(
-                    select(MolBioNGSOutboxEvent).where(
-                        MolBioNGSOutboxEvent.global_domain_experiment_id == "domain-concurrent",
-                        MolBioNGSOutboxEvent.event_type == "molbio_ngs.domain_state.initialized",
-                    )
-                )
-            ).scalars().all()
-        ) == 1
         from molbio_ngs_models import MolBioNGSIdempotencyClaim
         claims = (await verification_session.execute(select(MolBioNGSIdempotencyClaim).where(
             MolBioNGSIdempotencyClaim.scope == "initialize:domain-concurrent",

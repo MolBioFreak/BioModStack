@@ -21,8 +21,6 @@ from experiment_models import (
     ExperimentAggregateHead,
     ExperimentAuditEvent,
     ExperimentDatasetRevisionMember,
-    ExperimentDomainConnectorCommand,
-    ExperimentDomainConnectorInbox,
     ExperimentDispatchOutbox,
     ExperimentExternalEntityReceipt,
     ExperimentIdempotencyClaim,
@@ -1633,8 +1631,8 @@ async def operational_status(session: AsyncSession) -> dict[str, Any]:
         )
         or 0
     )
-    connector = (await session.execute(select(func.count(), func.min(ExperimentDomainConnectorCommand.created_at)).where(ExperimentDomainConnectorCommand.status.in_({"pending", "retryable", "conflicted"})))).one()
-    dead_letters = await session.scalar(select(func.count()).select_from(ExperimentDomainConnectorCommand).where(ExperimentDomainConnectorCommand.status == "conflicted"))
+    connector = (0, None)
+    dead_letters = 0
     receipts = list((await session.scalars(select(ExperimentOperationalReceipt).order_by(ExperimentOperationalReceipt.occurred_at.desc(), ExperimentOperationalReceipt.receipt_id.desc()).limit(100))).all())
     latest = {}
     for row in receipts:

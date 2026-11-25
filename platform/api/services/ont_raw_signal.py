@@ -1359,7 +1359,7 @@ async def _validate_external_registration_context(
     context: dict[str, Any] = {
         "experiment_group": experiment_group,
         "state_revision_id": domain.current_state_revision_id,
-        "binding_revision_id": domain.current_binding_revision_id,
+        "binding_revision_id": domain.binding_receipt_id,
         "head_generation": domain.head_generation,
         "sample_revision_id": None,
     }

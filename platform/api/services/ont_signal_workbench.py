@@ -42,7 +42,6 @@ from database import (
 from molbio_ngs_models import (
     MolBioNGSDomainState,
     MolBioNGSDomainStateRevision,
-    MolBioNGSGlobalBinding,
     MolBioNGSReferenceArtifact,
     MolBioNGSReferenceRevision,
 )
@@ -2234,28 +2233,27 @@ async def _resolve_domain_revision_authority(
     global_domain_experiment_id: str,
 ) -> dict[str, Any]:
     state = await domain_session.get(MolBioNGSDomainState, global_domain_experiment_id)
-    if state is None or not state.current_state_revision_id or not state.current_binding_revision_id:
+    if state is None or not state.current_state_revision_id or not state.binding_receipt_json:
         raise OntSignalError("authoritative Domain Experiment state revision is unavailable")
     revision = await domain_session.get(
         MolBioNGSDomainStateRevision, state.current_state_revision_id
     )
-    binding = await domain_session.get(
-        MolBioNGSGlobalBinding, state.current_binding_revision_id
-    )
+    try:
+        receipt = json.loads(state.binding_receipt_json)
+        binding_revision_digest = receipt["domain_experiment"]["digest"]
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise OntSignalError("authoritative Domain Experiment binding receipt is invalid") from exc
     if (
         revision is None
-        or binding is None
         or revision.global_domain_experiment_id != global_domain_experiment_id
-        or binding.global_domain_experiment_id != global_domain_experiment_id
-        or revision.binding_revision_id != binding.binding_revision_id
         or revision.global_domain_experiment_revision_id
-        != binding.global_domain_experiment_revision_id
+        != state.global_domain_experiment_revision_id
     ):
         raise OntSignalError("authoritative Domain Experiment revision binding diverged")
     digest_fields = {
         "state_revision_sha256": revision.payload_sha256,
         "membership_graph_sha256": revision.membership_graph_sha256,
-        "binding_revision_digest": binding.global_domain_experiment_revision_digest,
+        "binding_revision_digest": binding_revision_digest,
     }
     if any(
         not isinstance(value, str)
@@ -2272,7 +2270,7 @@ async def _resolve_domain_revision_authority(
         "global_domain_experiment_id": global_domain_experiment_id,
         "state_revision_id": revision.id,
         **digest_fields,
-        "binding_revision_id": binding.binding_revision_id,
+        "binding_revision_id": state.binding_receipt_id or revision.id,
         "head_generation": int(state.head_generation),
     }
 async def _resolve_reference_authority(

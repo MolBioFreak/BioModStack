@@ -12,7 +12,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from experiment_models import ExperimentAggregateHead, ExperimentDomainAdapterReceipt, ExperimentDomainConnectorCommand
+from experiment_models import ExperimentAggregateHead, ExperimentExternalEntityReceipt
 
 from molbio_ngs_models import (
     MolBioNGSAuditEvent,
@@ -20,10 +20,8 @@ from molbio_ngs_models import (
     MolBioNGSDomainStateMember,
     MolBioNGSDomainStateRevision,
     MolBioNGSEvidenceAssessment,
-    MolBioNGSGlobalBinding,
     MolBioNGSIdempotencyClaim,
     MolBioNGSMemberReceipt,
-    MolBioNGSOutboxEvent,
     MolBioNGSReferenceResource,
     MolBioNGSReferenceRevision,
     MolBioNGSSample,
@@ -31,7 +29,7 @@ from molbio_ngs_models import (
 )
 from services.molbio_authority import SERVER_OWNED_ACTOR
 from services.molbio_ngs_member_receipts import parse_canonical_member_receipt
-from services.ngs_molbio_connector import BINDING_ADAPTER_ID, emit_ordered_event
+from services.ngs_molbio_binding import BINDING_ADAPTER_ID, BINDING_ENTITY_KIND, SOURCE_STORE_ID
 
 
 STATE_SCHEMA = "bms.molbio-ngs.domain-state-revision.v1"
@@ -174,62 +172,52 @@ async def verify_global_domain_binding(
     global_domain_experiment_id: str,
     global_domain_experiment_revision_id: str,
 ) -> InternalVerifiedGlobalBinding:
-    """Resolve the finalized server-issued combined hierarchy receipt."""
+    """Resolve the server-issued hub external_entity_receipt for a bound Domain Experiment."""
 
     domain = await session.get(ExperimentAggregateHead, global_domain_experiment_id)
     if domain is None or domain.aggregate_kind != "domain_experiment":
         raise GlobalBindingError("global Domain Experiment was not found")
     if domain.current_revision_id != global_domain_experiment_revision_id:
         raise GlobalBindingError("global Domain Experiment revision is stale")
-    command = await session.scalar(
-        select(ExperimentDomainConnectorCommand)
+    receipt_row = await session.scalar(
+        select(ExperimentExternalEntityReceipt)
         .where(
-            ExperimentDomainConnectorCommand.domain_experiment_id == global_domain_experiment_id,
-            ExperimentDomainConnectorCommand.domain_revision_id == global_domain_experiment_revision_id,
-            ExperimentDomainConnectorCommand.status.in_({"applied", "duplicate"}),
+            ExperimentExternalEntityReceipt.store_id == SOURCE_STORE_ID,
+            ExperimentExternalEntityReceipt.entity_kind == BINDING_ENTITY_KIND,
+            ExperimentExternalEntityReceipt.entity_id == global_domain_experiment_id,
+            ExperimentExternalEntityReceipt.generation_or_revision == global_domain_experiment_revision_id,
+            ExperimentExternalEntityReceipt.availability == "available",
         )
-        .order_by(ExperimentDomainConnectorCommand.updated_at.desc())
+        .order_by(ExperimentExternalEntityReceipt.created_at.desc())
     )
-    if command is None or command.acknowledgement_json is None:
+    if receipt_row is None or not receipt_row.acknowledgement_json:
         raise GlobalAdapterUnavailable("current NGS/MolBio binding is not acknowledged")
-    receipt_row = await session.get(ExperimentDomainAdapterReceipt, command.global_receipt_id)
-    if receipt_row is None or receipt_row.adapter_id != BINDING_ADAPTER_ID:
-        raise GlobalBindingError("combined hierarchy receipt is unavailable")
-    if _digest(receipt_row.receipt_json) != command.global_receipt_sha256:
-        raise GlobalBindingError("combined hierarchy receipt digest diverged")
-    if command.acknowledgement_sha256 != _digest(command.acknowledgement_json):
-        raise GlobalBindingError("combined hierarchy acknowledgement digest diverged")
     try:
-        receipt = json.loads(receipt_row.receipt_json)
-        acknowledgement = json.loads(command.acknowledgement_json)
+        acknowledgement = json.loads(receipt_row.acknowledgement_json)
+        receipt = acknowledgement.get("binding_receipt") or {}
     except json.JSONDecodeError as exc:
         raise GlobalBindingError("combined hierarchy binding evidence is invalid JSON") from exc
     if (
-        receipt.get("receipt_id") != command.global_receipt_id
-        or receipt.get("adapter_id") != BINDING_ADAPTER_ID
+        receipt.get("adapter_id") != BINDING_ADAPTER_ID
         or receipt.get("domain_experiment", {}).get("id") != global_domain_experiment_id
         or receipt.get("domain_experiment", {}).get("revision_id")
         != global_domain_experiment_revision_id
-        or acknowledgement.get("command_id") != command.command_id
-        or acknowledgement.get("binding_revision_id") != command.binding_revision_id
-        or acknowledgement.get("accepted_payload_sha256") != command.global_receipt_sha256
-        or acknowledgement.get("disposition") not in {"applied", "duplicate"}
     ):
         raise GlobalBindingError("combined hierarchy binding evidence diverged")
     return InternalVerifiedGlobalBinding(
         global_domain_experiment_id=global_domain_experiment_id,
         global_domain_experiment_revision_id=global_domain_experiment_revision_id,
-        global_domain_experiment_revision_digest=command.domain_revision_sha256,
-        project_id=command.project_id,
+        global_domain_experiment_revision_digest=str(receipt["domain_experiment"]["digest"]),
+        project_id=str(receipt["project"]["id"]),
         project_generation=str(receipt["project"]["generation"]),
         project_digest=str(receipt["project"]["digest"]),
-        project_receipt_id=command.global_receipt_id,
+        project_receipt_id=receipt_row.resource_id,
         project_reopen_destination={"uri": receipt["project"]["reopen_destination"]},
         project_acknowledgement={"status": "verified"},
-        global_experiment_id=command.global_experiment_id,
+        global_experiment_id=str(receipt["global_experiment"]["id"]),
         global_experiment_generation=str(receipt["global_experiment"]["generation"]),
         global_experiment_digest=str(receipt["global_experiment"]["digest"]),
-        global_experiment_receipt_id=command.global_receipt_id,
+        global_experiment_receipt_id=receipt_row.resource_id,
         global_experiment_reopen_destination={"uri": receipt["global_experiment"]["reopen_destination"]},
         global_experiment_acknowledgement={"status": "verified"},
         verified_at=str(receipt["verified_at"]),
@@ -344,41 +332,6 @@ async def _audit_and_outbox(
             created_by=SERVER_OWNED_ACTOR,
         )
     )
-    state = await session.get(MolBioNGSDomainState, domain_id)
-    if state is None or not state.current_binding_revision_id:
-        raise StateIntegrityError("ordered outbox requires a current binding revision")
-    if event_type == "molbio_ngs.domain_state.initialized":
-        event_stream, source_generation = "binding", 0
-    elif event_type == "molbio_ngs.domain_state.revision_saved":
-        event_stream, source_generation = "state", int(payload["state_revision_number"])
-    elif event_type.startswith("molbio_ngs.sample."):
-        event_stream = f"sample:{payload['sample_id']}"
-        source_generation = int(payload["sample_revision_number"])
-    elif event_type.startswith("molbio_ngs.reference."):
-        event_stream = f"reference:{payload['reference_id']}"
-        source_generation = int(payload.get("reference_revision_number", payload.get("head_generation", 0)))
-    elif event_type == "molbio_ngs.instrument_run_evidence.attached":
-        event_stream = f"member:ont_instrument_run:{payload['run_id']}"
-        source_generation = int(payload["observed_generation"])
-    elif event_type == "molbio_ngs.evidence.assessed":
-        event_stream, source_generation = f"evidence:{payload['evidence_id']}", None
-    elif event_type == "molbio_ngs.member_receipt.published":
-        event_stream = (
-            f"member:{payload['receipt_kind']}:{payload['native_entity_id']}"
-        )
-        source_generation = None
-    else:
-        raise StateValidationError(f"event type has no frozen stream mapping: {event_type}")
-    await emit_ordered_event(
-        session,
-        domain_id=domain_id,
-        binding_revision_id=state.current_binding_revision_id,
-        event_stream=event_stream,
-        event_type=event_type,
-        payload=dict(payload),
-        source_generation=source_generation,
-        state_revision_id=state_revision_id,
-    )
 
 
 async def initialize_domain_state(
@@ -429,47 +382,34 @@ async def acknowledge_global_binding(
     binding: InternalVerifiedGlobalBinding,
 ) -> None:
     state = await session.get(MolBioNGSDomainState, binding.global_domain_experiment_id)
-    stored = (
-        await session.get(MolBioNGSGlobalBinding, state.current_binding_revision_id)
-        if state is not None else None
-    )
-    if stored is None:
+    if state is None:
         raise DomainStateNotFound("MolBio/NGS state has not been initialized")
     supplied_authority = {
         "global_domain_experiment_revision_id": binding.global_domain_experiment_revision_id,
-        "global_domain_experiment_revision_digest": binding.global_domain_experiment_revision_digest,
         "project_id": binding.project_id,
-        "project_generation": binding.project_generation,
-        "project_digest": binding.project_digest,
         "global_experiment_id": binding.global_experiment_id,
-        "global_experiment_generation": binding.global_experiment_generation,
-        "global_experiment_digest": binding.global_experiment_digest,
     }
     changed_authority = [
         field_name
         for field_name, supplied_value in supplied_authority.items()
-        if getattr(stored, field_name) != supplied_value
+        if getattr(state, field_name) != supplied_value
     ]
     if changed_authority:
         raise GlobalBindingError(
             "global binding authority changed: " + ", ".join(changed_authority)
         )
-    if stored.binding_state != "acknowledged" or stored.global_binding_receipt_sha256 is None:
-        raise GlobalBindingError("current local binding is not acknowledged by the managed connector")
+    if not state.binding_receipt_sha256:
+        raise GlobalBindingError("current local binding has no persisted hub receipt")
 
 
 async def require_acknowledged_local_domain(
     session: AsyncSession,
     global_domain_experiment_id: str,
 ) -> MolBioNGSDomainState:
-    """Require acknowledged local authority without querying global tables."""
+    """Require local domain state authority without querying global tables."""
 
     state = await session.get(MolBioNGSDomainState, global_domain_experiment_id)
-    binding = (
-        await session.get(MolBioNGSGlobalBinding, state.current_binding_revision_id)
-        if state is not None else None
-    )
-    if state is None or binding is None or binding.binding_state != "acknowledged":
+    if state is None or not state.project_id or not state.global_experiment_id:
         raise DomainStateNotFound(
             "acknowledged MolBio/NGS Domain Experiment state was not found"
         )
@@ -1404,11 +1344,9 @@ async def save_state_revision(
     state = await session.get(MolBioNGSDomainState, global_domain_experiment_id)
     if state is None:
         raise DomainStateNotFound("MolBio/NGS state has not been initialized")
-    binding = await session.get(MolBioNGSGlobalBinding, state.current_binding_revision_id)
     if (
-        binding is None
-        or binding.binding_state != "acknowledged"
-        or binding.global_domain_experiment_revision_id != global_domain_experiment_revision_id
+        not state.binding_receipt_sha256
+        or state.global_domain_experiment_revision_id != global_domain_experiment_revision_id
     ):
         raise GlobalBindingError("The current experiment revision has not been linked to this NGS workspace.")
     if (
@@ -1422,7 +1360,9 @@ async def save_state_revision(
         id=revision_id,
         global_domain_experiment_id=global_domain_experiment_id,
         global_domain_experiment_revision_id=global_domain_experiment_revision_id,
-        binding_revision_id=binding.binding_revision_id,
+        binding_receipt_id=state.binding_receipt_id,
+        binding_receipt_json=state.binding_receipt_json,
+        binding_receipt_sha256=state.binding_receipt_sha256,
         revision_number=expected_head_generation + 1,
         parent_revision_id=parent_revision_id,
         schema_name=STATE_SCHEMA_NAME,
@@ -1570,20 +1510,16 @@ async def _batch_domain_counts(
 async def _domain_experiment_view(
     session: AsyncSession,
     state: MolBioNGSDomainState,
-    binding: MolBioNGSGlobalBinding,
     counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    if (
-        binding.global_domain_experiment_id != state.global_domain_experiment_id
-        or binding.binding_state != "acknowledged"
-    ):
-        raise StateIntegrityError("local Domain Experiment binding is not acknowledged")
+    if not state.project_id or not state.global_experiment_id:
+        raise StateIntegrityError("local Domain Experiment binding is incomplete")
     return {
-        "project_id": binding.project_id,
-        "global_experiment_id": binding.global_experiment_id,
+        "project_id": state.project_id,
+        "global_experiment_id": state.global_experiment_id,
         "domain_experiment_id": state.global_domain_experiment_id,
         "global_domain_experiment_revision_id": (
-            binding.global_domain_experiment_revision_id
+            state.global_domain_experiment_revision_id
         ),
         "local_state_revision_id": state.current_state_revision_id,
         "local_state_head_generation": state.head_generation,
@@ -1610,27 +1546,12 @@ async def get_domain_experiment_view(
     session: AsyncSession,
     domain_experiment_id: str,
 ) -> dict[str, Any]:
-    row = (
-        await session.execute(
-            select(MolBioNGSDomainState, MolBioNGSGlobalBinding)
-            .join(
-                MolBioNGSGlobalBinding,
-                MolBioNGSGlobalBinding.binding_revision_id
-                == MolBioNGSDomainState.current_binding_revision_id,
-            )
-            .where(
-                MolBioNGSDomainState.global_domain_experiment_id
-                == domain_experiment_id,
-                MolBioNGSGlobalBinding.binding_state == "acknowledged",
-            )
-        )
-    ).one_or_none()
-    if row is None:
+    state = await session.get(MolBioNGSDomainState, domain_experiment_id)
+    if state is None:
         raise DomainStateNotFound(
             "acknowledged local MolBio/NGS Domain Experiment was not found"
         )
-    state, binding = row
-    return await _domain_experiment_view(session, state, binding)
+    return await _domain_experiment_view(session, state)
 
 
 async def list_project_domain_experiments(
@@ -1643,27 +1564,19 @@ async def list_project_domain_experiments(
     rows = list(
         (
             await session.execute(
-                select(MolBioNGSDomainState, MolBioNGSGlobalBinding)
-                .join(
-                    MolBioNGSGlobalBinding,
-                    MolBioNGSGlobalBinding.binding_revision_id
-                    == MolBioNGSDomainState.current_binding_revision_id,
-                )
-                .where(
-                    MolBioNGSGlobalBinding.project_id == normalized_project_id,
-                    MolBioNGSGlobalBinding.binding_state == "acknowledged",
-                )
+                select(MolBioNGSDomainState)
+                .where(MolBioNGSDomainState.project_id == normalized_project_id)
                 .order_by(
                     MolBioNGSDomainState.created_at,
                     MolBioNGSDomainState.global_domain_experiment_id,
                 )
             )
-        ).all()
+        ).scalars().all()
     )
-    counts = await _batch_domain_counts(session, [state.global_domain_experiment_id for state, _ in rows])
+    counts = await _batch_domain_counts(session, [state.global_domain_experiment_id for state in rows])
     return [
-        await _domain_experiment_view(session, state, binding, counts[state.global_domain_experiment_id])
-        for state, binding in rows
+        await _domain_experiment_view(session, state, counts[state.global_domain_experiment_id])
+        for state in rows
     ]
 
 
@@ -1676,10 +1589,7 @@ async def get_project_domain_summary(
         raise StateValidationError("project_id is required")
     domains = (
         select(MolBioNGSDomainState.global_domain_experiment_id)
-        .join(MolBioNGSGlobalBinding,
-              MolBioNGSGlobalBinding.binding_revision_id == MolBioNGSDomainState.current_binding_revision_id)
-        .where(MolBioNGSGlobalBinding.project_id == normalized_project_id,
-               MolBioNGSGlobalBinding.binding_state == "acknowledged")
+        .where(MolBioNGSDomainState.project_id == normalized_project_id)
     )
     domain_count = (await session.execute(select(func.count()).select_from(domains.subquery()))).scalar_one()
     totals = {}

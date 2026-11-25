@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from experiment_database import get_experiment_session
 from molbio_ngs_database import get_molbio_ngs_session
-from molbio_ngs_models import MolBioNGSDomainState, MolBioNGSGlobalBinding
+from molbio_ngs_models import MolBioNGSDomainState
 from experiment_models import (
     ExperimentAggregateHead,
     ExperimentAuditEvent,
@@ -49,14 +49,11 @@ from experiment_services import (
     save_hierarchy_revision,
 )
 from routers.experiment_workspaces import _mutation_principal, _require_mutation_owner
-from services.global_experiments.worker import global_experiment_worker
-from services.ngs_molbio_connector import (
+from services.ngs_molbio_binding import (
     ConnectorConflict,
     ConnectorUnavailable,
-    binding_status,
-    command_for_binding,
-    issue_binding_command,
-    migrated_binding_status,
+    bind_domain_to_hub,
+    get_binding_status,
 )
 
 
@@ -1477,6 +1474,7 @@ async def create_domain_experiment_route(
     payload: DomainExperimentCreateRequest,
     request: Request,
     session: AsyncSession = Depends(get_experiment_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> dict[str, Any]:
     try:
         actor = await _require_mutation_owner(request, session, resource_id=project_id)
@@ -1492,12 +1490,17 @@ async def create_domain_experiment_route(
             experiment_id,
             domain_payload,
         )
-        command = None
+        binding = None
         if domain_payload.get("domain_kind") in {"ngs_molbio", "protein_in_silico"}:
-            command = await issue_binding_command(
-                session, project_id=project_id, global_experiment_id=experiment_id,
-                domain_id=head.aggregate_id, expected_domain_revision_id=str(head.current_revision_id),
-                idempotency_key=f"domain-create:{head.aggregate_id}:{head.current_revision_id}", operation="initialize",
+            binding = await _bind_domain_revision(
+                session,
+                domain_session,
+                project_id=project_id,
+                experiment_id=experiment_id,
+                domain_id=head.aggregate_id,
+                domain_revision_id=str(head.current_revision_id),
+                idempotency_key=f"domain-create:{head.aggregate_id}:{head.current_revision_id}",
+                operation="initialize",
             )
         await session.commit()
         result = await _head_json(
@@ -1507,8 +1510,8 @@ async def create_domain_experiment_route(
             storage_kind="domain_experiment",
             parent_id=experiment_id,
         )
-        if command is not None:
-            result["binding"] = binding_status(command)
+        if binding is not None:
+            result["binding"] = binding
         return result
     except (ExperimentServiceError, ConnectorConflict, ConnectorUnavailable) as exc:
         await session.rollback()
@@ -1535,36 +1538,7 @@ async def get_domain_experiment(
         raise _error(exc) from exc
 
 
-async def _binding_status_response(
-    command: Any,
-    domain_session: AsyncSession,
-) -> dict[str, Any]:
-    state = await domain_session.get(MolBioNGSDomainState, command.domain_experiment_id)
-    return binding_status(
-        command,
-        local_state_id=state.global_domain_experiment_id if state is not None else None,
-        head_generation=state.head_generation if state is not None else 0,
-    )
-
-
-async def _current_local_binding(
-    domain_session: AsyncSession,
-    domain_id: str,
-) -> tuple[MolBioNGSDomainState, MolBioNGSGlobalBinding] | None:
-    state = await domain_session.get(MolBioNGSDomainState, domain_id)
-    binding = (
-        await domain_session.get(MolBioNGSGlobalBinding, state.current_binding_revision_id)
-        if state is not None
-        else None
-    )
-    if state is None or binding is None:
-        return None
-    if binding.global_domain_experiment_id != domain_id:
-        raise ConnectorConflict("local binding authority belongs to another Domain Experiment")
-    return state, binding
-
-
-async def _issue_domain_revision_reverification(
+async def _bind_domain_revision(
     session: AsyncSession,
     domain_session: AsyncSession,
     *,
@@ -1573,32 +1547,17 @@ async def _issue_domain_revision_reverification(
     domain_id: str,
     domain_revision_id: str,
     idempotency_key: str,
-) -> Any:
-    local = None
-    try:
-        prior_binding_revision_id = (
-            await command_for_binding(
-                session,
-                project_id=project_id,
-                global_experiment_id=experiment_id,
-                domain_id=domain_id,
-            )
-        ).binding_revision_id
-    except NotFound:
-        local = await _current_local_binding(domain_session, domain_id)
-        prior_binding_revision_id = local[1].binding_revision_id if local is not None else None
-    if prior_binding_revision_id is None:
-        raise NotFound("binding authority was not found")
-    return await issue_binding_command(
+    operation: str = "reverify",
+) -> dict[str, Any]:
+    return await bind_domain_to_hub(
         session,
+        domain_session,
         project_id=project_id,
         global_experiment_id=experiment_id,
         domain_id=domain_id,
         expected_domain_revision_id=domain_revision_id,
-        expected_binding_revision_id=prior_binding_revision_id,
-        current_local_binding=local[1] if local is not None else None,
         idempotency_key=idempotency_key,
-        operation="reverify",
+        operation=operation,
     )
 
 
@@ -1611,29 +1570,14 @@ async def get_ngs_molbio_binding(
     domain_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> dict[str, Any]:
     try:
-        command = await command_for_binding(
-            session, project_id=project_id, global_experiment_id=experiment_id, domain_id=domain_id
+        return await get_binding_status(
+            session,
+            domain_session,
+            project_id=project_id,
+            global_experiment_id=experiment_id,
+            domain_id=domain_id,
         )
-        return await _binding_status_response(command, domain_session)
-    except NotFound as exc:
-        local = await _current_local_binding(domain_session, domain_id)
-        if local is None or local[1].binding_state != "needs_reverification":
-            raise _error(exc) from exc
-        project = await _project(session, project_id)
-        experiment = await _global_experiment(session, project_id, experiment_id)
-        if not project.current_revision_id or not experiment.current_revision_id:
-            raise _error(exc) from exc
-        state, binding = local
-        if binding.project_id != project_id or binding.global_experiment_id != experiment_id:
-            raise _error(exc) from exc
-        return migrated_binding_status(
-            binding,
-            project_revision_id=project.current_revision_id,
-            global_experiment_revision_id=experiment.current_revision_id,
-            local_state_id=state.global_domain_experiment_id,
-            head_generation=state.head_generation,
-        )
-    except ExperimentServiceError as exc:
+    except (ExperimentServiceError, ConnectorConflict, ConnectorUnavailable) as exc:
         raise _error(exc) from exc
 
 
@@ -1650,24 +1594,20 @@ async def _mutate_ngs_molbio_binding(
     expected_binding_revision_id: str | None,
 ) -> JSONResponse:
     await _require_mutation_owner(request, session, resource_id=project_id)
-    worker = global_experiment_worker()
-    if worker is None or not worker.ensure_dispatcher_available():
-        raise HTTPException(status_code=503, detail={"code": "connector_unavailable", "message": "sole managed connector owner is unavailable"})
     idempotency_key = request.headers.get("Idempotency-Key")
     try:
-        local = await _current_local_binding(domain_session, domain_id) if operation == "reverify" else None
-        command = await issue_binding_command(
-            session, project_id=project_id, global_experiment_id=experiment_id, domain_id=domain_id,
+        body = await bind_domain_to_hub(
+            session,
+            domain_session,
+            project_id=project_id,
+            global_experiment_id=experiment_id,
+            domain_id=domain_id,
             expected_domain_revision_id=expected_domain_revision_id,
-            expected_binding_revision_id=expected_binding_revision_id,
-            current_local_binding=local[1] if local is not None else None,
-            idempotency_key=idempotency_key or "", operation=operation,
+            idempotency_key=idempotency_key or "",
+            operation=operation,
         )
-        if command.status == "conflicted":
-            raise HTTPException(status_code=409, detail={"code": "connector_conflict", "message": command.last_error or "durable connector conflict"})
         await session.commit()
-        body = await _binding_status_response(command, domain_session)
-        return JSONResponse(status_code=200 if command.status in {"applied", "duplicate"} else 202, content=body)
+        return JSONResponse(status_code=200, content=body)
     except RevisionConflict as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail={"code": "stale_revision", "message": str(exc)}) from exc
@@ -1753,9 +1693,9 @@ async def upgrade_domain_experiment(
             expected_head_generation=payload.expected_head_generation,
             lifecycle_operation="domain_contract_upgrade",
         )
-        command = None
+        binding = None
         if successor.get("domain_kind") == "ngs_molbio":
-            command = await _issue_domain_revision_reverification(
+            binding = await _bind_domain_revision(
                 session,
                 domain_session,
                 project_id=project_id,
@@ -1773,8 +1713,8 @@ async def upgrade_domain_experiment(
             storage_kind="domain_experiment",
             parent_id=experiment_id,
         )
-        if command is not None:
-            result["binding"] = binding_status(command)
+        if binding is not None:
+            result["binding"] = binding
         return result
     except (ExperimentServiceError, ConnectorConflict, ConnectorUnavailable) as exc:
         await session.rollback()
@@ -1803,10 +1743,10 @@ async def patch_domain_experiment(
             _complete_domain_v4_attestations(await _merge_patch(session, head, payload)),
             expected_head_generation=payload.expected_head_generation,
         )
-        command = None
+        binding = None
         refreshed_payload = await _payload(session, head)
         if refreshed_payload.get("domain_kind") == "ngs_molbio" and refreshed_payload.get("schema") == "bms.domain-experiment.v4":
-            command = await _issue_domain_revision_reverification(
+            binding = await _bind_domain_revision(
                 session,
                 domain_session,
                 project_id=project_id,
@@ -1824,8 +1764,8 @@ async def patch_domain_experiment(
             storage_kind="domain_experiment",
             parent_id=experiment_id,
         )
-        if command is not None:
-            result["binding"] = binding_status(command)
+        if binding is not None:
+            result["binding"] = binding
         return result
     except (ExperimentServiceError, ConnectorConflict, ConnectorUnavailable) as exc:
         await session.rollback()
@@ -1851,9 +1791,9 @@ async def archive_domain_experiment(
             head.aggregate_id,
             expected_head_generation=payload.expected_head_generation,
         )
-        command = None
+        binding = None
         if domain_payload.get("domain_kind") == "ngs_molbio" and domain_payload.get("schema") == "bms.domain-experiment.v4":
-            command = await _issue_domain_revision_reverification(
+            binding = await _bind_domain_revision(
                 session,
                 domain_session,
                 project_id=project_id,
@@ -1870,8 +1810,8 @@ async def archive_domain_experiment(
             storage_kind="domain_experiment",
             parent_id=experiment_id,
         )
-        if command is not None:
-            result["binding"] = binding_status(command)
+        if binding is not None:
+            result["binding"] = binding
         return result
     except (ExperimentServiceError, ConnectorConflict, ConnectorUnavailable) as exc:
         await session.rollback()
@@ -1897,9 +1837,9 @@ async def restore_domain_experiment(
             head.aggregate_id,
             expected_head_generation=payload.expected_head_generation,
         )
-        command = None
+        binding = None
         if domain_payload.get("domain_kind") == "ngs_molbio" and domain_payload.get("schema") == "bms.domain-experiment.v4":
-            command = await _issue_domain_revision_reverification(
+            binding = await _bind_domain_revision(
                 session,
                 domain_session,
                 project_id=project_id,
@@ -1916,8 +1856,8 @@ async def restore_domain_experiment(
             storage_kind="domain_experiment",
             parent_id=experiment_id,
         )
-        if command is not None:
-            result["binding"] = binding_status(command)
+        if binding is not None:
+            result["binding"] = binding
         return result
     except (ExperimentServiceError, ConnectorConflict, ConnectorUnavailable) as exc:
         await session.rollback()

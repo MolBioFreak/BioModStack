@@ -35,13 +35,11 @@ async def test_sample_create_replay_uses_completed_revision_not_head(monkeypatch
 @pytest.mark.asyncio
 async def test_reference_create_replay_uses_completed_revision_not_head(monkeypatch):
     from services import molbio_ngs_references as service
-    from molbio_ngs_models import MolBioNGSDomainState, MolBioNGSGlobalBinding, MolBioNGSIdempotencyClaim
+    from molbio_ngs_models import MolBioNGSDomainState, MolBioNGSIdempotencyClaim
 
     async def get(model, key):
         if model is MolBioNGSDomainState:
-            return SimpleNamespace(current_binding_revision_id="binding")
-        if model is MolBioNGSGlobalBinding:
-            return SimpleNamespace(binding_state="acknowledged")
+            return SimpleNamespace(binding_receipt_id="binding")
         if model is MolBioNGSIdempotencyClaim:
             return SimpleNamespace(response_json=json.dumps({"reference_revision_id": "original"}))
         raise AssertionError(model)

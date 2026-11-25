@@ -32,55 +32,15 @@ class MolBioNGSDomainState(MolBioNGSBase):
         ForeignKey("molbio_ngs_domain_state_revisions.id", ondelete="RESTRICT", use_alter=True),
         nullable=True,
     )
-    current_binding_revision_id = Column(
-        String(128),
-        ForeignKey("molbio_ngs_global_binding_revisions.binding_revision_id", ondelete="RESTRICT", use_alter=True),
-        nullable=False,
-    )
+    project_id = Column(String(128), nullable=False)
+    global_experiment_id = Column(String(128), nullable=False)
+    global_domain_experiment_revision_id = Column(String(128), nullable=False)
+    binding_receipt_id = Column(String(128), nullable=True)
+    binding_receipt_json = Column(Text, nullable=True)
+    binding_receipt_sha256 = Column(String(64), nullable=True)
     head_generation = Column(Integer, nullable=False, default=0)
     created_at = Column(String(64), nullable=False, default=_timestamp)
     updated_at = Column(String(64), nullable=False, default=_timestamp)
-
-
-class MolBioNGSGlobalBinding(MolBioNGSBase):
-    __tablename__ = "molbio_ngs_global_binding_revisions"
-    __table_args__ = (
-        UniqueConstraint("global_domain_experiment_id", "revision_number"),
-    )
-
-    binding_revision_id = Column(String(128), primary_key=True)
-    global_domain_experiment_id = Column(
-        String(128),
-        ForeignKey("molbio_ngs_domain_states.global_domain_experiment_id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    revision_number = Column(Integer, nullable=False)
-    supersedes_binding_revision_id = Column(
-        String(128), ForeignKey("molbio_ngs_global_binding_revisions.binding_revision_id"), nullable=True
-    )
-    global_domain_experiment_revision_id = Column(String(128), nullable=False)
-    global_domain_experiment_revision_digest = Column(String(64), nullable=False)
-    project_id = Column(String(128), nullable=False)
-    project_generation = Column(String(128), nullable=False)
-    project_digest = Column(String(64), nullable=False)
-    project_receipt_id = Column(String(128), nullable=False)
-    project_reopen_destination = Column(Text, nullable=False)
-    project_acknowledgement = Column(Text, nullable=False, default="{}")
-    global_experiment_id = Column(String(128), nullable=False)
-    global_experiment_generation = Column(String(128), nullable=False)
-    global_experiment_digest = Column(String(64), nullable=False)
-    global_experiment_receipt_id = Column(String(128), nullable=False)
-    global_experiment_reopen_destination = Column(Text, nullable=False)
-    global_experiment_acknowledgement = Column(Text, nullable=False, default="{}")
-    global_binding_receipt_id = Column(String(128), nullable=True)
-    global_binding_receipt_json = Column(Text, nullable=True)
-    global_binding_receipt_sha256 = Column(String(64), nullable=True)
-    connector_command_id = Column(String(128), nullable=True, unique=True)
-    binding_state = Column(String(32), nullable=False, default="needs_reverification")
-    last_verified_at = Column(String(64), nullable=True)
-    last_error = Column(Text, nullable=True)
-    created_at = Column(String(64), nullable=False, default=_timestamp)
-    updated_at = Column(String(64), nullable=True)
 
 
 class MolBioNGSMemberReceipt(MolBioNGSBase):
@@ -125,9 +85,11 @@ class MolBioNGSDomainStateRevision(MolBioNGSBase):
         nullable=False,
     )
     global_domain_experiment_revision_id = Column(String(128), nullable=False)
-    binding_revision_id = Column(
-        String(128), ForeignKey("molbio_ngs_global_binding_revisions.binding_revision_id"), nullable=False
-    )
+    project_id = Column(String(128), nullable=False)
+    global_experiment_id = Column(String(128), nullable=False)
+    binding_receipt_id = Column(String(128), nullable=True)
+    binding_receipt_json = Column(Text, nullable=True)
+    binding_receipt_sha256 = Column(String(64), nullable=True)
     revision_number = Column(Integer, nullable=False)
     parent_revision_id = Column(
         String(128),
@@ -417,76 +379,3 @@ class MolBioNGSAuditEvent(MolBioNGSBase):
     payload_sha256 = Column(String(64), nullable=False)
     created_at = Column(String(64), nullable=False, default=_timestamp)
     created_by = Column(String(255), nullable=True)
-
-
-class MolBioNGSOutboxEvent(MolBioNGSBase):
-    __tablename__ = "molbio_ngs_outbox_events"
-    __table_args__ = (
-        UniqueConstraint(
-            "global_domain_experiment_id", "binding_revision_id", "event_stream", "stream_generation"
-        ),
-    )
-
-    id = Column(String(128), primary_key=True)
-    global_domain_experiment_id = Column(
-        String(128),
-        ForeignKey("molbio_ngs_domain_states.global_domain_experiment_id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    state_revision_id = Column(
-        String(128),
-        ForeignKey("molbio_ngs_domain_state_revisions.id", ondelete="RESTRICT"),
-        nullable=True,
-    )
-    binding_revision_id = Column(
-        String(128), ForeignKey("molbio_ngs_global_binding_revisions.binding_revision_id"), nullable=False
-    )
-    event_type = Column(String(128), nullable=False)
-    event_stream = Column(String(512), nullable=False)
-    stream_generation = Column(Integer, nullable=False)
-    source_generation = Column(Integer, nullable=True)
-    payload_json = Column(Text, nullable=False)
-    payload_sha256 = Column(String(64), nullable=False)
-    status = Column(String(32), nullable=False, default="pending")
-    lease_owner = Column(String(255), nullable=True)
-    lease_token = Column(String(128), nullable=True)
-    lease_expires_at = Column(String(64), nullable=True)
-    next_retry_at = Column(String(64), nullable=True)
-    retry_count = Column(Integer, nullable=False, default=0)
-    last_error = Column(Text, nullable=True)
-    acknowledgement_json = Column(Text, nullable=True)
-    acknowledgement_sha256 = Column(String(64), nullable=True)
-    conflict_json = Column(Text, nullable=True)
-    conflict_sha256 = Column(String(64), nullable=True)
-    created_at = Column(String(64), nullable=False, default=_timestamp)
-    updated_at = Column(String(64), nullable=False, default=_timestamp)
-
-
-class MolBioNGSOutboxStream(MolBioNGSBase):
-    __tablename__ = "molbio_ngs_outbox_streams"
-
-    global_domain_experiment_id = Column(
-        String(128),
-        ForeignKey("molbio_ngs_domain_states.global_domain_experiment_id", ondelete="RESTRICT"),
-        primary_key=True,
-    )
-    binding_revision_id = Column(
-        String(128), ForeignKey("molbio_ngs_global_binding_revisions.binding_revision_id"), primary_key=True
-    )
-    event_stream = Column(String(512), primary_key=True)
-    next_stream_generation = Column(Integer, nullable=False, default=1)
-    updated_at = Column(String(64), nullable=False, default=_timestamp)
-
-
-class MolBioNGSConnectorAcknowledgement(MolBioNGSBase):
-    __tablename__ = "molbio_ngs_connector_acknowledgements"
-
-    acknowledgement_id = Column(String(128), primary_key=True)
-    command_id = Column(String(128), nullable=False, unique=True)
-    binding_revision_id = Column(
-        String(128), ForeignKey("molbio_ngs_global_binding_revisions.binding_revision_id"), nullable=False
-    )
-    disposition = Column(String(32), nullable=False)
-    acknowledgement_json = Column(Text, nullable=False)
-    acknowledgement_sha256 = Column(String(64), nullable=False)
-    created_at = Column(String(64), nullable=False, default=_timestamp)

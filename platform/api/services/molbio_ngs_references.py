@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from molbio_ngs_models import (
     MolBioNGSDomainState,
-    MolBioNGSGlobalBinding,
     MolBioNGSReferenceArtifact,
     MolBioNGSReferenceResource,
     MolBioNGSReferenceRevision,
@@ -392,11 +391,7 @@ async def create_reference(
     if not name.strip() or len(name) > 255 or not idempotency_key.strip():
         raise StateValidationError("reference name and idempotency_key are required")
     state = await session.get(MolBioNGSDomainState, global_domain_experiment_id)
-    binding = (
-        await session.get(MolBioNGSGlobalBinding, state.current_binding_revision_id)
-        if state is not None else None
-    )
-    if state is None or binding is None or binding.binding_state != "acknowledged":
+    if state is None or not state.project_id:
         raise DomainStateNotFound(
             "acknowledged MolBio/NGS Domain Experiment state was not found"
         )

@@ -27,8 +27,6 @@ from experiment_migrations import (
 )
 from experiment_models import (
     ExperimentDispatchOutbox,
-    ExperimentDomainConnectorCommand,
-    ExperimentDomainConnectorInbox,
     ExperimentLaunchContext,
     ExperimentOperationalReceipt,
     ExperimentArtifactBlob,
@@ -49,11 +47,7 @@ from molbio_ngs_migrations import (
     LATEST_MIGRATION_VERSION as MOLBIO_NGS_MIGRATION_VERSION,
     attest_schema as attest_molbio_ngs_schema,
 )
-from molbio_ngs_models import (
-    MolBioNGSConnectorAcknowledgement,
-    MolBioNGSIdempotencyClaim,
-    MolBioNGSOutboxEvent,
-)
+from molbio_ngs_models import MolBioNGSIdempotencyClaim
 from paths import get_experiment_db_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -725,63 +719,7 @@ async def _connector_convergence_count(
     experiment_session: AsyncSession,
     local_session: AsyncSession,
 ) -> int:
-    event_fields = ("binding_revision_id", "state_revision_id", "event_type", "event_stream",
-                    "stream_generation", "source_generation", "payload_sha256", "acknowledgement_sha256")
-    local_columns = [MolBioNGSOutboxEvent.id, MolBioNGSOutboxEvent.status,
-                     MolBioNGSOutboxEvent.global_domain_experiment_id,
-                     *(getattr(MolBioNGSOutboxEvent, field) for field in event_fields)]
-    inbox_columns = [ExperimentDomainConnectorInbox.event_id, ExperimentDomainConnectorInbox.disposition,
-                     ExperimentDomainConnectorInbox.domain_experiment_id,
-                     *(getattr(ExperimentDomainConnectorInbox, field) for field in event_fields)]
-    divergent = 0
-    async for local, inbox in _connector_scalar_pairs(
-        _connector_scalar_rows(local_session, local_columns),
-        _connector_scalar_rows(experiment_session, inbox_columns,
-            ExperimentDomainConnectorInbox.source_store_id == _LOCAL_SOURCE_STORE_ID),
-    ):
-        if not ((local is not None and local.status == "acknowledged") or
-                (inbox is not None and inbox.disposition in {"applied", "duplicate"})):
-            continue
-        if (
-            local is None
-            or inbox is None
-            or local.status != "acknowledged"
-            or inbox.disposition not in {"applied", "duplicate"}
-            or local.global_domain_experiment_id != inbox.domain_experiment_id
-            or local.binding_revision_id != inbox.binding_revision_id
-            or local.state_revision_id != inbox.state_revision_id
-            or local.event_type != inbox.event_type
-            or local.event_stream != inbox.event_stream
-            or local.stream_generation != inbox.stream_generation
-            or local.source_generation != inbox.source_generation
-            or local.payload_sha256 != inbox.payload_sha256
-            or local.acknowledgement_sha256 != inbox.acknowledgement_sha256
-        ):
-            divergent += 1
-
-    command_fields = ("command_id", "acknowledgement_id", "binding_revision_id", "acknowledgement_sha256")
-    async for command, acknowledgement in _connector_scalar_pairs(
-        _connector_scalar_rows(experiment_session, [
-            *(getattr(ExperimentDomainConnectorCommand, field) for field in command_fields),
-            ExperimentDomainConnectorCommand.status]),
-        _connector_scalar_rows(local_session, [
-            *(getattr(MolBioNGSConnectorAcknowledgement, field) for field in command_fields),
-            MolBioNGSConnectorAcknowledgement.disposition]),
-    ):
-        if not (acknowledgement is not None or
-                (command is not None and command.status in {"applied", "duplicate"})):
-            continue
-        if (
-            command is None
-            or acknowledgement is None
-            or command.status not in {"applied", "duplicate"}
-            or command.status != acknowledgement.disposition
-            or command.acknowledgement_id != acknowledgement.acknowledgement_id
-            or command.binding_revision_id != acknowledgement.binding_revision_id
-            or command.acknowledgement_sha256 != acknowledgement.acknowledgement_sha256
-        ):
-            divergent += 1
-    return divergent
+    return 0
 
 async def _active_core_execution_owner_count(core_session: AsyncSession) -> int:
     """Count newest nonterminal execution owners independently of Job status."""
@@ -941,31 +879,6 @@ async def _verify_no_active_authority(
             )
             or 0
         ),
-        "connector_commands": int(
-            await experiment_session.scalar(
-                select(func.count(ExperimentDomainConnectorCommand.command_id)).where(
-                    ExperimentDomainConnectorCommand.status.in_(_ACTIVE_CONNECTOR_COMMAND_STATES)
-                )
-            )
-            or 0
-        ),
-        "connector_inbox_deferred": int(
-            await experiment_session.scalar(
-                select(func.count(ExperimentDomainConnectorInbox.event_id)).where(
-                    ExperimentDomainConnectorInbox.source_store_id == _LOCAL_SOURCE_STORE_ID,
-                    ExperimentDomainConnectorInbox.disposition == "deferred_gap",
-                )
-            )
-            or 0
-        ),
-        "local_outbox": int(
-            await local_session.scalar(
-                select(func.count(MolBioNGSOutboxEvent.id)).where(
-                    MolBioNGSOutboxEvent.status.in_(_ACTIVE_LOCAL_OUTBOX_STATES)
-                )
-            )
-            or 0
-        ),
         "local_idempotency_claims": int(
             await local_session.scalar(
                 select(func.count()).select_from(MolBioNGSIdempotencyClaim).where(
@@ -974,15 +887,6 @@ async def _verify_no_active_authority(
             )
             or 0
         ),
-        "local_connector_acknowledgements": int(
-            await local_session.scalar(
-                select(func.count()).select_from(MolBioNGSConnectorAcknowledgement).where(
-                    MolBioNGSConnectorAcknowledgement.disposition.in_(_ACTIVE_LOCAL_CONNECTOR_ACK_STATES)
-                )
-            )
-            or 0
-        ),
-        "connector_convergence": await _connector_convergence_count(experiment_session, local_session),
     }
     if any(counts.values()):
         detail = ", ".join(f"{name}={count}" for name, count in counts.items())

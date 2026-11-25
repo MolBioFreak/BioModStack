@@ -12,7 +12,7 @@ import rfc8785
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from experiment_models import ExperimentRevision
-from molbio_ngs_models import MolBioNGSGlobalBinding, MolBioNGSSampleRevision
+from molbio_ngs_models import MolBioNGSDomainState, MolBioNGSSampleRevision
 from molbio_ngs_services import (
     MolBioNGSServiceError,
     get_sample_revision,

@@ -24,7 +24,7 @@ from database import (
 )
 from experiment_database import get_experiment_session
 from molbio_ngs_database import get_molbio_ngs_session
-from molbio_ngs_models import MolBioNGSDomainState, MolBioNGSGlobalBinding
+from molbio_ngs_models import MolBioNGSDomainState
 from experiment_models import (
     ExperimentAggregateHead,
     ExperimentDispatchOutbox,
@@ -91,7 +91,7 @@ from services.global_experiments.workflow_setups import (
 )
 from services.global_experiments.receipts import attach_verified_entity, reverify_source_receipt
 from services.global_experiments.result_surfaces import result_surface_for_receipt
-from services.ngs_molbio_connector import exact_local_launch_authority
+from services.ngs_molbio_binding import exact_local_launch_authority
 from services.ngs_molbio_capabilities import NgsMolBioCapabilityError, capability_inventory
 from services.protein_project_capabilities import (
     ProteinProjectCapabilityError,
@@ -1368,18 +1368,17 @@ def _capability_is_allowed_for_domain(capability: dict[str, Any], experiment_mod
     )
 
 
-async def _active_ngs_binding(domain_session: AsyncSession, *, project_id: str, experiment_id: str, domain: ExperimentAggregateHead) -> MolBioNGSGlobalBinding:
+async def _active_ngs_binding(domain_session: AsyncSession, *, project_id: str, experiment_id: str, domain: ExperimentAggregateHead) -> MolBioNGSDomainState:
     state = await domain_session.get(MolBioNGSDomainState, domain.aggregate_id)
-    binding = await domain_session.get(MolBioNGSGlobalBinding, state.current_binding_revision_id if state else "")
     if (
-        state is None or binding is None or binding.binding_state != "acknowledged"
-        or binding.project_id != project_id or binding.global_experiment_id != experiment_id
-        or binding.global_domain_experiment_id != domain.aggregate_id
-        or binding.global_domain_experiment_revision_id != domain.current_revision_id
-        or not binding.global_binding_receipt_id or not binding.global_binding_receipt_sha256
+        state is None
+        or state.project_id != project_id
+        or state.global_experiment_id != experiment_id
+        or state.global_domain_experiment_id != domain.aggregate_id
+        or state.global_domain_experiment_revision_id != domain.current_revision_id
     ):
         raise HTTPException(409, detail={"code": "current_acknowledged_binding_required", "message": "The exact current Domain revision has no active acknowledged binding."})
-    return binding
+    return state
 
 
 async def _is_native_protein_domain(session: AsyncSession, revision_id: str) -> bool:

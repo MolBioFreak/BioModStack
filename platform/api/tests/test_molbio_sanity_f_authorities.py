@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from services import ngs_molbio_capabilities as caps
 from services import ngs_molbio_n5 as n5
-from services import ngs_molbio_connector as connector
 from services import ngs_molbio_release_acceptance as release
 from services import ngs_molbio_run_control as control
 
@@ -46,21 +45,6 @@ def test_warm_schema_authority_reuses_checks_and_defensive_copies(monkeypatch, t
         assert caps.contract_registry("dataset")["entries"]
     assert len(checks) == cold
     print(f"F schema counter: cold meta-checks={cold}; 20 warm requests additional=0")
-
-
-def test_connector_validator_is_cached_and_still_checks_each_payload(monkeypatch):
-    caps._compiled_validator.cache_clear()
-    caps._checked_schema.cache_clear()
-    schema_id = "bms.molbio-ngs.binding-acknowledged.v1"
-    body = {"schema": schema_id, "binding_revision_id": "binding-1", "binding_revision_number": 1, "binding_receipt_sha256": "a" * 64}
-    connector._validate(schema_id, body)
-    misses = caps._compiled_validator.cache_info().misses
-    for _ in range(20):
-        connector._validate(schema_id, body)
-    assert caps._compiled_validator.cache_info().misses == misses
-    with pytest.raises(connector.ConnectorConflict):
-        connector._validate(schema_id, {**body, "binding_revision_number": -1})
-    print("F connector counter: 20 warm payloads, zero additional validator compilations")
 
 
 def test_selected_schema_dependency_changes_are_not_hidden(tmp_path, monkeypatch):
@@ -186,65 +170,6 @@ def _fixture_row(model, index, **overrides):
             row[field] = "2026-01-01T00:00:00+00:00"
     row.update(overrides)
     return row
-
-
-@pytest.mark.asyncio
-async def test_health_uses_scalar_aggregates_without_payload_hydration(tmp_path):
-    models = [connector.ExperimentDomainConnectorCommand, connector.MolBioNGSOutboxEvent,
-              connector.ExperimentDomainConnectorInbox, connector.ExperimentDomainConnectorConflict]
-    engine, session = await _scratch_session(tmp_path, models)
-    try:
-        async with session:
-            for model in models[:2]:
-                await session.execute(insert(model), [_fixture_row(model, i, status="pending" if i < 3 else "applied", created_at="2026-01-01T00:00:00+00:00") for i in range(1003)])
-            await session.commit()
-            statements = []
-            event.listen(engine.sync_engine, "before_cursor_execute", lambda conn, cursor, statement, *args: statements.append(statement))
-            health = await connector.connector_health(session, session)
-            assert health["command_pending_count"] == health["outbox_pending_count"] == 3
-            assert health["command_conflict_count"] == health["outbox_conflict_count"] == 0
-            assert health["oldest_command_age_seconds"] is not None
-            assert not session.identity_map
-            assert len(statements) == 5
-            assert sum("GROUP BY" in sql for sql in statements) == 2
-            assert all("payload_json" not in sql and "command_json" not in sql for sql in statements)
-            print("F health: 2006 retained rows; 5 scalar queries; zero ORM payload identities")
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_convergence_covers_more_than_old_ceiling_and_late_divergence(tmp_path):
-    local, inbox = release.MolBioNGSOutboxEvent, release.ExperimentDomainConnectorInbox
-    command, ack = release.ExperimentDomainConnectorCommand, release.MolBioNGSConnectorAcknowledgement
-    engine, session = await _scratch_session(tmp_path, [local, inbox, command, ack])
-    try:
-        async with session:
-            shared = dict(binding_revision_id="binding", state_revision_id=None, event_type="event", event_stream="stream", source_generation=1, payload_sha256="a" * 64, acknowledgement_sha256="b" * 64)
-            total = 10005
-            await session.execute(insert(local), [_fixture_row(local, i, stream_generation=i + 1, id=f"event-{i:06}", status="acknowledged", global_domain_experiment_id="domain", **shared) for i in range(total)])
-            await session.execute(insert(inbox), [_fixture_row(inbox, i, stream_generation=i + 1, event_id=f"event-{i:06}", disposition="applied", source_store_id=release._LOCAL_SOURCE_STORE_ID, domain_experiment_id="domain", **shared) for i in range(total)])
-            await session.commit()
-            statements = []
-            event.listen(engine.sync_engine, "before_cursor_execute", lambda conn, cursor, statement, *args: statements.append(statement))
-            assert await release._connector_convergence_count(session, session) == 0
-            assert not session.identity_map
-            assert all("payload_json" not in sql and "acknowledgement_json" not in sql for sql in statements)
-            assert all("LIMIT" in sql for sql in statements)
-            await session.execute(update(local).where(local.id == "event-010004").values(payload_sha256="c" * 64))
-            await session.execute(delete(inbox).where(inbox.event_id == "event-010003"))
-            assert await release._connector_convergence_count(session, session) == 2
-            command_shared = dict(command_id="command-1", acknowledgement_id="ack-1", binding_revision_id="binding", acknowledgement_sha256="d" * 64)
-            await session.execute(insert(command), [_fixture_row(command, 1, status="applied", **command_shared)])
-            await session.execute(insert(ack), [_fixture_row(ack, 1, disposition="applied", **command_shared)])
-            assert await release._connector_convergence_count(session, session) == 2
-            await session.execute(update(ack).values(acknowledgement_sha256="e" * 64))
-            assert await release._connector_convergence_count(session, session) == 3
-            await session.execute(delete(command))
-            assert await release._connector_convergence_count(session, session) == 3
-            print(f"F convergence: {total} settled pairs; 512-row scalar batches; late mismatch and missing event/command peer detected")
-    finally:
-        await engine.dispose()
 
 
 

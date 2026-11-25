@@ -53,7 +53,6 @@ from migrations import runner as migration_runner
 from molbio_ngs_models import (
     MolBioNGSDomainState,
     MolBioNGSDomainStateRevision,
-    MolBioNGSGlobalBinding,
 )
 from migrations.runner import MIGRATIONS
 from routers import ont_signal_workbench as router
@@ -74,7 +73,7 @@ async def test_domain_revision_authority_returns_current_binding_and_digests() -
     state_revision = SimpleNamespace(
         id="state-rev-2",
         global_domain_experiment_id=domain_id,
-        binding_revision_id="binding-rev-2",
+        binding_receipt_id="binding-rev-2",
         payload_sha256="a" * 64,
         membership_graph_sha256="b" * 64,
         global_domain_experiment_revision_id="global-rev-2",
@@ -82,28 +81,19 @@ async def test_domain_revision_authority_returns_current_binding_and_digests() -
     domain_state = SimpleNamespace(
         global_domain_experiment_id=domain_id,
         current_state_revision_id=state_revision.id,
-        current_binding_revision_id=state_revision.binding_revision_id,
-        head_generation=7,
-    )
-    binding = SimpleNamespace(
-        binding_revision_id="binding-rev-2",
-        global_domain_experiment_id=domain_id,
         global_domain_experiment_revision_id="global-rev-2",
-        global_domain_experiment_revision_digest="c" * 64,
+        binding_receipt_id=state_revision.binding_receipt_id,
+        binding_receipt_json=json.dumps({"domain_experiment": {"digest": "c" * 64}}),
+        head_generation=7,
     )
 
     class DomainSession:
         async def get(self, model: Any, identifier: str) -> Any:
-            values = {
-                MolBioNGSDomainState: domain_state,
-                MolBioNGSDomainStateRevision: state_revision,
-                MolBioNGSGlobalBinding: binding,
-            }
             if model is MolBioNGSDomainState:
-                return values[model] if identifier == domain_id else None
+                return domain_state if identifier == domain_id else None
             if model is MolBioNGSDomainStateRevision:
-                return values[model] if identifier == state_revision.id else None
-            return values[model] if identifier == binding.binding_revision_id else None
+                return state_revision if identifier == state_revision.id else None
+            return None
 
     authority = await service._resolve_domain_revision_authority(DomainSession(), domain_id)
     assert authority == {

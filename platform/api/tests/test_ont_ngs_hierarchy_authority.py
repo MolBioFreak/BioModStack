@@ -288,7 +288,11 @@ async def test_resolver_loads_the_frozen_binding_not_the_current_domain_head(mon
     )
 
     rows = {
-        "MolBioNGSGlobalBinding": SimpleNamespace(**contract["binding"]),
+        "MolBioNGSDomainState": SimpleNamespace(
+            binding_receipt_id=contract["binding"]["binding_revision_id"],
+            binding_receipt_json=contract["binding"]["global_binding_receipt_json"],
+            binding_receipt_sha256=contract["binding"]["global_binding_receipt_sha256"],
+        ),
         "MolBioNGSSampleRevision": SimpleNamespace(sample_id="sample-1", **contract["sample_revision"]),
         "ExperimentRevision": {
             "project-revision-1": SimpleNamespace(**contract["project_revision"]),
@@ -306,7 +310,7 @@ async def test_resolver_loads_the_frozen_binding_not_the_current_domain_head(mon
             if name == "ExperimentRevision":
                 return rows[name].get(key)
             row = rows.get(name)
-            expected_key = BINDING_ID if name == "MolBioNGSGlobalBinding" else SAMPLE_ID
+            expected_key = DOMAIN_ID if name == "MolBioNGSDomainState" else SAMPLE_ID
             return row if key == expected_key else None
 
     async def fake_state(_session, domain_id, state_id):

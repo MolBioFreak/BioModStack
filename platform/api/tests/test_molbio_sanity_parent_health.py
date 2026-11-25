@@ -104,23 +104,10 @@ def test_health_query_work_does_not_grow_with_domain_history(tmp_path, monkeypat
         connection.execute("BEGIN")
         connection.executemany(
             "INSERT INTO molbio_ngs_domain_states "
-            "(global_domain_experiment_id, head_generation, current_binding_revision_id, created_at, updated_at) "
-            "VALUES (?,0,?,?,?)",
-            [(f"domain-{i}", f"binding-{i}", "2026-09-11T00:00:00Z", "2026-09-11T00:00:00Z") for i in range(2000)],
-        )
-        connection.executemany(
-            "INSERT INTO molbio_ngs_global_binding_revisions ("
-            "binding_revision_id, global_domain_experiment_id, revision_number, "
-            "global_domain_experiment_revision_id, global_domain_experiment_revision_digest, "
-            "project_id, project_generation, project_digest, project_receipt_id, "
-            "project_reopen_destination, project_acknowledgement, global_experiment_id, "
-            "global_experiment_generation, global_experiment_digest, global_experiment_receipt_id, "
-            "global_experiment_reopen_destination, global_experiment_acknowledgement, binding_state, created_at"
-            ") VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            [(f"binding-{i}", f"domain-{i}", f"revision-{i}", "0" * 64,
-              "project", "1", "0" * 64, "project-receipt", "{}", "{}",
-              "experiment", "1", "0" * 64, "experiment-receipt", "{}", "{}",
-              "needs_reverification", "2026-09-11T00:00:00Z") for i in range(2000)],
+            "(global_domain_experiment_id, project_id, global_experiment_id, "
+            "global_domain_experiment_revision_id, head_generation, binding_receipt_id, created_at, updated_at) "
+            "VALUES (?,?,?,?,0,?,?,?)",
+            [(f"domain-{i}", "project", "experiment", f"revision-{i}", f"binding-{i}", "2026-09-11T00:00:00Z", "2026-09-11T00:00:00Z") for i in range(2000)],
         )
         connection.commit()
     finally:

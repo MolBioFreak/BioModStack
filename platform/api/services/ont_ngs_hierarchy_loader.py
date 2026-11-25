@@ -6,7 +6,7 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from experiment_models import ExperimentRevision
-from molbio_ngs_models import MolBioNGSGlobalBinding, MolBioNGSSampleRevision
+from molbio_ngs_models import MolBioNGSDomainState, MolBioNGSSampleRevision
 
 
 class OntNgsHierarchyLoadError(RuntimeError):
@@ -78,14 +78,19 @@ async def resolve_hierarchy_records(
         reference_revision_id,
     )
 
-    binding_revision_id = getattr(state_revision, "binding_revision_id", None)
-    if not isinstance(binding_revision_id, str) or not binding_revision_id:
-        raise OntNgsHierarchyLoadError("frozen binding revision authority is unavailable")
-    binding = await domain_session.get(MolBioNGSGlobalBinding, binding_revision_id)
-    if binding is None or not isinstance(binding.global_binding_receipt_json, str):
+    binding_receipt_json = getattr(state_revision, "binding_receipt_json", None)
+    binding_receipt_id = getattr(state_revision, "binding_receipt_id", None)
+    binding_receipt_sha256 = getattr(state_revision, "binding_receipt_sha256", None)
+    if not isinstance(binding_receipt_json, str) or not binding_receipt_json:
+        domain_state = await domain_session.get(MolBioNGSDomainState, domain_id)
+        if domain_state is not None:
+            binding_receipt_json = domain_state.binding_receipt_json
+            binding_receipt_id = domain_state.binding_receipt_id
+            binding_receipt_sha256 = domain_state.binding_receipt_sha256
+    if not isinstance(binding_receipt_json, str) or not binding_receipt_json:
         raise OntNgsHierarchyLoadError("frozen binding receipt authority is unavailable")
     try:
-        binding_receipt = json.loads(binding.global_binding_receipt_json)
+        binding_receipt = json.loads(binding_receipt_json)
         project_binding = binding_receipt["project"]
         global_binding = binding_receipt["global_experiment"]
         domain_binding = binding_receipt["domain_experiment"]
@@ -97,6 +102,23 @@ async def resolve_hierarchy_records(
     if not all(isinstance(value, str) and value for value in (project_revision_id, global_revision_id, domain_revision_id)):
         raise OntNgsHierarchyLoadError("frozen global revision authority is invalid")
 
+    binding_record = {
+        "binding_revision_id": binding_receipt_id or state_revision.id,
+        "binding_state": "acknowledged",
+        "global_domain_experiment_id": domain_id,
+        "global_domain_experiment_revision_id": domain_binding.get("revision_id"),
+        "global_domain_experiment_revision_digest": domain_binding.get("digest"),
+        "project_id": project_binding.get("id"),
+        "project_generation": str(project_binding.get("generation", "")),
+        "project_digest": project_binding.get("digest"),
+        "global_experiment_id": global_binding.get("id"),
+        "global_experiment_generation": str(global_binding.get("generation", "")),
+        "global_experiment_digest": global_binding.get("digest"),
+        "global_binding_receipt_id": binding_receipt_id,
+        "global_binding_receipt_json": binding_receipt_json,
+        "global_binding_receipt_sha256": binding_receipt_sha256,
+    }
+
     project_revision = await experiment_session.get(ExperimentRevision, project_revision_id)
     global_revision = await experiment_session.get(ExperimentRevision, global_revision_id)
     domain_revision = await experiment_session.get(ExperimentRevision, domain_revision_id)
@@ -105,40 +127,23 @@ async def resolve_hierarchy_records(
         job_id=getattr(job, "id", None),
         model_id=getattr(job, "model_id", None),
         params=dict(params),
-        state_revision=_record(
-            state_revision,
-            (
-                "id",
-                "global_domain_experiment_id",
-                "global_domain_experiment_revision_id",
-                "binding_revision_id",
-                "canonical_payload",
-                "payload_sha256",
-                "membership_graph_sha256",
+        state_revision={
+            **_record(
+                state_revision,
+                (
+                    "id",
+                    "global_domain_experiment_id",
+                    "global_domain_experiment_revision_id",
+                    "canonical_payload",
+                    "payload_sha256",
+                    "membership_graph_sha256",
+                ),
+                "state revision",
             ),
-            "state revision",
-        ),
+            "binding_revision_id": binding_record["binding_revision_id"],
+        },
         membership_graph=membership_graph,
-        binding=_record(
-            binding,
-            (
-                "binding_revision_id",
-                "binding_state",
-                "global_domain_experiment_id",
-                "global_domain_experiment_revision_id",
-                "global_domain_experiment_revision_digest",
-                "project_id",
-                "project_generation",
-                "project_digest",
-                "global_experiment_id",
-                "global_experiment_generation",
-                "global_experiment_digest",
-                "global_binding_receipt_id",
-                "global_binding_receipt_json",
-                "global_binding_receipt_sha256",
-            ),
-            "binding",
-        ),
+        binding=binding_record,
         project_revision=_record(
             project_revision,
             ("resource_id", "subject_id", "payload_sha256"),
