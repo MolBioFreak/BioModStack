@@ -5489,7 +5489,7 @@ function ResultsViewerContent() {
                 {showResultFamily && <BinderResultFamily key={`family-${selectedJobId}`}
                     jobId={selectedJobId} launchContextId={destinationLaunchContextId} onOpenJob={handleSelectJob}
                     onCompareJobs={ids => setComparison({ jobId: selectedJobId, ids })} />}
-                {showResultFamily && <BinderResultComparison key={`comparison-${selectedJobId}`}
+                {showResultFamily && !isNativeBinderGeneration(activeJob) && <BinderResultComparison key={`comparison-${selectedJobId}`}
                     jobId={selectedJobId} jobIds={comparison?.jobId === selectedJobId ? comparison.ids : undefined}
                     // An untouched empty table is not a command to erase the comparison's saved selection.
                     selectedDesignIds={selectedDesignIds.length || (designSelection.jobId === selectedJobId && designSelection.changed) ? selectedDesignIds : undefined}
@@ -5497,7 +5497,7 @@ function ResultsViewerContent() {
                     candidateDocuments={Object.keys(selectedCandidateDocuments).length || (designSelection.jobId === selectedJobId && designSelection.changed) || (nativeSelection.jobId === selectedJobId && nativeSelection.changed) ? selectedCandidateDocuments : undefined}
                     launchContextId={destinationLaunchContextId} />}
 
-                {activeJob?.sequence_design && (
+                {activeJob?.sequence_design && !isNativeBinderGeneration(activeJob) && (
                     <ProteinDesignPanel title="Sequence design" description="Generation results remain unchanged. Each follow-on opens in its model’s native result view.">
                         <CandidateRoundProgress key={`sequence-${activeJob.id}`} jobId={activeJob.id} kind="sequence" />
                     </ProteinDesignPanel>
@@ -5547,7 +5547,26 @@ function ResultsViewerContent() {
                                     if (nativeScope) route.searchParams.set('native_scope', nativeScope);
                                     navigate(`${route.pathname}${route.search}`, { replace: true });
                                 }} />
-                            {selectedCandidateControls}
+                            <div className="mt-3 grid gap-2 md:grid-cols-2">
+                                {showResultFamily && <BinderResultComparison key={`comparison-${selectedJobId}`}
+                                    jobId={selectedJobId} jobIds={comparison?.jobId === selectedJobId ? comparison.ids : undefined}
+                                    selectedDesignIds={selectedDesignIds.length || (designSelection.jobId === selectedJobId && designSelection.changed) ? selectedDesignIds : undefined}
+                                    selectedNativeSources={selectedNativeSources.length || (nativeSelection.jobId === selectedJobId && nativeSelection.changed) ? selectedNativeSources : undefined}
+                                    candidateDocuments={Object.keys(selectedCandidateDocuments).length || (designSelection.jobId === selectedJobId && designSelection.changed) || (nativeSelection.jobId === selectedJobId && nativeSelection.changed) ? selectedCandidateDocuments : undefined}
+                                    launchContextId={destinationLaunchContextId} />}
+                                {activeJob?.sequence_design && (
+                                    <details className="rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+                                        <summary className="cursor-pointer text-sm font-semibold text-slate-200">Sequence design</summary>
+                                        <div className="mt-2"><ProteinDesignPanel title="Sequence design" description="Generation results remain unchanged. Each follow-on opens in its model’s native result view.">
+                                            <CandidateRoundProgress key={`sequence-${activeJob.id}`} jobId={activeJob.id} kind="sequence" />
+                                        </ProteinDesignPanel></div>
+                                    </details>
+                                )}
+                            </div>
+                            <details className="mt-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+                                <summary className="cursor-pointer text-sm font-semibold text-slate-200">Selected candidate operations ({selectedDesignIds.length + selectedNativeSources.length})</summary>
+                                <div className="mt-3">{selectedCandidateControls}</div>
+                            </details>
                         </>
                     ) : activeJob.model_id === 'molecular_dynamics' ? (
                         <MDResultsPane key={activeJob.id} jobId={activeJob.id} returnTo={typeof activeJob.params?.intent === 'object' && activeJob.params.intent !== null && 'return_to' in activeJob.params.intent && typeof activeJob.params.intent.return_to === 'string' ? activeJob.params.intent.return_to : undefined} />

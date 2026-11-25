@@ -37,8 +37,9 @@ function EvidenceBrowser({ jobId, sourceDesignId, launchContextId }: { jobId: st
     const changePage = (next: number) => { setOffset(next); setCandidate(''); setSequenceId(''); setPredictionId(''); };
     const sequence = record?.sequences.find(row => JSON.stringify([row.job_id, row.design_id]) === sequenceId);
     const prediction = sequence?.predictions.find(row => predictionKey(row) === predictionId);
-    return <section aria-label="Candidate-linked prediction evidence" className="space-y-3 rounded-xl border border-[var(--border-color)] p-4 text-[var(--text-primary)]">
-        <h4 className="font-semibold">Sequence and prediction evidence</h4>
+    const [expanded, setExpanded] = useState(false);
+    const emptySummary = sourceDesignId === undefined && query.data != null && query.data.total === 0 && !query.isError;
+    const content = <>
         <CandidateRoundProgress jobId={jobId} />
         <p className="text-xs text-[var(--text-secondary)]">Each sequence, prediction sample and target state retains its own evidence. Missing measurements are not zero. Source viewing and selection remain independent.</p>
         {query.isLoading && <p role="status">Reading candidate-linked evidence…</p>}
@@ -67,6 +68,19 @@ function EvidenceBrowser({ jobId, sourceDesignId, launchContextId }: { jobId: st
             {prediction && <PredictionDetail key={predictionKey(prediction)} prediction={prediction} launchContextId={launchContextId} />}
             <a className="block underline text-sm" href={jsonUrl(record)} download={`${record.source_design_id}-binder-evidence.json`}>Export candidate evidence JSON</a>
         </>}
+    </>;
+    if (emptySummary) {
+        return <section aria-label="Candidate-linked prediction evidence" className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] p-3 text-[var(--text-primary)]">
+            <button type="button" aria-expanded={expanded} onClick={() => setExpanded(v => !v)} className="flex w-full cursor-pointer items-center justify-between gap-2 text-left text-sm font-medium">
+                <h4 className="inline font-semibold">Sequence and prediction evidence</h4>
+                <span className="text-xs text-[var(--text-secondary)]">0 linked records · {expanded ? 'Hide' : 'Show'}</span>
+            </button>
+            <div hidden={!expanded} className="mt-3 space-y-3">{content}</div>
+        </section>;
+    }
+    return <section aria-label="Candidate-linked prediction evidence" className="space-y-3 rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] p-4 text-[var(--text-primary)]">
+        <h4 className="font-semibold">Sequence and prediction evidence</h4>
+        {content}
     </section>;
 }
 
