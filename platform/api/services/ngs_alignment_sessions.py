@@ -3008,13 +3008,29 @@ def _load_derived_package(
         if manifest.get("authority_sha256") != authority_digest or directory_authority != authority_digest:
             return None
         metadata = {}
+        resolved_dir = directory.resolve()
         for key, path in paths.items():
-            if not path.is_file() or path.is_symlink():
+            if path.is_symlink():
                 return None
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            size = path.stat().st_size
+            try:
+                file_stat = os.lstat(path)
+            except OSError:
+                return None
+            if not stat.S_ISREG(file_stat.st_mode):
+                return None
+            if path.resolve().parent != resolved_dir:
+                return None
             declared = manifest["outputs"][key]
-            if declared != {"sha256": digest, "size_bytes": size}:
+            if not isinstance(declared, dict):
+                return None
+            digest = declared.get("sha256")
+            if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                return None
+            size = file_stat.st_size
+            if declared.get("size_bytes") != size:
+                return None
+            declared_mtime_ns = declared.get("mtime_ns")
+            if declared_mtime_ns is not None and str(declared_mtime_ns) != str(file_stat.st_mtime_ns):
                 return None
             metadata[key] = _derived_metadata(
                 path,
@@ -3455,7 +3471,11 @@ def build_alignment_presentation(
             outputs = {}
             for key, path in (("bam", preview_path), ("index", preview_index), ("coverage", coverage_path)):
                 digest, size = _sha256_file_and_size(path)
-                outputs[key] = {"sha256": digest, "size_bytes": size}
+                outputs[key] = {
+                    "sha256": digest,
+                    "size_bytes": size,
+                    "mtime_ns": str(path.stat().st_mtime_ns),
+                }
             selected_forward = sum(not record.is_reverse for read_id in retained_ids for record in selected[read_id])
             selected_reverse = sum(record.is_reverse for read_id in retained_ids for record in selected[read_id])
             selected_contig_counts: dict[str, int] = {}

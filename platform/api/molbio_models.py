@@ -453,19 +453,6 @@ class MolBioAuditEvent(MolBioBase):
     occurred_at = Column(DateTime, nullable=False, default=_utcnow)
 
 
-class MolBioOutboxEvent(MolBioBase):
-    """Immutable event body; consumers use event ID as their idempotency key."""
-
-    __tablename__ = "molbio_outbox_events"
-
-    id = Column(String(36), primary_key=True)
-    aggregate_kind = Column(String(64), nullable=False)
-    aggregate_id = Column(String(64), nullable=False)
-    event_kind = Column(String(128), nullable=False)
-    payload = Column(JSON, nullable=False)
-    occurred_at = Column(DateTime, nullable=False, default=_utcnow)
-
-
 IMMUTABLE_TABLES = (
     "molecular_revisions",
     "primer_revisions",
@@ -478,5 +465,4 @@ IMMUTABLE_TABLES = (
     "polymerase_preset_revisions",
     "pcr_experiment_revisions",
     "molbio_audit_events",
-    "molbio_outbox_events",
 )

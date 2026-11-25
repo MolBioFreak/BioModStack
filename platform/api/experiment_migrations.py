@@ -61,7 +61,9 @@ MIGRATION_V23_VERSION = 23
 MIGRATION_V23_NAME = "family_msa_workflow_setup_routes"
 MIGRATION_V24_VERSION = 24
 MIGRATION_V24_NAME = "editable_submitted_workflow_setups"
-LATEST_MIGRATION_VERSION = MIGRATION_V24_VERSION
+MIGRATION_V25_VERSION = 25
+MIGRATION_V25_NAME = "remove_hash_udfs_and_sync_state"
+LATEST_MIGRATION_VERSION = MIGRATION_V25_VERSION
 MIGRATION_V2_CHECKSUM = "db24d1ef056e560f10eb2fe9f8ef4dac0d4e4dbe90fd0a49efed88f0d111935c"
 MIGRATION_V3_CHECKSUM = "46f1a1d28a02334e87d628070e2bd9c6d78e158caa23d583951fdc582e7b11d2"
 MIGRATION_V4_CHECKSUM = "ec2966efee9129f8890019bee0d569de2cdf8d2a9fc4bb2e05138839880f375b"
@@ -2308,11 +2310,404 @@ END;
 """.strip()
 MIGRATION_V24_CHECKSUM = hashlib.sha256(MIGRATION_V24_SQL.encode("utf-8")).hexdigest()
 
+MIGRATION_V25_SQL = """
+DROP TABLE IF EXISTS sync_state;
+
+DROP TRIGGER IF EXISTS trg_experiment_audit_immutable_delete;
+DELETE FROM audit_events WHERE event_type = 'run_group_reconciled';
+CREATE TRIGGER trg_experiment_audit_immutable_delete
+BEFORE DELETE ON audit_events
+BEGIN
+    SELECT RAISE(ABORT, 'audit events are append-only');
+END;
+
+DROP TRIGGER IF EXISTS trg_experiment_revision_digest_insert;
+DROP TRIGGER IF EXISTS trg_experiment_preparation_digest_insert;
+DROP TRIGGER IF EXISTS trg_experiment_outbox_digest_insert;
+DROP TRIGGER IF EXISTS trg_experiment_validation_receipt_digest_insert;
+DROP TRIGGER IF EXISTS trg_experiment_dataset_member_digest_insert;
+DROP TRIGGER IF EXISTS trg_experiment_workflow_plan_authority_digest_insert;
+
+DROP TRIGGER IF EXISTS trg_experiment_domain_parent_global_revision_insert;
+CREATE TRIGGER trg_experiment_domain_parent_global_revision_insert
+BEFORE INSERT ON revision_edges
+WHEN NEW.role = 'parent_global_revision' AND NOT EXISTS (
+    SELECT 1
+    FROM revisions domain_revision
+    JOIN resources domain_revision_resource
+      ON domain_revision_resource.id = domain_revision.resource_id
+    JOIN aggregate_heads domain_head
+      ON domain_head.aggregate_id = domain_revision.subject_id
+     AND domain_head.aggregate_kind = 'domain_experiment'
+    JOIN aggregate_heads global_head
+      ON global_head.aggregate_id = domain_head.parent_id
+     AND global_head.aggregate_kind = 'experiment'
+     AND global_head.workspace_id = domain_head.workspace_id
+    JOIN revisions global_revision
+      ON global_revision.resource_id = NEW.target_resource_id
+     AND global_revision.subject_id = global_head.aggregate_id
+    JOIN resources global_revision_resource
+      ON global_revision_resource.id = global_revision.resource_id
+    WHERE domain_revision.resource_id = NEW.revision_id
+      AND domain_revision_resource.kind = 'revision'
+      AND domain_revision_resource.workspace_id = domain_head.workspace_id
+      AND domain_revision_resource.lifecycle_owner_id = domain_head.aggregate_id
+      AND global_revision_resource.kind = 'revision'
+      AND global_revision_resource.workspace_id = global_head.workspace_id
+      AND global_revision_resource.lifecycle_owner_id = global_head.aggregate_id
+      AND NEW.ordinal = 0
+      AND NEW.expected_sha256 = global_revision.payload_sha256
+      AND NEW.metadata_json = '{"authority":"server_resolved"}'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'invalid Domain parent Global revision authority');
+END;
+
+DROP TRIGGER IF EXISTS trg_experiment_run_attempt_terminal_receipt_insert;
+CREATE TRIGGER trg_experiment_run_attempt_terminal_receipt_insert
+BEFORE INSERT ON run_attempts
+WHEN (NEW.terminal_receipt_json IS NULL AND NEW.terminal_receipt_sha256 IS NOT NULL)
+  OR (NEW.terminal_receipt_json IS NOT NULL AND NEW.terminal_receipt_sha256 IS NULL)
+BEGIN SELECT RAISE(ABORT, 'terminal receipt digest mismatch'); END;
+
+DROP TRIGGER IF EXISTS trg_experiment_run_attempt_terminal_receipt_update;
+CREATE TRIGGER trg_experiment_run_attempt_terminal_receipt_update
+BEFORE UPDATE OF terminal_receipt_json, terminal_receipt_sha256 ON run_attempts
+WHEN (OLD.terminal_receipt_json IS NOT NULL AND (
+        NEW.terminal_receipt_json IS NOT OLD.terminal_receipt_json
+        OR NEW.terminal_receipt_sha256 IS NOT OLD.terminal_receipt_sha256))
+  OR (OLD.terminal_receipt_json IS NULL AND (
+        (NEW.terminal_receipt_json IS NULL AND NEW.terminal_receipt_sha256 IS NOT NULL)
+        OR (NEW.terminal_receipt_json IS NOT NULL AND NEW.terminal_receipt_sha256 IS NULL)))
+BEGIN SELECT RAISE(ABORT, 'terminal receipt is immutable or digest-mismatched'); END;
+
+CREATE TABLE domain_connector_commands__v25 (
+    command_id TEXT PRIMARY KEY NOT NULL,
+    request_scope TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    idempotency_request_sha256 TEXT NOT NULL CHECK(length(idempotency_request_sha256) = 64),
+    operation TEXT NOT NULL CHECK(operation IN ('initialize', 'reverify')),
+    project_id TEXT NOT NULL REFERENCES resources(id),
+    project_revision_id TEXT NOT NULL REFERENCES revisions(resource_id),
+    global_experiment_id TEXT NOT NULL REFERENCES resources(id),
+    global_experiment_revision_id TEXT NOT NULL REFERENCES revisions(resource_id),
+    domain_experiment_id TEXT NOT NULL REFERENCES resources(id),
+    domain_revision_id TEXT NOT NULL REFERENCES revisions(resource_id),
+    domain_revision_sha256 TEXT NOT NULL CHECK(length(domain_revision_sha256) = 64),
+    prior_binding_revision_id TEXT,
+    global_receipt_id TEXT NOT NULL REFERENCES domain_adapter_receipts(resource_id),
+    global_receipt_sha256 TEXT NOT NULL CHECK(length(global_receipt_sha256) = 64),
+    command_json TEXT NOT NULL,
+    command_sha256 TEXT NOT NULL CHECK(length(command_sha256) = 64),
+    status TEXT NOT NULL CHECK(status IN ('pending','leased','applied','duplicate','retryable','conflicted')),
+    lease_owner TEXT, lease_token TEXT, lease_expires_at TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),
+    next_retry_at TEXT, last_error TEXT,
+    acknowledgement_id TEXT, acknowledgement_json TEXT, acknowledgement_sha256 TEXT,
+    binding_revision_id TEXT, conflict_json TEXT, conflict_sha256 TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    UNIQUE(request_scope, idempotency_key),
+    CHECK((status = 'leased') = (lease_owner IS NOT NULL AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)),
+    CHECK((acknowledgement_json IS NULL AND acknowledgement_sha256 IS NULL AND acknowledgement_id IS NULL)
+       OR (acknowledgement_json IS NOT NULL AND acknowledgement_sha256 IS NOT NULL AND acknowledgement_id IS NOT NULL)),
+    CHECK((conflict_json IS NULL AND conflict_sha256 IS NULL)
+       OR (conflict_json IS NOT NULL AND conflict_sha256 IS NOT NULL)),
+    CHECK((status IN ('applied','duplicate')) = (acknowledgement_id IS NOT NULL)),
+    CHECK((status = 'conflicted') = (conflict_json IS NOT NULL))
+);
+INSERT INTO domain_connector_commands__v25
+SELECT command_id, request_scope, idempotency_key, idempotency_request_sha256, operation,
+       project_id, project_revision_id, global_experiment_id, global_experiment_revision_id,
+       domain_experiment_id, domain_revision_id, domain_revision_sha256, prior_binding_revision_id,
+       global_receipt_id, global_receipt_sha256, command_json, command_sha256, status,
+       lease_owner, lease_token, lease_expires_at, retry_count, next_retry_at, last_error,
+       acknowledgement_id, acknowledgement_json, acknowledgement_sha256,
+       binding_revision_id, conflict_json, conflict_sha256, created_at, updated_at
+  FROM domain_connector_commands;
+DROP TABLE domain_connector_commands;
+ALTER TABLE domain_connector_commands__v25 RENAME TO domain_connector_commands;
+CREATE INDEX ix_experiment_connector_commands_domain
+    ON domain_connector_commands(domain_experiment_id, created_at);
+CREATE INDEX ix_experiment_connector_commands_ready
+    ON domain_connector_commands(status, next_retry_at, created_at);
+CREATE TRIGGER trg_experiment_connector_command_identity_immutable
+BEFORE UPDATE OF command_id, request_scope, idempotency_key, idempotency_request_sha256, operation,
+ project_id, project_revision_id, global_experiment_id, global_experiment_revision_id,
+ domain_experiment_id, domain_revision_id, domain_revision_sha256, prior_binding_revision_id,
+ global_receipt_id, global_receipt_sha256, command_json, command_sha256, created_at
+ON domain_connector_commands BEGIN SELECT RAISE(ABORT, 'connector command identity is immutable'); END;
+
+CREATE TABLE domain_connector_conflicts__v25 (
+    conflict_id TEXT PRIMARY KEY NOT NULL,
+    domain_experiment_id TEXT NOT NULL REFERENCES resources(id),
+    binding_revision_id TEXT NOT NULL, event_stream TEXT NOT NULL,
+    stream_generation INTEGER NOT NULL, event_id TEXT NOT NULL,
+    conflict_json TEXT NOT NULL, conflict_sha256 TEXT NOT NULL CHECK(length(conflict_sha256)=64),
+    created_at TEXT NOT NULL
+);
+INSERT INTO domain_connector_conflicts__v25
+SELECT conflict_id, domain_experiment_id, binding_revision_id, event_stream,
+       stream_generation, event_id, conflict_json, conflict_sha256, created_at
+  FROM domain_connector_conflicts;
+DROP TABLE domain_connector_conflicts;
+ALTER TABLE domain_connector_conflicts__v25 RENAME TO domain_connector_conflicts;
+CREATE INDEX ix_experiment_connector_conflicts_stream
+    ON domain_connector_conflicts(domain_experiment_id, binding_revision_id, event_stream, stream_generation);
+CREATE TRIGGER trg_experiment_connector_conflict_immutable_delete BEFORE DELETE ON domain_connector_conflicts
+BEGIN SELECT RAISE(ABORT, 'connector conflict is immutable'); END;
+CREATE TRIGGER trg_experiment_connector_conflict_immutable_update BEFORE UPDATE ON domain_connector_conflicts
+BEGIN SELECT RAISE(ABORT, 'connector conflict is immutable'); END;
+
+CREATE TABLE domain_connector_inbox__v25 (
+    event_id TEXT PRIMARY KEY NOT NULL,
+    source_store_id TEXT NOT NULL,
+    domain_experiment_id TEXT NOT NULL REFERENCES resources(id),
+    binding_revision_id TEXT NOT NULL,
+    state_revision_id TEXT,
+    event_type TEXT NOT NULL,
+    event_stream TEXT NOT NULL,
+    stream_generation INTEGER NOT NULL CHECK(stream_generation > 0),
+    source_generation INTEGER,
+    payload_json TEXT NOT NULL,
+    payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256) = 64),
+    envelope_json TEXT NOT NULL,
+    envelope_sha256 TEXT NOT NULL CHECK(length(envelope_sha256) = 64),
+    disposition TEXT NOT NULL CHECK(disposition IN ('applied','duplicate','deferred_gap','conflicted')),
+    acknowledgement_json TEXT NOT NULL,
+    acknowledgement_sha256 TEXT NOT NULL CHECK(length(acknowledgement_sha256) = 64),
+    conflict_json TEXT, conflict_sha256 TEXT,
+    occurred_at TEXT NOT NULL, received_at TEXT NOT NULL, applied_at TEXT,
+    UNIQUE(domain_experiment_id, binding_revision_id, event_stream, stream_generation),
+    CHECK((conflict_json IS NULL AND conflict_sha256 IS NULL)
+       OR (conflict_json IS NOT NULL AND conflict_sha256 IS NOT NULL))
+);
+INSERT INTO domain_connector_inbox__v25
+SELECT event_id, source_store_id, domain_experiment_id, binding_revision_id, state_revision_id,
+       event_type, event_stream, stream_generation, source_generation, payload_json, payload_sha256,
+       envelope_json, envelope_sha256, disposition, acknowledgement_json, acknowledgement_sha256,
+       conflict_json, conflict_sha256, occurred_at, received_at, applied_at
+  FROM domain_connector_inbox;
+DROP TABLE domain_connector_inbox;
+ALTER TABLE domain_connector_inbox__v25 RENAME TO domain_connector_inbox;
+CREATE INDEX ix_experiment_connector_inbox_deferred
+    ON domain_connector_inbox(domain_experiment_id, binding_revision_id, event_stream, disposition, stream_generation);
+CREATE TRIGGER trg_experiment_connector_inbox_immutable_delete BEFORE DELETE ON domain_connector_inbox
+BEGIN SELECT RAISE(ABORT, 'connector inbox is immutable'); END;
+CREATE TRIGGER trg_experiment_connector_inbox_immutable_update
+BEFORE UPDATE OF event_id, source_store_id, domain_experiment_id, binding_revision_id,
+ state_revision_id, event_type, event_stream, stream_generation, source_generation,
+ payload_json, payload_sha256, envelope_json, envelope_sha256, occurred_at, received_at
+ON domain_connector_inbox
+BEGIN SELECT RAISE(ABORT, 'connector inbox identity is immutable'); END;
+CREATE TRIGGER trg_experiment_connector_inbox_state_transition
+BEFORE UPDATE OF disposition, acknowledgement_json, acknowledgement_sha256, applied_at
+ON domain_connector_inbox
+WHEN OLD.disposition <> 'deferred_gap' OR NEW.disposition <> 'applied'
+  OR NEW.applied_at IS NULL OR NEW.acknowledgement_json IS OLD.acknowledgement_json
+BEGIN SELECT RAISE(ABORT, 'invalid deferred connector inbox transition'); END;
+
+CREATE TABLE idempotency_claims__v25 (
+    scope TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_sha256 TEXT NOT NULL CHECK (length(request_sha256) = 64),
+    result_resource_id TEXT NOT NULL REFERENCES resources(id),
+    response_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    response_sha256 TEXT
+    CHECK (
+        response_sha256 IS NULL
+        OR (
+            length(response_sha256) = 64
+            AND response_sha256 = lower(response_sha256)
+            AND response_sha256 NOT GLOB '*[^0-9a-f]*'
+            AND json_valid(response_json) = 1
+        )
+    ),
+    PRIMARY KEY(scope, idempotency_key)
+);
+INSERT INTO idempotency_claims__v25
+SELECT scope, idempotency_key, request_sha256, result_resource_id, response_json, created_at, response_sha256
+  FROM idempotency_claims;
+DROP TABLE idempotency_claims;
+ALTER TABLE idempotency_claims__v25 RENAME TO idempotency_claims;
+CREATE TRIGGER trg_experiment_idempotency_response_digest_insert
+BEFORE INSERT ON idempotency_claims
+WHEN NEW.response_sha256 IS NULL
+    OR json_valid(NEW.response_json) != 1
+BEGIN SELECT RAISE(ABORT, 'canonical idempotency response digest is required'); END;
+CREATE TRIGGER trg_experiment_idempotency_response_digest_update
+BEFORE UPDATE ON idempotency_claims
+WHEN NEW.response_sha256 IS NULL
+    OR json_valid(NEW.response_json) != 1
+BEGIN SELECT RAISE(ABORT, 'canonical idempotency response digest is required'); END;
+CREATE TRIGGER trg_experiment_idempotency_response_immutable_update
+BEFORE UPDATE ON idempotency_claims
+WHEN OLD.response_sha256 IS NOT NULL AND (
+    NEW.response_json != OLD.response_json
+    OR NEW.response_sha256 != OLD.response_sha256
+)
+BEGIN SELECT RAISE(ABORT, 'idempotency response authority is immutable'); END;
+
+CREATE TABLE operational_receipts__v25 (
+    receipt_id TEXT PRIMARY KEY NOT NULL,
+    operation_kind TEXT NOT NULL CHECK(operation_kind IN ('backup','export','restoration','payload_audit','package_acceptance','resource_admission','resource_usage')),
+    workspace_id TEXT REFERENCES resources(id),
+    native_identity TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('created','verified','failed','sealed','complete')),
+    receipt_json TEXT NOT NULL,
+    receipt_sha256 TEXT NOT NULL CHECK(length(receipt_sha256) = 64),
+    source_revision TEXT,
+    occurred_at TEXT NOT NULL,
+    verified_at TEXT
+);
+INSERT INTO operational_receipts__v25
+SELECT receipt_id, operation_kind, workspace_id, native_identity, state,
+       receipt_json, receipt_sha256, source_revision, occurred_at, verified_at
+  FROM operational_receipts;
+DROP TABLE operational_receipts;
+ALTER TABLE operational_receipts__v25 RENAME TO operational_receipts;
+CREATE INDEX ix_experiment_operational_receipts_kind_time
+    ON operational_receipts(operation_kind, occurred_at, receipt_id);
+CREATE TRIGGER trg_experiment_operational_receipt_immutable_delete
+BEFORE DELETE ON operational_receipts
+BEGIN SELECT RAISE(ABORT, 'operational receipt is immutable'); END;
+CREATE TRIGGER trg_experiment_operational_receipt_immutable_update
+BEFORE UPDATE ON operational_receipts
+BEGIN SELECT RAISE(ABORT, 'operational receipt is immutable'); END;
+
+CREATE TABLE run_control_commands__v25 (
+    command_id TEXT PRIMARY KEY NOT NULL,
+    request_scope TEXT NOT NULL CHECK(length(request_scope) BETWEEN 1 AND 512),
+    idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 255),
+    command_type TEXT NOT NULL CHECK(command_type = 'cancel'),
+    workspace_id TEXT NOT NULL REFERENCES resources(id),
+    run_group_id TEXT NOT NULL REFERENCES run_groups(resource_id),
+    expected_generation INTEGER NOT NULL CHECK(expected_generation >= 0),
+    request_json TEXT NOT NULL,
+    request_sha256 TEXT NOT NULL CHECK(
+        length(request_sha256) = 64
+        AND request_sha256 = lower(request_sha256)
+        AND request_sha256 NOT GLOB '*[^0-9a-f]*'
+    ),
+    target_snapshot_json TEXT NOT NULL,
+    target_snapshot_sha256 TEXT NOT NULL CHECK(
+        length(target_snapshot_sha256) = 64
+        AND target_snapshot_sha256 = lower(target_snapshot_sha256)
+        AND target_snapshot_sha256 NOT GLOB '*[^0-9a-f]*'
+    ),
+    status TEXT NOT NULL CHECK(status IN ('pending','leased','applied','retryable','conflicted')),
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+    next_retry_at TEXT,
+    progress_json TEXT NOT NULL DEFAULT '{}',
+    progress_sha256 TEXT NOT NULL CHECK(
+        length(progress_sha256) = 64
+        AND progress_sha256 = lower(progress_sha256)
+        AND progress_sha256 NOT GLOB '*[^0-9a-f]*'
+    ),
+    acknowledgement_json TEXT,
+    acknowledgement_sha256 TEXT CHECK(
+        acknowledgement_sha256 IS NULL OR (
+            length(acknowledgement_sha256) = 64
+            AND acknowledgement_sha256 = lower(acknowledgement_sha256)
+            AND acknowledgement_sha256 NOT GLOB '*[^0-9a-f]*'
+        )
+    ),
+    conflict_json TEXT,
+    conflict_sha256 TEXT CHECK(
+        conflict_sha256 IS NULL OR (
+            length(conflict_sha256) = 64
+            AND conflict_sha256 = lower(conflict_sha256)
+            AND conflict_sha256 NOT GLOB '*[^0-9a-f]*'
+        )
+    ),
+    last_error_code TEXT CHECK(last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 128),
+    last_error_message TEXT CHECK(last_error_message IS NULL OR length(last_error_message) <= 2000),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    applied_at TEXT,
+    UNIQUE(request_scope, idempotency_key),
+    CHECK(json_valid(request_json) = 1 AND json(request_json) = request_json),
+    CHECK(json_valid(target_snapshot_json) = 1 AND json(target_snapshot_json) = target_snapshot_json),
+    CHECK(json_valid(progress_json) = 1 AND json(progress_json) = progress_json
+          AND json_type(progress_json) IN ('object','array')),
+    CHECK((status = 'leased') =
+          (lease_owner IS NOT NULL AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)),
+    CHECK(
+        (acknowledgement_json IS NULL AND acknowledgement_sha256 IS NULL)
+        OR (acknowledgement_json IS NOT NULL AND acknowledgement_sha256 IS NOT NULL
+            AND json_valid(acknowledgement_json) = 1
+            AND json(acknowledgement_json) = acknowledgement_json)
+    ),
+    CHECK(
+        (conflict_json IS NULL AND conflict_sha256 IS NULL)
+        OR (conflict_json IS NOT NULL AND conflict_sha256 IS NOT NULL
+            AND json_valid(conflict_json) = 1
+            AND json(conflict_json) = conflict_json)
+    ),
+    CHECK(
+        (status = 'applied' AND acknowledgement_json IS NOT NULL
+         AND conflict_json IS NULL AND applied_at IS NOT NULL)
+        OR (status = 'conflicted' AND acknowledgement_json IS NULL
+            AND conflict_json IS NOT NULL AND applied_at IS NULL)
+        OR (status IN ('pending','leased','retryable')
+            AND acknowledgement_json IS NULL AND conflict_json IS NULL AND applied_at IS NULL)
+    )
+);
+INSERT INTO run_control_commands__v25
+SELECT command_id, request_scope, idempotency_key, command_type, workspace_id, run_group_id,
+       expected_generation, request_json, request_sha256, target_snapshot_json, target_snapshot_sha256,
+       status, lease_owner, lease_token, lease_expires_at, attempt_count, next_retry_at,
+       progress_json, progress_sha256, acknowledgement_json, acknowledgement_sha256,
+       conflict_json, conflict_sha256, last_error_code, last_error_message,
+       created_at, updated_at, applied_at
+  FROM run_control_commands;
+DROP TABLE run_control_commands;
+ALTER TABLE run_control_commands__v25 RENAME TO run_control_commands;
+CREATE INDEX ix_experiment_run_control_commands_group
+    ON run_control_commands(run_group_id, created_at, command_id);
+CREATE INDEX ix_experiment_run_control_commands_ready
+    ON run_control_commands(status, next_retry_at, created_at, command_id);
+CREATE UNIQUE INDEX uq_run_control_active_command
+    ON run_control_commands(run_group_id, command_type)
+    WHERE status IN ('pending','leased','retryable','applied');
+CREATE TRIGGER trg_experiment_run_control_command_delete_forbidden
+BEFORE DELETE ON run_control_commands
+BEGIN SELECT RAISE(ABORT, 'run control commands are durable authority'); END;
+CREATE TRIGGER trg_experiment_run_control_command_identity_immutable
+BEFORE UPDATE OF command_id, request_scope, idempotency_key, command_type,
+ workspace_id, run_group_id, expected_generation, request_json, request_sha256,
+ target_snapshot_json, target_snapshot_sha256, created_at
+ON run_control_commands
+BEGIN SELECT RAISE(ABORT, 'run control command identity is immutable'); END;
+CREATE TRIGGER trg_experiment_run_control_command_scope_insert
+BEFORE INSERT ON run_control_commands
+WHEN NOT EXISTS (
+    SELECT 1 FROM run_groups
+     WHERE resource_id = NEW.run_group_id AND workspace_id = NEW.workspace_id
+)
+BEGIN SELECT RAISE(ABORT, 'run control command workspace mismatch'); END;
+CREATE TRIGGER trg_experiment_run_control_command_state_transition
+BEFORE UPDATE OF status ON run_control_commands
+WHEN OLD.status <> NEW.status AND NOT (
+    (OLD.status = 'pending' AND NEW.status IN ('leased','conflicted'))
+    OR (OLD.status = 'leased' AND NEW.status IN ('applied','retryable','conflicted'))
+    OR (OLD.status = 'retryable' AND NEW.status IN ('leased','conflicted'))
+)
+BEGIN SELECT RAISE(ABORT, 'invalid run control command state transition'); END;
+CREATE TRIGGER trg_experiment_run_control_command_terminal_immutable
+BEFORE UPDATE ON run_control_commands
+WHEN OLD.status IN ('applied','conflicted')
+BEGIN SELECT RAISE(ABORT, 'terminal run control command is immutable'); END;
+""".strip()
+MIGRATION_V25_CHECKSUM = hashlib.sha256(MIGRATION_V25_SQL.encode("utf-8")).hexdigest()
+
 _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_resource_owner_same_workspace_insert",
     "trg_experiment_resource_owner_same_workspace_update",
     "trg_experiment_resource_identity_immutable",
-    "trg_experiment_revision_digest_insert",
     "trg_experiment_revision_immutable_update",
     "trg_experiment_revision_immutable_delete",
     "trg_experiment_revision_edge_immutable_update",
@@ -2320,9 +2715,6 @@ _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_domain_parent_global_revision_insert",
     "trg_experiment_lineage_same_workspace",
     "trg_experiment_lineage_owns_no_cycle",
-    "trg_experiment_preparation_digest_insert",
-    "trg_experiment_outbox_digest_insert",
-    "trg_experiment_validation_receipt_digest_insert",
     "trg_experiment_audit_immutable_update",
     "trg_experiment_audit_immutable_delete",
     "trg_experiment_log_chunk_immutable_update",
@@ -2354,7 +2746,6 @@ _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_launch_context_delete_forbidden",
     "trg_experiment_preparation_immutable_update",
     "trg_experiment_preparation_immutable_delete",
-    "trg_experiment_dataset_member_digest_insert",
     "trg_experiment_dataset_member_immutable_update",
     "trg_experiment_dataset_member_immutable_delete",
     "trg_experiment_dataset_kind_insert",
@@ -2376,7 +2767,6 @@ _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_operational_receipt_immutable_update",
     "trg_experiment_operational_receipt_immutable_delete",
     "trg_experiment_workflow_plan_authority_scope_insert",
-    "trg_experiment_workflow_plan_authority_digest_insert",
     "trg_experiment_workflow_plan_authority_immutable_update",
     "trg_experiment_workflow_plan_authority_immutable_delete",
     "trg_experiment_idempotency_response_digest_insert",
@@ -2518,7 +2908,6 @@ _REQUIRED_SCHEMA_COLUMNS: dict[str, set[str]] = {
     "log_streams": {"resource_id", "attempt_id", "stream_name", "state", "created_at", "closed_at"},
     "log_chunks": {"stream_id", "sequence_number", "content_sha256", "artifact_blob_sha256", "content_text", "created_at"},
     "audit_events": {"id", "workspace_id", "resource_id", "event_type", "generation", "payload_json", "created_at"},
-    "sync_state": {"state_key", "local_generation", "remote_generation", "pending_changes", "last_success_at", "last_error", "updated_at"},
     "research_records": {"resource_id", "workspace_id", "subject_resource_id", "record_kind", "body", "author", "source_receipt_ids_json", "supersedes_record_id", "created_at"},
     "domain_adapter_receipts": {"resource_id", "workspace_id", "domain_experiment_id", "adapter_id", "adapter_version", "operation_kind", "normalized_request_sha256", "receipt_json", "created_at"},
     "launch_contexts": {"launch_context_id", "project_id", "global_experiment_id", "domain_experiment_id", "workflow_id", "workflow_revision_id", "preparation_id", "run_attempt_id", "contract_version", "normalized_request_sha256", "validation_receipt_id", "validation_receipt_sha256", "source_receipt_id", "return_uri", "state", "claim_token", "canonical_job_id", "binding_receipt_json", "issued_at", "expires_at", "claimed_at", "consumed_at"},
@@ -2581,10 +2970,11 @@ def _accepted_migration_ledgers() -> tuple[list[tuple[int, str, str]], ...]:
     v22 = (MIGRATION_V22_VERSION, MIGRATION_V22_NAME, MIGRATION_V22_CHECKSUM)
     v23 = (MIGRATION_V23_VERSION, MIGRATION_V23_NAME, MIGRATION_V23_CHECKSUM)
     v24 = (MIGRATION_V24_VERSION, MIGRATION_V24_NAME, MIGRATION_V24_CHECKSUM)
+    v25 = (MIGRATION_V25_VERSION, MIGRATION_V25_NAME, MIGRATION_V25_CHECKSUM)
     v1 = (LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM)
     return (
-        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24],
-        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24],
+        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25],
+        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25],
     )
 
 
@@ -2771,6 +3161,7 @@ def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dic
             expected, MIGRATION_V24_VERSION, MIGRATION_V24_NAME, MIGRATION_V24_CHECKSUM,
             "Keep submitted Project setups editable", MIGRATION_V24_SQL,
         )
+        _apply_v25_remove_hash_udfs_upgrade(expected)
         manifest = _schema_definition_manifest(expected)
         if legacy_lineage:
             for table_name, definition in _LEGACY_FINAL_TABLE_SQL.items():
@@ -2784,7 +3175,10 @@ def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dic
 
 
 def attest_schema(
-    connection: sqlite3.Connection, *, verify_data: bool = True
+    connection: sqlite3.Connection,
+    *,
+    verify_data: bool = True,
+    verify_definitions: bool = True,
 ) -> dict[str, object]:
     """Verify schema/ledger and, by default, historical foreign-key integrity."""
     missing_tables: list[str] = []
@@ -2822,34 +3216,45 @@ def attest_schema(
         )
     ]
     ledger_valid = ledger in _accepted_migration_ledgers()
-    legacy_lineage = bool(ledger and ledger[0][0] == LEGACY_MIGRATION_VERSION)
-    expected_definitions = _expected_schema_definition_manifest(legacy_lineage=legacy_lineage)
-    actual_definitions = _schema_definition_manifest(connection)
-    actual_tables = {
-        str(row[0])
-        for row in connection.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+    if verify_definitions:
+        legacy_lineage = bool(ledger and ledger[0][0] == LEGACY_MIGRATION_VERSION)
+        expected_definitions = _expected_schema_definition_manifest(legacy_lineage=legacy_lineage)
+        actual_definitions = _schema_definition_manifest(connection)
+        actual_tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+        unexpected_tables = sorted(actual_tables - set(_REQUIRED_SCHEMA_COLUMNS))
+        missing_definitions = sorted(set(expected_definitions) - set(actual_definitions))
+        unexpected_definitions = sorted(set(actual_definitions) - set(expected_definitions))
+        mismatched_definitions = sorted(
+            name
+            for name in set(expected_definitions) & set(actual_definitions)
+            if expected_definitions[name] != actual_definitions[name]
         )
-    }
-    unexpected_tables = sorted(actual_tables - set(_REQUIRED_SCHEMA_COLUMNS))
-    missing_definitions = sorted(set(expected_definitions) - set(actual_definitions))
-    unexpected_definitions = sorted(set(actual_definitions) - set(expected_definitions))
-    mismatched_definitions = sorted(
-        name
-        for name in set(expected_definitions) & set(actual_definitions)
-        if expected_definitions[name] != actual_definitions[name]
-    )
-    definition_errors = [
-        *(f"unexpected table: {name}" for name in unexpected_tables),
-        *(f"missing definition: {name}" for name in missing_definitions),
-        *(f"unexpected definition: {name}" for name in unexpected_definitions),
-        *(f"definition digest mismatch: {name}" for name in mismatched_definitions),
-    ]
-    # V1-V10 constants remain frozen. V11-V16 are additive successors whose
-    # exact expected manifest is derived from their immutable SQL bodies.
-    frozen_manifest_checksum = _schema_manifest_checksum(expected_definitions)
-    if _schema_manifest_checksum(actual_definitions) != frozen_manifest_checksum:
-        definition_errors.append("frozen schema definition manifest checksum mismatch")
+        definition_errors = [
+            *(f"unexpected table: {name}" for name in unexpected_tables),
+            *(f"missing definition: {name}" for name in missing_definitions),
+            *(f"unexpected definition: {name}" for name in unexpected_definitions),
+            *(f"definition digest mismatch: {name}" for name in mismatched_definitions),
+        ]
+        # V1-V10 constants remain frozen. V11-V16 are additive successors whose
+        # exact expected manifest is derived from their immutable SQL bodies.
+        frozen_manifest_checksum = _schema_manifest_checksum(expected_definitions)
+        if _schema_manifest_checksum(actual_definitions) != frozen_manifest_checksum:
+            definition_errors.append("frozen schema definition manifest checksum mismatch")
+        expected_manifest_sha = hashlib.sha256(
+            "\n".join(f"{name}:{digest}" for name, digest in sorted(expected_definitions.items())).encode("utf-8")
+        ).hexdigest()
+        actual_manifest_sha = hashlib.sha256(
+            "\n".join(f"{name}:{digest}" for name, digest in sorted(actual_definitions.items())).encode("utf-8")
+        ).hexdigest()
+    else:
+        definition_errors = []
+        expected_manifest_sha = None
+        actual_manifest_sha = None
     ok = not (
         missing_tables
         or missing_columns
@@ -2867,15 +3272,12 @@ def attest_schema(
         "missing_triggers": missing_triggers,
         "foreign_key_errors": foreign_key_errors,
         "data_integrity_checked": verify_data,
+        "definitions_checked": verify_definitions,
         "migration_ledger": [list(row) for row in ledger],
         "migration_ledger_valid": ledger_valid,
         "definition_errors": definition_errors,
-        "expected_definition_manifest_sha256": hashlib.sha256(
-            "\n".join(f"{name}:{digest}" for name, digest in sorted(expected_definitions.items())).encode("utf-8")
-        ).hexdigest(),
-        "actual_definition_manifest_sha256": hashlib.sha256(
-            "\n".join(f"{name}:{digest}" for name, digest in sorted(actual_definitions.items())).encode("utf-8")
-        ).hexdigest(),
+        "expected_definition_manifest_sha256": expected_manifest_sha,
+        "actual_definition_manifest_sha256": actual_manifest_sha,
     }
 
 
@@ -3774,6 +4176,28 @@ def _apply_domain_parent_revision_authority_upgrade(connection: sqlite3.Connecti
         raise
 
 
+def _apply_v25_remove_hash_udfs_upgrade(connection: sqlite3.Connection) -> None:
+    """Drop sync_state and remove Python hash UDF calls from constraints and triggers."""
+    connection.execute("PRAGMA foreign_keys = OFF")
+    try:
+        script = (
+            "BEGIN IMMEDIATE;\n"
+            + MIGRATION_V25_SQL
+            + "\nINSERT INTO experiment_schema_migrations("
+            + "version, name, checksum, description, applied_at) VALUES ("
+            + f"{MIGRATION_V25_VERSION}, '{MIGRATION_V25_NAME}', '{MIGRATION_V25_CHECKSUM}', "
+            + f"'Remove Python hash UDF calls and unused sync_state table', '{datetime.now(timezone.utc).isoformat()}');\n"
+            + "COMMIT;\n"
+        )
+        connection.executescript(script)
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        connection.execute("PRAGMA foreign_keys = ON")
+
+
 def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
     """Migrate and attest; schema-only reopen still fully audits actual upgrades."""
     _verify_frozen_migration_sources()
@@ -4010,7 +4434,7 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-3] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-4] for ledger in _accepted_migration_ledgers()):
             _apply_additive_migration(
                 connection, MIGRATION_V22_VERSION, MIGRATION_V22_NAME,
                 MIGRATION_V22_CHECKSUM, "Native model workflow setup routes", MIGRATION_V22_SQL,
@@ -4019,7 +4443,7 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-2] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-3] for ledger in _accepted_migration_ledgers()):
             _apply_additive_migration(
                 connection, MIGRATION_V23_VERSION, MIGRATION_V23_NAME,
                 MIGRATION_V23_CHECKSUM, "Family MSA workflow setup routes", MIGRATION_V23_SQL,
@@ -4028,11 +4452,17 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-1] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-2] for ledger in _accepted_migration_ledgers()):
             _apply_additive_migration(
                 connection, MIGRATION_V24_VERSION, MIGRATION_V24_NAME, MIGRATION_V24_CHECKSUM,
                 "Keep submitted Project setups editable", MIGRATION_V24_SQL,
             )
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in tuple(ledger[:-1] for ledger in _accepted_migration_ledgers()):
+            _apply_v25_remove_hash_udfs_upgrade(connection)
             rows = connection.execute(
                 "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
             ).fetchall()
@@ -4043,7 +4473,11 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_experiment_run_events_idempotency "
             "ON run_events(workflow_run_id, idempotency_key)"
         )
-        attestation = attest_schema(connection, verify_data=verify_data or migrated)
+        attestation = attest_schema(
+            connection,
+            verify_data=verify_data or migrated,
+            verify_definitions=verify_data or migrated,
+        )
         if not attestation["ok"]:
             raise sqlite3.IntegrityError(f"experiment schema attestation failed: {attestation!r}")
     except Exception:

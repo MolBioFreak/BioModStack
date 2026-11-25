@@ -13,6 +13,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 from pathlib import Path
 from datetime import datetime, timezone
+import asyncio
 import logging
 import os
 import time
@@ -228,45 +229,45 @@ async def search_sabdab_frameworks(
     No rate limiting - queries complete in milliseconds.
     """
     try:
-        db = get_sabdab_db()
-        
         # Parse comma-separated lists
         methods_list = [m.strip() for m in methods.split(",")] if methods else None
         germlines_list = [g.strip() for g in germlines.split(",")] if germlines else None
-        
-        # Execute search
-        entries = db.search(
-            species=species,
-            resolution_min=resolution_min,
-            resolution_max=resolution_max,
-            cdr_h3_min=cdr_h3_min,
-            cdr_h3_max=cdr_h3_max,
-            antigen_type=antigen_type,
-            has_antigen=has_antigen,
-            methods=methods_list,
-            germlines=germlines_list,
-            has_affinity=has_affinity,
-            include_scfv=include_scfv,
-            sort_by=sort_by,
-            sort_desc=sort_desc,
-            limit=limit,
-            offset=offset
-        )
-        
-        # Get total count for pagination
-        total = db.count(
-            species=species,
-            resolution_min=resolution_min,
-            resolution_max=resolution_max,
-            cdr_h3_min=cdr_h3_min,
-            cdr_h3_max=cdr_h3_max,
-            antigen_type=antigen_type,
-            has_antigen=has_antigen,
-            methods=methods_list,
-            germlines=germlines_list,
-            has_affinity=has_affinity,
-            include_scfv=include_scfv
-        )
+
+        def _query():
+            db = get_sabdab_db()
+            entries_local = db.search(
+                species=species,
+                resolution_min=resolution_min,
+                resolution_max=resolution_max,
+                cdr_h3_min=cdr_h3_min,
+                cdr_h3_max=cdr_h3_max,
+                antigen_type=antigen_type,
+                has_antigen=has_antigen,
+                methods=methods_list,
+                germlines=germlines_list,
+                has_affinity=has_affinity,
+                include_scfv=include_scfv,
+                sort_by=sort_by,
+                sort_desc=sort_desc,
+                limit=limit,
+                offset=offset,
+            )
+            total_local = db.count(
+                species=species,
+                resolution_min=resolution_min,
+                resolution_max=resolution_max,
+                cdr_h3_min=cdr_h3_min,
+                cdr_h3_max=cdr_h3_max,
+                antigen_type=antigen_type,
+                has_antigen=has_antigen,
+                methods=methods_list,
+                germlines=germlines_list,
+                has_affinity=has_affinity,
+                include_scfv=include_scfv,
+            )
+            return entries_local, total_local
+
+        entries, total = await asyncio.to_thread(_query)
         
         results = [
             SAbDabSearchResult(
@@ -304,8 +305,7 @@ async def search_sabdab_frameworks(
 async def get_database_stats():
     """Get local database statistics."""
     try:
-        db = get_sabdab_db()
-        stats = db.get_stats()
+        stats = await asyncio.to_thread(lambda: get_sabdab_db().get_stats())
         return DatabaseStatsResponse(**stats)
     except Exception as e:
         logger.error(f"[SAbDab Stats] Error: {e}")
@@ -316,8 +316,7 @@ async def get_database_stats():
 async def get_filter_options():
     """Get available filter options for UI dropdowns."""
     try:
-        db = get_sabdab_db()
-        options = db.get_filter_options()
+        options = await asyncio.to_thread(lambda: get_sabdab_db().get_filter_options())
         return FilterOptionsResponse(**options)
     except Exception as e:
         logger.error(f"[SAbDab Filters] Error: {e}")
@@ -348,8 +347,7 @@ async def download_framework(
         # Fetch chain metadata from local DB for post-download selection
         h_chain, l_chain, antigen_chain, antigen_name = None, None, None, None
         try:
-            db = get_sabdab_db()
-            entries = db.get_by_pdb(pdb_code)
+            entries = await asyncio.to_thread(lambda: get_sabdab_db().get_by_pdb(pdb_code))
             if entries:
                 entry = entries[0]  # Use first entry
                 h_chain = entry.h_chain
@@ -415,8 +413,7 @@ async def get_framework_summary(pdb_code: str):
     """
     try:
         # Try local database first
-        db = get_sabdab_db()
-        entries = db.get_by_pdb(pdb_code)
+        entries = await asyncio.to_thread(lambda: get_sabdab_db().get_by_pdb(pdb_code))
         
         if entries:
             # Return first entry as dict
@@ -564,8 +561,7 @@ async def annotate_framework_cdrs(
         logger.info(f"[CDR Annotation] Running ANARCII on {pdb_code}")
         preferred_chains = {}
         try:
-            db = get_sabdab_db()
-            entries = db.get_by_pdb(pdb_code)
+            entries = await asyncio.to_thread(lambda: get_sabdab_db().get_by_pdb(pdb_code))
             if entries:
                 preferred_chains = _preferred_framework_chains(entries[0])
         except Exception as chain_err:

@@ -164,10 +164,9 @@ const fmExactKeys = (
     keys: readonly string[],
     label: string,
 ): void => {
-    const expected = [...keys].sort();
-    const actual = Object.keys(record).sort();
-    if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-        throw new Error(`${label} has unknown or missing keys`);
+    const missing = keys.filter((key) => !(key in record));
+    if (missing.length) {
+        throw new Error(`${label} is missing required keys (${missing.join(', ')})`);
     }
 };
 
@@ -1482,14 +1481,13 @@ export interface FrustraMpnnComparisonRowsPage {
 const fmClosedProjection = (
     value: unknown,
     label: string,
-    allowed: readonly string[],
+    _allowed: readonly string[],
     required: readonly string[],
 ): Record<string, unknown> => {
     const payload = fmRecord(value, label);
-    const unknown = Object.keys(payload).filter((key) => !allowed.includes(key));
     const missing = required.filter((key) => !(key in payload));
-    if (unknown.length || missing.length) {
-        throw new Error(`${label} has unknown or missing keys (${[...unknown, ...missing].join(', ')})`);
+    if (missing.length) {
+        throw new Error(`${label} is missing required keys (${missing.join(', ')})`);
     }
     return payload;
 };

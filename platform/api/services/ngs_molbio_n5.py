@@ -36,7 +36,6 @@ from experiment_models import (
     ExperimentRevision,
     ExperimentRunAttempt,
     ExperimentRunGroup,
-    ExperimentSyncState,
     ExperimentValidation,
     ExperimentWorkflowPreparation,
     ExperimentWorkflowRun,
@@ -1636,7 +1635,6 @@ async def operational_status(session: AsyncSession) -> dict[str, Any]:
     )
     connector = (await session.execute(select(func.count(), func.min(ExperimentDomainConnectorCommand.created_at)).where(ExperimentDomainConnectorCommand.status.in_({"pending", "retryable", "conflicted"})))).one()
     dead_letters = await session.scalar(select(func.count()).select_from(ExperimentDomainConnectorCommand).where(ExperimentDomainConnectorCommand.status == "conflicted"))
-    projection = await session.scalar(select(ExperimentSyncState).order_by(ExperimentSyncState.updated_at.desc()).limit(1))
     receipts = list((await session.scalars(select(ExperimentOperationalReceipt).order_by(ExperimentOperationalReceipt.occurred_at.desc(), ExperimentOperationalReceipt.receipt_id.desc()).limit(100))).all())
     latest = {}
     for row in receipts:
@@ -1657,7 +1655,7 @@ async def operational_status(session: AsyncSession) -> dict[str, Any]:
         },
         "verification_failures": failed_validations,
         "connector": {"lagged_or_failed": int(connector[0]), "dead_letters": int(dead_letters or 0), "oldest_pending_at": connector[1]},
-        "projection_cursor": ({"state_key": projection.state_key, "local_generation": projection.local_generation, "remote_generation": projection.remote_generation, "pending_changes": projection.pending_changes, "last_success_at": projection.last_success_at, "last_error": projection.last_error, "updated_at": projection.updated_at} if projection else None),
+        "projection_cursor": None,
         "provenance": {"backup": latest.get("backup"), "export": latest.get("export"), "restoration": latest.get("restoration")},
         "payload_audit": latest.get("payload_audit"),
         "package_acceptance": latest.get("package_acceptance"),

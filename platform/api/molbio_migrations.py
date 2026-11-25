@@ -461,8 +461,42 @@ _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0010 = _RESTRICTION_DIGEST_INTEGRITY_T
 assert _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0010 != _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL
 
 
+_RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0011 = (
+    _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0010.replace(
+        "WHEN bms_restriction_digest_result_valid(\n"
+        "       NEW.result, NEW.operation_id, NEW.source_revision_id, NEW.catalog_id,\n"
+        "       NEW.catalog_sha256, NEW.request_sha256, NEW.result_sha256\n"
+        "     ) != 1\n"
+        "  OR ",
+        "WHEN ",
+        1,
+    )
+    .replace(
+        "\n         AND bms_restriction_digest_save_receipt_valid(\n"
+        "               json_extract(operation.parameters, '$.save_request_receipt'),\n"
+        "               operation.idempotency_key,\n"
+        "               operation.request_fingerprint\n"
+        "             ) = 1",
+        "",
+        1,
+    )
+    .replace(
+        "\n          OR bms_restriction_digest_json_equal(\n"
+        "               json_extract(revision.provenance, '$.geometry'),\n"
+        "               json_extract(\n"
+        "                 NEW.result,\n"
+        "                 '$.simulation.fragments[' || CAST(identity.key AS INTEGER) || ']'\n"
+        "               )\n"
+        "             ) != 1",
+        "",
+        1,
+    )
+)
+assert "bms_restriction_digest_" not in _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0011
+
+
 def restriction_digest_integrity_trigger_sql() -> str:
-    return _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0010
+    return _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0011
 
 
 def _restriction_digest_expected_triggers() -> dict[str, str]:
@@ -474,9 +508,19 @@ def _restriction_digest_expected_triggers() -> dict[str, str]:
             _restriction_digest_immutable_trigger_sql("UPDATE")
         ),
         "molbio_restriction_digest_results_integrity_insert": (
-            _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0010
+            _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0011
         ),
     }
+
+
+async def apply_m3_drop_outbox_and_udf_triggers_migration(connection: AsyncConnection) -> None:
+    """Drop unused molbio_outbox_events table (R16) and remove Python UDF calls from digest trigger (R23)."""
+
+    await connection.execute(text("DROP TABLE IF EXISTS molbio_outbox_events"))
+    await connection.execute(
+        text("DROP TRIGGER IF EXISTS molbio_restriction_digest_results_integrity_insert")
+    )
+    await connection.execute(text(_RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0011))
 
 
 def restriction_digest_physical_schema_issues(  # noqa: ANN001

@@ -423,7 +423,6 @@ def create_molbio_engine(database_url: str | None = None) -> AsyncEngine:
         try:
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.execute(f"PRAGMA busy_timeout={MOLBIO_BUSY_TIMEOUT_MS}")
-            cursor.execute("PRAGMA journal_mode=WAL")
         finally:
             cursor.close()
 
@@ -635,6 +634,14 @@ async def _migration_digest_child_features(connection: AsyncConnection) -> None:
     await apply_restriction_digest_child_features_migration(connection)
 
 
+async def _migration_m3_drop_outbox_and_udf_triggers(connection: AsyncConnection) -> None:
+    """Drop unused molbio_outbox_events table and remove UDF calls from digest trigger."""
+
+    from molbio_migrations import apply_m3_drop_outbox_and_udf_triggers_migration
+
+    await apply_m3_drop_outbox_and_udf_triggers_migration(connection)
+
+
 MOLBIO_MIGRATIONS: tuple[Migration, ...] = (
     ("0001_initial", "create Mol Bio owned schema", _migration_initial),
     ("0002_append_only_guards", "enforce append-only scientific history", _migration_append_only_guards),
@@ -677,6 +684,11 @@ MOLBIO_MIGRATIONS: tuple[Migration, ...] = (
         "0010_digest_child_features",
         "allow mapped features on saved digest child snapshots",
         _migration_digest_child_features,
+    ),
+    (
+        "0011_m3_drop_outbox_and_udf_triggers",
+        "drop unused molbio outbox table and remove UDF calls from restriction digest trigger",
+        _migration_m3_drop_outbox_and_udf_triggers,
     ),
 )
 
@@ -866,15 +878,14 @@ async def molbio_health(*, engine: AsyncEngine | None = None, deep: bool = True)
             and not sequence_parent_cycles
         )
         from molbio_migrations import restriction_digest_migration_attestation
-        from services.restriction_digest import resource_policy_receipt
 
-        digest_policy = resource_policy_receipt().model_dump(mode="json", by_alias=True)
+        digest_policy, digest_policy_sha256 = _static_restriction_digest_policy()
         digest_readiness = {
             "required": True,
             "ready": healthy,
             "status": "ready" if healthy else "degraded",
             "resource_policy": digest_policy,
-            "resource_policy_sha256": hashlib.sha256(rfc8785.dumps(digest_policy)).hexdigest(),
+            "resource_policy_sha256": digest_policy_sha256,
             "migration": restriction_digest_migration_attestation(),
             "routes": [
                 "POST /api/molbio/restriction/digests/simulate",
@@ -929,6 +940,20 @@ async def molbio_health(*, engine: AsyncEngine | None = None, deep: bool = True)
 
 molbio_engine = create_molbio_engine()
 molbio_session = make_molbio_session_factory(molbio_engine)
+
+
+_CACHED_DIGEST_POLICY: tuple[dict[str, object], str] | None = None
+
+
+def _static_restriction_digest_policy() -> tuple[dict[str, object], str]:
+    global _CACHED_DIGEST_POLICY
+    if _CACHED_DIGEST_POLICY is None:
+        from services.restriction_digest import resource_policy_receipt
+
+        digest_policy = resource_policy_receipt().model_dump(mode="json", by_alias=True)
+        digest_policy_sha256 = hashlib.sha256(rfc8785.dumps(digest_policy)).hexdigest()
+        _CACHED_DIGEST_POLICY = (digest_policy, digest_policy_sha256)
+    return _CACHED_DIGEST_POLICY
 
 
 async def get_molbio_session() -> AsyncIterator[AsyncSession]:

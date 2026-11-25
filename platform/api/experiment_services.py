@@ -3541,26 +3541,9 @@ async def reconcile_run_group(
             continue
         expected_generation = int(run.generation)
         attempt.state = projected_state
-        from services.ngs_molbio_n5 import (
-            append_attempt_log_chunk,
-            persist_attempt_validation,
-        )
-
-        log_payload = {
-            "state": projected_state,
-            "scheduler_job_id": attempt.scheduler_job_id,
-            "terminal_receipt_sha256": attempt.terminal_receipt_sha256,
-            "runtime_identity_sha256": sha256_text(attempt.runtime_identity_json) if attempt.runtime_identity_json else None,
-            "event_type": event_type,
-        }
-        await append_attempt_log_chunk(
-            session,
-            attempt_id=attempt.resource_id,
-            stream_name="status",
-            content=canonical_json(log_payload or {"state": projected_state}),
-            close=projected_state in {"completed", "failed", "cancelled"},
-        )
         if projected_state in {"completed", "failed", "cancelled"}:
+            from services.ngs_molbio_n5 import persist_attempt_validation
+
             if receipt is not None:
                 preparation = await session.get(
                     ExperimentWorkflowPreparation,
@@ -3618,14 +3601,6 @@ async def reconcile_run_group(
     if changed:
         group.generation += 1
         group.updated_at = now()
-        add_audit_event(
-            session,
-            workspace_id=workspace_id,
-            resource_id=run_group_id,
-            event_type="run_group_reconciled",
-            generation=group.generation,
-            payload={"state": group.state},
-        )
         await session.flush()
     return group
 

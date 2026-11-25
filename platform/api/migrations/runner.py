@@ -89,6 +89,9 @@ from run_migration import migrate as migrate_stage_tracking
 from migrations.add_design_producer_identity import migrate as migrate_design_producer_identity
 from migrations.add_user_template_revisions import migrate as migrate_user_template_revisions
 from migrations.allow_ont_job_move_source_fresh_attempts import migrate as allow_ont_job_move_source_fresh_attempts
+from migrations.remove_ont_terminal_manifest_hash_udfs import (
+    migrate as migrate_remove_ont_terminal_manifest_hash_udfs,
+)
 
 
 @dataclass
@@ -168,6 +171,7 @@ MIGRATIONS: List[Migration] = [
     Migration(47, "add_design_producer_identity", migrate_design_producer_identity),
     Migration(48, "add_user_template_revisions", migrate_user_template_revisions),
     Migration(49, "allow_ont_job_move_source_fresh_attempts", allow_ont_job_move_source_fresh_attempts),
+    Migration(50, "remove_ont_terminal_manifest_hash_udfs", migrate_remove_ont_terminal_manifest_hash_udfs),
 ]
 
 
@@ -322,6 +326,14 @@ def _validate_applied_migration_identities(applied: dict[int, str]) -> None:
         )
 
 
+from functools import lru_cache
+
+
+@lru_cache(maxsize=None)
+def _cached_migration_file_sha256(module_file: str) -> str:
+    return hashlib.sha256(Path(module_file).read_bytes()).hexdigest()
+
+
 def _migration_content_sha256(migration: Migration) -> str:
     module = getmodule(migration.fn)
     module_file = getattr(module, "__file__", None)
@@ -330,12 +342,11 @@ def _migration_content_sha256(migration: Migration) -> str:
             f"schema migration version {migration.version} has no readable module byte authority"
         )
     try:
-        content = Path(module_file).read_bytes()
+        return _cached_migration_file_sha256(str(module_file))
     except OSError as exc:
         raise RuntimeError(
             f"schema migration version {migration.version} module bytes are unreadable"
         ) from exc
-    return hashlib.sha256(content).hexdigest()
 
 
 _MIGRATION_33_CANONICAL_CONTENT_SHA256 = (

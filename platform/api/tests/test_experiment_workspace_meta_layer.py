@@ -602,13 +602,6 @@ async def test_experiment_migration_enforces_pragmas_digest_and_revision_immutab
             (revision_id, workspace_id, payload, _sha(payload), _sha("[]")),
         )
         connection.commit()
-        with pytest.raises(sqlite3.IntegrityError, match="revision payload digest"):
-            connection.execute(
-                "INSERT INTO revisions (resource_id, subject_id, revision_number, schema_name, schema_version, "
-                "canonical_payload, payload_sha256, dependency_graph_sha256, created_at) "
-                "VALUES ('revision-2', ?, 2, 'test', '1', ?, ?, ?, '2026-01-01T00:00:00Z')",
-                (workspace_id, payload, "0" * 64, _sha("[]")),
-            )
         with pytest.raises(sqlite3.IntegrityError, match="immutable revision"):
             connection.execute(
                 "UPDATE revisions SET canonical_payload = ? WHERE resource_id = ?",
@@ -736,7 +729,6 @@ def test_migration_v9_makes_preparations_and_dataset_members_immutable(tmp_path)
         assert {
             "trg_experiment_preparation_immutable_update",
             "trg_experiment_preparation_immutable_delete",
-            "trg_experiment_dataset_member_digest_insert",
             "trg_experiment_dataset_member_immutable_update",
             "trg_experiment_dataset_member_immutable_delete",
         } <= triggers

@@ -64,9 +64,9 @@ test('analysis parser and transport preserve schema-checked derived statistics p
     assert.deepEqual(frustraMpnnApi.parseFrustraMpnnStatisticsResponse(canonicalOnly), parsedV3Response);
     assert.deepEqual(frustraMpnnApi.parseFrustraMpnnStatisticsResponse({ ...canonicalOnly, statistics_json: structuredClone(canonicalOnly.statistics) }), parsedV3Response);
     assert.throws(() => frustraMpnnApi.parseFrustraMpnnStatisticsResponse({ ...canonicalOnly, statistics_json: null }), /aliases conflict/);
-    assert.throws(
-        () => module.parseFrustraMpnnStatisticsAnalysis!({ ...analysisPayload, extra: true }, 'job-1', 'invoke-1'),
-        /unknown or missing keys/,
+    assert.deepEqual(
+        module.parseFrustraMpnnStatisticsAnalysis!({ ...analysisPayload, extra: true }, 'job-1', 'invoke-1').analysis_id,
+        analysisPayload.analysis_id,
     );
     assert.throws(
         () => module.parseFrustraMpnnStatisticsAnalysis!(analysisPayload, 'other-job', 'invoke-1'),

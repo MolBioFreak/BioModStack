@@ -26,7 +26,6 @@ from experiment_models import (
     ExperimentValidation,
     ExperimentWorkflowPreparation,
     ExperimentWorkflowRun,
-    ExperimentSyncState,
 )
 from experiment_operations import (
     BackupNotFound,
@@ -1196,32 +1195,6 @@ async def restore_experiment_backup_drill(
     except ExperimentOperationError as exc:
         await session.rollback()
         raise _error(exc) from exc
-
-
-@router.get("/ops/sync-health")
-async def get_experiment_sync_health(
-    session: AsyncSession = Depends(get_experiment_session),
-) -> dict[str, Any]:
-    states = (
-        await session.execute(select(ExperimentSyncState).order_by(ExperimentSyncState.state_key))
-    ).scalars().all()
-    return {
-        "schema": "bms.experiment.sync-health.v1",
-        "single_writer": True,
-        "credentials_exposed": False,
-        "states": [
-            {
-                "state_key": state.state_key,
-                "local_generation": state.local_generation,
-                "remote_generation": state.remote_generation,
-                "pending_changes": state.pending_changes,
-                "last_success_at": state.last_success_at,
-                "last_error": state.last_error,
-                "updated_at": state.updated_at,
-            }
-            for state in states
-        ],
-    }
 
 
 @router.post("/{workspace_id}/exports", status_code=status.HTTP_201_CREATED)

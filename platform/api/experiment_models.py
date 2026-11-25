@@ -676,18 +676,6 @@ class ExperimentAuditEvent(ExperimentBase):
     created_at = Column(String(64), nullable=False, default=_timestamp)
 
 
-class ExperimentSyncState(ExperimentBase):
-    __tablename__ = "sync_state"
-
-    state_key = Column(String(255), primary_key=True)
-    local_generation = Column(Integer, nullable=False, default=0)
-    remote_generation = Column(Integer, nullable=True)
-    pending_changes = Column(Integer, nullable=False, default=0)
-    last_success_at = Column(String(64), nullable=True)
-    last_error = Column(Text, nullable=True)
-    updated_at = Column(String(64), nullable=False, default=_timestamp)
-
-
 class ExperimentResourceAdmission(ExperimentBase):
     """Durable aggregate resource reservation for one canonical workflow attempt."""
 

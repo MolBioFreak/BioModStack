@@ -21,7 +21,6 @@ from molbio_models import (
     MolecularOperationOutput,
     MolecularRevision,
     MolBioAuditEvent,
-    MolBioOutboxEvent,
     NucleotideSequence,
     PCRExperiment,
     PCRExperimentRevision,
@@ -190,24 +189,15 @@ async def _emit_history_events(
     actor: str | None,
 ) -> None:
     event_id = str(uuid.uuid4())
-    session.add_all(
-        [
-            MolBioAuditEvent(
-                id=event_id,
-                entity_kind=entity_kind,
-                entity_id=entity_id,
-                event_kind=event_kind,
-                payload=payload,
-                actor=SERVER_OWNED_ACTOR,
-            ),
-            MolBioOutboxEvent(
-                id=str(uuid.uuid4()),
-                aggregate_kind=entity_kind,
-                aggregate_id=entity_id,
-                event_kind=event_kind,
-                payload={"audit_event_id": event_id, **payload},
-            ),
-        ]
+    session.add(
+        MolBioAuditEvent(
+            id=event_id,
+            entity_kind=entity_kind,
+            entity_id=entity_id,
+            event_kind=event_kind,
+            payload=payload,
+            actor=SERVER_OWNED_ACTOR,
+        )
     )
 
 

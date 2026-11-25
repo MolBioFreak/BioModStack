@@ -618,31 +618,36 @@ async def cleanup_work_directory(days: int = 30):
 
 @router.get("/db-info", response_model=DbInfo)
 async def get_db_info():
-    db_path = get_db_path()
-    if not db_path.exists():
-        return DbInfo(
-            path=str(db_path),
-            exists=False,
-            size_bytes=0,
-            journal_mode=None,
-            busy_timeout_ms=None,
-        )
+    def _read_db_info() -> DbInfo:
+        db_path = get_db_path()
+        if not db_path.exists():
+            return DbInfo(
+                path=str(db_path),
+                exists=False,
+                size_bytes=0,
+                journal_mode=None,
+                busy_timeout_ms=None,
+            )
 
-    journal_mode = None
-    busy_timeout = None
-    try:
-        conn = sqlite3.connect(str(db_path), timeout=5)
-        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
-        busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
-        conn.close()
-    except Exception:
         journal_mode = None
         busy_timeout = None
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=5)
+            try:
+                journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+                busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+            finally:
+                conn.close()
+        except Exception:
+            journal_mode = None
+            busy_timeout = None
 
-    return DbInfo(
-        path=str(db_path),
-        exists=True,
-        size_bytes=db_path.stat().st_size,
-        journal_mode=journal_mode,
-        busy_timeout_ms=busy_timeout,
-    )
+        return DbInfo(
+            path=str(db_path),
+            exists=True,
+            size_bytes=db_path.stat().st_size,
+            journal_mode=journal_mode,
+            busy_timeout_ms=busy_timeout,
+        )
+
+    return await asyncio.to_thread(_read_db_info)

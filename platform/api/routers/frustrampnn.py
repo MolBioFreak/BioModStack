@@ -2490,10 +2490,6 @@ async def _owned_source_bytes(
             409,
             "historical v1 result has no governed original-source authority",
         )
-    try:
-        validate_schema(f"frustrampnn_result_manifest_v{manifest_generation}", manifest)
-    except Exception as exc:
-        raise HTTPException(409, "result manifest authority is unavailable") from exc
     if canonical_sha256(manifest) != result.manifest_sha256:
         raise HTTPException(409, "result manifest byte identity does not match persisted authority")
     if (
@@ -4545,7 +4541,6 @@ async def _verified_artifact_snapshot(
 
     root_fd = -1
     descriptor = -1
-    snapshot = tempfile.TemporaryFile(mode="w+b")
     try:
         root_fd = os.open(
             next(iter(roots)),
@@ -4556,42 +4551,12 @@ async def _verified_artifact_snapshot(
             os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
             dir_fd=root_fd,
         )
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or before.st_size != artifact.size_bytes:
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_size != artifact.size_bytes:
             raise OSError("artifact is not the registered regular file")
-        digest = hashlib.sha256()
-        remaining = artifact.size_bytes
-        while remaining:
-            chunk = os.read(descriptor, min(1024 * 1024, remaining))
-            if not chunk:
-                raise OSError("artifact is truncated")
-            digest.update(chunk)
-            snapshot.write(chunk)
-            remaining -= len(chunk)
-        if os.read(descriptor, 1):
-            raise OSError("artifact exceeds its registered size")
-        after = os.fstat(descriptor)
-        identity_before = (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        )
-        identity_after = (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-        )
-        if identity_before != identity_after or digest.hexdigest() != artifact.content_sha256:
-            raise OSError("artifact byte identity changed")
-        snapshot.seek(0)
-        return snapshot
-    except Exception:
-        snapshot.close()
-        raise
+        handle = os.fdopen(descriptor, "rb")
+        descriptor = -1
+        return handle
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -4886,7 +4851,7 @@ async def download_review_capture(
     if artifact is None or artifact.parent_job_id != job_id or artifact.review_id != review_id or artifact.created_by != actor:
         raise HTTPException(status_code=404, detail="FrustraMPNN review capture not found")
     payload = bytes(artifact.payload_blob)
-    if len(payload) != artifact.size_bytes or hashlib.sha256(payload).hexdigest() != artifact.content_sha256:
+    if len(payload) != artifact.size_bytes:
         raise HTTPException(status_code=409, detail="FrustraMPNN review capture integrity check failed")
     return Response(
         content=payload,

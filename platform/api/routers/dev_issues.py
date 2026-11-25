@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import os
@@ -121,67 +122,85 @@ def _table_sql() -> str:
     """
 
 
+_INITIALIZED_DB_PATHS: set[Path] = set()
+
+
+def _ensure_schema(path: Path) -> None:
+    resolved = path.expanduser().resolve()
+    if resolved in _INITIALIZED_DB_PATHS and resolved.is_file():
+        return
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(resolved, timeout=10)) as connection:
+        connection.execute("PRAGMA busy_timeout = 10000")
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute(_table_sql().replace("CREATE TABLE dev_issues", "CREATE TABLE IF NOT EXISTS dev_issues", 1))
+        existing_table_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'dev_issues'"
+        ).fetchone()[0]
+        if "in_progress" not in existing_table_sql:
+            connection.execute("ALTER TABLE dev_issues RENAME TO dev_issues_legacy")
+            connection.execute(_table_sql())
+            connection.execute(
+                """
+                INSERT INTO dev_issues (
+                    id, body, status, lane, scope_kind, scope_key, page_label, route,
+                    component_hint, author_kind, frontend_revision, api_revision,
+                    created_at, cleared_at, resolution_note
+                )
+                SELECT id, body,
+                       CASE status WHEN 'resolved' THEN 'cleared' ELSE status END,
+                       'general', scope_kind, scope_key, page_label, route, component_hint,
+                       author_kind, frontend_revision, api_revision, created_at,
+                       resolved_at, resolution_note
+                  FROM dev_issues_legacy
+                """
+            )
+            connection.execute("DROP TABLE dev_issues_legacy")
+        columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(dev_issues)").fetchall()
+        }
+        if "lane" not in columns:
+            connection.execute(
+                "ALTER TABLE dev_issues ADD COLUMN lane TEXT NOT NULL DEFAULT 'general' "
+                "CHECK(lane IN ('general', 'mobile'))"
+            )
+        additive_columns = {
+            "screenshot_sha256": "TEXT",
+            "screenshot_media_type": "TEXT",
+            "screenshot_byte_size": "INTEGER",
+            "screenshot_relative_path": "TEXT",
+        }
+        for name, sql_type in additive_columns.items():
+            if name not in columns:
+                connection.execute(f"ALTER TABLE dev_issues ADD COLUMN {name} {sql_type}")
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dev_issues_scope_status ON dev_issues(scope_key, status, id DESC)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dev_issues_status_id ON dev_issues(status, id DESC)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dev_issues_lane_status_id ON dev_issues(lane, status, id DESC)"
+        )
+        connection.commit()
+    try:
+        resolved.chmod(0o600)
+    except OSError:
+        pass
+    _INITIALIZED_DB_PATHS.add(resolved)
+
+
+def init_dev_issues_store() -> None:
+    """Ensure the development-issues SQLite schema and WAL mode once at mount."""
+    _ensure_schema(_database_path())
+
+
 def _connect() -> sqlite3.Connection:
     path = _database_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_schema(path)
     connection = sqlite3.connect(path, timeout=10)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA busy_timeout = 10000")
-    connection.execute("PRAGMA journal_mode = WAL")
-    connection.execute(_table_sql().replace("CREATE TABLE dev_issues", "CREATE TABLE IF NOT EXISTS dev_issues", 1))
-    existing_table_sql = connection.execute(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'dev_issues'"
-    ).fetchone()[0]
-    if "in_progress" not in existing_table_sql:
-        connection.execute("ALTER TABLE dev_issues RENAME TO dev_issues_legacy")
-        connection.execute(_table_sql())
-        connection.execute(
-            """
-            INSERT INTO dev_issues (
-                id, body, status, lane, scope_kind, scope_key, page_label, route,
-                component_hint, author_kind, frontend_revision, api_revision,
-                created_at, cleared_at, resolution_note
-            )
-            SELECT id, body,
-                   CASE status WHEN 'resolved' THEN 'cleared' ELSE status END,
-                   'general', scope_kind, scope_key, page_label, route, component_hint,
-                   author_kind, frontend_revision, api_revision, created_at,
-                   resolved_at, resolution_note
-              FROM dev_issues_legacy
-            """
-        )
-        connection.execute("DROP TABLE dev_issues_legacy")
-    columns = {
-        str(row[1]) for row in connection.execute("PRAGMA table_info(dev_issues)").fetchall()
-    }
-    if "lane" not in columns:
-        connection.execute(
-            "ALTER TABLE dev_issues ADD COLUMN lane TEXT NOT NULL DEFAULT 'general' "
-            "CHECK(lane IN ('general', 'mobile'))"
-        )
-    additive_columns = {
-        "screenshot_sha256": "TEXT",
-        "screenshot_media_type": "TEXT",
-        "screenshot_byte_size": "INTEGER",
-        "screenshot_relative_path": "TEXT",
-    }
-    for name, sql_type in additive_columns.items():
-        if name not in columns:
-            connection.execute(f"ALTER TABLE dev_issues ADD COLUMN {name} {sql_type}")
-    connection.execute(
-        "CREATE INDEX IF NOT EXISTS idx_dev_issues_scope_status ON dev_issues(scope_key, status, id DESC)"
-    )
-    connection.execute(
-        "CREATE INDEX IF NOT EXISTS idx_dev_issues_status_id ON dev_issues(status, id DESC)"
-    )
-    connection.execute(
-        "CREATE INDEX IF NOT EXISTS idx_dev_issues_lane_status_id ON dev_issues(lane, status, id DESC)"
-    )
-    connection.commit()
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
     return connection
 
 
@@ -570,24 +589,28 @@ async def create_dev_issue_with_screenshot(
         author_kind=author_kind,
         frontend_revision=frontend_revision,
     )
-    with closing(_connect()) as connection:
-        try:
-            issue_id = _insert_issue(connection, payload)
-            relative_path = _write_screenshot(content, media_type, digest)
-            connection.execute(
-                """
-                UPDATE dev_issues
-                   SET screenshot_sha256 = ?, screenshot_media_type = ?,
-                       screenshot_byte_size = ?, screenshot_relative_path = ?
-                 WHERE id = ?
-                """,
-                (digest, media_type, len(content), relative_path, issue_id),
-            )
-            row = connection.execute("SELECT * FROM dev_issues WHERE id = ?", (issue_id,)).fetchone()
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
+    def _persist() -> sqlite3.Row | None:
+        with closing(_connect()) as connection:
+            try:
+                issue_id = _insert_issue(connection, payload)
+                relative_path = _write_screenshot(content, media_type, digest)
+                connection.execute(
+                    """
+                    UPDATE dev_issues
+                       SET screenshot_sha256 = ?, screenshot_media_type = ?,
+                           screenshot_byte_size = ?, screenshot_relative_path = ?
+                     WHERE id = ?
+                    """,
+                    (digest, media_type, len(content), relative_path, issue_id),
+                )
+                row = connection.execute("SELECT * FROM dev_issues WHERE id = ?", (issue_id,)).fetchone()
+                connection.commit()
+                return row
+            except Exception:
+                connection.rollback()
+                raise
+
+    row = await asyncio.to_thread(_persist)
 
     if row is None:
         raise HTTPException(status_code=500, detail="development issue was not persisted")

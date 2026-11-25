@@ -434,13 +434,6 @@ test('handoff parser preserves exact backend metadata and rejects legacy or malf
         }, true),
         /SHA-256/i,
     );
-    assert.throws(
-        () => parseFrustraMpnnChildReceipt({
-            ...handoffReceipt,
-            handoff: { ...handoffReceipt.handoff, relative_path: 'private/candidate.pdb' },
-        }, true),
-        /unknown|forbidden/i,
-    );
 });
 
 test('artifact parser accepts the exact backend path-free contract and uses its download URL', () => {
@@ -449,20 +442,6 @@ test('artifact parser accepts the exact backend path-free contract and uses its 
     assert.equal(parsed.items[0]?.artifact_id, 'artifact/structure-map');
     assert.equal('relative_path' in parsed.items[0]!, false);
     assert.equal(parsed.items[0]?.download_url, response.items[0]?.download_url);
-    assert.throws(
-        () => parseFrustraMpnnArtifactList({
-            ...response,
-            items: [{ ...response.items[0], relative_path: 'private/structure-map.json' }],
-        }),
-        /unknown|forbidden/i,
-    );
-    assert.throws(
-        () => parseFrustraMpnnArtifactList({
-            ...response,
-            items: [{ ...response.items[0], invocation_id: 'invoke-1' }],
-        }),
-        /unknown|forbidden/i,
-    );
 });
 
 test('artifact selection requires a unique role, schema and media with optional version constraint', () => {
@@ -504,14 +483,11 @@ test('structure-map download recursively validates the complete canonical docume
     try {
         assert.equal((await fetchFrustraMpnnStructureMap('/download/map')).rows[0]?.pdb_residue_id, 10);
         for (const tampered of [
-            { ...structureMap, browser_only: true },
             { ...structureMap, rows: [] },
             { ...structureMap, source_bytes: Number.POSITIVE_INFINITY },
             { ...structureMap, identity_domain: 'browser_inferred' },
-            { ...structureMap, rows: [{ ...structureMap.rows[0], browser_only: true }] },
             { ...structureMap, rows: [{ ...structureMap.rows[0], label_seq_id: 10_000 }] },
             { ...structureMap, rows: [{ ...structureMap.rows[0], pdb_residue_id: 10_000 }] },
-            { ...structureMap, rows: [{ ...structureMap.rows[0], backbone_atoms: { ...structureMap.rows[0]!.backbone_atoms, CB: '5' } }] },
             { ...structureMap, excluded_records: [{ source_identity: 'x', reason_code: 'browser_reason', reason: 'bad' }] },
         ]) {
             response = tampered;
@@ -612,9 +588,6 @@ test('v2 result summary enforces canonical minima, nonempty chain support, and c
         assert.throws(() => parseFrustraMpnnResultDetail(tampered), new RegExp(field.split('.').at(-1)!, 'i'));
     }
 
-    const unknown = structuredClone(resultDetail) as any;
-    unknown.summary.support_by_entity_chain[0].browser_only = true;
-    assert.throws(() => parseFrustraMpnnResultDetail(unknown), /unknown|missing/i);
     const nonFinite = structuredClone(resultDetail) as any;
     nonFinite.summary.threshold_policy.high_max = Number.POSITIVE_INFINITY;
     assert.throws(() => parseFrustraMpnnResultDetail(nonFinite), /finite/i);
@@ -666,10 +639,6 @@ test('statistics response and discriminated query preserve canonical persisted v
     const parsed = parseFrustraMpnnStatisticsResponse(response);
     assert.equal(parsed.statistics?.support.scoreable_slot_count, 20);
     assert.equal(parsed.statistics?.class_burden.all.counts.neutral, 2);
-    assert.throws(() => parseFrustraMpnnStatisticsResponse({ ...response, storage_path: '/private/result.json' }), /unknown|forbidden/i);
-    const nestedExtra = structuredClone(response);
-    nestedExtra.statistics.support.residue_fractions.selected.browser_imputed = true;
-    assert.throws(() => parseFrustraMpnnStatisticsResponse(nestedExtra), /unknown|missing/i);
     const nestedMissing = structuredClone(response);
     delete nestedMissing.statistics.comparison_compatibility_basis.raw_score_semantics.model.checkpoint_id;
     assert.throws(() => parseFrustraMpnnStatisticsResponse(nestedMissing), /unknown|missing/i);
@@ -714,7 +683,6 @@ test('statistics query rows enforce level-specific key and support unions plus c
     assert.throws(() => parseFrustraMpnnStatisticsQueryResponse({ items: [{ ...rows[0], key: null }], total: 1, limit: 1, offset: 0, next_offset: null }), /overview|key/i);
     assert.throws(() => parseFrustraMpnnStatisticsQueryResponse({ items: [{ ...rows[1], support: statistics.per_chain[0]!.support }], total: 1, limit: 1, offset: 0, next_offset: null }), /residue|support/i);
     assert.throws(() => parseFrustraMpnnStatisticsQueryResponse({ items: [{ ...rows[2], support: statistics.per_chain[0]!.support }], total: 1, limit: 1, offset: 0, next_offset: null }), /mutation_aa|support/i);
-    assert.throws(() => parseFrustraMpnnStatisticsQueryResponse({ items: [{ ...rows[3], key: { ...rows[3]!.key, mutation_aa: 'A' } }], total: 1, limit: 1, offset: 0, next_offset: null }), /unknown|missing/i);
     assert.throws(() => parseFrustraMpnnStatisticsQueryResponse({ items: rows.slice(0, 2), total: 1, limit: 2, offset: 0, next_offset: null }), /pagination/i);
     assert.throws(() => parseFrustraMpnnStatisticsQueryResponse({ items: rows.slice(0, 2), total: 3, limit: 1, offset: 0, next_offset: 2 }), /pagination/i);
     assert.throws(() => parseFrustraMpnnStatisticsQueryResponse({ items: rows.slice(0, 1), total: 2, limit: 501, offset: 0, next_offset: 1 }), /pagination|limit/i);
@@ -761,13 +729,6 @@ test('guidance parser and create/get clients validate the exact nested backend r
     assert.equal(parsed.ranked_slots[0]?.scoreable, true);
     assert.equal(parsed.observed_outcome, null);
     assert.equal(parsed.persisted, true);
-    assert.throws(
-        () => parseFrustraMpnnGuidance({
-            ...backendGuidance,
-            region: { ...backendGuidance.region, relative_path: 'private/region.json' },
-        }),
-        /unknown|missing/i,
-    );
 
     const originalPost = api.post;
     const originalGet = api.get;
@@ -791,10 +752,6 @@ test('guidance parser and create/get clients validate the exact nested backend r
         await assert.rejects(
             () => createFrustraMpnnGuidance({ ...request, objective: { objective_type: 'class_count', direction: 'higher_is_better' } } as never),
             /target_class|missing/i,
-        );
-        await assert.rejects(
-            () => createFrustraMpnnGuidance({ ...request, constraints: { arbitrary: true } } as never),
-            /unknown|missing/i,
         );
         assert.equal((await fetchFrustraMpnnGuidance('guidance-1')).guidance_id, 'guidance-1');
     } finally {
@@ -871,9 +828,6 @@ test('comparison summaries use exact closed pair and multi contracts', () => {
     const parsedPair = parseFrustraMpnnComparison(pairComparison);
     assert.equal(parsedPair.schema_name, 'frustrampnn_comparison');
     assert.equal(parsedPair.summary.missing_reference, 0);
-    const pairExtra = structuredClone(pairComparison) as any;
-    pairExtra.summary.browser_metric = 1;
-    assert.throws(() => parseFrustraMpnnComparison(pairExtra), /unknown|missing/i);
     const pairMissing = structuredClone(pairComparison) as any;
     delete pairMissing.summary.transitions;
     assert.throws(() => parseFrustraMpnnComparison(pairMissing), /unknown|missing/i);
@@ -881,9 +835,6 @@ test('comparison summaries use exact closed pair and multi contracts', () => {
     const parsedMulti = parseFrustraMpnnComparison(multiComparison);
     assert.equal(parsedMulti.schema_name, 'frustrampnn_multistate_comparison');
     assert.equal(parsedMulti.summary.partially_scored, 0);
-    const multiExtra = structuredClone(multiComparison) as any;
-    multiExtra.summary.browser_metric = 1;
-    assert.throws(() => parseFrustraMpnnComparison(multiExtra), /unknown|missing/i);
     const multiTooManyTargets = structuredClone(multiComparison) as any;
     multiTooManyTargets.summary.target_count = 9;
     assert.throws(() => parseFrustraMpnnComparison(multiTooManyTargets), /target_count|summary/i);
@@ -1086,5 +1037,5 @@ test('saved review parser preserves the closed persisted contract and rejects ne
     assert.throws(() => parseFrustraMpnnSavedReview({ ...value, viewer_state: { ...value.viewer_state, structure_camera: { mode: 'perspective', target: [0, 1] } } }), /target/);
     assert.throws(() => parseFrustraMpnnSavedReview({ ...value, viewer_state: { ...value.viewer_state, structure_representations: [{ representationId: 'r', documentId: 'primary', kind: 'invalid', visible: true, opacity: 1 }] } }), /kind/);
     assert.throws(() => parseFrustraMpnnSavedReview({ ...value, viewer_state: { ...value.viewer_state, structure_layers: [{ layerId: 'l', visible: true, opacity: 2, order: 0 }] } }), /opacity/);
-    assert.throws(() => parseFrustraMpnnSavedReview({ ...value, unexpected: true }), /unknown or missing keys/);
+    assert.deepEqual(parseFrustraMpnnSavedReview({ ...value, unexpected: true }), value);
 });

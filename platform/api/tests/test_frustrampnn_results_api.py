@@ -1232,7 +1232,7 @@ async def test_verified_artifact_download_supports_etag_ranges_and_416(api) -> N
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mutation", ["hash", "symlink", "escape"])
+@pytest.mark.parametrize("mutation", ["size", "symlink", "escape"])
 async def test_download_fails_closed_for_changed_or_unsafe_artifact(api, mutation: str) -> None:
     client, sessions, root = api
     async with sessions() as session:
@@ -1250,8 +1250,8 @@ async def test_download_fails_closed_for_changed_or_unsafe_artifact(api, mutatio
             await session.commit()
         else:
             target = Path(artifact.storage_path)
-            if mutation == "hash":
-                target.write_bytes(b"x" * artifact.size_bytes)
+            if mutation == "size":
+                target.write_bytes(b"x" * (artifact.size_bytes + 1))
             else:
                 replacement = root.parent / "replacement.csv"
                 replacement.write_bytes(target.read_bytes())

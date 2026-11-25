@@ -11,6 +11,7 @@ import stat
 import tempfile
 import uuid
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
 
@@ -26,7 +27,9 @@ MIGRATION_V3_VERSION = 3
 MIGRATION_V3_NAME = "molbio_ngs_immutable_evidence_assessments_v3"
 MIGRATION_V4_VERSION = 4
 MIGRATION_V4_NAME = "molbio_ngs_versioned_bindings_ordered_outbox_v4"
-LATEST_MIGRATION_VERSION = MIGRATION_V4_VERSION
+MIGRATION_V5_VERSION = 5
+MIGRATION_V5_NAME = "molbio_ngs_remove_hash_udfs_v5"
+LATEST_MIGRATION_VERSION = MIGRATION_V5_VERSION
 BACKUP_MANIFEST_SCHEMA = "bms.molbio-ngs.domain-state-backup-manifest.v1"
 
 LEDGER_SQL = """
@@ -1198,6 +1201,109 @@ WHEN (NEW.status = 'leased' AND (NEW.lease_owner IS NULL OR NEW.lease_token IS N
 BEGIN SELECT RAISE(ABORT, 'invalid outbox delivery state'); END;
 '''
 
+MIGRATION_V5_SQL = '''
+DROP TRIGGER IF EXISTS trg_molbio_ngs_audit_digest_insert;
+DROP TRIGGER IF EXISTS trg_molbio_ngs_evidence_digest_insert;
+DROP TRIGGER IF EXISTS trg_molbio_ngs_member_receipt_digest_insert;
+DROP TRIGGER IF EXISTS trg_molbio_ngs_outbox_digest_insert;
+DROP TRIGGER IF EXISTS trg_molbio_ngs_sample_revision_digest_insert;
+DROP TRIGGER IF EXISTS trg_molbio_ngs_state_revision_digest_insert;
+
+DROP TRIGGER IF EXISTS trg_molbio_ngs_outbox_evidence_digest_insert;
+CREATE TRIGGER trg_molbio_ngs_outbox_evidence_digest_insert BEFORE INSERT ON molbio_ngs_outbox_events
+WHEN (NEW.acknowledgement_json IS NULL) != (NEW.acknowledgement_sha256 IS NULL)
+  OR (NEW.conflict_json IS NULL) != (NEW.conflict_sha256 IS NULL)
+BEGIN SELECT RAISE(ABORT, 'outbox evidence digest mismatch'); END;
+
+DROP TRIGGER IF EXISTS trg_molbio_ngs_outbox_evidence_digest_update;
+CREATE TRIGGER trg_molbio_ngs_outbox_evidence_digest_update BEFORE UPDATE ON molbio_ngs_outbox_events
+WHEN (NEW.acknowledgement_json IS NULL) != (NEW.acknowledgement_sha256 IS NULL)
+  OR (NEW.conflict_json IS NULL) != (NEW.conflict_sha256 IS NULL)
+BEGIN SELECT RAISE(ABORT, 'outbox evidence digest mismatch'); END;
+
+DROP TRIGGER IF EXISTS trg_molbio_ngs_reference_revision_digest_insert;
+CREATE TRIGGER trg_molbio_ngs_reference_revision_digest_insert
+BEFORE INSERT ON molbio_ngs_reference_revisions
+WHEN json_valid(NEW.canonical_payload) != 1
+  OR json_extract(NEW.canonical_payload, '$.canonical_fasta.sha256') IS NOT NEW.canonical_fasta_sha256
+  OR json_extract(NEW.canonical_payload, '$.canonical_fasta.size_bytes') IS NOT NEW.canonical_fasta_size_bytes
+  OR json_extract(NEW.canonical_payload, '$.contig_manifest_sha256') IS NOT NEW.contig_manifest_sha256
+BEGIN
+    SELECT RAISE(ABORT, 'reference revision authority mismatch');
+END;
+
+CREATE TABLE molbio_ngs_connector_acknowledgements__v5 (
+    acknowledgement_id TEXT PRIMARY KEY NOT NULL,
+    command_id TEXT NOT NULL UNIQUE,
+    binding_revision_id TEXT NOT NULL REFERENCES molbio_ngs_global_binding_revisions(binding_revision_id),
+    disposition TEXT NOT NULL CHECK(disposition IN ('applied','duplicate','retryable','conflicted','deferred_gap')),
+    acknowledgement_json TEXT NOT NULL,
+    acknowledgement_sha256 TEXT NOT NULL CHECK(length(acknowledgement_sha256) = 64),
+    created_at TEXT NOT NULL
+);
+INSERT INTO molbio_ngs_connector_acknowledgements__v5
+SELECT acknowledgement_id, command_id, binding_revision_id, disposition, acknowledgement_json, acknowledgement_sha256, created_at
+  FROM molbio_ngs_connector_acknowledgements;
+DROP TABLE molbio_ngs_connector_acknowledgements;
+ALTER TABLE molbio_ngs_connector_acknowledgements__v5 RENAME TO molbio_ngs_connector_acknowledgements;
+CREATE TRIGGER trg_molbio_ngs_connector_ack_immutable_delete BEFORE DELETE ON molbio_ngs_connector_acknowledgements
+BEGIN SELECT RAISE(ABORT, 'connector acknowledgement is immutable'); END;
+CREATE TRIGGER trg_molbio_ngs_connector_ack_immutable_update BEFORE UPDATE ON molbio_ngs_connector_acknowledgements
+BEGIN SELECT RAISE(ABORT, 'connector acknowledgement is immutable'); END;
+
+CREATE TABLE molbio_ngs_global_binding_revisions__v5 (
+    binding_revision_id TEXT PRIMARY KEY NOT NULL,
+    global_domain_experiment_id TEXT NOT NULL REFERENCES molbio_ngs_domain_states(global_domain_experiment_id) DEFERRABLE INITIALLY DEFERRED,
+    revision_number INTEGER NOT NULL CHECK(revision_number > 0),
+    supersedes_binding_revision_id TEXT REFERENCES molbio_ngs_global_binding_revisions(binding_revision_id),
+    global_domain_experiment_revision_id TEXT NOT NULL,
+    global_domain_experiment_revision_digest TEXT NOT NULL CHECK(length(global_domain_experiment_revision_digest) = 64),
+    project_id TEXT NOT NULL, project_generation TEXT NOT NULL,
+    project_digest TEXT NOT NULL CHECK(length(project_digest) = 64),
+    project_receipt_id TEXT NOT NULL, project_reopen_destination TEXT NOT NULL,
+    project_acknowledgement TEXT NOT NULL,
+    global_experiment_id TEXT NOT NULL, global_experiment_generation TEXT NOT NULL,
+    global_experiment_digest TEXT NOT NULL CHECK(length(global_experiment_digest) = 64),
+    global_experiment_receipt_id TEXT NOT NULL,
+    global_experiment_reopen_destination TEXT NOT NULL,
+    global_experiment_acknowledgement TEXT NOT NULL,
+    global_binding_receipt_id TEXT,
+    global_binding_receipt_json TEXT,
+    global_binding_receipt_sha256 TEXT,
+    connector_command_id TEXT UNIQUE,
+    binding_state TEXT NOT NULL CHECK(binding_state IN ('needs_reverification','acknowledged','stale','conflicted')),
+    last_verified_at TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT,
+    UNIQUE(global_domain_experiment_id, revision_number),
+    CHECK((global_binding_receipt_id IS NULL AND global_binding_receipt_json IS NULL AND global_binding_receipt_sha256 IS NULL)
+       OR (global_binding_receipt_id IS NOT NULL AND global_binding_receipt_json IS NOT NULL
+           AND global_binding_receipt_sha256 IS NOT NULL))
+);
+INSERT INTO molbio_ngs_global_binding_revisions__v5
+SELECT binding_revision_id, global_domain_experiment_id, revision_number, supersedes_binding_revision_id,
+       global_domain_experiment_revision_id, global_domain_experiment_revision_digest,
+       project_id, project_generation, project_digest, project_receipt_id, project_reopen_destination, project_acknowledgement,
+       global_experiment_id, global_experiment_generation, global_experiment_digest, global_experiment_receipt_id, global_experiment_reopen_destination, global_experiment_acknowledgement,
+       global_binding_receipt_id, global_binding_receipt_json, global_binding_receipt_sha256,
+       connector_command_id, binding_state, last_verified_at, last_error, created_at, updated_at
+  FROM molbio_ngs_global_binding_revisions;
+DROP TABLE molbio_ngs_global_binding_revisions;
+ALTER TABLE molbio_ngs_global_binding_revisions__v5 RENAME TO molbio_ngs_global_binding_revisions;
+CREATE TRIGGER trg_molbio_ngs_binding_revision_delete_forbidden
+BEFORE DELETE ON molbio_ngs_global_binding_revisions
+BEGIN SELECT RAISE(ABORT, 'binding revisions are append-only'); END;
+CREATE TRIGGER trg_molbio_ngs_binding_revision_immutable_update
+BEFORE UPDATE OF binding_revision_id, global_domain_experiment_id, revision_number,
+ supersedes_binding_revision_id, global_domain_experiment_revision_id,
+ global_domain_experiment_revision_digest, project_id, project_generation, project_digest,
+ project_receipt_id, project_reopen_destination, project_acknowledgement,
+ global_experiment_id, global_experiment_generation, global_experiment_digest,
+ global_experiment_receipt_id, global_experiment_reopen_destination,
+ global_experiment_acknowledgement, global_binding_receipt_id,
+ global_binding_receipt_json, global_binding_receipt_sha256, connector_command_id, created_at
+ON molbio_ngs_global_binding_revisions
+BEGIN SELECT RAISE(ABORT, 'binding revision authority is immutable'); END;
+'''
+
 
 def migration_checksum() -> str:
     return hashlib.sha256(MIGRATION_SQL.encode("utf-8")).hexdigest()
@@ -1215,6 +1321,10 @@ def migration_v4_checksum() -> str:
     return hashlib.sha256(
         (MIGRATION_V4_SQL + MIGRATION_V4_FINALIZE_SQL).encode("utf-8")
     ).hexdigest()
+
+
+def migration_v5_checksum() -> str:
+    return hashlib.sha256(MIGRATION_V5_SQL.encode("utf-8")).hexdigest()
 
 
 def _migration_registry() -> list[tuple[int, str, str, str, str]]:
@@ -1247,6 +1357,13 @@ def _migration_registry() -> list[tuple[int, str, str, str, str]]:
             migration_v4_checksum(),
             "Append-only binding revisions and ordered token-fenced outbox authority",
             MIGRATION_V4_SQL + MIGRATION_V4_FINALIZE_SQL,
+        ),
+        (
+            MIGRATION_V5_VERSION,
+            MIGRATION_V5_NAME,
+            migration_v5_checksum(),
+            "Remove Python hash UDF calls from MolBio/NGS SQLite constraints and triggers",
+            MIGRATION_V5_SQL,
         ),
     ]
 
@@ -1523,14 +1640,22 @@ def _schema_objects(connection: sqlite3.Connection) -> dict[str, dict[str, str]]
     return objects
 
 
+@lru_cache(maxsize=1)
 def _expected_schema_objects() -> dict[str, dict[str, str]]:
     connection = sqlite3.connect(":memory:")
     register_sqlite_sha256(connection)
     connection.execute("PRAGMA foreign_keys=ON")
     try:
         connection.executescript(LEDGER_SQL)
-        for _version, _name, _checksum, _description, sql in _migration_registry():
-            connection.executescript(sql)
+        for version, _name, _checksum, _description, sql in _migration_registry():
+            if version == MIGRATION_V5_VERSION:
+                connection.execute("PRAGMA foreign_keys=OFF")
+                try:
+                    connection.executescript(sql)
+                finally:
+                    connection.execute("PRAGMA foreign_keys=ON")
+            else:
+                connection.executescript(sql)
         return _schema_objects(connection)
     finally:
         connection.close()
@@ -1702,31 +1827,37 @@ def _artifact_errors(
 def attest_schema(
     connection: sqlite3.Connection, *, artifact_root: Path | None = None,
     verify_data: bool = True,
+    verify_definitions: bool = True,
 ) -> dict[str, object]:
-    """Attest schema; optionally audit retained rows and artifact bytes too.
+    """Attest schema; optionally audit retained rows, artifact bytes, and DDL definitions.
 
     Explicit verification, release, restore and actual migrations retain the full
-    audit. Already-migrated startup and ordinary health probes only check schema
-    and ledger, not retained scientific rows or artifact bytes.
+    audit. Already-migrated startup and ordinary health probes only check the
+    migration ledger without replaying expected DDL into :memory:.
     """
 
-    expected_objects = _expected_schema_objects()
-    actual_objects = _schema_objects(connection)
-    expected_keys = set(expected_objects)
-    actual_keys = set(actual_objects)
-    missing_objects = [expected_objects[key] for key in sorted(expected_keys - actual_keys)]
-    extra_objects = [actual_objects[key] for key in sorted(actual_keys - expected_keys)]
-    changed_objects = [
-        {
-            "type": expected_objects[key]["type"],
-            "name": expected_objects[key]["name"],
-            "table": actual_objects[key]["table"],
-            "expected_sql_sha256": expected_objects[key]["sql_sha256"],
-            "actual_sql_sha256": actual_objects[key]["sql_sha256"],
-        }
-        for key in sorted(expected_keys & actual_keys)
-        if expected_objects[key] != actual_objects[key]
-    ]
+    if verify_definitions:
+        expected_objects = _expected_schema_objects()
+        actual_objects = _schema_objects(connection)
+        expected_keys = set(expected_objects)
+        actual_keys = set(actual_objects)
+        missing_objects = [expected_objects[key] for key in sorted(expected_keys - actual_keys)]
+        extra_objects = [actual_objects[key] for key in sorted(actual_keys - expected_keys)]
+        changed_objects = [
+            {
+                "type": expected_objects[key]["type"],
+                "name": expected_objects[key]["name"],
+                "table": actual_objects[key]["table"],
+                "expected_sql_sha256": expected_objects[key]["sql_sha256"],
+                "actual_sql_sha256": actual_objects[key]["sql_sha256"],
+            }
+            for key in sorted(expected_keys & actual_keys)
+            if expected_objects[key] != actual_objects[key]
+        ]
+    else:
+        missing_objects = []
+        extra_objects = []
+        changed_objects = []
     try:
         ledger_rows = connection.execute(
             "SELECT version, name, checksum FROM molbio_ngs_schema_migrations ORDER BY version"
@@ -1755,6 +1886,7 @@ def attest_schema(
             or not ledger_matches
         ),
         "data_integrity_checked": verify_data,
+        "definitions_checked": verify_definitions,
         "expected_migration_ledger": [list(row) for row in expected_ledger],
         "actual_migration_ledger": [list(row) for row in ledger_rows],
         "migration_ledger_error": ledger_error,
@@ -1765,6 +1897,29 @@ def attest_schema(
         "authority_coherence_errors": authority_coherence_errors,
         "artifact_errors": artifact_errors,
     }
+
+
+def _apply_v5_upgrade(connection: sqlite3.Connection) -> None:
+    connection.execute("PRAGMA foreign_keys=OFF")
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        _execute_transactional_script(connection, MIGRATION_V5_SQL)
+        connection.execute(
+            "INSERT INTO molbio_ngs_schema_migrations(version,name,checksum,description,applied_at) VALUES (?,?,?,?,?)",
+            (
+                MIGRATION_V5_VERSION,
+                MIGRATION_V5_NAME,
+                migration_v5_checksum(),
+                "Remove Python hash UDF calls from MolBio/NGS SQLite constraints and triggers",
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.execute("PRAGMA foreign_keys=ON")
 
 
 def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
@@ -1785,6 +1940,9 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
             if version == MIGRATION_V4_VERSION:
                 _apply_v4_upgrade(connection)
                 continue
+            if version == MIGRATION_V5_VERSION:
+                _apply_v5_upgrade(connection)
+                continue
             applied_at = datetime.now(timezone.utc).isoformat()
             connection.executescript(
                 "BEGIN IMMEDIATE;\n"
@@ -1799,7 +1957,11 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         ).fetchall()
         if rows != expected_rows:
             raise RuntimeError(f"MolBio/NGS migration ledger mismatch: {rows!r}")
-        attestation = attest_schema(connection, verify_data=verify_data or migrated)
+        attestation = attest_schema(
+            connection,
+            verify_data=verify_data or migrated,
+            verify_definitions=verify_data or migrated,
+        )
         if not attestation["ok"]:
             raise sqlite3.IntegrityError(f"MolBio/NGS schema attestation failed: {attestation!r}")
     except Exception:
@@ -1825,7 +1987,7 @@ def health(db_path: str | Path, *, deep: bool = True) -> dict[str, object]:
     connection: sqlite3.Connection | None = None
     try:
         connection = _connect(path, read_only=True)
-        attestation = attest_schema(connection, verify_data=deep)
+        attestation = attest_schema(connection, verify_data=deep, verify_definitions=True)
         migration = connection.execute(
             "SELECT version, name, checksum, description, applied_at "
             "FROM molbio_ngs_schema_migrations ORDER BY version DESC LIMIT 1"
