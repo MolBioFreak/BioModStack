@@ -166,8 +166,8 @@ workflows:
   system telemetry and power/fan controls
 - `start_ui.sh`
   API/frontend launcher
-- `biomodstack_panel.py`
-  GTK control panel for local service operation
+- `scripts/run_biomodstack_core_runtime.sh`
+  local service and runtime status/restart/stop CLI
 
 ## What These Docs Deliberately Avoid
 

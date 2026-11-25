@@ -19,10 +19,7 @@ The stable in-app APK update channel publishes the exact hash-bound bytes from
 this artifact. The package uses the durable internal-updater signer required by
 previous BioModStack APK installations.
 
-## Historical phone artifacts
-
-The retained beta APKs predate the governed internal-update channel. Their
-metadata and adjacent SHA-256 files remain available for provenance.
+## Governed release process
 
 Native-wrapper build inputs and mobile UI-update distribution are operated
 through the supported governed release process. Do not place machine-local

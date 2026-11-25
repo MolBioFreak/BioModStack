@@ -7,11 +7,6 @@
       "reason": "Approved hash-bound internal-update release asset; artifacts/android/README.md defines its role."
     },
     {
-      "path": "artifacts/android/BioModStack-debug-phone-2026.06.09-molbio-drag-header-beta-007.apk",
-      "sha256": "021472cae04f2c55a774c15021ab5f479d94bb2f98751f78627aad8332c91343",
-      "reason": "Existing approved historical phone APK. Retention is documented in artifacts/android/README.md; an owner-reviewed retirement must remove this exception too."
-    },
-    {
       "path": "tests/fixtures/boltzgen_617e549/installed_source.zip",
       "sha256": "dacf205f79e7de856b1ce62fdfa7460d528fb027c0f42701b27c5ba11e774075",
       "reason": "Pinned installed-source fixture used by platform/api/tests/test_boltzgen_native_scalars.py; documented in docs/S01_BoltzGen_Native_Scalars.md."
