@@ -92,7 +92,6 @@ REQUIRED_WEIGHTS = [
 # Optional weight directories (warn but don't fail)
 OPTIONAL_WEIGHTS = [
     "ppiflow",
-    "rfdpoly",
     "frustrampnn",
 ]
 

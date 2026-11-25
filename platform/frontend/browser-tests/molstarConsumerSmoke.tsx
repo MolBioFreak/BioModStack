@@ -219,7 +219,6 @@ async function runMolstarConsumerSmoke(): Promise<ConsumerSmokeReport> {
     try {
         generic.push(...await smokeDirectGroup(['G3'], ['FloatingViewer orphan fixture'], [{ ...base, height: '100%' }]));
         generic.push(...await smokeDirectGroup(['G5'], ['MutagenesisTemplate FrustraMPNN'], [{ ...base, height: 280, alphafoldView: false, residueMetricLayer: metricLayer, label: 'Frustration Map' }]));
-        generic.push(...await smokeDirectGroup(['G6'], ['OligoDesignerTemplate scaffold'], [{ ...base, height: 300, hideControls: false, backgroundColor: '#1e293b' }]));
         generic.push(...await smokeDirectGroup(['G7'], ['Dashboard QuickViewer'], [{ ...base, height: 480, alphafoldView: true }]));
         generic.push(...await smokeDirectGroup(['G8'], ['ResultsViewer antibody binder info'], [{ ...base, height: '100%', selections: selection, label: 'CDR regions' }]));
         generic.push(...await smokeDirectGroup(['G9'], ['StructurePredictionTemplate target preview'], [{ ...base, height: 240, selections: selection, label: 'A' }]));

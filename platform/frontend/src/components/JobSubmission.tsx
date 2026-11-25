@@ -35,7 +35,6 @@ const AntibodyDenovoTemplate = lazy(() => import('./AntibodyDenovoTemplate').the
 const StructurePredictionTemplate = lazy(() => import('./StructurePredictionTemplate').then(m => ({ default: m.StructurePredictionTemplate })));
 
 
-const OligoDesignerTemplate = lazy(() => import('./OligoDesignerTemplate').then(m => ({ default: m.OligoDesignerTemplate })));
 const ProteinModificationTemplate = lazy(() => import('./ProteinModificationTemplate').then(m => ({ default: m.ProteinModificationTemplate })));
 import { DE_NOVO_TEMPLATE, DE_NOVO_ROUTE_KEYS, deNovoSavedValues, deNovoRouteValues, deNovoNavigation, deNovoSearch, isDeNovoModel, type DeNovoNavigationState } from './deNovoWorkflowRoute';
 
@@ -70,7 +69,7 @@ import { FileBrowser } from './FileBrowser';
 const MODEL_DOCUMENTATION_TOPIC_KEYS = new Set<ModelDocumentationTopic>([
     'alphafold2', 'boltz2', 'boltzgen', 'caliby', 'chai1', 'confornets', 'disco', 'esmfold2',
     'fampnn', 'fold_cp', 'laproteina', 'ligandmpnn', 'ppiflow', 'proteinmpnn', 'protenix', 'rf3',
-    'rfantibody', 'rfdiffusion', 'rfdpoly',
+    'rfantibody', 'rfdiffusion',
 ]);
 
 const getTemplateDocumentationTopics = (
@@ -140,8 +139,6 @@ const getCompactTemplateDescription = (template: UntypedApiValue): string => {
             return 'ESMFold2 engine inside Structure Prediction.';
         case 'mutagenesis':
             return 'Build variant libraries and predict structures.';
-        case 'oligo_design':
-            return 'Design nucleoprotein assemblies with validation.';
         default:
             return template.short_description || template.summary || template.description || '';
     }
@@ -1557,7 +1554,7 @@ export function JobSubmission() {
     ) : null;
 
     // Dedicated templates that handle their own header/navigation
-    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics', 'conformational_mapping'];
+    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'protein_modification_experimental', 'molecular_dynamics', 'conformational_mapping'];
     const showMainHeader = !isNativeBinderGeneration && (!selectedTemplateId || !dedicatedTemplates.includes(selectedTemplateId));
 
     const preparedStructureModelId = launchContextQuery.data?.pinned_scheduler?.model_id;
@@ -1699,7 +1696,7 @@ export function JobSubmission() {
                     catch (error) { setProjectActionError(error instanceof Error ? error.message : String(error)); }
                     finally { setProjectActionBusy(false); }
                 }}>Start run</button>}{projectActionError && <p role="alert">{projectActionError}</p>}<ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
-            {!isNativeBinderGeneration && !(isTemplateMode && ['structure_prediction', 'mutagenesis', 'antibody_denovo', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics', 'conformational_mapping'].includes(selectedTemplateId ?? '')) && <ExecutionTargetPicker workflowRequest={workflowRequest} />}
+            {!isNativeBinderGeneration && !(isTemplateMode && ['structure_prediction', 'mutagenesis', 'antibody_denovo', 'protein_modification_experimental', 'molecular_dynamics', 'conformational_mapping'].includes(selectedTemplateId ?? '')) && <ExecutionTargetPicker workflowRequest={workflowRequest} />}
             {!isNativeBinderGeneration && selectedTemplateId !== DE_NOVO_TEMPLATE && selectedTemplateId !== 'antibody_denovo' && <ExecutionPolicyControl initialPolicy={initialReturnPolicy} />}
             {launchContextId && (
                 <aside className="mb-4 rounded-lg border border-blue-500/40 bg-blue-950/40 px-4 py-3 text-sm text-blue-100" aria-label="Project launch destination">
@@ -1898,11 +1895,6 @@ export function JobSubmission() {
                                     sourceSequenceId={durableMdDetour.data ? null : mdHandoff.route?.sourceSequenceId ?? null}
                                     mdDraftId={mdHandoff.route?.draftId ?? null}
                                     returnTemplate={mdHandoff.route?.returnTemplate ?? null}
-                                />
-                            ) : selectedTemplateId === 'oligo_design' ? (
-                                <OligoDesignerTemplate
-                                    onBack={handleDedicatedTemplateBack}
-                                    initialValues={clonedValues}
                                 />
                             ) : selectedTemplateId === 'protein_modification_experimental' ? (
                                 <DeNovoDraftPreparationContext.Provider value={deNovoPreparation}>

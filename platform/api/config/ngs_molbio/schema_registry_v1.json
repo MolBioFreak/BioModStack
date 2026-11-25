@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_source_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "eace8f07094433ed527c57b27543872145665ae8ff2934e93202dee55046ea37",
+  "content_sha256": "601e27fdb92bc1120fcbb12556a53b8e18505dc909c5a2eb09d58ccb49262b9f",
   "entries": [
     {
       "path": "schemas/ngs_molbio/adapter-registry-v1.schema.json",
@@ -188,12 +188,6 @@
       "schema_canonical_sha256": "109a99c44c7378545df09fb318de2ef4971f4b6cd6d567120b57920a8aad0160",
       "schema_id": "bms.operation-parameters.molbio.mutagenesis.v1",
       "schema_sha256": "09e95fed1dfa712f3f0d5a29e80dc4e571254d4fc4d9bf570c51bdb7ec5160cf"
-    },
-    {
-      "path": "schemas/ngs_molbio/molbio-oligo_design-rfdpoly-v1.schema.json",
-      "schema_canonical_sha256": "54455abc858a1476282050593039f653e77f98d518f51a8620e1911278000ea3",
-      "schema_id": "bms.workflow-parameters.molbio.oligo_design.rfdpoly.v1",
-      "schema_sha256": "7ae266b060771e4c13b35bb900d606b7e026352c4c65f1d5d54e5d46f30a8ebd"
     },
     {
       "path": "schemas/ngs_molbio/molbio-pcr-v1.schema.json",
@@ -466,5 +460,6 @@
       "schema_sha256": "e6bdc976195c14318328072bb031fd7476a125417695c5d88ca12a0a3e1eb054"
     }
   ],
-  "schema": "bms.ngs-molbio.schema-registry.v1"
+  "schema": "bms.ngs-molbio.schema-registry.v1",
+  "schemas": []
 }

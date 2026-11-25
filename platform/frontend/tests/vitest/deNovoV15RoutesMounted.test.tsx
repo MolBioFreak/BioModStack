@@ -40,7 +40,6 @@ vi.mock('../../src/components/ModelIntegrationControl', () => ({ ModelIntegratio
 vi.mock('../../src/components/AntibodyDenovoTemplate', () => ({ AntibodyDenovoTemplate: () => null }));
 vi.mock('../../src/components/StructurePredictionTemplate', () => ({ StructurePredictionTemplate: () => null }));
 vi.mock('../../src/components/MolecularDynamicsTemplate', () => ({ MolecularDynamicsTemplate: () => null }));
-vi.mock('../../src/components/OligoDesignerTemplate', () => ({ OligoDesignerTemplate: () => null }));
 vi.mock('../../src/components/conformationalMapping/ConformationalMappingLauncher', () => ({ ConformationalMappingLauncher: () => null }));
 import { JobSubmission } from '../../src/components/JobSubmission';
 // Resolve the real lazy editor during collection, outside a case's execution

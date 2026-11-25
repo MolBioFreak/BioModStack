@@ -80,10 +80,6 @@ export const MODEL_DOCUMENTATION_LINKS = {
         { label: 'RFdiffusion GitHub', href: 'https://github.com/RosettaCommons/RFdiffusion' },
         { label: 'RFdiffusion Science DOI', href: 'https://doi.org/10.1126/science.add2187' },
     ],
-    rfdpoly: [
-        { label: 'RFDpoly GitHub', href: 'https://github.com/RosettaCommons/RFDpoly' },
-        { label: 'RFDpoly preprint DOI', href: 'https://doi.org/10.1101/2025.10.01.679929' },
-    ],
 } as const;
 
 export type ModelDocumentationTopic = keyof typeof MODEL_DOCUMENTATION_LINKS;

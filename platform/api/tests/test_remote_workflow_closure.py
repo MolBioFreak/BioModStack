@@ -721,7 +721,6 @@ def test_launch_callers_structurally_share_helper_and_forward_command():
     ('protein_cad_experimental', 'design', 'protein_cad_experimental', {'pcad_backend': 'laproteina'}, {'PrepProteinCadRequest', 'RunLaProteina'}),
     ('confornets_experimental', 'design', 'confornets_experimental', {'cn_skip_msa': True}, {'PrepConforNetsRequest', 'RunConforNets', 'FinalizeConforNetsOutputs'}),
     ('boltz_cp_experimental', 'design', 'boltz_cp_experimental', {'run_frustrampnn': False}, {'RunBoltzCPExperimental', 'FinalizeBoltzCPExperimental'}),
-    ('oligo_design', 'oligo_design', 'oligo_design', {'oligo_validate_boltz': False}, {'RFDPolyDesign', 'NAMPNNDesign', 'PyRosettaRebuild'}),
     ('antibody_child', 'validation_batch', 'antibody_child', {'structure_validator': 'boltz2'}, {'BatchBoltzValidation', 'AlignBoltzValidation'}),
     ('protein_local_redesign', 'local_redesign', 'protein_local_redesign', {'plr_seq_method': 'mpnn'}, {'PrepProteinLocalMPNN', 'RunMPNN', 'ExportProteinLocalMPNNResults'}),
     ('nanopore', 'fastq_qc', 'ngs/ont_fastq_qc', {'ont_workflow_id': 'ont_fastq_qc', 'ont_input_mode': 'fastq', 'fastq_path': '/logical/reads.fastq', 'reference_fasta': '/logical/ref.fasta'}, {'FastqAlign', 'FastqDimerAnalysis', 'BuildDimerCanonicalOutputs', 'FastqPlasmidQC', 'ConstructVerify'}),

@@ -21,10 +21,6 @@
       "sha256": "33ab7124556e4278acc11532b114dac6b58d686439f0a7da1a8b66301080fe03"
     },
     {
-      "path": "platform/api/config/models/oligo_design.yaml",
-      "sha256": "507dd13ec7cd94dc36498997c6c0752fab46aa31562be7fd01ce8d173247fcfd"
-    },
-    {
       "path": "platform/api/experiment_migrations.py",
       "sha256": "c028a06d3b7f48ff746a930470f0d5b67991e29cc37bae5c5abf83757a4fea5d"
     },
@@ -129,10 +125,6 @@
       "sha256": "1f55a13b4fb11c6b935e40005c264bc1e0b6069e2cf6ef994b8320d270fd9d4c"
     },
     {
-      "path": "platform/frontend/src/components/OligoDesignerTemplate.tsx",
-      "sha256": "3a1ab572f3e830f9a5e2da6ace20dee4c9a7207ed9bdd6f0aa17b68af343ea6e"
-    },
-    {
       "path": "platform/frontend/src/lib/api.ts",
       "sha256": "c6aa49f3be9e9a1dfbfb4404d7246fe72a5d9985123419c271c62a920aaba81b"
     },
@@ -167,14 +159,10 @@
     {
       "path": "workflows/ngs/wf_clone_validation.nf",
       "sha256": "2f2741b556c7f91278a5cea1366f677fcd93899c62003581fa126b1b9ca8c2a0"
-    },
-    {
-      "path": "workflows/oligo_design.nf",
-      "sha256": "04eb00b6f5d8ca4e8eba7c12a43a799b76c514f5e78edfed3cec06f8a2a39fff"
     }
   ],
   "baseline_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "3a02123c559ee11e05b6c44479dff273805f0cb632422792560cfe19ecc51fc4",
+  "content_sha256": "a6330d87df191363e857d4e1007d1e670ad4b8c8e61af37a76ce93c4e1899141",
   "schema": "bms.ngs-molbio.source-pin.v1"
 }

@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "1d41fb50300a4e574670f6a02a0345e597ac9ed4",
   "baseline_source_tree": "af85061039a5fafdcb828336f09ea6355713d1a9",
-  "content_sha256": "23a461b990752dfa243d899bcae13d01576e8b897ffaea5159551ac46dd89b3a",
+  "content_sha256": "b943276cd6899b724807fb6f9b3b72f03894eb5bac84e91a12cb1d4572d4a0ef",
   "entries": [
     {
       "path": "schemas/ngs_molbio/domain-experiment-v2.schema.json",
@@ -436,12 +436,6 @@
       "schema_sha256": "3d629379925203ee50568d0f59548473cea4781b927e7a6e2b4054843c981948"
     },
     {
-      "path": "schemas/ngs_molbio/molbio-oligo_design-rfdpoly-v1.schema.json",
-      "schema_canonical_sha256": "54455abc858a1476282050593039f653e77f98d518f51a8620e1911278000ea3",
-      "schema_id": "bms.workflow-parameters.molbio.oligo_design.rfdpoly.v1",
-      "schema_sha256": "7ae266b060771e4c13b35bb900d606b7e026352c4c65f1d5d54e5d46f30a8ebd"
-    },
-    {
       "path": "schemas/ngs_molbio/ngs-ont-basecall_dna-v1.schema.json",
       "schema_canonical_sha256": "2e99d30b94588adca95ced9ff3c3f487ce3b45611d7aca82fa48d41e5f785902",
       "schema_id": "bms.workflow-parameters.ngs.ont.basecall_dna.v1",
@@ -502,5 +496,6 @@
       "schema_canonical_sha256": "530a78422096e0b1cc88a3a1e087968862461923c04587ad323eb26e2a7a05aa"
     }
   ],
-  "schema": "bms.ngs-molbio.schema-registry.v2"
+  "schema": "bms.ngs-molbio.schema-registry.v2",
+  "schemas": []
 }

@@ -13,7 +13,6 @@ INCLUDE_RE = re.compile(
 )
 
 DIRECT_ENTRYPOINTS = {
-    "oligo_design": "workflows/oligo_design.nf",
     "nanopore_methylation": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_basecall_dna": "workflows/ngs/ont_basecall_dna.nf",
     "ont_basecall_rna": "workflows/ngs/ont_basecall_rna.nf",
@@ -68,7 +67,6 @@ def test_region_loop_shell_quotes_current_source_and_selection_arguments() -> No
     assert "rfd3_local_redesign/build_result_manifest.py" not in source
 
 MIGRATED_SYMBOLS = (
-    "OLIGO_DESIGNER",
     "PROTEIN_LOCAL_REDESIGN",
     "PROTEIN_CAD_EXPERIMENTAL",
     "CALIBY_EXPERIMENTAL",

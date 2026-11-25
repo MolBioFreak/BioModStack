@@ -270,7 +270,6 @@ VRAM_PROFILES = {
     'esmfold2': {'base': 22000, 'scale': 35},  # Canonical ESMFold2 high-pressure profile
     'esmfold2_experimental': {'base': 22000, 'scale': 35},  # Compatibility alias
 
-    'oligo_design': {'base': 7000, 'scale': 20},     # Oligo Designer (RFDpoly + NA-MPNN)
     'nanopore': {'base': 12288, 'scale': 0},        # Display estimate; packing books nanopore_vram_fraction of the card
     'default': {'base': 6000, 'scale': 25},     # Conservative fallback
 }

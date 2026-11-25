@@ -55,7 +55,6 @@ vi.mock('../../src/components/SequenceManager', () => ({ SequenceManager: () => 
 vi.mock('../../src/components/TemplateManagerModal', () => ({ TemplateManagerModal: () => null }));
 vi.mock('../../src/components/MutagenesisTemplate', () => ({ MutagenesisTemplate: () => null }));
 vi.mock('../../src/components/AntibodyDenovoTemplate', () => ({ AntibodyDenovoTemplate: () => null }));
-vi.mock('../../src/components/OligoDesignerTemplate', () => ({ OligoDesignerTemplate: () => null }));
 vi.mock('../../src/components/ProteinModificationTemplate', () => ({ ProteinModificationTemplate: () => null }));
 vi.mock('../../src/components/conformationalMapping/ConformationalMappingLauncher', () => ({ ConformationalMappingLauncher: () => null }));
 vi.mock('../../src/components/StructurePredictionTemplate', () => ({

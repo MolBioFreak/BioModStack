@@ -16,7 +16,6 @@ TYPED_CORE_JOB_MODELS = {
     "nanopore",
     "ngs_alignment",
     "oligo_builder",
-    "oligo_design",
     "ont_fastq_qc",
     "ppiflow",
     "protein_local_redesign",

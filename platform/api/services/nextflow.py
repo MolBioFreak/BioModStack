@@ -481,7 +481,6 @@ PUBLIC_SEQUENCE_MODES = frozenset({
 # structure prediction, antibody validation, PPiFlow, mutagenesis, and core
 # protein-design contexts; those route through MODEL_MODE_WORKFLOW_ENTRYPOINTS.
 WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
-    "oligo_design": "workflows/oligo_design.nf",
     "ont_basecall_dna": "workflows/ngs/ont_basecall_dna.nf",
     "ont_basecall_rna": "workflows/ngs/ont_basecall_rna.nf",
     "ont_plasmid_qc": "workflows/ngs/ont_plasmid_qc.nf",
@@ -5843,8 +5842,6 @@ def compile_nextflow_invocation(
         ('rfantibody_child', 'antibody_backbone'): 'antibody_backbone',  # Uses antibody_backbone profile which sets rfd_mode correctly
         # FAMPNN child jobs (sequence design - spawned by orchestrator)
         ('fampnn_child', 'sequence_design'): 'fampnn_predict',
-        # Oligo Designer (RFDpoly multi-polymer design)
-        ('oligo_design', 'oligo_design'): 'oligo_design',
         # Protein local redesign with constrained RFD3 remodeling
         ('protein_local_redesign', 'local_redesign'): 'protein_local_redesign',
         ('protein_cad_experimental', 'design'): 'protein_cad_experimental',
@@ -6594,13 +6591,6 @@ def compile_nextflow_invocation(
         'target_geometry_mode': 'target_geometry_mode',
         'target_template_threshold_angstrom': 'target_template_threshold_angstrom',
         'strict_target_rmsd': 'strict_target_rmsd',
-        # NA-MPNN sequence design params (Oligo Designer)
-        'nampnn_temperature': 'nampnn_temperature',
-        'nampnn_num_seqs': 'nampnn_num_seqs',
-        'nampnn_fixed_residues': 'nampnn_fixed_residues',
-        'nampnn_chains_to_design': 'nampnn_chains_to_design',
-        'nampnn_design_na_only': 'nampnn_design_na_only',
-        'nampnn_seed': 'nampnn_seed',
     }
     
     # Validation remains native-model-owned; ensemble transport must not apply

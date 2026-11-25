@@ -52,17 +52,6 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
     },
 
     {
-        workflowId: 'oligo_design',
-        label: 'Oligo Designer',
-        modelTopics: ['rfdpoly', 'boltz2'],
-        sourceFiles: [
-            'platform/api/config/models/oligo_design.yaml',
-            'platform/frontend/src/components/OligoDesignerTemplate.tsx',
-            'main.nf',
-            'nextflow.config',
-        ],
-    },
-    {
         workflowId: 'protein_modification_experimental',
         label: 'De Novo Design',
         modelTopics: ['rfdiffusion', 'laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2'],

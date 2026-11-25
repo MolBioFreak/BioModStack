@@ -12,7 +12,6 @@ import { newJobExecutionPolicy, normalizeResultPolicy, type ExecutionPolicy } fr
  * Self-contained: imports only shared UI primitives (BMS-lite extractable).
  * No MolstarViewer, TargetAntigenSelector, or protein-design dependencies.
  *
- * Pattern follows OligoDesignerTemplate for consistency.
  */
 
 import { useEffect, useState, useMemo, useRef } from 'react';

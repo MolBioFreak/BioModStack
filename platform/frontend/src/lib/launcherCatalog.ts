@@ -43,17 +43,7 @@ export const launcherWorkflowTemplates = [
             ],
         },
 ];
-export const launcherExperimentalTemplates = [
-        {
-            id: 'oligo_design',
-            name: 'Oligo Designer',
-            description: 'Design nucleoprotein assemblies with validation.',
-            icon: 'dna',
-            color: '#6366F1',
-            experimental: true,
-            stages: [{ tool: 'RFDpoly' }, { tool: 'Boltz-2' }, { tool: 'Filtering' }],
-        },
-];
+export const launcherExperimentalTemplates: Array<{ id: string; name: string; description: string; icon: string; color: string; experimental: boolean; stages: Array<{ tool: string }> }> = [];
 
 export function visibleLauncherTemplates<T extends { id: string }>(templates: T[], debug = false): T[] {
   return templates.filter(t => ![

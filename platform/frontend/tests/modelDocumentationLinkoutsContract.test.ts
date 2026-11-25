@@ -53,7 +53,6 @@ const expectedUniqueTopics: ModelDocumentationTopic[] = [
   'rf3',
   'rfantibody',
   'rfdiffusion',
-  'rfdpoly',
 ];
 
 test('model documentation linkout registry exposes compact shared DOI/GitHub/preprint contracts', () => {
@@ -91,8 +90,6 @@ test('model documentation linkout registry exposes compact shared DOI/GitHub/pre
     'https://doi.org/10.1038/s41592-025-02626-1',
     'https://github.com/bytedance/Protenix',
     'https://doi.org/10.1101/2025.01.08.631967',
-    'https://github.com/RosettaCommons/RFDpoly',
-    'https://doi.org/10.1101/2025.10.01.679929',
     'https://github.com/NVIDIA-Digital-Bio/la-proteina',
     'https://arxiv.org/abs/2507.09466',
     'https://github.com/DISCO-design/DISCO',

@@ -42,7 +42,7 @@ DOMAIN_JOB_MODELS = {
         "caliby_binder", "caliby_experimental", "proteinmpnn", "fampnn", "frustrampnn", "ligandmpnn", "protonpottsmpnn",
         "laproteina", "rfd4_proteina", "complexa", "family_msa_protein",
     },
-    "ngs_molbio": {"nanopore", "ngs_alignment", "ont_fastq_qc", "sequence_qc", "oligo_builder", "oligo_design", "family_msa_nucleic"},
+    "ngs_molbio": {"nanopore", "ngs_alignment", "ont_fastq_qc", "sequence_qc", "oligo_builder", "family_msa_nucleic"},
 }
 
 

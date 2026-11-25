@@ -38,8 +38,6 @@ export const MODE_DISPLAY_NAMES: Record<string, string> = {
     // DNA Polymerase
     'dna_polymerase': 'DNA Polymerase Design',
 
-    // Oligo Designer
-    'oligo_design': 'Oligo Designer',
     'protein_local_redesign': 'Protein Local Redesign',
     'local_redesign': 'Protein Local Redesign',
     'methylation_analysis': 'Nanopore Methylation',
@@ -66,9 +64,6 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
     'template_antibody_denovo': 'De Novo Nanobody Toolkit',
 
     'antibody_child': 'Antibody Validation',
-    'rfdpoly': 'RFDpoly',
-    'nampnn': 'NA-MPNN',
-    'oligo_design': 'Oligo Designer',
     'protein_local_redesign': 'Protein Local Redesign',
     'nanopore': 'Nanopore Sequencing',
     'ppiflow': 'PPIFlow',
@@ -110,9 +105,6 @@ export const STAGE_DISPLAY_NAMES: Record<string, string> = {
     'rfdiffusion': 'RFdiffusion',
     'protein_local_redesign': 'Protein Local Redesign',
     'msa': 'MSA Generation',
-    'rfdpoly': 'RFDpoly',
-    'nampnn': 'NA-MPNN',
-    'pyrosetta_rebuild': 'PyRosetta Rebuild',
     'doradobasecall': 'Dorado Basecall',
     'doradoalign': 'Dorado Align',
     'modkitpileup': 'modkit Pileup',

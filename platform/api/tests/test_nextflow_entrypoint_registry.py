@@ -27,7 +27,6 @@ from services.nextflow import (  # noqa: E402
 
 
 EXPECTED_PROFILE_ENTRYPOINTS = {
-    "oligo_design": "workflows/oligo_design.nf",
     "ont_basecall_dna": "workflows/ngs/ont_basecall_dna.nf",
     "ont_basecall_rna": "workflows/ngs/ont_basecall_rna.nf",
     "ont_plasmid_qc": "workflows/ngs/ont_plasmid_qc.nf",
@@ -253,28 +252,3 @@ def test_remaining_parent_and_child_workflows_route_direct_for_fresh_and_resume(
         assert "-resume" not in fresh_cmd
         assert "-resume" in resume_cmd
 
-
-def test_oligo_design_fresh_and_resume_launches_are_direct_entrypoint() -> None:
-    fresh_cmd = build_nextflow_command(
-        "oligo_design",
-        "oligo_design",
-        {"rfdpoly_contigs": "10", "rfdpoly_polymer_chains": "A"},
-        "/tmp/out",
-        job_id="job-oligo-fresh",
-    )
-    resume_cmd = build_nextflow_command(
-        "oligo_design",
-        "oligo_design",
-        {
-            "rfdpoly_contigs": "10",
-            "rfdpoly_polymer_chains": "A",
-            "resume_work_dir": "/tmp/nxf-work",
-        },
-        "/tmp/out",
-        job_id="job-oligo-resume",
-    )
-
-    assert fresh_cmd[1:4] == ["run", "workflows/oligo_design.nf", "-profile"]
-    assert resume_cmd[1:4] == ["run", "workflows/oligo_design.nf", "-profile"]
-    assert "-resume" not in fresh_cmd
-    assert "-resume" in resume_cmd

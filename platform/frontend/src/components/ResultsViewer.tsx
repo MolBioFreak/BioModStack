@@ -3570,13 +3570,7 @@ function ResultsViewerContent() {
         )
     );
     const hasCdrOverlay = Boolean(antibodySelections?.length);
-    // For oligo_design jobs: default to element coloring (B-factors are design confidence, not AlphaFold pLDDT)
-    const isOligoJob = (activeJob?.model_id || '').toLowerCase().includes('oligo');
     useEffect(() => {
-        if (isOligoJob) {
-            setColorMode('default');
-            return;
-        }
         if (selectedDesignLens === 'fampnn') {
             setColorMode('fampnn_psce');
             return;
@@ -3594,7 +3588,7 @@ function ResultsViewerContent() {
             return;
         }
         setColorMode('default');
-    }, [hasCdrAnnotation, hasCdrOverlay, isOligoJob, selectedDesignLens, selectedJobId]);
+    }, [hasCdrAnnotation, hasCdrOverlay, selectedDesignLens, selectedJobId]);
     const antibodyDesignGroups = useMemo(() => {
         const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], boltzgen: [], fampnn: [], caliby: [], ppiflow: [], confornets: [], esmfold2: [], imported: [], validation: [] };
         for (const design of orderedDesigns) {

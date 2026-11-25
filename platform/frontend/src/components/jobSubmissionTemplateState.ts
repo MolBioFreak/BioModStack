@@ -2,7 +2,6 @@ export const DEDICATED_LAUNCHER_TEMPLATE_IDS = [
     'mutagenesis',
     'antibody_denovo',
     'structure_prediction',
-    'oligo_design',
     'protein_modification_experimental',
 
     'molecular_dynamics',

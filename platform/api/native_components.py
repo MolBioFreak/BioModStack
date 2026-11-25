@@ -129,10 +129,6 @@ PROCESS_CONTRACTS = {
     'modules/rfd3.nf:FilterRFD3': (('Foundry',), ('tuple path(cif_files), path(json_files)',), ('tuple path("filtered_output/*.pdb"), path("filtered_output/*.json"), emit: structures_metadata, optional: true', 'path "rfd3_filter_*", emit: stage_receipt, optional: true', 'path ("rfd3_data_*.jsonl"), topic: metadata_ch_fold', 'path "filter_rfd3_*.log"'), (), ()),
     'modules/rfdiffusion.nf:RunRFDiffusion': (('RFDiffusion', 'gpu'), ('tuple val(rfd_command), val(batch_id), val(batch_size), val(design_startnum), val(mode), path(input_files)',), ('path ("rfd_results/*.pdb"), emit: pdbs', 'tuple path("rfd_results/*.pdb"), path("rfd_results/*.json"), emit: pdbs_jsons', 'path "*.log"', 'path ("rfd_metadata_${batch_id}.jsonl"), topic: metadata_ch_fold'), (), ('beforeScript """\n        mkdir -p outputs schedules .dgl\n    """',)),
     'modules/rfdiffusion.nf:FilterRFD': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('tuple path("filtered_output/*.pdb"), path("filtered_output/*.json"), emit: pdbs_jsons, optional: true', 'path ("rfd_data_*.jsonl"), topic: metadata_ch_fold', 'path "filter_rfd_*.log"'), (), ()),
-    'modules/rfdpoly.nf:RFDPolyDesign': (('RFDpoly', 'gpu'), ('val design_id', 'val contigs', 'val polymer_chains', 'val use_input_pdb', 'path input_pdb', 'val use_target_pdb', 'path target_pdb'), ('path "*.pdb", emit: pdbs', 'path "rfdpoly_metrics.json", emit: metrics'), (), ()),
-    'modules/rfdpoly.nf:PrepBoltzOligo': (('pyrosetta_tools',), ('path pdbs', 'path prep_script'), ('path "boltz_inputs/*.yaml", emit: yamls',), ('scripts/prep_boltz_oligo.py', 'scripts/rebuild_sidechains.py'), ()),
-    'modules/rfdpoly.nf:NAMPNNDesign': (('nampnn', 'gpu'), ('path pdbs', 'val design_id'), ('path "designed/*.pdb", emit: pdbs', 'path "designed/*.fa", emit: fastas', 'path "nampnn_metrics.json", emit: metrics'), (), ()),
-    'modules/rfdpoly.nf:PyRosettaRebuild': (('pyrosetta_tools',), ('path pdbs', 'path fastas', 'path rebuild_script', 'val polymer_chains', 'path convert_script'), ('path "out_*.pdb", emit: pdbs', 'path "rebuild_metrics.json", emit: metrics'), (), ()),
     'modules/shape_blueprint.nf:ValidateShapeBundle': (('ShapeEvaluate',), ('path request_json', 'path geometry_manifest', 'path vertices_f64', 'path faces_u32', 'path points_f32le', 'path sdf_f32le'), ("path 'shape_input_receipt.json', emit: receipt",), ('scripts/shape_blueprint/validate_bundle.py',), ()),
     'modules/shape_blueprint.nf:PlanRFD3Batches': (('ShapeEvaluate',), ('path request_json',), ("path 'rfd3_batch_plan.json', emit: plan", "path 'batch_requests/*.json', emit: batch_requests"), ('scripts/shape_blueprint/plan_rfd3_batches.py',), ()),
     'modules/shape_blueprint.nf:RunShapeRFD3': (('ShapeRFD3', 'gpu'), ('path request_json', 'path geometry_manifest', 'path points_f32le', 'path sdf_f32le', 'path validation_receipt'), ("path 'rfd3_results/*.cif.gz', emit: structures", "tuple path('rfd3_results/*.cif.gz'), path('rfd3_results/*.json'), emit: structures_metadata", "path 'shape_rfd3_runtime_receipt.json', emit: runtime_receipt", "path 'rfd3_results/shape_guidance_steps.jsonl', emit: guidance_receipt", "path 'shape_rfd3_input.json', emit: input_spec", "path 'shape_rfd3.log', emit: log"), ('scripts/shape_blueprint/run_shape_rfd3.py',), ()),
@@ -296,8 +292,6 @@ LABEL_ASSETS = {
     'LaProteina': ('laproteina.sif', None, None, None),
     'DISCO': ('disco.sif', None, None, None),
     'Antiberty': ('antibody_tools.sif', None, None, None),
-    'RFDpoly': ('rfdpoly_v2.sif', None, 'rfdpoly', None),
-    'nampnn': ('nampnn.sif', None, 'nampnn', None),
     'PPIFlow': ('ppiflow.sif', None, 'ppiflow', 'ppiflow_weights_dir'),
     'Protenix': ('protenix.sif', 'protenix_container_path', None, None),
     'dorado_gpu': ('dorado.sif', 'dorado_runtime_sif', 'dorado', None),
@@ -1003,12 +997,6 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         after = a.chain(['PrepareConformationalMappingFrustraMPNNV2'], after)
         frustra = a.frustra(after, owner='cm_request.targets/ordered_seeds; workflow_component_request_v3')
         a.stage('CanonicalConformationalAnalysisPlaneV2', (*after, *frustra))
-        return True
-
-    if workflow == 'oligo_design':
-        after = a.chain(['RFDPolyDesign', 'NAMPNNDesign', 'PyRosettaRebuild'])
-        if yes('oligo_validate_boltz'):
-            a.chain(['PrepBoltzOligo', 'RunBoltz', 'FilterBoltz'], after)
         return True
 
     if workflow == 'protein_local_redesign':

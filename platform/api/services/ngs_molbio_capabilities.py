@@ -55,7 +55,6 @@ _PROJECT_SCHEDULED_CAPABILITIES: dict[str, tuple[str, str, str]] = {
         "methylation_analysis",
         "/api/ont/ngs/methylation-analysis/submit",
     ),
-    "molbio.oligo_design.rfdpoly": ("oligo_design", "oligo_design", "/api/jobs/submit"),
 }
 _PROJECT_GOVERNED_DATASET_KINDS = frozenset(
     {
