@@ -1,10 +1,10 @@
-# First-class experimental molecular-dynamics workflow.
+# First-class molecular-dynamics workflow.
 
 id: molecular_dynamics
 name: Molecular Dynamics
 icon: activity
 color: "#22C55E"
-experimental: true
+experimental: false
 description: >
   Run reproducible biomolecular molecular-dynamics jobs with engine-neutral
   contracts. GROMACS is the engine.
@@ -13,7 +13,7 @@ goal: >
   restart artifacts, execute independent replicas, and publish checksum-bound
   trajectory, structure, and provenance artifacts.
 status: >
-  Experimental alpha. Protein systems are supported first. Protein-DNA and
+  Protein systems are supported first. Protein-DNA and
   protein-ligand capabilities remain gated until their benchmark and force-field
   acceptance criteria pass. Production fan-out is fail-closed; the local wrapper
   is development-only and is never used as an automatic fallback.

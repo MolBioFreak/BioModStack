@@ -801,7 +801,7 @@ export function MolecularDynamicsTemplate({
             <header className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                     <button type="button" onClick={onBack} className="mb-3 rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">← Back to workflows</button>
-                    <div className="flex items-center gap-3"><h1 className="text-2xl font-bold text-slate-100">Molecular Dynamics</h1><span className="rounded-full border border-orange-400/30 bg-orange-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-orange-300">Experimental alpha</span></div>
+                    <div className="flex items-center gap-3"><h1 className="text-2xl font-bold text-slate-100">Molecular Dynamics</h1></div>
                     <p className="mt-2 max-w-3xl text-sm text-slate-400">Select a starting structure and chemistry, then preview and launch.</p>
                 </div>
                 <ModelDocumentationLinks topics={['gromacs']} title="MD references" compact summary="Product scope, engine references, and chemistry limits remain visible before launch." />
