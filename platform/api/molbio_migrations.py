@@ -1150,6 +1150,7 @@ async def extract_legacy_molbio_data(
     expected_sequence_count: int | None = None,
     expected_total_bases: int | None = None,
     expected_primer_count: int | None = None,
+    allow_existing_destination_rows: bool = False,
 ) -> LegacyMolBioMigrationReport:
     """Back up, copy, and independently verify legacy Mol Bio records.
 
@@ -1349,18 +1350,35 @@ async def extract_legacy_molbio_data(
                     ).fetchall()
                 ]
 
-                if destination_sequence_count != len(sequence_rows):
-                    raise MigrationVerificationError(
-                        "Sequence count mismatch: "
-                        f"source={len(sequence_rows)} destination={destination_sequence_count}"
-                    )
-                if destination_primer_count != len(primer_rows):
-                    raise MigrationVerificationError(
-                        "Primer count mismatch: "
-                        f"source={len(primer_rows)} destination={destination_primer_count}"
-                    )
-                if destination_checksums != source_checksums:
-                    raise MigrationVerificationError("Per-sequence SHA-256 verification failed")
+                if allow_existing_destination_rows:
+                    if destination_sequence_count < len(sequence_rows):
+                        raise MigrationVerificationError(
+                            "Sequence count mismatch: "
+                            f"source={len(sequence_rows)} destination={destination_sequence_count}"
+                        )
+                    if destination_primer_count < len(primer_rows):
+                        raise MigrationVerificationError(
+                            "Primer count mismatch: "
+                            f"source={len(primer_rows)} destination={destination_primer_count}"
+                        )
+                    if any(
+                        destination_checksums.get(seq_id) != checksum
+                        for seq_id, checksum in source_checksums.items()
+                    ):
+                        raise MigrationVerificationError("Per-sequence SHA-256 verification failed")
+                else:
+                    if destination_sequence_count != len(sequence_rows):
+                        raise MigrationVerificationError(
+                            "Sequence count mismatch: "
+                            f"source={len(sequence_rows)} destination={destination_sequence_count}"
+                        )
+                    if destination_primer_count != len(primer_rows):
+                        raise MigrationVerificationError(
+                            "Primer count mismatch: "
+                            f"source={len(primer_rows)} destination={destination_primer_count}"
+                        )
+                    if destination_checksums != source_checksums:
+                        raise MigrationVerificationError("Per-sequence SHA-256 verification failed")
                 if destination_quick_check != ["ok"]:
                     raise MigrationVerificationError(
                         "Destination PRAGMA quick_check failed: "

@@ -92,6 +92,9 @@ from migrations.allow_ont_job_move_source_fresh_attempts import migrate as allow
 from migrations.remove_ont_terminal_manifest_hash_udfs import (
     migrate as migrate_remove_ont_terminal_manifest_hash_udfs,
 )
+from migrations.drop_retired_and_legacy_molbio_tables import (
+    migrate_drop_retired_and_legacy_molbio_tables,
+)
 
 
 @dataclass
@@ -172,6 +175,7 @@ MIGRATIONS: List[Migration] = [
     Migration(48, "add_user_template_revisions", migrate_user_template_revisions),
     Migration(49, "allow_ont_job_move_source_fresh_attempts", allow_ont_job_move_source_fresh_attempts),
     Migration(50, "remove_ont_terminal_manifest_hash_udfs", migrate_remove_ont_terminal_manifest_hash_udfs),
+    Migration(51, "drop_retired_and_legacy_molbio_tables", migrate_drop_retired_and_legacy_molbio_tables),
 ]
 
 
