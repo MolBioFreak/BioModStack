@@ -46,7 +46,6 @@ import { BinderWorkflowWorkspace } from './BinderWorkflowWorkspace';
 import { BindCraft2Settings, type BC2Inventory, type BC2Request, type BC2Section } from './BindCraft2Settings';
 import { BindCraft2Campaign } from './BindCraft2Campaign';
 import { BinderRoundSettings } from './BinderRoundSettings';
-import { RFantibodyGeneration } from './RFantibodyGeneration';
 import { bc2DisplaySelectors, bc2SelectorSignature, useBC2LeafDiscovery } from '../lib/bc2LeafDisplay';
 import { hydrateBinderRound } from '../lib/binderRound';
 import { BindCraft2StructureInputs } from './BindCraft2StructureInputs';
@@ -321,7 +320,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [pendingNativeRoute, setPendingNativeRoute] = useState<BinderNativeRoute | null>(null);
     const [nativeScaffoldHandoff, setNativeScaffoldHandoff] = useState(false);
     const selectDeNovoGenerator = (generator: DeNovoGenerator) => {
-        if (deNovoGenerator === 'bindcraft2' && generator === 'rfantibody') { setShowRfSourceHandoff(true); setWorkspaceSection('sources'); }
         setDeNovoGenerator(generator);
         navigate({ pathname: location.pathname, search: binderEngineSearch(location.search, generator), hash: location.hash }, { replace: true, state: location.state });
     };
@@ -615,7 +613,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const showQualitySettingsPanel = isRefinementMode || (!deNovoDownstreamLocked && hasEnabledDeNovoDownstreamStages);
     const showSequenceDesignerPanel = isRefinementMode;
     const showQcPanels = isRefinementMode || (!deNovoDownstreamLocked && deNovoStageSelection.qc);
-    const showRfQualitySettings = !isRefinementMode && deNovoGenerator === 'rfantibody';
+    const showRfQualitySettings = false;
     const showStructureValidationQualitySettings = effectiveRunStructureValidation && structureValidator !== 'esmfold2';
     const showFampnnQualitySettings = effectiveSeqDesigner === 'fampnn' || (anyPpiFlowStageEnabled && qualitySettings.maturation_redesign_enabled !== false);
     const showCalibyQualitySettings = effectiveSeqDesigner === 'caliby';
@@ -1121,7 +1119,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             throw new Error('Failed to determine PDB file path');
         }
 
-        if (deNovoGenerator === 'rfantibody' && /\.(cif|mmcif)$/i.test(pdbPath)) {
+        if (false && /\.(cif|mmcif)$/i.test(pdbPath)) {
             const prepared = await preparePdbStructureSource({ ...targetSource, path: pdbPath,
                 name: targetSource?.name || pdbPath, modelNumber: selectedTargetModel ?? undefined });
             pdbPath = prepared.path;
@@ -2044,7 +2042,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
         if (effectiveSeqDesigner === 'fampnn' && fampnnError) throw new Error(fampnnError);
         // When skipping early steps, target PDB and epitope are not required
-        const skippingEarlySteps = deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn);
+        const skippingEarlySteps = false;
         const runSequenceDesign = effectiveSeqDesigner !== 'none';
         const requiresTargetAndEpitope =
             !isRefinementMode &&
@@ -2087,7 +2085,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
 
         // Validate that a SAbDab framework was actually selected
-        if (deNovoGenerator === 'rfantibody' && frameworkType === 'sabdab' && !sabdabFramework?.pdbCode) {
+        if (false && frameworkType === 'sabdab' && !sabdabFramework?.pdbCode) {
             throw new Error('Please select a specific framework from the SAbDab database before submitting, or select a different framework preset.');
         }
 
@@ -2705,10 +2703,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         { missing: submitMutation.isPending || launchMutagenesisMutation.isPending, label: 'Submission is in progress', section: 'generation' },
         { missing: isUploading, label: 'Wait for the structure upload', section: 'sources' },
         { missing: isRefinementMode && !refinementHasLaunchSource, label: 'Choose refinement source outputs', section: 'sources' },
-        { missing: !(isRefinementMode || deNovoGenerator === 'ppiflow' || (deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn))) && !(targetPdb || targetSource?.path || uploadedPath), label: 'Choose a target structure', section: 'sources' },
-        { missing: !(isRefinementMode || deNovoGenerator === 'ppiflow' || (deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn))) && selectedResidues.size === 0, label: 'Select target hotspots', section: 'sources' },
-        { missing: !isRefinementMode && deNovoGenerator === 'rfantibody' && skipRFantibody && !rfantibodyInputPdbs.trim(), label: 'Supply existing RFantibody input structures', section: 'expert' },
-        { missing: !isRefinementMode && deNovoGenerator === 'rfantibody' && skipFampnn && !fampnnCollectedPdbs.trim(), label: 'Supply collected sequence-design structures', section: 'expert' },
+        { missing: !(isRefinementMode || deNovoGenerator === 'ppiflow' || false) && !(targetPdb || targetSource?.path || uploadedPath), label: 'Choose a target structure', section: 'sources' },
+        { missing: !(isRefinementMode || deNovoGenerator === 'ppiflow' || false) && selectedResidues.size === 0, label: 'Select target hotspots', section: 'sources' },
+        { missing: false, label: 'Supply existing RFantibody input structures', section: 'expert' },
+        { missing: false, label: 'Supply collected sequence-design structures', section: 'expert' },
         { missing: !isRefinementMode && deNovoGenerator === 'ppiflow' && !hasPpiFlowSeedLaunchInput, label: 'Choose a PPIFlow seed', section: 'sources' },
         { missing: isRefinementMode && !useManualMutagenesis && effectiveSeqDesigner === 'none' && !anyPpiFlowStageEnabled && !effectiveRunStructureValidation && !effectiveRunFrustrampnn, label: 'Enable a refinement operation', section: 'operations' },
     ];
@@ -2735,10 +2733,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         isUploading ||
                         (isRefinementMode && !refinementHasLaunchSource) ||
                         // Refinement mode and skip modes don't require target PDB or hotspots
-                        (!(isRefinementMode || deNovoGenerator === 'ppiflow' || (deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn))) && (!(targetPdb || targetSource?.path || uploadedPath) || selectedResidues.size === 0)) ||
+                        (!(isRefinementMode || deNovoGenerator === 'ppiflow' || false) && (!(targetPdb || targetSource?.path || uploadedPath) || selectedResidues.size === 0)) ||
                         // When skipping, require the skip paths
-                        (!isRefinementMode && deNovoGenerator === 'rfantibody' && skipRFantibody && !rfantibodyInputPdbs.trim()) ||
-                        (!isRefinementMode && deNovoGenerator === 'rfantibody' && skipFampnn && !fampnnCollectedPdbs.trim()) ||
+                        (false) ||
+                        (false) ||
                         (!isRefinementMode && deNovoGenerator === 'ppiflow' && !hasPpiFlowSeedLaunchInput) ||
                         (isRefinementMode && !useManualMutagenesis && effectiveSeqDesigner === 'none' && !anyPpiFlowStageEnabled && !effectiveRunStructureValidation && !effectiveRunFrustrampnn)
                     }
@@ -2758,7 +2756,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 ? (mutagenesisLaunchMode === 'seeded_refinement' ? 'Launch Mutation-Seeded Refinement' : 'Launch Exact Mutant Evaluation')
                                 : 'Launch Antibody Refinement'} ({refinementInputCount} outputs)
                         </>
-                    ) : (deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn)) ? (
+                    ) : false ? (
                         <>
                             Run Skipped Workflow
                         </>
@@ -3142,11 +3140,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             submitControls={submitControls} library={!bc2Workspace && library}
         >
             {retainedSourceError && <p role="status">{retainedSourceError} Saved source identity and settings are retained.</p>}
-            {!isRefinementMode && deNovoGenerator === 'rfantibody' && <div hidden={sectionHidden('generation')}>
-                <RFantibodyGeneration settings={qualitySettings} onSettingsChange={setQualitySettings} />
-            </div>}
             {!isRefinementMode && !bc2Workspace && <div hidden={sectionHidden('generation')}><BinderRoundSettings values={roundDraft} onChange={setRoundDraft} /></div>}
-            {showRfSourceHandoff && deNovoGenerator === 'rfantibody' && <section hidden={sectionHidden('sources')} aria-label="BindCraft2 source handoff" className="mb-4 space-y-3 rounded-xl border p-4" style={themedPanelStyle}>
+            {false && showRfSourceHandoff && <section hidden={sectionHidden('sources')} aria-label="BindCraft2 source handoff" className="mb-4 space-y-3 rounded-xl border p-4" style={themedPanelStyle}>
                 <h3>Reuse BindCraft2 sources</h3>
                 <p>Choose a source deliberately. Existing RFantibody sources and selections are kept until you replace them; select RF chains and hotspots in the target workspace.</p>
                 {(Array.isArray(bc2Settings.targets) ? bc2Settings.targets : []).map((target, index) => {
@@ -3186,7 +3181,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             </section>}
             <DeNovoModalityNotice generator={deNovoGenerator} />
             <ModelDocumentationLinks
-                topics={['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2']}
+                topics={['boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2']}
                 summary="Generator and validator background is linked out; this launcher keeps controls and review gates up front."
                 compact
                 className="mb-6"
@@ -5983,7 +5978,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     Override paths, reuse behaviors, or skip stages for recovery runs. Some options are generator-specific.
                                 </div>
 
-                                {(isRefinementMode || deNovoGenerator === 'rfantibody') && (
+                                {(isRefinementMode) && (
                                     <>
                                         <div className="space-y-2">
                                             <label className="flex items-center gap-2 cursor-pointer">

@@ -36,9 +36,9 @@ async function choose(label: string) {
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
 }
 async function remount(entry: string) { await act(async () => root.unmount()); client.clear(); document.body.replaceChildren(); await mount(entry); }
-it('RF to BC2 selection persists engine identity on reopen without losing Project query or hash', async () => {
+it('BoltzGen to BC2 selection persists engine identity on reopen without losing Project query or hash', async () => {
     await mount('/submit?template=antibody_denovo&project_id=project-1&setup=setup-2&launch_context=ctx&extra=keep#sources');
-    expect(draft().denovo_generator).toBe('rfantibody');
+    expect(draft().denovo_generator).toBe('boltzgen');
     // Fresh entry intentionally opens the chooser. Exercise close/reopen at
     // its real native disclosure rather than treating the first click as open.
     await settleDraft(() => expect(Object.keys(draft().binder_round_drafts)).toEqual(expect.arrayContaining(['fampnn', 'protenix'])));
@@ -58,21 +58,21 @@ it('RF to BC2 selection persists engine identity on reopen without losing Projec
     expect(document.querySelector('[aria-label="BindCraft2 campaign"]')).not.toBeNull();
     expect(mocks.submit).not.toHaveBeenCalled();
 });
-it('BC2 to RF selection reopens RF and leaves requested BC2 settings untouched', async () => {
+it('BC2 to BoltzGen selection reopens BoltzGen and leaves requested BC2 settings untouched', async () => {
     const settings = { subbatch_size: 'auto', targets: [], relax_steps: 0, trajectory_only: false, binder_name: null };
     await mount('/submit?template=antibody_denovo&engine=bindcraft2', { initialValues: { model_id: 'bindcraft2', mode: 'campaign', bindcraft2_settings: settings } });
     const select = [...document.querySelectorAll<HTMLSelectElement>('[aria-label="Binder format / objective"]')].find(el => !el.closest('[hidden]'))!;
     await act(async () => { select.value = 'antibody'; select.dispatchEvent(new Event('change', { bubbles: true })); });
-    await choose('RFantibody Stack');
+    await choose('BoltzGen');
     expect(draft().bindcraft2_settings).toEqual(settings);
-    const destination = route(); expect(destination).toContain('engine=rfantibody');
-    await remount(destination); expect(draft().denovo_generator).toBe('rfantibody');
+    const destination = route(); expect(destination).toContain('engine=boltzgen');
+    await remount(destination); expect(draft().denovo_generator).toBe('boltzgen');
 });
 it.each([
     { initialValues: { model_id: 'bindcraft2', mode: 'campaign', bindcraft2_settings: { relax_steps: 0 } } },
     { initialDraft: { model_id: 'bindcraft2', mode: 'campaign', bindcraft2_settings: { relax_steps: 0 } } },
 ])('saved/clone/Project native identity takes precedence over URL: %j', async props => {
-    await mount('/submit?template=antibody_denovo&engine=rfantibody', props);
+    await mount('/submit?template=antibody_denovo&engine=boltzgen', props);
     expect(draft().denovo_generator).toBe('bindcraft2'); expect(draft().bindcraft2_settings).toEqual({ subbatch_size: null, relax_steps: 0 });
 });
 it('unknown URL selector preserves the warning rather than substituting RF', async () => {
@@ -81,7 +81,7 @@ it('unknown URL selector preserves the warning rather than substituting RF', asy
     expect(document.querySelector('[aria-label="Binder modality and generation engine"] button[aria-pressed="true"]')).toBeNull();
 });
 it('unknown saved selector is not replaced by a known URL engine', async () => {
-    await mount('/submit?template=antibody_denovo&engine=rfantibody', { initialDraft: { denovo_generator: 'unknown-engine' } });
+    await mount('/submit?template=antibody_denovo&engine=boltzgen', { initialDraft: { denovo_generator: 'unknown-engine' } });
     expect(document.body.textContent).toContain('Saved generator is not available here');
     expect(draft().denovo_generator).toBe('unknown-engine');
 });

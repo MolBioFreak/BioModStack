@@ -34,7 +34,6 @@ DIRECT_ENTRYPOINTS = {
 
     "antibody_child": "workflows/antibody_child.nf",
     "antibody_child": "workflows/antibody_child.nf",
-    "rfantibody_backbone": "workflows/rfantibody_backbone.nf",
     "fampnn_child": "workflows/fampnn_child.nf",
     "maturation_child": "workflows/maturation_child.nf",
 }

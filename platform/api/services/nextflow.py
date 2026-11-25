@@ -500,7 +500,6 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
 
     "ppiflow_generator": "workflows/ppiflow_generator_design.nf",
     "antibody_child": "workflows/antibody_child.nf",
-    "antibody_backbone": "workflows/rfantibody_backbone.nf",
     "maturation_child": "workflows/maturation_child.nf",
 }
 
@@ -552,7 +551,6 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("antibody_denovo", "generator_backbone_refine"): "workflows/ppiflow_generator_design.nf",
 
     ("antibody_child", "validation_batch"): "workflows/antibody_child.nf",
-    ("rfantibody_child", "antibody_backbone"): "workflows/rfantibody_backbone.nf",
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
     **{('boltzgen_child', mode): 'workflows/boltzgen_child.nf'
        for mode in ('nanobody_binder', 'peptide_binder', 'protein_binder')},
@@ -5838,8 +5836,6 @@ def compile_nextflow_invocation(
         ('template_antibody_denovo', 'default'): 'boltz',
         # Batch antibody validation jobs.
         ('antibody_child', 'validation_batch'): 'boltz',
-        # RFantibody child jobs (backbone generation - spawned by orchestrator)
-        ('rfantibody_child', 'antibody_backbone'): 'antibody_backbone',  # Uses antibody_backbone profile which sets rfd_mode correctly
         # FAMPNN child jobs (sequence design - spawned by orchestrator)
         ('fampnn_child', 'sequence_design'): 'fampnn_predict',
         # Protein local redesign with constrained RFD3 remodeling

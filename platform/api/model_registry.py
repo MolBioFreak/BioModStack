@@ -258,7 +258,6 @@ def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
             raise ValueError('Native BoltzGen pack dependencies are unresolved')
         groups = {
             'bindcraft2': ('alphafold/params',),
-            'rfantibody': ('rfantibody',),
             'boltzgen': tuple(dep.relative_path for dep in boltzgen),
             'caliby_binder': tuple(dep.relative_path for dep in
                 native_checkpoint_dependencies('RunCalibyBinder', {})[0]),
@@ -429,9 +428,8 @@ def workflow_pack_dependencies(workflow_id: str, component_ids=None):
         bindcraft2 = registry.get_model('bindcraft2')
         if bindcraft2 is None or not bindcraft2.enabled:
             raise ValueError('BindCraft2 runtime binding is unavailable')
-        # RFANTIBODY is a process-level container in modules/antibody_denovo.nf.
         # All other labels are the native nextflow.config process bindings.
-        images = {bindcraft2.container, 'rfantibody.sif'}
+        images = {bindcraft2.container}
         images.update(LABEL_ASSETS[label][0] for label in (
             'BoltzGen', 'PPIFlow', 'MPNN', 'FAMPNN', 'Caliby',
             'pyrosetta_tools', 'Foundry', 'MolecularDynamicsPreparation',
@@ -1092,10 +1090,7 @@ class ModelRegistry:
                 return [f"Disabled model: {model_id}"]
             # These aliases share the parent's parameter definitions, but have
             # their own native input contract (not the full parent workflow).
-            if (model_id, mode_id) == ('rfantibody_child', 'antibody_backbone'):
-                model = self.get_model('antibody_denovo')
-                native_required = ('target_pdb',)
-            elif (model_id, mode_id) == ('template_antibody_denovo', 'maturation_child'):
+            if (model_id, mode_id) == ('template_antibody_denovo', 'maturation_child'):
                 model = self.get_model('antibody_denovo')
                 native_required = ('pdb_paths',)
             elif model_id == 'template_antibody_denovo' and mode_id in {
@@ -1313,7 +1308,6 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
         p.setdefault('sequence_design_engine', model_id)
         p.setdefault('sequence_design_mode', mode)
     native_internal_contexts = {
-        ('rfantibody_child', 'antibody_backbone'): 'rfantibody_backbone',
         ('fampnn_child', 'sequence_design'): 'fampnn_child',
         ('template_antibody_denovo', 'maturation_child'): 'maturation_child',
         ('template_antibody_denovo', 'antibody_denovo_pipeline'): 'antibody_denovo',

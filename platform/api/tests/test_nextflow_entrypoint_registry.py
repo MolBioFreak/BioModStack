@@ -45,7 +45,6 @@ EXPECTED_PROFILE_ENTRYPOINTS = {
 
     "ppiflow_generator": "workflows/ppiflow_generator_design.nf",
     "antibody_child": "workflows/antibody_child.nf",
-    "antibody_backbone": "workflows/rfantibody_backbone.nf",
     "maturation_child": "workflows/maturation_child.nf",
 
 }
@@ -103,7 +102,6 @@ def test_api_generated_profiles_are_defined_in_nextflow_config() -> None:
             ("antibody_denovo", "generator_backbone_refine", {"ppiflow_seed_complex_path": "/tmp/seed.pdb"}),
 
             ("antibody_child", "validation_batch", {"pdb_paths": "/tmp/a.pdb"}),
-            ("rfantibody_child", "antibody_backbone", {"target_pdb": "/tmp/target.pdb"}),
             ("fampnn_child", "sequence_design", {"pdb_paths": "/tmp/a.pdb"}),
             ("antibody_child", "maturation_child", {"pdb_paths": "/tmp/a.pdb"}),
         ]
@@ -237,7 +235,6 @@ def test_remaining_parent_and_child_workflows_route_direct_for_fresh_and_resume(
         ("antibody_denovo", "generator_backbone_refine", {"ppiflow_seed_complex_path": "/tmp/seed.pdb"}, "workflows/ppiflow_generator_design.nf"),
 
         ("antibody_child", "validation_batch", {"pdb_paths": "/tmp/a.pdb"}, "workflows/antibody_child.nf"),
-        ("rfantibody_child", "antibody_backbone", {"target_pdb": "/tmp/target.pdb"}, "workflows/rfantibody_backbone.nf"),
         ("fampnn_child", "sequence_design", {"pdb_paths": "/tmp/a.pdb"}, "workflows/fampnn_child.nf"),
 
     ]

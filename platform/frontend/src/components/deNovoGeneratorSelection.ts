@@ -1,18 +1,17 @@
-// Route identity is scientific intent: an unknown saved selector must not become RFantibody.
-export type ExistingDeNovoGenerator = 'rfantibody' | 'boltzgen' | 'ppiflow' | 'bindcraft2';
+// Route identity is scientific intent: an unknown saved selector must not silently fall back.
+export type ExistingDeNovoGenerator = 'boltzgen' | 'ppiflow' | 'bindcraft2';
 
 export function resolveExistingDeNovoGenerator(values: Record<string, unknown> = {}): ExistingDeNovoGenerator | null {
     const explicit = values.denovo_generator ?? values.generator;
     if (explicit !== undefined && explicit !== null && String(explicit).trim()) {
         const selected = String(explicit).trim().toLowerCase();
-        if (selected !== 'rfantibody' && selected !== 'boltzgen' && selected !== 'ppiflow' && selected !== 'bindcraft2') return null;
+        if (selected !== 'boltzgen' && selected !== 'ppiflow' && selected !== 'bindcraft2') return null;
         // A saved selector cannot override a different model-owned execution mode.
         const mode = values.mode ?? (values.stage_family === 'ppiflow' ? values.stage_mode : undefined);
         if (mode !== undefined && mode !== null && String(mode).trim()) {
             const expected = mode === 'generator_backbone_refine' ? 'ppiflow'
                 : mode === 'nanobody_binder' ? 'boltzgen'
-                    : mode === 'campaign' ? 'bindcraft2'
-                        : ['antibody_denovo', 'antibody_denovo_pipeline', 'antibody_refinement_pipeline'].includes(String(mode)) ? 'rfantibody' : null;
+                    : mode === 'campaign' ? 'bindcraft2' : null;
             if (expected !== selected) return null;
         }
         return selected;
@@ -24,8 +23,7 @@ export function resolveExistingDeNovoGenerator(values: Record<string, unknown> =
     if (typeof stage === 'string' && stage.trim() && ![
         'antibody_denovo', 'antibody_denovo_pipeline', 'antibody_refinement_pipeline',
     ].includes(stage)) return null;
-    // Only legacy antibody jobs without a generator selector inherit RFantibody.
-    return 'rfantibody';
+    return 'boltzgen';
 }
 
 export function hydrateInitialStageSelection(values: Record<string, unknown> = {}) {

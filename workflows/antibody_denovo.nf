@@ -468,7 +468,6 @@ def initializeAntibodyDenovoParams(params) {
     ]
 }
 
-include { RFANTIBODY } from '../modules/rfantibody'
 include { ANTIFOLD } from '../modules/antifold'
 include { PrepFAMPNN ; RunFAMPNN ; FilterFAMPNN } from '../modules/fampnn'
 include { RunCaliby ; FilterCaliby } from '../modules/caliby'
@@ -483,59 +482,6 @@ include { BatchBoltzValidation ; BatchProtenixValidation ; BatchESMFold2Validati
 include { PrepareAntibodyFrustraMPNNCandidate ; PublishAntibodyFrustraMPNNCandidate ; AggregateAndReportAntibodyFrustraMPNN ; ReportAntibodyFrustraMPNNNotRequested } from '../modules/antibody_frustrampnn_parent'
 include { FinalizeSequentialValidationOutputs ; FinalizeTerminalAntibodyOutputs } from '../modules/antibody_output_finalization'
 
-
-process SpawnRFantibodyJobs {
-    label 'process_low'
-    
-    publishDir "${params.out_dir}/spawn", mode: 'copy', pattern: "*.json"
-    publishDir "${params.out_dir}/spawn", mode: 'copy', pattern: "*.log"
-    
-    input:
-    path target_pdb
-    val epitope_residues
-    val framework_type
-    val total_designs
-    val designs_per_job
-    val parent_job_id
-    val batch_name
-    
-    output:
-    path "spawn_rfa_result.json", emit: result
-    
-    script:
-    def customLoopSpec = params.get('rfantibody_design_loops_custom')
-    def loopLengthSpec = params.get('rfantibody_loop_length_ranges')
-    def params_json = groovy.json.JsonOutput.toJson([
-        rfantibody_diffusion_steps: params.rfantibody_diffusion_steps ?: 50,
-        rfantibody_noise_scale_ca: params.rfantibody_noise_scale_ca ?: 1.0,
-        rfantibody_noise_scale_frame: params.rfantibody_noise_scale_frame ?: 1.0,
-        rfantibody_guide_scale: params.rfantibody_guide_scale ?: 10,
-        rfantibody_ckpt_override: params.rfantibody_ckpt_override,
-        rfantibody_debug_repo_overlay: params.rfantibody_debug_repo_overlay ?: false,
-        antibody_design_loops: customLoopSpec ?: (params.antibody_design_loops ?: ''),
-        rfantibody_loop_length_ranges: loopLengthSpec,
-        antibody_chains: params.antibody_chains ?: 'H,L',
-        pinned_gpus: params.pinned_gpus
-    ])
-    def frameworkArg = params.framework_pdb ? "--framework_pdb \"${params.framework_pdb}\" \\\n        " : ""
-    """
-    set -euo pipefail
-    python3 ${params.code_root}/scripts/spawn_rfantibody_children.py \\
-        --parent_job_id "${parent_job_id}" \\
-        --total_designs ${total_designs} \\
-        --designs_per_job ${designs_per_job} \\
-        --target_pdb "\$(readlink -f ${target_pdb})" \\
-        --epitope_residues "${epitope_residues}" \\
-        --framework_type "${framework_type}" \\
-        ${frameworkArg}\
-        --batch_name "${batch_name}" \\
-        --display_prefix "${params.job_name ?: 'Antibody'}" \\
-        --params_json '${params_json}' \\
-        --api_url "${params.api_url}" \\
-        --output spawn_rfa_result.json \\
-        2>&1 | tee spawn_rfa.log
-    """
-}
 
 process NormalizeTargetPDB {
     label 'process_low'
@@ -2045,98 +1991,10 @@ if (skip_rfantibody && skip_rfantibody_input_dir) {
             def meta = [id: params.name ?: "antibody"]
             [meta, pdbs]
         }
-} else if (skip_rfantibody) {
-    error("skip_rfantibody=true but no selected_input_dir-compatible directory was provided")
-} else {
-    def use_orchestrator = params.parallel_mode == 'full_orchestrator'
-
-if (use_orchestrator) {
-    log.info("  Orchestrator mode: Spawning ${planned_child_jobs} child job(s)")
-
-    SpawnRFantibodyJobs(
-        target_pdb_ch.map { meta, pdb -> pdb }.first(),
-        epitope_residues ?: "",
-        params.framework_type ?: "standard-fv",
-        total_designs,
-        designs_per_job,
-        params.job_id ?: "unknown",
-        orchestrator_batch_name
-    )
-
-    wait_trigger = SpawnRFantibodyJobs.out.result.map { it -> params.job_id ?: "unknown" }
-    batch_name = orchestrator_batch_name
-    WaitForChildren(
-        wait_trigger,
-        "rfantibody",
-        30,  // poll_interval_seconds
-        batch_name,
-        SpawnRFantibodyJobs.out.result
-    )
-
-    CollectChildOutputs(
-        WaitForChildren.out.child_outputs,
-        "rfantibody"
-    )
-
-    CollectChildOutputs.out.pdbs.subscribe { pdbs ->
-        try {
-            def file_list = pdbs instanceof List ? pdbs : [pdbs]
-            def count = file_list.size()
-            log.info("  RFantibody via orchestrator: Collected ${count} PDBs from child jobs")
-            def report_files = count > 50 ? file_list[0..49] : file_list
-            def args = [params.job_id, "rfantibody", "complete"] + report_files.collect { it.toString() }
-            def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-            proc.waitFor()
-        } catch (Exception e) {
-            println "Warning: Failed to report stage rfantibody: ${e.message}"
-        }
-    }
-
-    backbone_designs = CollectChildOutputs.out.pdbs
-        .flatten()
-        .collect()
-        .map { pdbs ->
-        def meta = [id: params.name ?: "antibody"]
-        [meta, pdbs]
-    }
-
-} else {
-    log.info("  Multi-GPU mode: Splitting ${total_designs} designs across ${num_gpus} GPU(s): ${available_gpus}")
-
-    rfantibody_parallel_inputs = Channel.from(available_gpus).map { gpu_id ->
-        def idx = available_gpus.indexOf(gpu_id)
-        def designs_for_this_gpu = designs_per_gpu + (idx < remainder ? 1 : 0)
-        log.info("    GPU ${gpu_id}: ${designs_for_this_gpu} designs")
-        [gpu_id, designs_for_this_gpu]
-    }
-
-    rfantibody_input = target_pdb_ch.combine(rfantibody_parallel_inputs).map { meta, pdb, gpu_id, designs_count ->
-        def hotspots = epitope_residues ?: ""
-        def split_meta = [id: "${meta.id}_gpu${gpu_id}"]
-        [split_meta, pdb, hotspots, gpu_id, designs_count]
-    }
-
-    RFANTIBODY(rfantibody_input, framework_for_rfantibody)
-
-    RFANTIBODY.out.designs.subscribe { meta, files ->
-        try {
-            def file_list = files instanceof List ? files : [files]
-            def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
-            def args = [params.job_id, "rfantibody", "complete"] + report_files.collect { it.toString() }
-            def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-            proc.waitFor()
-        } catch (Exception e) {
-            println "Warning: Failed to report stage rfantibody: ${e.message}"
-        }
-    }
-
-    backbone_designs = RFANTIBODY.out.designs.map { meta, files ->
-        def base_id = meta.id.replaceAll(/_gpu\d+$/, '')
-        def unified_meta = [id: base_id]
-        [unified_meta, files]
-    }
-} // End of else block (standard mode)
-} // End of skip_rfantibody else block
+}
+else {
+    error("RFantibody backbone generation has been removed; use BoltzGen, BindCraft2, or PPIFlow, or provide selected_input_dir for refinement.")
+}
 staged_rfantibody_pdbs = backbone_designs
     .map { meta, files -> files }
     .flatten()

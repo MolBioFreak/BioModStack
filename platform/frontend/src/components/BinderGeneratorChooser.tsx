@@ -34,7 +34,7 @@ export function BinderGeneratorChooser({ generator, onSelect, onOpenNativeRoute 
             </select>
         </label>
         <div className="grid gap-3 sm:grid-cols-2">
-            {format === 'antibody' && <>{button('RFantibody Stack', 'rfantibody')}{button('BoltzGen', 'boltzgen')}{onOpenNativeRoute && <><button type="button" className="rounded-lg border p-3 text-left" onClick={() => onOpenNativeRoute({ modelId: 'ppiflow', mode: 'antibody_binder' })}>PPIFlow · antibody generation</button><button type="button" className="rounded-lg border p-3 text-left" onClick={() => onOpenNativeRoute({ modelId: 'ppiflow', mode: 'nanobody_binder' })}>PPIFlow · nanobody generation</button></>}</>}
+            {format === 'antibody' && <>{button('BoltzGen', 'boltzgen')}{onOpenNativeRoute && <><button type="button" className="rounded-lg border p-3 text-left" onClick={() => onOpenNativeRoute({ modelId: 'ppiflow', mode: 'antibody_binder' })}>PPIFlow · antibody generation</button><button type="button" className="rounded-lg border p-3 text-left" onClick={() => onOpenNativeRoute({ modelId: 'ppiflow', mode: 'nanobody_binder' })}>PPIFlow · nanobody generation</button></>}</>}
             {format === 'seeded' && button('PPIFlow · retained partial flow', 'ppiflow')}
             {(format === 'protein' || format === 'antibody') && button('BindCraft2 campaign', 'bindcraft2')}
             {format === 'protein' && onOpenNativeRoute && <>

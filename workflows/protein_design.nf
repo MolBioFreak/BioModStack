@@ -577,7 +577,6 @@ workflow PROTEIN_DESIGN {
         'fampnn_child': 'workflows/fampnn_child.nf',
         'maturation_child': 'workflows/maturation_child.nf',
         'ppiflow_generator': 'workflows/ppiflow_generator_design.nf',
-        'rfantibody_backbone': 'workflows/rfantibody_backbone.nf',
     ]
     if (params.rfd_mode in migratedDirectModes.keySet()) {
         error("${params.rfd_mode} is isolated from the core protein-design entrypoint; launch ${migratedDirectModes[params.rfd_mode]} directly")

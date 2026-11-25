@@ -6,7 +6,7 @@ import { launcherWorkflowTemplates } from '../src/lib/launcherCatalog.js';
 test('launcher retains every existing generator and describes exact supported modality', () => {
     const card = launcherWorkflowTemplates.find(item => item.id === 'antibody_denovo');
     assert.equal(card?.name, 'De Novo Binder Design');
-    assert.deepEqual(card?.stages[0].tool.split(' / '), ['BindCraft2', 'BoltzGen', 'PPIFlow', 'RFantibody']);
+    assert.deepEqual(card?.stages[0].tool.split(' / '), ['BindCraft2', 'BoltzGen', 'PPIFlow']);
     assert.match(card?.description ?? '', /model-native inputs and settings/);
     assert.match(card?.description ?? '', /optional selected refinement/);
     assert.doesNotMatch(card?.stages[0].tool ?? '', /seeded|RFD3|VHH/);
@@ -15,8 +15,8 @@ test('launcher retains every existing generator and describes exact supported mo
 test('saved native generator mode restores its own route and unknown selectors refuse substitution', () => {
     assert.equal(resolveExistingDeNovoGenerator({ mode: 'nanobody_binder' }), 'boltzgen');
     assert.equal(resolveExistingDeNovoGenerator({ mode: 'generator_backbone_refine' }), 'ppiflow');
-    assert.equal(resolveExistingDeNovoGenerator({ denovo_generator: 'rfantibody' }), 'rfantibody');
-    assert.equal(resolveExistingDeNovoGenerator({}), 'rfantibody'); // legacy antibody request
+    assert.equal(resolveExistingDeNovoGenerator({ denovo_generator: 'rfantibody' }), null);
+    assert.equal(resolveExistingDeNovoGenerator({}), 'boltzgen');
     assert.equal(resolveExistingDeNovoGenerator({ denovo_generator: 'rfantibody', mode: 'nanobody_binder' }), null);
     assert.equal(resolveExistingDeNovoGenerator({ denovo_generator: 'boltzgen', mode: 'generator_backbone_refine' }), null);
     assert.equal(resolveExistingDeNovoGenerator({ denovo_generator: 'ppiflow', mode: 'antibody_denovo_pipeline' }), null);

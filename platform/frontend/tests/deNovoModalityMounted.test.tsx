@@ -11,7 +11,7 @@ test('mounted modality notice scopes legacy limits and preserves unknown-selecto
     await act(async () => { tree = create(<DeNovoModalityNotice generator={null} />); });
     const paragraphs = tree!.root.findAllByType('p');
     const copy = paragraphs[0].children.join('');
-    for (const engine of ['BindCraft2', 'BoltzGen', 'RFantibody', 'PPIFlow']) assert.ok(copy.includes(engine));
+    for (const engine of ['BindCraft2', 'BoltzGen', 'PPIFlow']) assert.ok(copy.includes(engine));
     assert.match(copy, /Only the legacy BoltzGen wrapper here is VHH-only/);
     assert.match(copy, /only the retained PPIFlow partial-flow wrapper requires a seeded antibody-target complex/);
     assert.match(copy, /legacy limits do not apply to the native generation modes/);

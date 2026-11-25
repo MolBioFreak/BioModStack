@@ -18,9 +18,7 @@ def test_backbone_extraction_preserves_gate_and_downstream_wiring() -> None:
     source = ENTRYPOINT.read_text(encoding="utf-8")
     helper, parent = source.split("workflow ANTIBODY_DENOVO {", 1)
     assert "workflow ANTIBODY_BACKBONE_PREPARATION {" in helper
-    assert "RFANTIBODY(rfantibody_input, framework_for_rfantibody)" in helper
-    assert "StageRFantibodyBackbones(staged_rfantibody_pdbs)" in helper
-    assert "ScreenRFantibodyBackbones(" in helper
+    assert "RFANTIBODY(" not in helper
     assert "backbones = backbone_designs" in helper
     assert "reviewed = reviewed_backbone_designs" in helper
     assert "candidate_count = rfantibody_candidate_count" in helper
@@ -54,4 +52,4 @@ def test_nextflow_25_inspects_antibody_entrypoint(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     processes = json.loads(result.stdout)["processes"]
     names = {process["name"] for process in processes}
-    assert {"RFANTIBODY", "BatchBoltzValidation", "BatchProtenixValidation"} <= names
+    assert {"BatchBoltzValidation", "BatchProtenixValidation"} <= names
