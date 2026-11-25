@@ -117,29 +117,33 @@ function StructureSequenceResults({ job }: { job: Pick<Job, 'id' | 'model_id' | 
             inspect: row => <div className="space-y-3"><Values value={row.native_record} /><Files files={row.files as NativeFile[]} onView={setViewed} /></div>,
         };
     }, [data, caliby, ligand, directory, kind]);
-    return <section aria-label="Native sequence results" className="space-y-4 rounded-xl border border-slate-700 bg-slate-900/50 p-5 text-slate-200">
-        <h2 className="text-xl font-semibold">{kind === 'caliby' ? job.mode === 'sidechain_pack' ? 'Caliby fixed-sequence packing' : 'Caliby ensemble design' : 'LigandMPNN sequence design'}</h2>
-        <p className="text-sm text-slate-400">{kind === 'caliby' ? job.mode === 'sidechain_pack' ? 'Native side-chain packing preserves amino-acid identity; sequence-design energies are not packing outputs.' : 'Native ensemble records retain their emitted primary/group/state identity. Conditioning states are not additional generated structures.' : 'Ordinary native sequence design with supplied structural context, separate from interface-context diagnostics.'}</p>
-        {query.isPending && <p role="status">Loading native results…</p>}
-        {query.isError && <div role="alert">Native results could not be loaded: {query.error instanceof Error ? query.error.message : String(query.error)} <button type="button" onClick={() => void query.refetch()}>Retry native results</button></div>}
+    return <section aria-label="Native sequence results" className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/50 p-4 text-slate-200">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <div>
+                <h2 className="text-lg font-semibold">{kind === 'caliby' ? job.mode === 'sidechain_pack' ? 'Caliby fixed-sequence packing' : 'Caliby ensemble design' : 'LigandMPNN sequence design'}</h2>
+                <p className="mt-0.5 text-xs text-slate-400">{kind === 'caliby' ? job.mode === 'sidechain_pack' ? 'Native side-chain packing preserves amino-acid identity; sequence-design energies are not packing outputs.' : 'Native ensemble records retain their emitted primary/group/state identity. Conditioning states are not additional generated structures.' : 'Ordinary native sequence design with supplied structural context, separate from interface-context diagnostics.'}</p>
+            </div>
+            {data && <span className="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-0.5 text-xs text-slate-300">{count.toLocaleString()} native records</span>}
+        </div>
+        {query.isPending && <p role="status" className="text-sm text-slate-400">Loading native results…</p>}
+        {query.isError && <div role="alert" className="rounded-lg border border-red-500/40 bg-red-950/30 px-3 py-2 text-sm text-red-200">Native results could not be loaded: {query.error instanceof Error ? query.error.message : String(query.error)} <button type="button" className="ml-2 underline" onClick={() => void query.refetch()}>Retry native results</button></div>}
         {data && <>
-            <p>{count.toLocaleString()} native records</p>
-            {count === 0 && <p>No native records were emitted. Settings and retained files remain available.</p>}
-            {caliby && <div className="space-y-2">
+            {count === 0 && <p className="text-sm text-slate-400">No native records were emitted. Settings and retained files remain available.</p>}
+            {ligand && !ligand.request.write_structures && <p className="text-xs text-slate-400">Structure writing was off. Native sequence records remain available.</p>}
+            {viewed?.download_url && <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-3"><MolstarViewer structureUrl={viewed.stream_url ?? viewed.download_url} format="cif" label={viewed.path} artifactJobId={job.id} height={520} /></div>}
+            {adapter && <NativeBinderGenerationResults jobId={job.id} status={job.status} adapter={adapter} />}
+            {(data.artifacts?.length ?? 0) > 0 && <details className="rounded-lg border border-slate-700 p-3"><summary className="cursor-pointer text-sm font-medium">Retained artifact files ({data.artifacts!.length})</summary><div className="mt-2"><Files files={(data.artifacts ?? []).map(file => ({ ...file, path: file.relative_path }))} onView={setViewed} /></div></details>}
+            {caliby && <div className="grid gap-2 md:grid-cols-2">
                 <Receipt title="Requested Caliby settings" value={caliby.request.requested} />
                 <Receipt title="Effective Caliby settings" value={caliby.request.effective} />
                 <Receipt title="Effective native sampling" value={caliby.effective_sampling} />
                 <Receipt title="Source state ledger" value={caliby.request.sources} />
                 <Receipt title="Caliby runtime" value={caliby.runtime} />
             </div>}
-            {ligand && <div className="space-y-2">
+            {ligand && <div className="grid gap-2 md:grid-cols-2">
                 <Receipt title="Requested LigandMPNN settings" value={ligand.request} />
                 <Receipt title="LigandMPNN runtime and source" value={{ foundry_version: ligand.foundry_version, checkpoint_path: ligand.checkpoint_path, is_legacy_weights: ligand.is_legacy_weights, source_sha256: ligand.source_sha256 }} />
-                {!ligand.request.write_structures && <p>Structure writing was off. Native sequence records remain available.</p>}
             </div>}
-            <Files files={(data.artifacts ?? []).map(file => ({ ...file, path: file.relative_path }))} onView={setViewed} />
-            {adapter && <NativeBinderGenerationResults jobId={job.id} status={job.status} adapter={adapter} />}
         </>}
-        {viewed?.download_url && <MolstarViewer structureUrl={viewed.stream_url ?? viewed.download_url} format="cif" label={viewed.path} artifactJobId={job.id} height={560} />}
     </section>;
 }

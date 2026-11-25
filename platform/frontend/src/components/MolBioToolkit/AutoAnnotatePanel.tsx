@@ -252,13 +252,15 @@ export function AutoAnnotatePanel({
                     <strong>Detects:</strong> Origins (ori), Resistance genes (KanR, AmpR), Promoters, Tags, CDS
                 </div>
 
-                <div className="mt-4 space-y-3 rounded-lg border border-slate-600 bg-slate-900/70 p-3">
-                    <div>
-                        <div className="text-sm font-medium text-slate-200">Published annotations</div>
-                        <div className="mt-1 text-xs text-slate-400">
+                <details
+                    open={Boolean(importMessage || importError || retrievingSource)}
+                    className="mt-4 rounded-lg border border-slate-600 bg-slate-900/70 p-3"
+                >
+                    <summary className="cursor-pointer text-sm font-medium text-slate-200">Published annotations (File, NCBI, Addgene)</summary>
+                    <div className="mt-3 space-y-3">
+                        <div className="text-xs text-slate-400">
                             Transfer features from an authoritative annotated file only when its topology and sequence match this construct exactly. Unique circular rotations and reverse complements are aligned automatically.
                         </div>
-                    </div>
                     <label className={`flex w-full items-center justify-center rounded border border-cyan-600 px-3 py-2 text-sm font-medium text-cyan-200 transition-colors ${isImporting || !hasSequence ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-cyan-950/60'}`}>
                         <input
                             type="file"
@@ -338,7 +340,8 @@ export function AutoAnnotatePanel({
                             {importError}
                         </div>
                     )}
-                </div>
+                    </div>
+                </details>
 
                 <div className="mt-4 rounded-lg border border-red-900/70 bg-red-950/20 p-3">
                     {!confirmingClear ? (

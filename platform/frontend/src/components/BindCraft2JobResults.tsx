@@ -81,26 +81,26 @@ export function BindCraft2NativeActions({ jobId, page, launchContextId }: { jobI
       setError(typeof detail === 'string' ? detail : reason instanceof Error ? reason.message : String(reason));
     } finally { setBusy(false); }
   };
-  return <section aria-label="BindCraft2 native lifecycle" className="space-y-3">
-    <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)}>Native campaign actions</button>
-    {open && <>
-      <p>Resume continues a snapshot of this campaign in a new Job. Rank, filter, summaries, archive and score reuse native evidence; they are not a fresh generation or selected refinement round. Published parents remain unchanged.</p>
-      {discovery.isLoading && <p>Loading native action controls...</p>}
-      {discovery.isError && <p role="status">Native action controls could not be loaded.</p>}
+  return <section aria-label="BindCraft2 native lifecycle" className="space-y-3 rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/70 px-3 py-2.5">
+    <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex w-full items-center justify-between text-left text-sm font-medium text-[var(--text-primary)]">Native campaign actions</button>
+    {open && <div className="space-y-3 border-t border-[var(--border-color)]/60 pt-3 text-sm">
+      <p className="text-xs text-[var(--text-secondary)]">Resume continues a snapshot of this campaign in a new Job. Rank, filter, summaries, archive and score reuse native evidence; they are not a fresh generation or selected refinement round. Published parents remain unchanged.</p>
+      {discovery.isLoading && <p className="text-xs text-[var(--text-secondary)]">Loading native action controls...</p>}
+      {discovery.isError && <p role="status" className="text-xs text-amber-300">Native action controls could not be loaded.</p>}
       <form onSubmit={event => { event.preventDefault(); void run(); }} className="space-y-3">
-        <label>Native operation <select aria-label="Native operation" required value={operation} onChange={event => setOperation(event.target.value)}>
+        <label className="block text-xs text-[var(--text-secondary)]">Native operation <select className="mt-1 block rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] px-2.5 py-1.5 text-sm text-[var(--text-primary)]" aria-label="Native operation" required value={operation} onChange={event => setOperation(event.target.value)}>
           <option value="">Choose an operation</option>{Object.keys(discovery.data ?? {}).map(action => <option value={action} key={action}>{action}</option>)}
         </select></label>
         {descriptor && <div className="flex flex-wrap gap-3">{Object.entries(descriptor.properties).map(([name, field]) =>
           <NativeActionField key={`${operation}:${name}`} name={name} field={field} value={options[name]} page={page}
             required={descriptor.required?.includes(name)} onChange={value => setSaved(previous => ({ ...previous, [operation]: { ...options, [name]: value } }))} />)}</div>}
         <ExecutionTargetPicker value={target} onChange={setTarget} disabled={busy} />
-        <button type="submit" disabled={busy || !operation}>Run native operation</button>
+        <button type="submit" disabled={busy || !operation} className="rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-cyan-500 disabled:opacity-50">Run native operation</button>
       </form>
-      {busy && <p role="status">Submitting native operation...</p>}
-      {error && <p role="alert">{error}</p>}
-      {child && <p role="status">Created child Job. <a href={`/jobs/${encodeURIComponent(child)}`} className="text-accent underline">Open native action Job</a></p>}
-    </>}
+      {busy && <p role="status" className="text-xs text-[var(--text-secondary)]">Submitting native operation...</p>}
+      {error && <p role="alert" className="text-xs text-red-300">{error}</p>}
+      {child && <p role="status" className="text-xs text-emerald-300">Created child Job. <a href={`/jobs/${encodeURIComponent(child)}`} className="text-accent underline">Open native action Job</a></p>}
+    </div>}
   </section>;
 }
 
@@ -132,8 +132,8 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchCon
   const names = useQuery({ queryKey: ['bindcraft2-design-names', jobId, query.arm],
     enabled: resultsAvailable, retry: false, refetchOnWindowFocus: false,
     queryFn: ({ signal }) => fetchBC2TrajectoryNames(jobId, query.arm, signal) });
-  return <div className="space-y-2 min-w-0">
-    {data && <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+  return <div className="space-y-3 min-w-0">
+    {data && <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/70 px-3 py-2.5 text-sm">
       <div className="flex flex-wrap items-center gap-3">
         {data.arms.length > 1 && <label>Campaign arm <select className="rounded border border-[var(--border-color)] bg-[var(--bg-primary)] p-2" aria-label="Campaign arm" value={data.arm ?? ''} onChange={event => setQuery({ ...query, arm: event.target.value || null })}>
           {data.arms.map(arm => <option key={arm.name ?? ''} value={arm.name ?? ''}>{arm.name ?? 'Main campaign'}</option>)}
@@ -163,9 +163,9 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchCon
           inspect: row => <BindCraft2Trajectory key={row.candidate_key} jobId={jobId} row={row} arm={data.arm} />,
           summary: rows => <><BindCraft2OutcomeSummary rows={rows} />{data.analytics?.complete === false && <p role="status">Trajectory analytics are incomplete. Plots cover available recorded observations only.</p>}</>,
         }} />}
-    {!!data?.analytics?.warnings?.length && <details><summary className="cursor-pointer text-sm">Recorded measurement notes</summary>{data.analytics.warnings.map((warning, i) => <p key={i}>{warning}</p>)}</details>}
-    <details onToggle={event => setSettingsOpen(event.currentTarget.open)}><summary className="cursor-pointer font-semibold">Native campaign settings</summary>
-    <section aria-label="BindCraft2 campaign settings">
+    {!!data?.analytics?.warnings?.length && <details className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/70 px-3 py-2.5"><summary className="cursor-pointer text-sm font-medium">Recorded measurement notes ({data.analytics.warnings.length})</summary><div className="mt-2 space-y-1 text-xs text-[var(--text-secondary)]">{data.analytics.warnings.map((warning, i) => <p key={i}>{warning}</p>)}</div></details>}
+    <details className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/70 px-3 py-2.5" onToggle={event => setSettingsOpen(event.currentTarget.open)}><summary className="cursor-pointer text-sm font-semibold">Native campaign settings</summary>
+    <section aria-label="BindCraft2 campaign settings" className="mt-3 space-y-2">
       <h3 className="font-semibold">Native campaign settings</h3>
       {settings.isLoading ? <p>Loading compiled settings...</p> : settings.isError || !settings.data
         ? <p role="status">Native compilation settings are not available for this job. Native result evidence remains separate.</p>
@@ -185,7 +185,7 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchCon
           </details>
         </>}
     </section></details>
-    <details onToggle={event => setEvidenceOpen(event.currentTarget.open)}><summary className="cursor-pointer">Prediction and follow-on evidence</summary>{evidenceOpen && <BinderPredictionEvidence jobId={jobId} launchContextId={launchContextId} />}</details>
+    <details className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/70 px-3 py-2.5" onToggle={event => setEvidenceOpen(event.currentTarget.open)}><summary className="cursor-pointer text-sm font-medium">Prediction and follow-on evidence</summary>{evidenceOpen && <div className="mt-3"><BinderPredictionEvidence jobId={jobId} launchContextId={launchContextId} /></div>}</details>
     <BindCraft2NativeActions key={jobId} jobId={jobId} page={data} launchContextId={launchContextId} />
 
   </div>;

@@ -267,7 +267,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const focusedInspection = useRef(false);
     useEffect(() => {
         if (view !== 'structure' || !row || focusedInspection.current) return;
-        const frame = requestAnimationFrame(() => { inspector.current?.scrollIntoView({ block: 'start' }); focusedInspection.current = true; });
+        const frame = requestAnimationFrame(() => { inspector.current?.scrollIntoView?.({ block: 'start' }); focusedInspection.current = true; });
         return () => cancelAnimationFrame(frame);
     }, [view, row]);
     const documents = row?.structures ?? [];

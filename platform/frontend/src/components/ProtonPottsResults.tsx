@@ -17,10 +17,10 @@ const CohortPlot = lazy(() => import('./CohortAnalytics').then(m => ({ default: 
 function NativeDesign({ value }: { value: PHDesignOutput }) {
     return <section aria-label="Native protonation design"><p>Canonical binder sequence</p><code>{value.canonical_sequence}</code><p>Protonation tokens</p><code>{value.extended_tokens.join(' ')}</code>
         <BindCraft2SettingsReadback value={value} />
-        {value.energy_trajectory?.length ? <details><summary>Native optimization trajectory</summary><Suspense fallback={<p>Loading native trajectory chart…</p>}><CohortPlot label="Native optimization energies" data={(['selective_energy', 'global_protonation_dH', 'potts_energy'] as const).map(key => {
+        {value.energy_trajectory?.length ? <details className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)]/40 px-3 py-2"><summary className="cursor-pointer text-xs font-medium">Native optimization trajectory</summary><div className="mt-2 space-y-2"><Suspense fallback={<p className="text-xs text-[var(--text-secondary)]">Loading native trajectory chart…</p>}><CohortPlot label="Native optimization energies" data={(['selective_energy', 'global_protonation_dH', 'potts_energy'] as const).map(key => {
             const points = value.energy_trajectory!.filter(point => typeof point[key] === 'number' && Number.isFinite(point[key]));
             return { type: 'scatter', mode: 'lines+markers', name: key, x: points.map(point => point.step), y: points.map(point => point[key] as number) };
-        })} layout={{ xaxis: { title: { text: 'Native step' } }, yaxis: { title: { text: 'Native energy (uncalibrated)' } } }} /></Suspense><BindCraft2SettingsReadback value={value.energy_trajectory} /></details> : <p>Trajectory not reported.</p>}
+        })} layout={{ xaxis: { title: { text: 'Native step' } }, yaxis: { title: { text: 'Native energy (uncalibrated)' } } }} /></Suspense><BindCraft2SettingsReadback value={value.energy_trajectory} /></div></details> : <p className="text-xs text-[var(--text-secondary)]">Trajectory not reported.</p>}
     </section>;
 }
 const systemInputs = new Set(['input_pdb', 'pdb_paths', 'target_pdb', 'sequence', 'sequence_name', 'source_identity_json', 'selected_input_dir', 'selected_input_manifest']);
@@ -77,21 +77,29 @@ export default function ProtonPottsResultsView({ job, launchContextId, onOpenJob
         catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
         finally { setBusy(false); }
     };
-    return <section aria-label="ProtonPottsMPNN results">
-        <details><summary>Saved ProtonPottsMPNN scientific request</summary><BindCraft2SettingsReadback value={job.params ?? query.data?.request} /></details>
-        {query.isPending && <p role="status">Loading native redesign results…</p>}{query.isError && <p role="alert">{String(query.error)} <button type="button" onClick={() => void query.refetch()}>Retry native redesign results</button></p>}
+    return <section aria-label="ProtonPottsMPNN results" className="space-y-3">
+        <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/70 px-4 py-3">
+            <h2 className="text-base font-semibold text-[var(--text-primary)]">ProtonPottsMPNN pH-selective redesign</h2>
+            <p className="mt-1 text-xs text-[var(--text-secondary)]">Native protonation-aware sequences, Boltzmann-weighted pH states, and optimization trajectories. Fixed target residues remain outside redesigned chains.</p>
+        </div>
+        {query.isPending && <p role="status" className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-secondary)]/50 px-3 py-2 text-sm text-[var(--text-secondary)]">Loading native redesign results…</p>}
+        {query.isError && <p role="alert" className="rounded-lg border border-red-500/40 bg-red-950/30 px-3 py-2 text-sm text-red-200">{String(query.error)} <button type="button" className="ml-2 underline" onClick={() => void query.refetch()}>Retry native redesign results</button></p>}
         {adapter && <NativeBinderGenerationResults jobId={job.id} status={job.status} adapter={adapter} selectedRecordIds={selected} onSelectedRecordIdsChange={setSelected} />}
-        <details><summary>Predict selected redesigned sequences</summary><p>Optional prediction uses canonical redesigned binder sequences and retained fixed target sequences. No generated structure is substituted; protonation tokens remain in native results.</p>
-            <p>Destination: {launchContextId ? `Project launch context ${launchContextId}` : 'standalone'}.</p>
-            <label>Prediction model<select aria-label="Redesign prediction model" value={predictor} onChange={event => setPredictor(event.target.value as typeof predictor)}><option value="protenix">Protenix</option><option value="boltz2">Boltz-2</option></select></label>
-            {modelQuery.isPending && <p>Loading prediction settings…</p>}{modelQuery.isError && <p role="alert">{String(modelQuery.error)}</p>}
-            <SequenceDesignerSettings fields={fields} renderField={param => <ParamField key={param.name} param={param} params={params} updateParam={updateParam} setShowFileBrowser={setFileField} setActiveSequenceField={setSequenceField} setShowSequenceManager={setShowSequences} ligandPresets={[]} />} />
-            {fileField && <section aria-label="Prediction input file browser"><StructuralSourceFiles allowSequence onSelect={source => { updateParam(fileField, source.path); setFileField(null); }} /><button type="button" onClick={() => setFileField(null)}>Close prediction file browser</button></section>}
-            {showSequences && <SequenceManager onClose={() => setShowSequences(false)} onSelect={sequence => { updateParam(sequenceField, sequence.sequence); setShowSequences(false); }} />}
-            <ExecutionTargetPicker value={target} onChange={setTarget} disabled={busy} />
-            <BindCraft2SettingsReadback value={{ design_ids: selected, model_id: predictor, params, execution_target_id: target, launch_context_id: launchContextId }} />
-            <button type="button" disabled={busy || !selected.length || !model} onClick={() => void run()}>Predict selected redesigned sequences</button>
-            {error && <p role="alert">{error}</p>}{children.map(child => <p key={child.id}>{child.name} · {child.status} {onOpenJob ? <button type="button" onClick={() => onOpenJob(child.id)}>Open prediction Job</button> : <a href={`/designs/${encodeURIComponent(child.id)}`}>Open prediction Job</a>}</p>)}
+        <details className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/70 px-3 py-2.5"><summary className="cursor-pointer text-sm font-medium">Saved ProtonPottsMPNN scientific request</summary><div className="mt-2"><BindCraft2SettingsReadback value={job.params ?? query.data?.request} /></div></details>
+        <details className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/70 px-3 py-2.5"><summary className="cursor-pointer text-sm font-medium">Predict selected redesigned sequences</summary>
+            <div className="mt-3 space-y-3 text-sm">
+                <p className="text-xs text-[var(--text-secondary)]">Optional prediction uses canonical redesigned binder sequences and retained fixed target sequences. No generated structure is substituted; protonation tokens remain in native results.</p>
+                <p className="text-xs text-[var(--text-secondary)]">Destination: {launchContextId ? `Project launch context ${launchContextId}` : 'standalone'}.</p>
+                <label className="block text-xs text-[var(--text-secondary)]">Prediction model<select className="mt-1 block rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] px-2.5 py-1.5 text-sm text-[var(--text-primary)]" aria-label="Redesign prediction model" value={predictor} onChange={event => setPredictor(event.target.value as typeof predictor)}><option value="protenix">Protenix</option><option value="boltz2">Boltz-2</option></select></label>
+                {modelQuery.isPending && <p className="text-xs text-[var(--text-secondary)]">Loading prediction settings…</p>}{modelQuery.isError && <p role="alert" className="text-xs text-red-300">{String(modelQuery.error)}</p>}
+                <SequenceDesignerSettings fields={fields} renderField={param => <ParamField key={param.name} param={param} params={params} updateParam={updateParam} setShowFileBrowser={setFileField} setActiveSequenceField={setSequenceField} setShowSequenceManager={setShowSequences} ligandPresets={[]} />} />
+                {fileField && <section aria-label="Prediction input file browser" className="space-y-2 rounded-lg border border-[var(--border-color)] p-3"><StructuralSourceFiles allowSequence onSelect={source => { updateParam(fileField, source.path); setFileField(null); }} /><button type="button" className="rounded border border-[var(--border-color)] px-2.5 py-1 text-xs" onClick={() => setFileField(null)}>Close prediction file browser</button></section>}
+                {showSequences && <SequenceManager onClose={() => setShowSequences(false)} onSelect={sequence => { updateParam(sequenceField, sequence.sequence); setShowSequences(false); }} />}
+                <ExecutionTargetPicker value={target} onChange={setTarget} disabled={busy} />
+                <BindCraft2SettingsReadback value={{ design_ids: selected, model_id: predictor, params, execution_target_id: target, launch_context_id: launchContextId }} />
+                <button type="button" className="rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-cyan-500 disabled:opacity-50" disabled={busy || !selected.length || !model} onClick={() => void run()}>Predict selected redesigned sequences</button>
+                {error && <p role="alert" className="text-xs text-red-300">{error}</p>}{children.map(child => <p key={child.id} className="text-xs text-[var(--text-secondary)]">{child.name} · {child.status} {onOpenJob ? <button type="button" className="ml-1 text-accent underline" onClick={() => onOpenJob(child.id)}>Open prediction Job</button> : <a className="ml-1 text-accent underline" href={`/designs/${encodeURIComponent(child.id)}`}>Open prediction Job</a>}</p>)}
+            </div>
         </details>
     </section>;
 }

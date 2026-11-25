@@ -309,7 +309,7 @@ export function RnaStructurePanel({
                 )}
             </div>
 
-            <div className="space-y-2 rounded-xl border border-slate-700 bg-slate-900/60 p-3">
+            <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/60 p-3">
                 <div className="grid grid-cols-2 gap-2">
                     <label className="space-y-1">
                         <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Temp °C</span>
@@ -333,106 +333,7 @@ export function RnaStructurePanel({
                             <option value={3}>3</option>
                         </select>
                     </label>
-                    <label className="space-y-1">
-                        <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Pair cutoff</span>
-                        <input
-                            type="number"
-                            min="0.001"
-                            max="0.99"
-                            step="0.005"
-                            value={activeSettings?.probability_cutoff ?? 0.02}
-                            onChange={(event) => handleSettingsChange('probability_cutoff', Number(event.target.value))}
-                            className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
-                        />
-                    </label>
-                    <label className="space-y-1">
-                        <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Max pairs</span>
-                        <input
-                            type="number"
-                            min="10"
-                            max="5000"
-                            step="10"
-                            value={activeSettings?.max_pairs ?? 800}
-                            onChange={(event) => handleSettingsChange('max_pairs', Number(event.target.value))}
-                            className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
-                        />
-                    </label>
-                    <label className="space-y-1">
-                        <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Gamma</span>
-                        <input
-                            type="number"
-                            min="0.1"
-                            max="10"
-                            step="0.1"
-                            value={activeSettings?.gamma ?? 1}
-                            onChange={(event) => handleSettingsChange('gamma', Number(event.target.value))}
-                            className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
-                        />
-                    </label>
-                    <label className="space-y-1">
-                        <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Max bp span</span>
-                        <input
-                            type="number"
-                            min="2"
-                            max={options?.limits.max_bp_span ?? 1000}
-                            step="1"
-                            value={activeSettings?.max_bp_span ?? ''}
-                            onChange={(event) => handleSettingsChange('max_bp_span', event.target.value ? Number(event.target.value) : null)}
-                            placeholder="unbounded"
-                            className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
-                        />
-                    </label>
-                    <label className="space-y-1">
-                        <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">SHAPE slope</span>
-                        <input
-                            type="number"
-                            step="0.1"
-                            value={activeSettings?.shape_slope ?? 1.8}
-                            onChange={(event) => handleSettingsChange('shape_slope', Number(event.target.value))}
-                            className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
-                        />
-                    </label>
-                    <label className="space-y-1">
-                        <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">SHAPE intercept</span>
-                        <input
-                            type="number"
-                            step="0.1"
-                            value={activeSettings?.shape_intercept ?? -0.6}
-                            onChange={(event) => handleSettingsChange('shape_intercept', Number(event.target.value))}
-                            className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
-                        />
-                    </label>
                 </div>
-                <label className="flex items-center gap-2 text-xs text-slate-400">
-                    <input
-                        type="checkbox"
-                        checked={activeSettings?.no_lonely_pairs ?? false}
-                        onChange={(event) => handleSettingsChange('no_lonely_pairs', event.target.checked)}
-                        className="rounded border-slate-600 bg-slate-800"
-                    />
-                    Disallow lonely base pairs
-                </label>
-                <label className="flex items-center gap-2 text-xs text-slate-400">
-                    <input
-                        type="checkbox"
-                        checked={useSelectedTrackForGuidance && Boolean(selectedTrack)}
-                        onChange={(event) => setUseSelectedTrackForGuidance(event.target.checked)}
-                        disabled={!selectedTrack}
-                        className="rounded border-slate-600 bg-slate-800"
-                    />
-                    Use selected evidence track as SHAPE-like soft constraints
-                    {selectedTrack ? ` (${selectedTrack.name})` : ' (select a track below first)'}
-                </label>
-                <label className="space-y-1 block">
-                    <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Hard constraints</span>
-                    <textarea
-                        value={activeSettings?.hard_constraints ?? ''}
-                        onChange={(event) => handleSettingsChange('hard_constraints', event.target.value || null)}
-                        rows={3}
-                        className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 font-mono text-xs"
-                        placeholder="Optional pseudo dot-bracket constraint string matching RNA length"
-                    />
-                </label>
                 <div className="grid grid-cols-1 gap-2">
                     <button
                         onClick={() => void runAnalysis('fold')}
@@ -458,6 +359,112 @@ export function RnaStructurePanel({
                         </button>
                     </div>
                 </div>
+                <details className="rounded-lg border border-slate-700/80 bg-slate-950/40 px-2.5 py-2">
+                    <summary className="cursor-pointer text-xs font-medium text-slate-300">Advanced folding &amp; constraints</summary>
+                    <div className="mt-2.5 space-y-2">
+                        <div className="grid grid-cols-2 gap-2">
+                            <label className="space-y-1">
+                                <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Pair cutoff</span>
+                                <input
+                                    type="number"
+                                    min="0.001"
+                                    max="0.99"
+                                    step="0.005"
+                                    value={activeSettings?.probability_cutoff ?? 0.02}
+                                    onChange={(event) => handleSettingsChange('probability_cutoff', Number(event.target.value))}
+                                    className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
+                                />
+                            </label>
+                            <label className="space-y-1">
+                                <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Max pairs</span>
+                                <input
+                                    type="number"
+                                    min="10"
+                                    max="5000"
+                                    step="10"
+                                    value={activeSettings?.max_pairs ?? 800}
+                                    onChange={(event) => handleSettingsChange('max_pairs', Number(event.target.value))}
+                                    className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
+                                />
+                            </label>
+                            <label className="space-y-1">
+                                <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Gamma</span>
+                                <input
+                                    type="number"
+                                    min="0.1"
+                                    max="10"
+                                    step="0.1"
+                                    value={activeSettings?.gamma ?? 1}
+                                    onChange={(event) => handleSettingsChange('gamma', Number(event.target.value))}
+                                    className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
+                                />
+                            </label>
+                            <label className="space-y-1">
+                                <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Max bp span</span>
+                                <input
+                                    type="number"
+                                    min="2"
+                                    max={options?.limits.max_bp_span ?? 1000}
+                                    step="1"
+                                    value={activeSettings?.max_bp_span ?? ''}
+                                    onChange={(event) => handleSettingsChange('max_bp_span', event.target.value ? Number(event.target.value) : null)}
+                                    placeholder="unbounded"
+                                    className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
+                                />
+                            </label>
+                            <label className="space-y-1">
+                                <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">SHAPE slope</span>
+                                <input
+                                    type="number"
+                                    step="0.1"
+                                    value={activeSettings?.shape_slope ?? 1.8}
+                                    onChange={(event) => handleSettingsChange('shape_slope', Number(event.target.value))}
+                                    className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
+                                />
+                            </label>
+                            <label className="space-y-1">
+                                <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">SHAPE intercept</span>
+                                <input
+                                    type="number"
+                                    step="0.1"
+                                    value={activeSettings?.shape_intercept ?? -0.6}
+                                    onChange={(event) => handleSettingsChange('shape_intercept', Number(event.target.value))}
+                                    className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm"
+                                />
+                            </label>
+                        </div>
+                        <label className="flex items-center gap-2 text-xs text-slate-400">
+                            <input
+                                type="checkbox"
+                                checked={activeSettings?.no_lonely_pairs ?? false}
+                                onChange={(event) => handleSettingsChange('no_lonely_pairs', event.target.checked)}
+                                className="rounded border-slate-600 bg-slate-800"
+                            />
+                            Disallow lonely base pairs
+                        </label>
+                        <label className="flex items-center gap-2 text-xs text-slate-400">
+                            <input
+                                type="checkbox"
+                                checked={useSelectedTrackForGuidance && Boolean(selectedTrack)}
+                                onChange={(event) => setUseSelectedTrackForGuidance(event.target.checked)}
+                                disabled={!selectedTrack}
+                                className="rounded border-slate-600 bg-slate-800"
+                            />
+                            Use selected evidence track as SHAPE-like soft constraints
+                            {selectedTrack ? ` (${selectedTrack.name})` : ' (select a track below first)'}
+                        </label>
+                        <label className="space-y-1 block">
+                            <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Hard constraints</span>
+                            <textarea
+                                value={activeSettings?.hard_constraints ?? ''}
+                                onChange={(event) => handleSettingsChange('hard_constraints', event.target.value || null)}
+                                rows={3}
+                                className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 font-mono text-xs"
+                                placeholder="Optional pseudo dot-bracket constraint string matching RNA length"
+                            />
+                        </label>
+                    </div>
+                </details>
             </div>
 
             {structureResult && (
@@ -536,6 +543,9 @@ export function RnaStructurePanel({
                     </div>
                 )}
 
+                <details className="rounded-lg border border-slate-700/80 bg-slate-950/40 px-2.5 py-2">
+                    <summary className="cursor-pointer text-xs font-medium text-slate-300">Import evidence track</summary>
+                    <div className="mt-2.5 space-y-2.5">
                 <div className="grid grid-cols-2 gap-2">
                     <label className="space-y-1">
                         <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Track name</span>
@@ -604,6 +614,8 @@ export function RnaStructurePanel({
                 >
                     Import Evidence Track
                 </button>
+                    </div>
+                </details>
                 {selectedTrack && selectedTrack.sourceUrl && (
                     <a
                         href={selectedTrack.sourceUrl}

@@ -2715,7 +2715,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 {launchReasons.filter(reason => reason.missing).map(reason => <li key={reason.label}><button type="button" onClick={() => { setWorkspaceSection(reason.section); if (reason.section === 'expert') setShowDebugSettings(true); }}>{reason.label} →</button></li>)}
             </ul>}
             {/* Submit Button */}
-            <div className="mt-8 flex justify-end gap-3">
+            <div className="sticky bottom-3 z-20 mt-6 flex flex-wrap justify-end gap-3 rounded-xl border border-slate-700/80 bg-slate-900/95 px-4 py-3 shadow-xl backdrop-blur">
                 {/* Template Manager Button */}
                 <button
                     type="button"

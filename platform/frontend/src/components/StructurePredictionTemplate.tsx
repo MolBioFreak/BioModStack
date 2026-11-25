@@ -2770,7 +2770,7 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
                         {launchError}
                     </p>
                 )}
-                <div className={`flex ${isBoltzApi ? 'justify-end' : 'justify-between'} items-center pt-6 border-t border-slate-800`}>
+                <div className={`sticky bottom-3 z-20 flex flex-wrap ${isBoltzApi ? 'justify-end' : 'justify-between'} items-center gap-4 rounded-xl border border-slate-700/80 bg-slate-900/95 px-4 py-3 shadow-xl backdrop-blur`}>
                     {/* Left side: managed post-prediction analysis and retry policy */}
                     {!isBoltzApi && <div className="flex flex-wrap items-start gap-5">
                         <ModelIntegrationControl

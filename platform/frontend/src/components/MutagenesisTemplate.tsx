@@ -370,7 +370,7 @@ export function MutagenesisTemplate({ onBack, onSubmit, initialValues, onDraftCh
                 })}>Save / load template</button>}
             </header>
 
-            <div className="space-y-8">
+            <div className="space-y-6">
                 {/* 1. Base Sequence */}
                 <section>
                     <div className="flex justify-between items-center mb-2">
@@ -1014,11 +1014,12 @@ export function MutagenesisTemplate({ onBack, onSubmit, initialValues, onDraftCh
                 <LigandSelector ligands={ligands} setLigands={setLigands} showCustomSmiles={true} />
 
                 {/* Submit Panel */}
-                <div className="flex justify-end pt-6 border-t border-slate-800">
+                <div className="sticky bottom-3 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-700/80 bg-slate-900/95 px-4 py-3 shadow-xl backdrop-blur">
+                    <span className="text-xs text-slate-400">{generatedVariants.length} variant{generatedVariants.length === 1 ? '' : 's'} queued · {predictor === 'boltz' ? 'Boltz-2' : 'ESMFold2'}</span>
                     <button
                         onClick={handleSubmit}
                         disabled={generatedVariants.length === 0}
-                        className="px-6 py-3 bg-gradient-to-r from-blue-600 to-accent-secondary hover:from-blue-500 hover:to-accent disabled:opacity-50 disabled:grayscale text-white font-bold rounded-lg shadow-lg shadow-accent/20 transition-all transform active:scale-95 flex items-center gap-2"
+                        className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-accent-secondary hover:from-blue-500 hover:to-accent disabled:opacity-50 disabled:grayscale text-white font-bold rounded-lg shadow-lg shadow-accent/20 transition-all transform active:scale-95 flex items-center gap-2"
                     >
                         <span>🚀</span> Submit {generatedVariants.length} Jobs
                     </button>

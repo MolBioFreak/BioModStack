@@ -532,6 +532,66 @@ export function MolecularInputModal({
                                     placeholder="Description or provenance notes"
                                     className="min-h-20 w-full rounded-xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500"
                                 />
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className="text-[11px] uppercase tracking-wide text-slate-500 mr-1">Quick transform</span>
+                                    <button
+                                        type="button"
+                                        disabled={!buildRawSequence.trim()}
+                                        onClick={() => {
+                                            const cleaned = buildRawSequence
+                                                .split(/\r?\n/)
+                                                .map((line) => line.trim().startsWith('>') ? line.trim() : line.replace(/[\s0-9]/g, '').toUpperCase())
+                                                .filter(Boolean)
+                                                .join('\n');
+                                            setBuildRawSequence(cleaned);
+                                        }}
+                                        className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+                                    >
+                                        Clean
+                                    </button>
+                                    <button
+                                        type="button"
+                                        disabled={!buildRawSequence.trim()}
+                                        onClick={() => {
+                                            const rna = buildRawSequence
+                                                .split(/\r?\n/)
+                                                .map((line) => line.trim().startsWith('>') ? line : line.replace(/T/g, 'U').replace(/t/g, 'u'))
+                                                .join('\n');
+                                            setBuildRawSequence(rna);
+                                            setBuildType('rna');
+                                        }}
+                                        className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+                                    >
+                                        DNA → RNA
+                                    </button>
+                                    <button
+                                        type="button"
+                                        disabled={!buildRawSequence.trim()}
+                                        onClick={() => {
+                                            const dna = buildRawSequence
+                                                .split(/\r?\n/)
+                                                .map((line) => line.trim().startsWith('>') ? line : line.replace(/U/g, 'T').replace(/u/g, 't'))
+                                                .join('\n');
+                                            setBuildRawSequence(dna);
+                                            setBuildType('dna');
+                                        }}
+                                        className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+                                    >
+                                        RNA → DNA
+                                    </button>
+                                    <button
+                                        type="button"
+                                        disabled={!parsedBuildInput.sequence || parsedBuildInput.invalidCharacters.length > 0}
+                                        onClick={() => {
+                                            const header = buildRawSequence.split(/\r?\n/).find((line) => line.trim().startsWith('>'));
+                                            const rc = reverseComplementSequence(parsedBuildInput.sequence, buildSequenceType);
+                                            setBuildRawSequence(header ? `${header}\n${rc}` : rc);
+                                        }}
+                                        className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+                                    >
+                                        Reverse complement
+                                    </button>
+                                </div>
                                 <textarea
                                     value={buildRawSequence}
                                     onChange={(event) => setBuildRawSequence(event.target.value)}
