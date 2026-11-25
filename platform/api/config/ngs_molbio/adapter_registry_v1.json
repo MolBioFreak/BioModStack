@@ -7,7 +7,7 @@
     "binding_receipt_schema_id": "bms.ngs-molbio.global-binding-receipt.v1",
     "implementation_owner": null
   },
-  "content_sha256": "6d87b03af7c62498b58e05f45b3213f19d234dfecbc23ea33566f455dfe13545",
+  "content_sha256": "de2e3cc1aaba0db71ec619ce1c46f28823d45d1eea7d847b553c28e950cf1e8b",
   "entries": [
     {
       "adapter_id": "bms.cm.confornets.adapter.v1",
@@ -106,58 +106,6 @@
           "normalized_schema_id": null,
           "schema_presence": "absent",
           "source_schema": "conformational_mapping_request"
-        }
-      ]
-    },
-    {
-      "adapter_id": "bms.core-job.protein_local_redesign.adapter.v1",
-      "adapter_version": 1,
-      "allowed_dataset_roles": [
-        "protein_generated_candidate_cohort"
-      ],
-      "allowed_local_roles": [
-        "protein_generated_candidate_cohort"
-      ],
-      "baseline_state": "present",
-      "contract_class": "direct_native_adapter",
-      "digest_contract": {
-        "algorithm": "sha256",
-        "scope": "completed RFD3 whole-result manifest with exact request, source, and complete candidate artifact set",
-        "serialization": "rfc8785_canonical_json",
-        "source_fields": [
-          "request_sha256",
-          "result_manifest_sha256",
-          "source_artifact_sha256",
-          "candidate_artifact_set_sha256"
-        ]
-      },
-      "entity_kind": "rfd3_local_redesign_request",
-      "identity_contract": {
-        "binding_fields": [],
-        "fixed_revision_marker": null,
-        "generation_fields": [],
-        "key_fields": [
-          "request_id"
-        ],
-        "revision_fields": [
-          "request_sha256"
-        ]
-      },
-      "implementation_owner": "services.global_experiments.adapters.Rfd3LocalRedesignAdapter",
-      "reopen_contract": {
-        "head_resolution_forbidden": true,
-        "parameter_fields": [
-          "request_id",
-          "job_id"
-        ],
-        "path": "/designs/{job_id}"
-      },
-      "source_contracts": [
-        {
-          "artifact_schema_version": null,
-          "normalized_schema_id": null,
-          "schema_presence": "absent",
-          "source_schema": "rfd3_local_redesign_request"
         }
       ]
     },

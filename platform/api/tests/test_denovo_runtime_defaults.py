@@ -97,15 +97,6 @@ def test_workflow_adapter_prefers_the_installed_apptainer_without_reordering_pat
     assert 'export PATH="$_bms_apptainer_dir:$PATH"' in script
 
 
-def test_general_rfd3_request_is_read_from_the_staged_task_copy():
-    module = (REPO_ROOT / 'modules/rfd3.nf').read_text()
-    assert 'new File((generalGenerationRequest ? params.rfd3_generation_request_path : params.rfd3_request_path).toString()).name' in module
-    assert "--request '${requestPath}'" in module
-    # PrepareGeneralRFD3Input already stages the request next to the native input.
-    workflow = (REPO_ROOT / 'workflows/protein_design.nf').read_text()
-    assert "path({ [request_json, 'rfd3_sources'] })" in workflow
-
-
 def test_native_runners_set_the_environment_their_images_require():
     complexa = (REPO_ROOT / 'scripts/bms_complexa/run.py').read_text()
     assert 'env.setdefault("COMPLEXA_INIT", "bms")' in complexa
@@ -116,19 +107,21 @@ def test_native_runners_set_the_environment_their_images_require():
 
 
 def test_framed_native_log_scheduling_event_is_decoded_and_idempotent(tmp_path):
+    from database import Job
     from services import rf_filter_task_roster as roster
-    from test_rf_filter_task_roster import owner
-    job = owner(tmp_path)
+    job = Job(id='roster', name='roster', model_id='antibody_denovo', mode='nanobody_binder',
+              params={'pred_method': 'rf3', 'skip_rfd_seq': True}, output_dir=str(tmp_path),
+              status='running', provenance={'core_protein_scientific_contract': 1})
     assert roster.begin(job, job.params)
-    bare = '[30/cfa1c7] Submitted process > PROTEIN_LOCAL_REDESIGN:FilterRFD3 (1)'
+    bare = '[30/cfa1c7] Submitted process > FilterRF3 (1)'
     framed = 'Oct-29 14:06:17.649 [Task submitter] INFO  nextflow.Session - ' + bare
     assert roster.observe(job, bare)
     assert roster.observe(job, framed)
-    task = job.provenance[roster.KEY]['stages']['rfd3_backbone_filter']['tasks']['1']
+    task = job.provenance[roster.KEY]['stages']['rf3_prediction_filter']['tasks']['1']
     assert len(task['executions']) == 1
     with pytest.raises(ValueError, match='decoded'):
         roster.observe(job, 'Oct-29 14:06:17.649 [Task submitter] INFO  nextflow.Session - '
-                            '[30/cfa1c7] Submitted process > PROTEIN_LOCAL_REDESIGN:FilterRFD3 (bad)')
+                            '[30/cfa1c7] Submitted process > FilterRF3 (bad)')
 
 
 def test_filter_stage_label_never_replaces_canonical_candidate_identity(tmp_path):

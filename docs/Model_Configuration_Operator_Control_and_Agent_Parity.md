@@ -128,7 +128,7 @@ closeout commits are incorporated and qualified together, not pending handoffs.
 Fold-CP and Caliby candidate images passed their documented CPU contracts;
 publication, installed selection and managed release remain separate operations.
 
-BoltzGen is in scope; RF3 and RFD3 are explicitly off limits. Seven fresh public
+BoltzGen is in scope; RF3 is explicitly off limits. Seven fresh public
 BoltzGen input variants map to the five pinned native protocols. The historical
 `backbone_docking` request remains accepted, editable and replayable but is no
 longer advertised as a native capability: CPU execution of the installed
@@ -143,7 +143,7 @@ polymer context. The completed candidate SIF passed native PDB/mmCIF, polymer/mi
 parity, authoring-position and correspondence/publication CPU checks; all installed
 package versions are unchanged. Runtime publication and installed selection remain
 separate. The retained `backbone_docking` ID is compatibility-only, not a supported
-sampling or docking operation. RF3 and RFD3 are excluded from this repair and its
+sampling or docking operation. RF3 is excluded from this repair and its
 closeout; no changes to either model are included.
 
 The original 176 lane record keys remain preserved; the separate prior Protenix

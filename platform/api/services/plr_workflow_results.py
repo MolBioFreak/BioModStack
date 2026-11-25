@@ -17,7 +17,6 @@ _MODEL_RE = re.compile(r"(?:^|_)model_(\d+)(?:_|$)")
 _SAMPLE_RE = re.compile(r"(?:^|_)sample_(\d+)(?:\.|_|$)")
 
 _STAGE_DEFINITIONS: tuple[tuple[str, str, str, str], ...] = (
-    ("rfd3", "RFD3", "generator", "collected/protein_local_redesign_backbones/"),
     ("fampnn", "FA-MPNN", "sequence_design", "pdb_files/"),
     ("esmfold2", "ESMFold2", "structure_validation", "validation/esmfold2/"),
     ("protenix_v2", "Protenix V2", "structure_validation", "validation/protenix_v2/"),
@@ -455,7 +454,7 @@ def build_protein_local_redesign_result_surface(job: Any, designs: Iterable[Any]
     public_receipt = _json_safe(receipt) if receipt is not None else None
     params = getattr(job, "params", None)
     params = params if isinstance(params, Mapping) else {}
-    request_sha256 = params.get("rfd3_request_sha256") or params.get("request_sha256")
+    request_sha256 = params.get("request_sha256")
     surface: dict[str, Any] = {
         "schema": RESULT_SCHEMA,
         "job": {

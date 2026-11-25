@@ -34,6 +34,6 @@ AI agents that plan, implement, review, or accept a BioModStack model integratio
 
 The active first tranche is
 [FrustraMPNN global configuration and analysis workbench](../specs/frustrampnn-global-configuration-analysis-workbench.md).
-It must reach 100% before Structure Prediction, non-nanobody RFD3 de novo/redesign, and Conformational Mapping consumer integration tranches proceed.
+It must reach 100% before Structure Prediction, non-nanobody de novo/redesign, and Conformational Mapping consumer integration tranches proceed.
 
 The FrustraMPNN tranche includes complete settings, agent parity, execution mapping, data persistence, descriptive statistics, visualization, capture, export, comparison, and one consistent global result workbench. Internal LLM campaign machinery is outside that tranche. External agents use the standard BMS APIs under operator direction.

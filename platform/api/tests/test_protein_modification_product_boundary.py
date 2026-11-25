@@ -14,12 +14,12 @@ FRONTEND_ROOT = REPO_ROOT / "platform" / "frontend"
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
+import pytest
 from model_registry import ModelRegistry  # noqa: E402
 from services.nextflow import (  # noqa: E402
     MODEL_MODE_WORKFLOW_ENTRYPOINTS,
     build_nextflow_command,
 )
-from services.rfd3_generation import materialize_generation_request, normalize_generation_params  # noqa: E402
 from services.result_ingester import _trusted_producer_review_fields  # noqa: E402
 from services.stage_review import _is_protein_local_redesign_job  # noqa: E402
 
@@ -35,44 +35,32 @@ def test_registry_exposes_one_protein_modification_product_with_three_truthful_m
     assert {mode.id for mode in model.modes} == {"de_novo_design", "region_redesign"}
 
 
-def test_canonical_de_novo_mode_uses_native_rfd3_generation_entrypoint(tmp_path: Path) -> None:
+def test_canonical_de_novo_mode_defaults_to_rfd4_proteina_and_refuses_rfd3(tmp_path: Path) -> None:
     assert MODEL_MODE_WORKFLOW_ENTRYPOINTS[(CANONICAL_MODEL_ID, "de_novo_design")] == (
-        "workflows/protein_design.nf"
+        "workflows/rfd4_proteina.nf"
     )
-    output = tmp_path / "rfd3-general"
-    output.mkdir()
-    params, _request, _digest = normalize_generation_params(
-        {
-            "generator": "rfd3",
-            "generation_mode": "unconditional_monomer",
-            "min_length": 100,
-            "max_length": 150,
-            "num_designs": 4,
-            "seed": 0,
-            "dump_trajectories": False,
-        },
-        job_name="protein-modification-de-novo",
-    )
-    params, _request_path = materialize_generation_request(
-        params,
-        output_dir=output,
-        job_id="protein-modification-de-novo",
-    )
-    cmd = build_nextflow_command(
-        CANONICAL_MODEL_ID,
-        "de_novo_design",
-        params,
-        str(output),
-        job_id="protein-modification-de-novo",
-    )
-    joined = " ".join(cmd)
+    from fastapi import HTTPException
+    from schemas import JobCreate
+    from services.job_requests import normalize_job_request
 
-    assert cmd[1] == "run"
-    assert cmd[2] == "workflows/protein_design.nf"
-    assert "rfd3_generation,workstation_ryzen7960x" in cmd
-    assert "--diffusion_method rfd3" in joined
-    assert "--rfd3_generation_num_designs 4" in joined
-    assert "--modification_mode de_novo_design" in joined
+    # C1: De Novo without generator defaults to rfd4_proteina
+    model = ModelRegistry().get_model(CANONICAL_MODEL_ID)
+    assert model is not None
+    gen_param = next(p for p in model.params if p.name == "generator")
+    assert gen_param.default == "rfd4_proteina"
+    assert "rfd3" not in (gen_param.enum or [])
+
+    # C2: explicit generator='rfd3' is refused
+    with pytest.raises(HTTPException) as exc_info:
+        normalize_job_request(
+            JobCreate(
+                name="refused-rfd3",
+                model_id=CANONICAL_MODEL_ID,
+                mode="de_novo_design",
+                params={"generator": "rfd3", "num_designs": 4},
+            )
+        )
+    assert exc_info.value.status_code == 422
 
 
 def test_canonical_region_mode_reuses_internal_local_redesign_entrypoint() -> None:

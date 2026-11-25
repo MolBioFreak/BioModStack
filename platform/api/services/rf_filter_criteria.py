@@ -6,9 +6,6 @@ THRESHOLDS = {
         'plddt': ('rf3_min_plddt', None), 'ptm': ('rf3_min_ptm', None),
         'pae': (None, 'rf3_max_pae'), 'rmsd': (None, 'rf3_max_rmsd_overall'),
         'rmsd_binder': (None, 'rf3_max_rmsd_binder')},
-    'rfd3_backbone_filter': {
-        'total_ss': ('rfd_min_ss', 'rfd_max_ss'), 'helices': ('rfd_min_helices', 'rfd_max_helices'),
-        'strands': ('rfd_min_strands', 'rfd_max_strands'), 'rog': ('rfd_min_rog', 'rfd_max_rog')},
 }
 UNITS = {'plddt': 'percent', 'ptm': 'fraction', 'pae': 'angstrom', 'rmsd': 'angstrom',
          'rmsd_binder': 'angstrom', 'rog': 'angstrom', 'total_ss': 'native', 'helices': 'native', 'strands': 'native'}

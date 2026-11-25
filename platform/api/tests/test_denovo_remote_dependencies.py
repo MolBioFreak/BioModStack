@@ -68,7 +68,7 @@ def test_family_union_exact_deduplicated_native_members_and_no_unrelated_assets(
     protenix, blockers = native_checkpoint_dependencies('ProtenixPredict', {})
     assert not blockers
     assert {r.relative_path for r in refs if r.kind == 'weights'} == {
-        'foundry/checkpoints/rfd3_latest.ckpt', 'disco', 'laproteina', 'esmfold2',
+        'disco', 'laproteina', 'esmfold2',
         'boltz/boltz2_conf.ckpt', 'boltz/boltz2_aff.ckpt', 'boltz/mols',
         'caliby/model_params/caliby/soluble_caliby_v1.ckpt',
         *(d.relative_path for d in protenix),
@@ -88,7 +88,6 @@ def test_family_union_exact_deduplicated_native_members_and_no_unrelated_assets(
     destinations = [entry.remote_destination for entry in entries]
     assert len(destinations) == len(set(destinations)) == len(refs)
     assert unrelated not in {entry.source for entry in entries}
-    assert 'weights/foundry/checkpoints/rfd3_latest.ckpt' in destinations
     assert not any('unselected' in item for item in destinations)
 
 
@@ -105,7 +104,7 @@ def test_validated_redesign_keeps_selected_designer_and_validator(designer, vali
     params = {'plr_seq_method': designer, 'plr_structure_validators': [validator]}
     selected = plan(params, mode='region_redesign', entrypoint='region_redesign')
     images = {d.relative_path for d in selected.dependencies if d.kind == 'image'}
-    # No foundry.sif: the RFD3 region/prep stages were removed from Redesign (58af06d).
+    # No foundry.sif: region/prep stages are not part of Redesign.
     assert images == {'pyrosetta_tools.sif',
         'fampnn.sif' if designer == 'fampnn' else 'proteinmpnn.sif',
         {'boltz2': 'boltz2.sif', 'esmfold2': 'esmfold2.sif', 'protenix_v2': 'protenix.sif'}[validator]}
@@ -115,16 +114,14 @@ def test_validated_redesign_keeps_selected_designer_and_validator(designer, vali
 
 
 
-def test_native_redesign_ignores_stray_rfd3_request_and_selects_no_generator():
-    # 58af06d removed the RFD3 region/prep stages from Redesign, so a leftover
-    # rfd3_request_path selects only the default FAMPNN designer + Boltz validator closure.
-    selected = plan({'rfd3_request_path': '/not-materialized/request.json'},
+def test_native_redesign_selects_no_generator():
+    selected = plan({},
                     model='protein_local_redesign', mode='local_redesign', entrypoint='region_redesign')
     assert {d.relative_path for d in selected.dependencies if d.kind == 'image'} == {
         'pyrosetta_tools.sif', 'fampnn.sif', 'boltz2.sif'}
     weights = {d.relative_path for d in selected.dependencies if d.kind == 'weights'}
     assert weights == {'boltz/boltz2_aff.ckpt', 'boltz/boltz2_conf.ckpt', 'boltz/mols'}
-    assert not any('foundry' in path or 'rfd3' in path for path in weights)
+    assert not any('foundry' in path for path in weights)
 
 
 @pytest.mark.parametrize('backend,override', [
@@ -178,7 +175,7 @@ def test_unrelated_independent_model_closures_unchanged(model, expected):
 
 
 def test_nested_managed_ref_retains_exact_member():
-    value = 'foundry/checkpoints/rfd3_latest.ckpt'
+    value = 'foundry/checkpoints/rf3_foundry_01_24_latest_remapped.ckpt'
     assert RuntimeDependencyRef(kind='weights', relative_path=value).relative_path == value
 
 
@@ -250,17 +247,6 @@ def test_laproteina_override_retains_existing_containment_owner(assets, tmp_path
     leaf(outside / 'fixture.bin')
     with pytest.raises(bundle.RemoteBundleError, match='escapes managed storage'):
         runtime({'pcad_backend': 'laproteina', 'pcad_laproteina_data_path': str(outside)})
-
-
-@pytest.mark.parametrize('model,mode,entrypoint,params,images', [
-    (MODEL, 'de_novo_design', 'protein_design',
-     {'run_rfd_only': True, 'run_frustrampnn': False}, {'foundry.sif', 'pyrosetta_tools.sif'}),
-])
-def test_selected_rfd3_generation_remains_narrow(model, mode, entrypoint, params, images):
-    selected = plan(params, model=model, mode=mode, entrypoint=entrypoint)
-    assert {d.relative_path for d in selected.dependencies if d.kind == 'image'} == images
-    assert {d.relative_path for d in selected.dependencies if d.kind == 'weights'} == {
-        'foundry/checkpoints/rfd3_latest.ckpt'}
 
 
 @pytest.mark.asyncio

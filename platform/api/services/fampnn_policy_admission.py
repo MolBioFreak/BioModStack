@@ -50,7 +50,6 @@ def declaration_dependencies(declaration):
                  'region_manifest'}
         keys.update(local)
         keys.update('plr_' + key for key in local)
-        keys.add('rfd3_request')
     return keys
 
 
@@ -284,7 +283,7 @@ def compile_declaration(model_id, mode, params, overrides=None, *, parent=None):
                 origins.append((proof.get('native_origin') or {}).get('sha256', receipt['source_pdb_sha256']))
             declaration['materialization']['origins'] = sorted(set(origins))
         return declaration
-    local = (model_id, mode) == ('protein_modification_experimental', 'region_redesign') and not params.get('rfd3_request') and params.get('seq_method', params.get('plr_seq_method', 'fampnn')) == 'fampnn'
+    local = (model_id, mode) == ('protein_modification_experimental', 'region_redesign') and params.get('seq_method', params.get('plr_seq_method', 'fampnn')) == 'fampnn'
     if model_id != 'fampnn' and not local:
         if overrides.summary is not None or overrides.mutation is not None:
             raise ValueError('FA-MPNN declaration owner unresolved for this caller')

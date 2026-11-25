@@ -293,7 +293,7 @@ async def workflow_pinned_gpu(
     session: AsyncSession,
     context: ExperimentLaunchContext,
 ) -> int | None:
-    """Read the bound Workflow GPU pin, retaining native RFD3's required pin."""
+    """Read the bound Workflow GPU pin."""
     if context.workflow_revision_id is None:
         return None
     revision = await session.get(ExperimentRevision, context.workflow_revision_id)
@@ -309,16 +309,7 @@ async def workflow_pinned_gpu(
     scheduler: dict[str, Any] = raw_scheduler if isinstance(raw_scheduler, dict) else {}
     raw_resources = scheduler.get("resources")
     resources: dict[str, Any] = raw_resources if isinstance(raw_resources, dict) else {}
-    pinned_gpu = resources.get("pinned_gpu")
-    if scheduler.get("model_id") != "protein_local_redesign":
-        return pinned_gpu
-    if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
-        raise LaunchContextError(
-            "launch_context_workflow_invalid",
-            "Native RFD3 Workflow Revision has no authoritative pinned GPU.",
-            status_code=409,
-        )
-    return pinned_gpu
+    return resources.get("pinned_gpu")
 
 
 async def _attach_typed_resource_authority(
@@ -532,12 +523,6 @@ async def validate_bound_job_request(
             status_code=409,
         )
     if context.workflow_revision_id is None:
-        if model_id == "protein_local_redesign" and "workflow_adapter" in params:
-            raise LaunchContextError(
-                "launch_context_workflow_mismatch",
-                "Native RFD3 workflow_adapter is server-owned.",
-                status_code=409,
-            )
         if not attach_resource_authority:
             return dict(params)
         return await _attach_typed_resource_authority(
@@ -1269,21 +1254,6 @@ async def validate_bound_job(
                         base_job_params.get(key, 1 if key == "num_parallel_jobs" else object()) == value
                         for key, value in effective.items()
                     )
-        if (not params_match and job.model_id == "protein_modification_experimental"
-                and job.mode == "de_novo_design"
-                and expected_job_params.get("generator") == "rfd3"):
-            # The native owner binds request/job IDs, digest and destination at
-            # insertion. Compare with that same pure binding, not the unbound
-            # Plan template and not an identity-stripped scientific projection.
-            from services.rfd3_generation import bind_generation_request, GenerationContractError
-            try:
-                effective, _ = bind_generation_request(
-                    expected_job_params, output_dir=job.output_dir, job_id=job.id)
-            except (GenerationContractError, TypeError, ValueError):
-                effective = None
-            if effective is not None:
-                params_match = all(key in base_job_params and base_job_params[key] == value
-                                   for key, value in effective.items())
         if not params_match and job.model_id == "molecular_dynamics" and expected_job_params.get('md_job_spec'):
             params_match = _native_md_materialization_matches(job, expected_job_params, base_job_params)
         if not params_match and job.model_id == "boltzgen":
@@ -2127,25 +2097,6 @@ async def _project_bound_job(
     run_id = _bound_id("workflow-run", context.launch_context_id)
     workflow_id = context.workflow_id or _bound_id("workflow", context.launch_context_id)
     revision_id = context.workflow_revision_id or _bound_id("revision", context.launch_context_id)
-    is_native_rfd3 = job.model_id == "protein_local_redesign" and job.mode == "local_redesign"
-    native_preparation = None
-    if is_native_rfd3:
-        if not context.preparation_id:
-            raise ValidationFailure("native RFD3 launch context has no immutable preparation")
-        native_preparation = await session.get(
-            ExperimentWorkflowPreparation, context.preparation_id
-        )
-        if (
-            native_preparation is None
-            or native_preparation.workspace_id != context.project_id
-            or native_preparation.workflow_revision_id != context.workflow_revision_id
-            or native_preparation.normalized_request_sha256 != context.normalized_request_sha256
-            or native_preparation.validation_status != "valid"
-        ):
-            raise ValidationFailure("native RFD3 launch context preparation authority is invalid")
-        await validate_preparation_authority(
-            session, native_preparation, core_session=core_session
-        )
     existing = await session.get(ExperimentWorkflowRun, run_id)
     if existing is not None:
         return {"workflow_run_id": existing.resource_id, "run_group_id": existing.run_group_id}
@@ -2174,20 +2125,15 @@ async def _project_bound_job(
             ExperimentWorkflowRevisionNode(revision_id=revision_id, ordinal=0, node_id="bound-job", node_kind="bound_core_job", node_json=json.dumps(payload["nodes"][0], sort_keys=True, separators=(",", ":"))),
             ExperimentLineageEdge(id=_bound_id("lineage", context.launch_context_id), workspace_id=context.project_id, source_resource_id=context.domain_experiment_id, target_resource_id=workflow_id, edge_mode="owns", edge_key=f"owns:{context.domain_experiment_id}:{workflow_id}", metadata_json="{}", created_at=timestamp),
         ])
-    preparation_id = (
-        native_preparation.resource_id
-        if native_preparation is not None
-        else _bound_id("preparation", context.launch_context_id)
-    )
+    preparation_id = _bound_id("preparation", context.launch_context_id)
     run_group_id = _bound_id("run-group", context.launch_context_id)
     attempt_id = _bound_id("attempt", context.launch_context_id)
     projected_resources = [
+        (preparation_id, "workflow_preparation", workflow_id),
         (run_group_id, "run_group", workflow_id),
         (run_id, "workflow_run", workflow_id),
         (attempt_id, "run_attempt", run_id),
     ]
-    if native_preparation is None:
-        projected_resources.insert(0, (preparation_id, "workflow_preparation", workflow_id))
     for resource_id, kind, owner in projected_resources:
         session.add(ExperimentResource(id=resource_id, kind=kind, workspace_id=context.project_id, lifecycle_owner_id=owner, created_at=timestamp))
     await session.flush()
@@ -2201,18 +2147,11 @@ async def _project_bound_job(
             json.dumps(job.params or {}, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest(),
     }
-    if job.model_id == "protein_local_redesign":
-        request_payload["pinned_gpu"] = job.pinned_gpu
     request_json = json.dumps(request_payload, sort_keys=True, separators=(",", ":"))
-    request_sha256 = (
-        native_preparation.normalized_request_sha256
-        if native_preparation is not None
-        else hashlib.sha256(request_json.encode()).hexdigest()
+    request_sha256 = hashlib.sha256(request_json.encode()).hexdigest()
+    session.add(
+        ExperimentWorkflowPreparation(resource_id=preparation_id, workspace_id=context.project_id, workflow_revision_id=revision_id, normalized_request_json=request_json, normalized_request_sha256=request_sha256, scheduler_payload_json=request_json, validation_status="valid", validation_receipt_json=json.dumps({"schema": "bms.bound-job-preparation.v1", "verified": True}), expected_cardinality=1, created_at=timestamp, prepared_at=timestamp)
     )
-    if native_preparation is None:
-        session.add(
-            ExperimentWorkflowPreparation(resource_id=preparation_id, workspace_id=context.project_id, workflow_revision_id=revision_id, normalized_request_json=request_json, normalized_request_sha256=request_sha256, scheduler_payload_json=request_json, validation_status="valid", validation_receipt_json=json.dumps({"schema": "bms.bound-job-preparation.v1", "verified": True}), expected_cardinality=1, created_at=timestamp, prepared_at=timestamp)
-        )
     session.add(
         ExperimentRunGroup(resource_id=run_group_id, workspace_id=context.project_id, launch_idempotency_key=f"launch-context:{context.launch_context_id}", request_sha256=request_sha256, state=run_state, generation=1, created_at=timestamp, updated_at=timestamp)
     )

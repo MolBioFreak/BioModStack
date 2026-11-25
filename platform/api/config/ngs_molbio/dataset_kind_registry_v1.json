@@ -1,6 +1,6 @@
 {
   "baseline_source_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
-  "content_sha256": "e6a1a86e2c729afe539c001f49423f15b479a47c2b553d59b6f49baa63ded6ed",
+  "content_sha256": "5d29bbf147d0434373abceadbfafc62276e23b808880f39588314407c30f2a5e",
   "entries": [
     {
       "allowed_domain_kinds": [
@@ -345,14 +345,6 @@
           ],
           "compatibility_rule": "exact_immutable_revision_only",
           "receipt_kind": "design"
-        },
-        {
-          "adapter_id": "bms.core-job.protein_local_redesign.adapter.v1",
-          "allowed_roles": [
-            "protein_generated_candidate_cohort"
-          ],
-          "compatibility_rule": "exact_immutable_revision_only",
-          "receipt_kind": "rfd3_local_redesign_request"
         }
       ],
       "compatibility_rules": [

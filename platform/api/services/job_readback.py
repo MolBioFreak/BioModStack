@@ -1,9 +1,5 @@
 """Job readback: the public response projection of one Job."""
 
-from services.rfd3_generation_results import (
-    _rfd3_public_json,
-)
-
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import Optional, List, Dict, Any, Literal
@@ -428,13 +424,7 @@ def _resolve_stage_state_for_response(job: Job) -> tuple[List[str], Dict[str, Li
     return completed, stage_outputs
 
 
-def _is_native_rfd3_job(job: Any) -> bool:
-    return str(job.model_id or "").strip().lower() == "protein_local_redesign"
-
-
 def _public_job_output_dir(job: Any) -> str | None:
-    if _is_native_rfd3_job(job):
-        return None
     return job.output_dir
 
 
@@ -442,10 +432,7 @@ def _public_job_params(job: Any) -> dict[str, Any]:
     from services.execution_ownership import strip_execution_metadata
     from services.resource_usage_evidence import strip_resource_execution_metadata
 
-    params = strip_execution_metadata(strip_resource_execution_metadata(job.params))
-    if _is_native_rfd3_job(job):
-        return _rfd3_public_json(params)
-    return params
+    return strip_execution_metadata(strip_resource_execution_metadata(job.params))
 
 
 async def read_job(

@@ -23,7 +23,6 @@ from services.job_readback import _public_job_output_dir, _public_job_params, _r
 from runtime_policy import acquire_workflow_mutation_lease, run_with_workflow_mutation_lease
 from sqlalchemy import and_, func, or_, select
 from datetime import datetime
-from services.rfd3_generation import file_sha256
 from paths import get_code_root, get_work_dir, resolve_runtime_data_path, to_allowed_relative
 from services.binder_navigation_jobs import navigation_columns, navigation_job
 from services.job_stage_progress import project_execution_stages
@@ -715,73 +714,6 @@ async def pull_remote_job_results(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await session.refresh(job)
     return JobResponse.model_validate(job)
-
-
-def _rfd3_generation_range(values: list[float]) -> dict[str, float | None]:
-    if not values:
-        return {"min": None, "mean": None, "max": None}
-    return {"min": min(values), "mean": round(sum(values) / len(values), 6), "max": max(values)}
-
-
-@router.get("/{job_id}/rfd3-generation")
-async def get_rfd3_generation_result(
-    job_id: str,
-    session: AsyncSession = Depends(get_session),
-    offset: int = 0,
-    limit: int | None = None,
-):
-    job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
-    if (
-        job is None
-        or str(job.model_id or "").strip().lower() != "protein_modification_experimental"
-        or str(job.mode or "").strip().lower() != "de_novo_design"
-    ):
-        raise HTTPException(status_code=404, detail="RFD3 generation job not found")
-    from services.rfd3_generation_results import read_generation_results
-    return await read_generation_results(job, session, offset=offset, limit=limit)
-
-
-@router.get("/{job_id}/rfd3-generation/artifacts/{candidate_id}/{role}")
-async def get_rfd3_generation_artifact(
-    job_id: str,
-    candidate_id: str,
-    role: str,
-    session: AsyncSession = Depends(get_session),
-):
-    if role not in {"candidate_structure", "candidate_metadata"}:
-        raise HTTPException(status_code=404, detail="RFD3 generation artifact role not found")
-    job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
-    design = (
-        await session.execute(select(Design).where(Design.job_id == job_id, Design.name == candidate_id))
-    ).scalar_one_or_none()
-    if job is None or design is None or not isinstance(design.provenance, dict):
-        raise HTTPException(status_code=404, detail="RFD3 generation artifact not found")
-    artifacts = design.provenance.get("artifacts")
-    descriptor = next(
-        (item for item in artifacts if isinstance(item, dict) and item.get("role") == role),
-        None,
-    ) if isinstance(artifacts, list) else None
-    if not isinstance(descriptor, dict):
-        raise HTTPException(status_code=404, detail="RFD3 generation artifact not found")
-    root = resolve_runtime_data_path(str(job.output_dir or ""))
-    relative = Path(str(descriptor.get("relative_path") or ""))
-    if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
-        raise HTTPException(status_code=409, detail="RFD3 generation artifact path is unsafe")
-    current = root
-    for part in relative.parts:
-        current = current / part
-        if current.is_symlink():
-            raise HTTPException(status_code=409, detail="RFD3 generation artifact path contains a symlink")
-    path = current.resolve()
-    if not path.is_relative_to(root.resolve()) or not path.is_file() or path.stat().st_size != descriptor.get("bytes"):
-        raise HTTPException(status_code=410, detail="RFD3 generation artifact is unavailable")
-    if file_sha256(path) != descriptor.get("sha256"):
-        raise HTTPException(status_code=409, detail="RFD3 generation artifact hash mismatch")
-    headers = {"Content-Encoding": "gzip"} if path.name.endswith(".gz") else None
-    media_type = "chemical/x-mmcif" if path.name.endswith(".cif.gz") else str(descriptor.get("media_type"))
-    # HTTP clients decode Content-Encoding before saving the attachment.
-    filename = path.name.removesuffix(".gz") if headers else path.name
-    return FileResponse(str(path), media_type=media_type, filename=filename, headers=headers)
 
 
 @router.get("/{job_id}", response_model=JobResponse | BinderNavigationJob)

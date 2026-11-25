@@ -397,7 +397,7 @@ class JobCreate(BaseModel):
     )
     fampnn_analysis_overrides: FampnnAnalysisOverrides | None = None
     name: str = Field(..., min_length=1, max_length=255)
-    model_id: str = Field(..., description="ID of the model to use (e.g., rfd3)")
+    model_id: str = Field(..., description="ID of the model to use (e.g., rfd4_proteina)")
     mode: str = Field(..., description="Mode ID for the selected model")
     params: dict = Field(default_factory=dict)
     pinned_gpu: Optional[int] = Field(None, description="Optional: Pin job to specific GPU (0-3)")
@@ -444,26 +444,13 @@ class JobCreate(BaseModel):
             raise ValueError("remote_result_policy belongs in execution_policy")
         return data
 
-    @model_validator(mode="before")
-    @classmethod
-    def require_native_rfd3_gpu_pin(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        model_id = str(data.get("model_id") or "").strip().lower()
-        mode = str(data.get("mode") or "").strip().lower()
-        if model_id == "protein_local_redesign" and mode == "local_redesign":
-            pinned_gpu = data.get("pinned_gpu")
-            if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
-                raise ValueError("native RFD3 local redesign requires one explicit non-negative integer pinned_gpu")
-        return data
-    
     model_config = ConfigDict(
         extra="forbid",
         json_schema_extra={
             "example": {
-                "name": "binder_test_001",
-                "model_id": "rfd3",
-                "mode": "binder_denovo",
+                "name": "denovo_test_001",
+                "model_id": "rfd4_proteina",
+                "mode": "generate",
                 "params": {
                     "rfd_num_designs": 8,
                     "seqs_per_design": 4,

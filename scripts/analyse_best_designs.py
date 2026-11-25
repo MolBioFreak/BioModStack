@@ -37,7 +37,7 @@ def derive_ids_from_filename(filename):
     
     Supports formats:
     - fold_X_seq_Y_*.pdb (legacy RFD)
-    - rfd3_*_model_X_sampleY.pdb (RFD3/RF3)
+    - *_model_X_sampleY.pdb (RF3)
     """
     basename = Path(filename).stem
     
@@ -45,7 +45,7 @@ def derive_ids_from_filename(filename):
     fold_match = re.search(r'fold_(\d+)', basename)
     seq_match = re.search(r'seq_(\d+)', basename)
     
-    # Try RFD3/RF3 pattern: model_X, sample_Y
+    # Try RF3 pattern: model_X, sample_Y
     if not fold_match:
         fold_match = re.search(r'model_(\d+)', basename)
     if not seq_match:

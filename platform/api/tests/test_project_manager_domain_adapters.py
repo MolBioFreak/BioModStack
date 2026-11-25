@@ -26,10 +26,8 @@ from database import (
     Job,
     MdRun,
     MolBioNgsReceipt,
-    RFD3LocalRedesignRequest,
 )
 from molbio_models import MolBioBase, MolecularDocument, MolecularRevision
-from scripts.rfd3_local_redesign.contract import request_sha256
 from services.conformational_mapping.contracts import canonical_sha256 as cm_sha256
 from services.frustrampnn.contracts import canonical_json_bytes as frustrampnn_canonical_bytes
 from services.md.state import canonical_sha256 as md_sha256
@@ -137,7 +135,7 @@ def _class(name: str):
 def test_registry_exposes_complete_exact_adapter_id_set() -> None:
     assert {item["adapter_id"] for item in adapter_module.registry.list()} == EXPECTED_ADAPTER_IDS
     with pytest.raises(adapter_module.AdapterError):
-        adapter_module.registry.get("core.rfd3-local-redesign.v1")
+        adapter_module.registry.get("core.retired-local-redesign.v1")
 
 
 

@@ -41,7 +41,12 @@ from services.md.launch_contract import MDLaunchError, materialize_md_job_spec
 from services.md.results import expected_analysis_implementation_sha256
 from services.md.state import MdStateError, create_md_run, create_replica_attempt
 from services.nextflow import normalize_plr_input_pdb_path, normalize_plr_structure_validators
-from services.rfd3_generation import GenerationContractError, file_sha256, materialize_generation_request
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 from services.global_experiments.launch_contexts import (
     LaunchContextError,
     claim_launch_context,
@@ -1800,23 +1805,6 @@ async def _create_job(
             from services.gpu_orchestrator import md_root_vram_estimate
             vram_estimate = md_root_vram_estimate(job_params, vram_estimate,
                 selected_plan=execution_preview['plan'] if execution_preview is not None else None)
-
-        if (
-            normalized_model_id == "protein_modification_experimental"
-            and normalized_mode == "de_novo_design"
-            and str(job_params.get("generator") or "rfd3").strip().lower() == "rfd3"
-        ):
-            try:
-                job_params, _generation_request_path = materialize_generation_request(
-                    job_params,
-                    output_dir=output_dir,
-                    job_id=job_id,
-                )
-            except GenerationContractError as exc:
-                raise HTTPException(
-                    status_code=422,
-                    detail={"rfd3_generation_contract_error": str(exc)},
-                ) from exc
 
         if isinstance(job_params, dict):
             job_params = _ensure_job_resume_identity(

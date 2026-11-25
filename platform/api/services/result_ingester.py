@@ -46,7 +46,12 @@ from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_ch
 from .aligned_error_utils import detect_aligned_error_artifact, load_aligned_error_artifact
 from .ipsae import compute_ipsae_interface
 from .result_contracts import REVIEW_ARTIFACT_SCHEMA, REVIEW_CONTRACT_VERSION, resolve_result_contract
-from .rfd3_generation import GenerationContractError, file_sha256, validate_result_manifest
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 from .conformational_mapping.persistence import (
     ConformationalPersistenceError,
     ingest_result_bundle as ingest_cm_result_bundle,
@@ -524,9 +529,7 @@ def _trusted_producer_review_fields(job: Optional[Job], payload: Any) -> Dict[st
     modification_mode = str(job_params.get("modification_mode") or "").strip().lower()
     generator_family = str(payload.get("generator_family") or "").strip().lower()
     if generator_family == "caliby":
-        if model_id == "binder_design" and job_mode == "rfd3_caliby":
-            allowed_profiles = {"binder_design_v1"}
-        elif model_id == "caliby_binder" and job_mode == "design":
+        if model_id == "caliby_binder" and job_mode == "design":
             allowed_profiles = {"sequence_design_v1"}
         else:
             return {}
@@ -554,7 +557,6 @@ def _trusted_producer_review_fields(job: Optional[Job], payload: Any) -> Dict[st
             str(payload.get("artifact_class") or "").strip() != "validated_binder_complex"
             or str(payload.get("result_set") or "").strip() != "binder_candidates"
             or str(payload.get("stage_family") or "").strip() != "binder_design"
-            or str(payload.get("stage_mode") or "").strip() not in {"rfd3_caliby"}
         ):
             return {}
     fields = {
@@ -3557,14 +3559,6 @@ async def _ingest_job_results(
 
     job_result = await session.execute(select(Job).where(Job.id == job_id))
     current_job = job_result.scalar_one_or_none()
-    if (
-        current_job
-        and str(current_job.model_id or "").strip().lower() == "protein_modification_experimental"
-        and str(current_job.mode or "").strip().lower() == "de_novo_design"
-        and str(_parse_job_params(current_job.params).get("generator") or "rfd3").strip().lower() == "rfd3"
-    ):
-        from services.rfd3_generation_results import _ingest_rfd3_generation_manifest
-        return await _ingest_rfd3_generation_manifest(current_job, output_path, session, commit=False)
     if current_job and str(current_job.model_id or "") == "conformational_mapping":
         cm_request = (await session.execute(select(ConformationalMappingRequest).where(
             ConformationalMappingRequest.job_id == str(current_job.id),
@@ -3996,7 +3990,7 @@ async def _ingest_job_results(
                         num_helices=(strict_projection["num_helices"] if canonical_row is not None else safe_int(row.get('pr_helices'))),
                         num_strands=(strict_projection["num_strands"] if canonical_row is not None else safe_int(row.get('pr_strands'))),
                         rog=(strict_projection["rog"] if canonical_row is not None else safe_float(row.get('pr_RoG'))),
-                        # RFD3 backbone metrics
+                        # Backbone metrics
                         rfd_rog=(strict_projection["rfd_rog"] if canonical_row is not None else safe_float(row.get('rfd_RoG'))),
                         
                         # Sequence design metrics

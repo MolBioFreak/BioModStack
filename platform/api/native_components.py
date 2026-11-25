@@ -120,9 +120,17 @@ PROCESS_CONTRACTS = {
     'modules/rf3.nf:RunRF3': (('Foundry', 'gpu'), ('tuple val(batch_id), path(pdbs)',), ('tuple path("rf3_results/*.cif.gz"), path("rf3_results/*.json"), emit: structures_metadata', 'path ("rf3_metadata_${batch_id}.jsonl"), emit: jsonl, topic: metadata_ch_fold_seq', 'path "rf3_${batch_id}.log"'), (), ('beforeScript """\n        mkdir -p rf3_results\n    """',)),
     'modules/rf3.nf:FilterRF3': (('Foundry',), ('tuple path(cif_files), path(json_files)',), ('path ("output/*.pdb"), emit: structures, optional: true', 'path "rf3_filter_*", emit: stage_receipt, optional: true', 'path "filter_rf3_${task.index}.log"', 'path (params.get(\'core_protein_scientific_contract\') == 1 ? "rf3_data_*.jsonl" : "output/filtered.jsonl"), emit: jsonl, optional: true'), (), ()),
     'modules/rf_filter_stage.nf:PublishRFFilterStage': (('process_low',), ('val stage_owner', 'val stage_id', 'val role', 'val expected_tasks', 'path task_receipts', 'path terminal_manifests'), ('path "${stage_id}.json", emit: stage',), ('scripts/collect_rf_filter_stage.py',), ()),
+<<<<<<< HEAD
     'modules/rfd3.nf:RunRFD3': (('Foundry', 'gpu'), ('tuple val(batch_id), path(input_json), path(runtime_source)',), ('path ("rfd3_results/*.cif.gz"), emit: structures, optional: params.rfd3_generation_request_path ? true : false', 'path ("rfd3_results/*.json"), emit: metadata, optional: params.rfd3_generation_request_path ? true : false', 'tuple path("rfd3_results/*.cif.gz"), path("rfd3_results/*.json"), emit: structures_metadata, optional: params.rfd3_generation_request_path ? true : false', 'path "rfd3_results", emit: native_outputs', 'path "rfd3_generation_result_manifest.json", emit: generation_manifest, optional: true', 'path "rfd3_trajectories", emit: trajectories', 'path ("rfd3_metadata_${batch_id}.jsonl"), emit: producer_metadata_index, optional: params.rfd3_generation_request_path ? true : false, topic: metadata_ch_fold', 'path "rfd3_${batch_id}.log", emit: producer_log'), ('scripts/rfd3_generation/build_result_manifest.py',), ('beforeScript """\n        mkdir -p rfd3_results rfd3_trajectories\n    """',)),
     'modules/rfd3.nf:PrepRFD3Input': (('pyrosetta_tools',), ('tuple val(mode), val(contigs), path(input_pdb), val(hotspots), val(num_designs), val(design_startnum)',), ('tuple val("${mode}_${design_startnum}"), path("rfd3_input_*.json"), path(input_pdb), emit: input_json',), (), ()),
     'modules/rfd3.nf:FilterRFD3': (('Foundry',), ('tuple path(cif_files), path(json_files)',), ('tuple path("filtered_output/*.pdb"), path("filtered_output/*.json"), emit: structures_metadata, optional: true', 'path "rfd3_filter_*", emit: stage_receipt, optional: true', 'path ("rfd3_data_*.jsonl"), topic: metadata_ch_fold', 'path "filter_rfd3_*.log"'), (), ()),
+=======
+    'modules/rfantibody.nf:RFANTIBODY': (('process_gpu',), ('tuple val(meta), path(target_pdb), val(hotspot_residues), val(gpu_id), val(num_designs_for_this_gpu)', 'path framework_pdb'), ('tuple val(meta), path("output/*.pdb"), emit: designs', 'path "output/*.trb", emit: metadata, optional: true', 'path "output/traj/*.pdb", emit: trajectories, optional: true', 'path "rfantibody_${meta.id}.log", emit: log'), ('scripts/rfantibody_inference_wrapper.py',), ('container "${params.container_dir}/rfantibody.sif"', "errorStrategy 'retry'", 'maxRetries 2')),
+    'modules/rfdpoly.nf:RFDPolyDesign': (('RFDpoly', 'gpu'), ('val design_id', 'val contigs', 'val polymer_chains', 'val use_input_pdb', 'path input_pdb', 'val use_target_pdb', 'path target_pdb'), ('path "*.pdb", emit: pdbs', 'path "rfdpoly_metrics.json", emit: metrics'), (), ()),
+    'modules/rfdpoly.nf:PrepBoltzOligo': (('pyrosetta_tools',), ('path pdbs', 'path prep_script'), ('path "boltz_inputs/*.yaml", emit: yamls',), ('scripts/prep_boltz_oligo.py', 'scripts/rebuild_sidechains.py'), ()),
+    'modules/rfdpoly.nf:NAMPNNDesign': (('nampnn', 'gpu'), ('path pdbs', 'val design_id'), ('path "designed/*.pdb", emit: pdbs', 'path "designed/*.fa", emit: fastas', 'path "nampnn_metrics.json", emit: metrics'), (), ()),
+    'modules/rfdpoly.nf:PyRosettaRebuild': (('pyrosetta_tools',), ('path pdbs', 'path fastas', 'path rebuild_script', 'val polymer_chains', 'path convert_script'), ('path "out_*.pdb", emit: pdbs', 'path "rebuild_metrics.json", emit: metrics'), (), ()),
+>>>>>>> 2dfceb1 (Remove RFD3 backend, workflows, scripts, tables, and fallbacks (R1))
     'modules/structure_prediction.nf:GenerateLocalMSA': (('CPU',), ('tuple val(sequence), val(sequence_name)',), ('tuple val(sequence), val(sequence_name), path("${sequence_name}.a3m"), emit: msa', 'path "*_msa_quality.json", emit: quality_report, optional: true', 'path "*.log"'), ('scripts/run_local_msa.py',), ()),
     'modules/structure_prediction.nf:BoltzFromSequenceTask': (('Boltz', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name)',), ("path 'boltz_task_binding.json'", 'tuple val(producer_meta), path("producer_candidates.json"), path("predictions/*.{pdb,cif}"), emit: canonical_structures', 'path "predictions/*.json", emit: jsons, optional: true', 'path "predictions/*.npz", emit: native_identity_artifacts, optional: true', 'path "msa/*.a3m", emit: msa, optional: true', 'path "*.log"'), ('scripts/run_boltz_wrapper.py', 'scripts/lib/boltz_fidelity.py'), ()),
     'modules/structure_prediction.nf:BoltzFromSequenceWithMSATask': (('Boltz', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name), path(msa_file)',), ("path 'boltz_task_binding.json'", 'tuple val(producer_meta), path("producer_candidates.json"), path("predictions/*.{pdb,cif}"), emit: canonical_structures', 'path "predictions/*.json", emit: jsons, optional: true', 'path "predictions/*.npz", emit: native_identity_artifacts, optional: true', 'path "*.log"'), ('scripts/run_boltz_wrapper.py', 'scripts/lib/boltz_fidelity.py'), ()),
@@ -183,6 +191,7 @@ PROCESS_CONTRACTS = {
     'workflows/protein_design.nf:ReportProteinDesignFrustraMPNNNotRequested': (('CPU',), ('val trigger',), ("path 'protein_design_frustrampnn_terminal_manifest.json'", "path 'frustrampnn_not_requested.reported'"), ('scripts/stage_reporter.py',), ()),
     'workflows/protein_design.nf:PublishProteinDesignFrustraMPNNCandidate': (('CPU',), ('tuple val(result_meta), path(candidate_bundle), path(result_manifest)',), ("path 'published_*.json', emit: marker",), ('scripts/publish_frustrampnn_bundle.py',), ()),
     'workflows/protein_design.nf:ReportProteinDesignFrustraMPNNComplete': (('CPU',), ('path published_markers',), ("path 'frustrampnn_complete.reported'",), ('scripts/stage_reporter.py',), ()),
+<<<<<<< HEAD
     'workflows/protein_design.nf:PrepareGeneralRFD3Input': (('pyrosetta_tools',), ('path request_json', 'path staged_sources'), ("tuple val('generation_0'), path('rfd3_generation_native_input.json'), path({ [request_json, 'rfd3_sources'] }), emit: input_json", "path 'rfd3_generation_preparation_receipt.json', emit: receipt", "path 'rfd3_sources', emit: sources"), ('scripts/rfd3_generation/prepare_native_input.py',), ()),
     'workflows/protein_design.nf:BuildGeneralRFD3ResultManifest': (('process_low',), ('path native_outputs', 'path request_json'), ("path 'rfd3_generation_result_manifest.json', emit: manifest",), ('scripts/rfd3_generation/build_result_manifest.py',), ()),
 <<<<<<< HEAD
@@ -200,6 +209,8 @@ PROCESS_CONTRACTS = {
     'workflows/protein_local_redesign.nf:ExportProteinLocalMPNNResults': (('process_low',), ('tuple path(pdb_files), path(json_files)',), ("path('published/*.pdb'), emit: pdbs", "path('published/*.json'), emit: jsons"), (), ()),
     'workflows/protein_local_redesign.nf:ExportProteinLocalBoltzPredictions': (('process_low',), ('tuple val(batch_id), path(sample_dir), path(completion_receipt)',), ("path('published/*.pdb'), emit: pdbs", "path('published/*.json'), emit: jsons", "path('published/*.npz'), emit: pae, optional: true", "path('published/*.manifest'), emit: manifests"), (), ("errorStrategy 'ignore'",)),
 =======
+=======
+>>>>>>> 2dfceb1 (Remove RFD3 backend, workflows, scripts, tables, and fallbacks (R1))
     'workflows/region_redesign.nf:PrepareProteinLocalValidatorInput': (('process_low',), ('tuple val(producer_meta), path(source_pdb)',), ("tuple val(producer_meta), path(source_pdb), path('*.validator_contract.json'), path('*.protenix.json'), emit: prepared",), ('scripts/prepare_protein_local_validator_input.py',), ("errorStrategy 'ignore'",)),
     'workflows/region_redesign.nf:FinalizeProteinLocalValidatorSuite': (('process_low',), ('val requested_validators', 'val expected_candidate_count', 'val validator_summaries'), ("path 'validator_suite_receipt.json', emit: receipt",), (), ()),
     'workflows/region_redesign.nf:EnforceProteinLocalValidatorSuite': (('process_low',), ('path suite_receipt',), ("path 'validator_suite_complete', emit: complete",), (), ()),
@@ -271,7 +282,7 @@ LABEL_ASSETS = {
     'FAMPNN': ('fampnn.sif', None, None, None),
     'MPNN': ('proteinmpnn.sif', None, None, None),
     'pyrosetta_tools': ('pyrosetta_tools.sif', None, None, None),
-    # A container label does not imply inference: RF3/RFD3 filters only use
+    # A container label does not imply inference: RF3 filters only use
     # structure readers. Checkpoints are selected by the native process below.
     'Foundry': ('foundry.sif', None, None, None),
     'BoltzGen': ('boltzgen.sif', None, None, None),
@@ -733,7 +744,7 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
 
     if workflow == 'protein_design':
         after = ()
-        boltzgen = p.get('diffusion_method', 'rfd3') == 'boltzgen'
+        boltzgen = p.get('diffusion_method') == 'boltzgen'
         generation_only = yes('run_rfd_only')
         sequence_prediction = bool(p.get('sequence_input') or p.get('sequence_batch_json_path'))
         if sequence_prediction:
@@ -775,14 +786,7 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
                 after = a.chain(['AggregateBoltzGenResults'], after)
                 a.callback(run, 'modules/boltzgen.nf:SpawnBoltzGenJobs')
         elif not any(yes(k) for k in ('skip_rfd', 'skip_rfd_seq', 'skip_rfd_seq_pred')):
-            if p.get('diffusion_method', 'rfd3') != 'rfd3':
-                unresolved(workflow, 'dependency_closure', entrypoint, 'Native workflow rejects the retired diffusion method')
-            else:
-                prep = 'PrepareGeneralRFD3Input' if p.get('rfd3_generation_request_path') else 'PrepRFD3Input'
-                after = a.chain([prep, 'RunRFD3'])
-                if p.get('rfd3_generation_request_path'):
-                    a.stage('BuildGeneralRFD3ResultManifest', after)
-                after = a.chain(['FilterRFD3'], after)
+            unresolved(workflow, 'dependency_closure', entrypoint, 'Native workflow rejects unsupported or retired diffusion method')
         if not sequence_prediction and not boltzgen and not generation_only and not any(yes(k) for k in ('skip_rfd_seq', 'skip_rfd_seq_pred')):
             seq = p.get('seq_method', 'fampnn')
             names = ['PrepMPNN', 'RunMPNN', 'FilterMPNN'] if seq == 'mpnn' else ['PrepFAMPNN', 'RunFAMPNN', 'FilterFAMPNN']

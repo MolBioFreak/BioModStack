@@ -215,12 +215,6 @@ def resolve_job_result_contract(job: Any) -> dict[str, Any]:
         native = generation_result_contract(job.mode)
         if native is not None:
             return native
-    if job.model_id == 'protein_modification_experimental' and job.mode == 'de_novo_design':
-        from services.rfd3_generation import generation_result_contract
-        params = job.params if isinstance(job.params, dict) else json.loads(job.params or '{}')
-        native = generation_result_contract(params) if params.get('generator', 'rfd3') == 'rfd3' else None
-        if native is not None:
-            return native
     if (job.model_id in {'antibody_denovo', 'template_antibody_denovo'}
             and job.mode in {'antibody_denovo_pipeline', 'antibody_refinement_pipeline'}):
         # These fields describe the selected INPUT stage, not the root result.

@@ -22,7 +22,7 @@ def test_resequence_result_needs_no_filter_stage_record(model_id, mode):
 
 def test_protein_design_still_requires_its_roster_and_stage_records():
     from services.rf_filter_stage_accounting import prepare_filter_stages
-    job = SimpleNamespace(id="job", model_id="protein_modification_experimental", mode="de_novo_design", params={},
+    job = SimpleNamespace(id="job", model_id="antibody_denovo", mode="nanobody_binder", params={},
                           provenance={"core_protein_scientific_contract": 1})
     with tempfile.TemporaryDirectory() as root:
         with pytest.raises(ValueError, match="roster missing or incomplete"):

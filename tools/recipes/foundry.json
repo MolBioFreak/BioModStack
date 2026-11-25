@@ -1,7 +1,7 @@
 {
   "schema": "bms.tool-recipe.v1",
   "id": "foundry",
-  "name": "Foundry (RFdiffusion3, RoseTTAFold3, LigandMPNN)",
+  "name": "Foundry (RoseTTAFold3, LigandMPNN)",
   "label": "starting-point",
   "modules": [
     "design",
@@ -10,7 +10,7 @@
   "upstream": {
     "homepage": "https://github.com/RosettaCommons/foundry"
   },
-  "notes": "rc-foundry 0.1.9 from PyPI. BMS reads the RFdiffusion3 checkpoint as rfd3_latest.ckpt, so the upstream file is saved under that name. The definition apptainer/foundry-schedule.def patches an older base image and is not needed when building from foundry.def. Not yet built from clean by us: expect to fix things.",
+  "notes": "rc-foundry 0.1.9 from PyPI for RoseTTAFold3 and LigandMPNN. Not yet built from clean by us: expect to fix things.",
   "images": [
     {
       "filename": "foundry.sif",
@@ -19,27 +19,6 @@
     }
   ],
   "weights": [
-    {
-      "id": "rfd3",
-      "required": true,
-      "present_if": [
-        "foundry/checkpoints/rfd3_latest.ckpt"
-      ],
-      "fetch": {
-        "type": "url",
-        "files": [
-          {
-            "url": "https://files.ipd.uw.edu/pub/rfd3/rfd3_foundry_2025_12_01_remapped.ckpt",
-            "dest": "foundry/checkpoints/rfd3_latest.ckpt"
-          }
-        ]
-      },
-      "license": {
-        "id": "BSD-3-Clause",
-        "url": "https://github.com/RosettaCommons/foundry/blob/production/LICENSE.md"
-      },
-      "approx_size_gb": 3
-    },
     {
       "id": "mpnn",
       "required": false,

@@ -552,7 +552,7 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     **{('boltzgen_child', mode): 'workflows/boltzgen_child.nf'
        for mode in ('nanobody_binder', 'peptide_binder', 'protein_binder')},
     ("frustrampnn", "analyze"): "workflows/frustrampnn_analysis.nf",
-    ("protein_modification_experimental", "de_novo_design"): "workflows/protein_design.nf",
+    ("protein_modification_experimental", "de_novo_design"): "workflows/rfd4_proteina.nf",
     ("protein_modification_experimental", "region_redesign"): "workflows/region_redesign.nf",
     ("molecular_dynamics", "simulate"): "workflows/experimental/molecular_dynamics/orchestrator.nf",
     ("molecular_dynamics", "replica"): "workflows/experimental/molecular_dynamics/replica.nf",
@@ -592,7 +592,7 @@ def resolve_nextflow_entrypoint(
     if normalized_model_id.lower() == "bind" + "craft":
         raise ValueError("This retired workflow has been permanently removed")
 
-    selected_generator = ((params or {}).get('generator')
+    selected_generator = (((params or {}).get('generator') or 'rfd4_proteina')
         if normalized_model_id == 'protein_modification_experimental' and normalized_mode == 'de_novo_design'
         else normalized_model_id)
     if normalized_model_id == 'laproteina' and normalized_mode == 'evaluate':
@@ -618,10 +618,11 @@ def resolve_nextflow_entrypoint(
     if (
         normalized_model_id == "protein_modification_experimental"
         and normalized_mode == "de_novo_design"
-        and str((params or {}).get("generator") or "rfd3").strip().lower()
-        in {"disco", "laproteina"}
     ):
-        return "workflows/denovo_generation.nf"
+        gen = str((params or {}).get("generator") or "rfd4_proteina").strip().lower()
+        if gen in {"disco", "laproteina"}:
+            return "workflows/denovo_generation.nf"
+        raise ValueError(f"Unsupported de_novo_design generator: '{gen}'")
 
     if normalized_model_id in {"boltz2", "protenix"} and _params_request_complex_prediction(params):
         return COMPLEX_PREDICTION_ENTRYPOINT
@@ -5026,25 +5027,7 @@ def compile_nextflow_invocation(
         relative = path.absolute().relative_to(Path(output_dir).absolute()).as_posix()
         generated_inputs.append(GeneratedInput(relative, payload))
 
-    if (model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
-            and params.get('rfd3_generation_request') is not None):
-        from services.rfd3_generation import bind_generation_request, canonical_json
-        if not job_id:
-            raise ValueError('Native RFD3 generation requires a job identity')
-        bound, request_path = bind_generation_request(params, output_dir=output_dir, job_id=job_id)
-        if (params.get('rfd3_generation_request_path')
-                or params['rfd3_generation_request'].get('job_id') != 'validation-preview'):
-            # A persisted request is already job-bound. Never silently rebind a
-            # foreign request or redirect its materialized file during dispatch.
-            for key in ('rfd3_generation_request', 'rfd3_generation_request_path',
-                        'rfd3_generation_request_id', 'rfd3_generation_request_sha256',
-                        'rfd3_generation_result_contract_id'):
-                if params.get(key) != bound[key]:
-                    raise ValueError('Native RFD3 generation request binding changed: ' + key)
-        params = bound
-        plan_input(request_path, (canonical_json(bound['rfd3_generation_request']) + '\n').encode('utf-8'))
-
-    selected_generator = (params.get('generator')
+    selected_generator = ((params.get('generator') or 'rfd4_proteina')
         if model_id == 'protein_modification_experimental' and mode == 'de_novo_design' else model_id)
     if selected_generator in {'rfd4_proteina', 'complexa'}:
         native_mode = mode if selected_generator == model_id else 'generate'
@@ -5455,7 +5438,7 @@ def compile_nextflow_invocation(
         ('antibody_child', 'validation_batch'): 'boltz',
         # FAMPNN child jobs (sequence design - spawned by orchestrator)
         ('fampnn_child', 'sequence_design'): 'fampnn_predict',
-        ('protein_modification_experimental', 'de_novo_design'): 'rfd3_generation',
+        ('protein_modification_experimental', 'de_novo_design'): 'workstation_ryzen7960x',
         ('protein_modification_experimental', 'region_redesign'): 'workstation_ryzen7960x',
 
         ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',
@@ -5532,12 +5515,12 @@ def compile_nextflow_invocation(
     if (
         model_id == 'protein_modification_experimental'
         and mode == 'de_novo_design'
-        and str(params.get('generator') or 'rfd3').strip().lower()
+        and str(params.get('generator') or 'rfd4_proteina').strip().lower()
         in {'disco', 'laproteina'}
     ):
         effective_profile = 'workstation_ryzen7960x'
 
-    selected_generator = (params.get('generator')
+    selected_generator = ((params.get('generator') or 'rfd4_proteina')
         if model_id == 'protein_modification_experimental' and mode == 'de_novo_design' else model_id)
     if selected_generator in {'rfd4_proteina', 'complexa'}:
         effective_profile = 'workstation_ryzen7960x'
@@ -6347,21 +6330,6 @@ def compile_nextflow_invocation(
             params['rfd_mode'] = 'protein_local_redesign'
         if model_id == 'protein_modification_experimental':
             params['modification_mode'] = 'region_redesign'
-    elif (
-        model_id == 'protein_modification_experimental'
-        and mode == 'de_novo_design'
-        and str(params.get('generator') or 'rfd3').strip().lower() == 'rfd3'
-    ):
-        params.setdefault('diffusion_method', 'rfd3')
-        params.setdefault('rfd_mode', 'monomer_denovo')
-        params.setdefault('rfd_num_designs', params.get('num_designs', 8))
-        params.setdefault('rfd3_batches_per_design', params.get('num_designs', 8))
-        params.setdefault('run_rfd_only', True)
-        params.setdefault('skip_rfd', False)
-        params.setdefault('skip_rfd_seq', False)
-        params.setdefault('skip_rfd_seq_pred', False)
-        params.setdefault('run_frustrampnn', False)
-        params['modification_mode'] = 'de_novo_design'
     elif (
         model_id == 'protein_modification_experimental'
         and mode == 'de_novo_design'

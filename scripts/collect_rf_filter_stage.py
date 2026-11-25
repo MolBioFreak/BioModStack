@@ -9,7 +9,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--job-id', required=True)
     parser.add_argument('--owner', required=True, choices=['protein_design', 'protein_local_redesign'])
-    parser.add_argument('--stage-id', required=True, choices=['rf3_prediction_filter', 'rfd3_backbone_filter'])
+    parser.add_argument('--stage-id', required=True, choices=['rf3_prediction_filter'])
     parser.add_argument('--role', required=True, choices=['upstream', 'selected_publication', 'skipped'])
     parser.add_argument('--expected-tasks', required=True, type=int)
     parser.add_argument('--receipt', action='append', default=[])
@@ -24,7 +24,7 @@ def main():
     invocations = []
     pass_set = {}
     seen = set()
-    model = 'rf3' if args.stage_id == 'rf3_prediction_filter' else 'rfd3'
+    model = 'rf3'
     for directory in sorted(args.receipt):
         path = Path(directory) / 'invocation.json'
         raw = path.read_bytes()
@@ -38,7 +38,7 @@ def main():
         for row in [json.loads(line) for line in outcome_raw.splitlines()]:
             if row['passed'] and args.role == 'selected_publication':
                 artifact = row['artifacts']['published_structure']
-                branch = 'rf3_terminal' if model == 'rf3' else 'rfd3_only'
+                branch = 'rf3_terminal'
                 name = branch + '/' + Path(artifact['path']).name
                 if name in pass_set:
                     raise ValueError('ambiguous selected filter output identity')

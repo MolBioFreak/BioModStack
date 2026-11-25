@@ -9,7 +9,6 @@ from database import Design, Job
 from services.global_experiments.adapters import CoreProteinResultAdapter, TypedCoreJobResultAdapter, AdapterError, _canonical_json_sha256
 from services.result_ingester import ingest_job_results
 from tests.test_core_protein_candidates import artifacts, setup, job
-from tests.rfd3_native_fixture import write_native_result
 
 
 @pytest.fixture(autouse=True)

@@ -4,10 +4,7 @@ From: nvidia/cuda:13.5.0-cudnn-devel-ubuntu24.04
 %labels
     Author ProteinDJ Extended Pipeline
     Version 1.0
-    Description Foundry container with RFdiffusion3, RosettaFold3, LigandMPNN
-
-%files
-    scripts/rfd3_generation/install_schedule_return.py /opt/bms/install_schedule_return.py
+    Description Foundry container with RosettaFold3, LigandMPNN
 
 %post
     # Prevent interactive prompts during build
@@ -63,9 +60,8 @@ From: nvidia/cuda:13.5.0-cudnn-devel-ubuntu24.04
     printf '%s\n' 'torch==2.15.0+cu134' 'torchvision==0.29.2+cu134' 'torchaudio==2.11.1+cu134' > "$UV_CONSTRAINT"
     uv pip install --system --break-system-packages --compile --no-cache         torch==2.15.0+cu134 torchvision==0.29.2+cu134 torchaudio==2.11.1+cu134         --index https://download.pytorch.org/whl/cu134 --default-index https://pypi.org/simple
 
-    # Install Foundry with all dependencies (RFD3, RF3, MPNN) keeping cu134 torch pinned
+    # Install Foundry with all dependencies (RF3, MPNN) keeping cu134 torch pinned
     uv pip install --system --break-system-packages --compile --no-cache "rc-foundry[all]==0.1.9"
-    python3.12 /opt/bms/install_schedule_return.py
     
     # Download Foundry model weights
     mkdir -p /root/.foundry/checkpoints
@@ -104,20 +100,17 @@ From: nvidia/cuda:13.5.0-cudnn-devel-ubuntu24.04
 %test
     python3.12 -c "import torch; print(f'PyTorch: {torch.__version__}')"
     python3.12 -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
-    python3.12 -c "from rfd3 import RFDiffusion3; print('RFD3: OK')" || echo "RFD3 test skipped (no weights)"
     python3.12 -c "from rf3 import RosettaFold3; print('RF3: OK')" || echo "RF3 test skipped (no weights)"
     python3.12 -c "from mpnn import ProteinMPNN; print('MPNN: OK')" || echo "MPNN test skipped"
 
 %help
-    Foundry Container - RFdiffusion3, RosettaFold3, LigandMPNN
+    Foundry Container - RosettaFold3, LigandMPNN
     
     Components:
-    - RFdiffusion3 (RFD3): All-atom protein structure generation
     - RosettaFold3 (RF3): Structure prediction (open-source AF3 alternative)
     - LigandMPNN: Ligand-aware sequence design
     
     Usage:
-        apptainer run foundry.sif rfd3 --help
         apptainer run foundry.sif rf3 --help
         apptainer run foundry.sif mpnn --help
         

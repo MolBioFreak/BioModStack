@@ -865,12 +865,12 @@ def test_protein_design_sequence_branch_reuses_native_prediction(predictor, expe
               'boltz_use_msa': False, 'protenix_use_msa': False,
               'run_frustrampnn': False}
     before = dict(params)
-    metadata = selected_execution_metadata('rfd3', 'design', params,
+    metadata = selected_execution_metadata('boltz2', 'predict', params,
                                            'workflows/protein_design.nf')
     assert metadata.dependency_closure_complete
     keys = {row.component_key for row in metadata.static_components}
     assert expected <= keys
-    assert not keys & {'RunRFD3', 'RunRF3', 'PrepMPNN', 'RunFAMPNN', 'RunAF2'}
+    assert not keys & {'RunRF3', 'PrepMPNN', 'RunFAMPNN', 'RunAF2'}
     assert {'BindProteinDesignTerminalMetadata', 'PublishResults'} <= keys
     assert params == before
 
@@ -891,7 +891,7 @@ def test_rf3_sequence_is_unsupported_but_pdb_checkpoint_member_is_known():
     assert overridden[0].relative_path is None and blockers
 
 
-@pytest.mark.parametrize('process', ['FilterRF3', 'FilterRFD3'])
+@pytest.mark.parametrize('process', ['FilterRF3'])
 def test_foundry_filters_do_not_select_inference_checkpoints(process):
     from native_components import _NativeAnnotations
     components, dynamic, dependencies, roles, services, blockers = [], [], {}, [], [], []
@@ -903,7 +903,7 @@ def test_foundry_filters_do_not_select_inference_checkpoints(process):
     assert not blockers
 
 
-@pytest.mark.parametrize('process', ['RunRFD3', 'RunBoltzGen'])
+@pytest.mark.parametrize('process', ['RunRF3', 'RunBoltzGen'])
 def test_native_checkpoint_requirements_never_select_whole_cache(process):
     from model_registry import native_checkpoint_dependencies
     deps, blockers = native_checkpoint_dependencies(process, {'cache_root': '/host/private/cache'})
@@ -951,7 +951,7 @@ def test_installed_checkpoint_consumer_bindings_and_generated_cache_policy():
     assert 'def bindings = ["${concrete}:${guest}:ro"]' in config
     assert 'bindings.add("${concrete}:${source}:ro")' in config
     assert '--env FOUNDRY_CHECKPOINT_DIRS=/foundry/checkpoints' in config
-    assert "task.process.tokenize(':').last() in ['RunRF3', 'RunRFD3']" in config
+    assert "task.process.tokenize(':').last() == 'RunRF3'" in config
     assert 'weightBind("${params.weights_root}/boltzgen", "/weights/boltzgen")' in config
     module = (root / 'modules/boltzgen.nf').read_text()
     for flag, member in [('inverse_fold_checkpoint', 'boltzgen1_ifold.ckpt'),
@@ -960,9 +960,8 @@ def test_installed_checkpoint_consumer_bindings_and_generated_cache_policy():
         assert f'--{flag} /weights/boltzgen/{member}' in module
     assert '--design_checkpoints ${checkpointPaths}' in module
     assert '--checkpoint_mode ${checkpointMode}' not in module
-    deps, blockers = native_checkpoint_dependencies('RunRFD3', {})
-    assert deps[0].relative_path == 'foundry/checkpoints/rfd3_latest.ckpt'
-    assert '2025_12_01_remapped.ckpt' in deps[0].semantic_release
+    deps, blockers = native_checkpoint_dependencies('RunRF3', {})
+    assert deps[0].relative_path == 'foundry/checkpoints/rf3_foundry_01_24_latest_remapped.ckpt'
     assert not blockers
 
 

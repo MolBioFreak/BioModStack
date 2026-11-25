@@ -3301,10 +3301,6 @@ class NativeBinderJobResultAdapter:
                 page = await read_published_generation_page(job, core_session, limit=1)
                 publication = page['publication']
                 record_count = page['total']
-            elif self.model_id == 'protein_modification_experimental' and (job.params or {}).get('rfd3_generation_request'):
-                from services.rfd3_generation_results import read_generation_results
-                result = await read_generation_results(job, core_session, limit=1)
-                publication = {key: result[key] for key in ('schema', 'result_manifest_sha256', 'result_schema', 'population', 'counts')}
             elif self.model_id in {'protein_modification_experimental', 'protein_cad_experimental'}:
                 # Historical Design-backed receiving remains with its existing owner.
                 publication = await TypedCoreJobResultAdapter(self.model_id).verify(core_session, entity_id)

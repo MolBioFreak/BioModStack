@@ -1,9 +1,9 @@
-"""Artifact-bound receipts for the existing RF3/RFD3 filters, not final results."""
+"""Artifact-bound receipts for the existing RF3 filters, not final results."""
 import hashlib
 import json
 from pathlib import Path
 
-STAGES = {'rf3_prediction_filter', 'rfd3_backbone_filter'}
+STAGES = {'rf3_prediction_filter'}
 DISPOSITIONS = ('passed', 'rejected_threshold', 'unevaluable_missing', 'invalid_evidence')
 
 

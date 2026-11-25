@@ -190,7 +190,7 @@ def residue_keys_from_indices(residues: Sequence[ResidueRecord], indices: Iterab
 
 
 def lower_structure_lines(lines: Sequence[str], mapping: dict) -> List[str]:
-    """Apply the existing RFD3 source-map identity derivative, never coordinates.
+    """Apply the redesign source-map identity derivative, never coordinates.
 
     Also used by the merge owner on the original full selected complex, so native
     sequence masks and the retained context use the same reversible namespace.
@@ -381,15 +381,15 @@ def main() -> None:
             raise ValueError("Sequence-redesign ranges must be a subset of coordinate-edit ranges")
 
     # Dialect-2 integer contigs and sequence native readers cannot express
-    # insertion-coded identities. Reuse the RFD3 source-map owner only for that
+    # insertion-coded identities. Reuse the redesign source-map owner only for that
     # branch, retaining the untouched input and an explicit atom-level inverse.
     source_mapping = None
     source_regions = None
     if any(r.key.icode for group in chains.values() for r in group):
         if __package__:
-            from .rfd3_local_redesign.source_mapping import materialize_source
+            from .lib.redesign_source_mapping import materialize_source
         else:
-            from rfd3_local_redesign.source_mapping import materialize_source
+            from lib.redesign_source_mapping import materialize_source
         derivative = Path(args.output_manifest).with_suffix('.native.cif')
         # A selected CIF may already have been materialized as a single-model
         # PDB while its request still retains the original MODEL serial. Do not
@@ -464,7 +464,6 @@ def main() -> None:
         "movable_residue_count": len(movable_resnums),
         "fixed_residue_count": sum(len(values) for values in fixed_by_chain.values()),
         "design_chain_length": len(design_residues),
-        "rfd3_mode": "monomer_motifscaff",
     }
     if source_mapping is not None:
         import hashlib
@@ -474,16 +473,6 @@ def main() -> None:
         # residues. Length-only contig blocks create new ALA residues and erase
         # that distinction in the actual dialect-2 consumer.
         manifest['contig_spec'] = f"[{build_spec(design_chain, (r.key.resnum for r in design_residues))}]"
-        design_fixed = fixed_by_chain[design_chain]
-        manifest['native_rfd3'] = {
-            # Explicit empty atom lists matter: an omitted token retains native
-            # default fixed coordinates even when other tokens are selected.
-            'select_fixed_atoms': {
-                **({build_spec(design_chain, design_fixed): 'ALL'} if design_fixed else {}),
-                movable_spec: [],
-            },
-            'select_unfixed_sequence': build_spec(design_chain, sequence_redesign_resnums),
-        }
         manifest['seed_sha256'] = hashlib.sha256(output_seed_pdb.read_bytes()).hexdigest()
     output_manifest.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 

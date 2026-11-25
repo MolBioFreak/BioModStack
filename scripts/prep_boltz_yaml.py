@@ -102,7 +102,7 @@ def process_pdb_files(input_dir, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     
     for filename in os.listdir(input_dir):
-        # Handle both legacy 'fold_*' and new 'rfd3_*' naming conventions
+        # Process all PDB files regardless of naming convention
         if filename.endswith('.pdb'):
             pdb_path = os.path.join(input_dir, filename)
             

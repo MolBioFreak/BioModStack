@@ -1,5 +1,5 @@
 {
-  "adapter_registry_sha256": "0cd4555c38165f78977dc3b5273de1fea753d77902f884d2974a8cac1e151f15",
+  "adapter_registry_sha256": "a69045c2c4f120076c23172bf4032c1f5fb083066911e3cc20166980d91121c1",
   "baseline_source_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_source_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
   "branch_closure_sha256": "0d3f37b6e5b972f33450d05591ff06d404cd13b2c75490b2b3850f2deed00647",
@@ -2613,7 +2613,11 @@
   ],
   "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
+<<<<<<< HEAD
   "content_sha256": "9911bb39dd86a0d657d7575eb9915c7ae9e4df215f5b5dcb54481259947f6a90",
+=======
+  "content_sha256": "0c4bed561ab9544fa05a9e89adb543535013d2a4248a1fc27f9bf4092f030683",
+>>>>>>> 2dfceb1 (Remove RFD3 backend, workflows, scripts, tables, and fallbacks (R1))
   "contract_ids": {
     "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
     "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",
@@ -2630,7 +2634,7 @@
     "bms.scientific-criterion.manual-review.v1",
     "bms.scientific-criterion.metric-threshold.v1"
   ],
-  "dataset_registry_sha256": "1ff6d5621f47a1e0b607348efe1c693b3bca8794d09c46d022b42542deaa1e84",
+  "dataset_registry_sha256": "13fce7d75fd1c4d7dccb6cd14cac10f9703ff606425382c136344969bbb0ca07",
   "event_registry_sha256": "695fa4a3fae621b19c8ecdf48de1104cce59891d7c06024ea53a947fa3426adc",
   "evidence_schema_ids": [
     "bms.evidence-requirement.native-receipt.v1",

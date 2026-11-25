@@ -131,7 +131,6 @@ params.target_template_threshold_angstrom = params.target_template_threshold_ang
 params.strict_target_rmsd = params.strict_target_rmsd ?: null
 
 include { sequenceSubmissionMetadata; normalizeProteinDesignSequenceBatchEntries } from '../modules/sequence_submission.nf'
-include { PrepRFD3Input ; RunRFD3 ; FilterRFD3 } from '../modules/rfd3.nf'
 include { RunRF3 ; FilterRF3 } from '../modules/rf3.nf'
 include { PrepFAMPNN ; FilterFAMPNN ; RunFAMPNN } from '../modules/fampnn.nf'
 include { FilterMPNN ; PrepMPNN ; RunMPNN } from '../modules/proteinmpnn.nf'
@@ -178,7 +177,6 @@ def proteinDesignCandidateId(parentJobId, producerStage, producerCandidateKey) {
 def proteinDesignTerminalCandidate(rawPath, branch, method, producer = [:]) {
     def branchAuthorities = [
         early_sequence_prediction: [producer_branch: 'early_sequence_prediction'],
-        rfd3_only: [producer_branch: 'rfd3_only'],
         boltz_terminal: [producer_branch: 'boltz_terminal'],
         rf3_terminal: [producer_branch: 'rf3_terminal'],
         protenix_terminal: [producer_branch: 'protenix_terminal'],
@@ -424,89 +422,12 @@ PY
 
 
 
-// Resolve placement through the existing portable owner before Nextflow stages paths.
-def rfd3GenerationSources(requestPath) {
-    def source = new JsonSlurper().parse(file(requestPath)).source
-    if (!source) return []
-    def selected = source.path.toString()
-    if (System.getenv('BMS_PORTABLE_INPUT_BINDINGS')) {
-        def resolver = new ProcessBuilder('python3', "${params.code_root}/scripts/lib/portable_inputs.py",
-            'resolve', selected).start()
-        def output = resolver.inputStream.text.trim()
-        def error = resolver.errorStream.text
-        if (resolver.waitFor() != 0 || !output) {
-            throw new IllegalArgumentException("RFD3 portable input binding failed: ${error}")
-        }
-        selected = output
-    }
-    return [file(selected)]
-}
-
-process PrepareGeneralRFD3Input {
-    label 'pyrosetta_tools'
-    stageInMode 'copy'
-    publishDir "${params.out_dir}/collected/rfd3_generation", mode: 'copy', pattern: '{rfd3_generation_*json,rfd3_sources}'
-
-    input:
-    path request_json
-    path staged_sources
-
-    output:
-    tuple val('generation_0'), path('rfd3_generation_native_input.json'), path({ [request_json, 'rfd3_sources'] }), emit: input_json
-    path 'rfd3_generation_preparation_receipt.json', emit: receipt
-    path 'rfd3_sources', emit: sources
-
-    script:
-    """
-    set -euo pipefail
-    python3 -u '${params.code_root}/scripts/rfd3_generation/prepare_native_input.py' \
-      --request '${request_json}' \
-      --expected-min-length '${params.rfd3_generation_min_length}' \
-      --expected-max-length '${params.rfd3_generation_max_length}' \
-      --expected-num-designs '${params.rfd3_generation_num_designs}' \
-      --expected-seed '${params.rfd3_generation_seed}' \
-      --expected-dump-trajectories '${params.rfd3_generation_dump_trajectories}' \
-      --source-dir rfd3_sources \
-      ${staged_sources ? "--staged-source '${staged_sources instanceof List ? staged_sources[0] : staged_sources}'" : ''} \
-      --output-native rfd3_generation_native_input.json \
-      --output-receipt rfd3_generation_preparation_receipt.json
-    """
-}
-
-process BuildGeneralRFD3ResultManifest {
-    label 'process_low'
-    stageInMode 'copy'
-    publishDir "${params.out_dir}/collected/rfd3_generation", mode: 'copy', pattern: 'rfd3_generation_result_manifest.json'
-
-    input:
-    path native_outputs
-    path request_json
-
-    output:
-    path 'rfd3_generation_result_manifest.json', emit: manifest
-
-    script:
-
-    """
-    set -euo pipefail
-    python3 -u '${params.code_root}/scripts/rfd3_generation/build_result_manifest.py' \
-      --request '${request_json}' \
-      --native-output-dir '${native_outputs}' \
-      --execution-status completed \
-      --storage-prefix run/rfd3 \
-      --output rfd3_generation_result_manifest.json
-    """
-}
-
-include { PublishRFFilterStage as PublishProteinDesignRF3Stage; PublishRFFilterStage as PublishProteinDesignRFD3Stage } from '../modules/rf_filter_stage'
+include { PublishRFFilterStage as PublishProteinDesignRF3Stage } from '../modules/rf_filter_stage'
 
 workflow PROTEIN_DESIGN {
     def rf3StageTasks = Channel.empty()
     def rf3StageExpected = Channel.value(0)
     def rf3StageRole = 'skipped'
-    def rfd3StageTasks = Channel.empty()
-    def rfd3StageExpected = Channel.value(0)
-    def rfd3StageRole = 'skipped'
     try {
         nextflow.preview.topic = true
     }
@@ -514,31 +435,6 @@ workflow PROTEIN_DESIGN {
     }
 
     def outputDirectory = params.out_dir
-    def generalRfd3Generation = params.rfd3_generation_request_path ? true : false
-    if (generalRfd3Generation) {
-        if (params.rfd3_request_path) {
-            error("General RFD3 generation cannot be combined with a local-redesign RFD3 request")
-        }
-        if (params.diffusion_method != 'rfd3') {
-            error("General RFD3 generation requires diffusion_method='rfd3'")
-        }
-        if (params.run_rfd_only != true) {
-            error("General RFD3 generation requires run_rfd_only=true")
-        }
-        if (params.skip_rfd || params.skip_rfd_seq || params.skip_rfd_seq_pred) {
-            error("General RFD3 generation does not accept skip/resume flags")
-        }
-        def requiredGenerationParams = [
-            'rfd3_generation_min_length', 'rfd3_generation_max_length',
-            'rfd3_generation_num_designs', 'rfd3_generation_dump_trajectories',
-        ]
-        def missingGenerationParams = requiredGenerationParams.findAll {
-            !params.containsKey(it) || params[it] == null
-        }
-        if (missingGenerationParams) {
-            error("General RFD3 generation is missing required params: ${missingGenerationParams.join(',')}")
-        }
-    }
 
     if (params.run_rfd_only && (params.skip_rfd_seq || params.skip_rfd_seq_pred)) {
         error("Cannot use --run_rfd_only with skip flags --skip_rfd_seq or --skip_rfd_seq_pred. These options are contradictory.")
@@ -547,9 +443,7 @@ workflow PROTEIN_DESIGN {
         error("Cannot use --run_rfd_only with --skip_rfd. These options are contradictory.")
     }
 
-    def requestedRfdDesigns = generalRfd3Generation
-        ? params.rfd3_generation_num_designs
-        : params.rfd_num_designs
+    def requestedRfdDesigns = params.rfd_num_designs
     def num_batches = Math.min(params.gpus, requestedRfdDesigns).intValue()
     def batch_size = Math.ceil(requestedRfdDesigns / num_batches).intValue()
     def num_designs = num_batches * batch_size
@@ -647,71 +541,7 @@ workflow PROTEIN_DESIGN {
 
 
     if (!params.skip_rfd & !params.skip_rfd_seq & !params.skip_rfd_seq_pred & params.diffusion_method != 'boltzgen') {
-        if (!generalRfd3Generation && !params.rfd_num_designs) {
-            error("Please provide the number of designs for RFdiffusion to generate")
-        }
-
-        if (params.diffusion_method == "rfd3") {
-            println("Using RFdiffusion3 (Foundry) for structure generation")
-
-            if (generalRfd3Generation) {
-                def generationRequest = Channel.value(file(params.rfd3_generation_request_path))
-                def stagedSources = Channel.value(rfd3GenerationSources(params.rfd3_generation_request_path))
-                PrepareGeneralRFD3Input(generationRequest, stagedSources)
-                RunRFD3(PrepareGeneralRFD3Input.out.input_json)
-                BuildGeneralRFD3ResultManifest(
-                    RunRFD3.out.native_outputs,
-                    Channel.value(file(params.rfd3_generation_request_path)),
-                )
-            } else {
-                def inputFiles = collectInputFiles(params)
-                inputFiles.each { inputFile ->
-                    "rsync -r ${inputFile} ${inputsDir}/.".execute()
-                }
-
-                def rfd3_input_ch = Channel.of(
-                    [
-                        params.rfd_mode,
-                        params.rfd_contigs ?: '[100-100]',
-                        params.rfd_input_pdb ? file(params.rfd_input_pdb) : file("${params.code_root}/lib/NO_FILE"),
-                        params.rfd_hotspots ?: '',
-                        params.rfd_num_designs,
-                        0,
-                    ]
-                )
-
-                PrepRFD3Input(rfd3_input_ch)
-                RunRFD3(PrepRFD3Input.out.input_json)
-            }
-
-            RunRFD3.out.structures_metadata.set { rfd_pdbs_jsons }
-
-            rebatchTuples(rfd_pdbs_jsons, 200)
-                .set { rfd_tuples }
-
-            FilterRFD3(rfd_tuples)
-            rfd3StageTasks = FilterRFD3.out.stage_receipt
-            rfd3StageExpected = rfd_tuples.count()
-            rfd3StageRole = params.run_rfd_only && !generalRfd3Generation ? 'selected_publication' : 'upstream'
-
-            if (params.run_rfd_only) {
-                terminal_designs = FilterRFD3.out.structures_metadata
-                    .flatMap { pdbs, sidecars ->
-                        def structures = pdbs instanceof Collection ? pdbs : [pdbs]
-                        structures.collect { pdb ->
-                            proteinDesignTerminalCandidate(pdb, 'rfd3_only', 'rfd3')
-                        }
-                    }
-                    .ifEmpty { if (params.get('core_protein_scientific_contract') != 1) error('protein_design:no_candidates') }
-                final_pdbs = terminal_designs.map { candidate_meta, structure -> structure }.collect()
-            }
-            else {
-                FilterRFD3.out.structures_metadata.set { filt_rfd_pdbs_jsons }
-            }
-        }
-        else {
-            error("diffusion_method='rfd' has been retired from tracked BioModStack repo state. Use diffusion_method='rfd3' instead.")
-        }
+        error("Unsupported diffusion_method='${params.diffusion_method}' in protein_design.nf; only 'boltzgen' or skip-backbone modes are supported.")
     }
     else if (params.diffusion_method == "boltzgen") {
 
@@ -1135,7 +965,6 @@ workflow PROTEIN_DESIGN {
     BindProteinDesignTerminalMetadata.out.manifest.toList().set { terminal_candidate_manifests }
     if (params.get('core_protein_scientific_contract') == 1) {
         PublishProteinDesignRF3Stage('protein_design', 'rf3_prediction_filter', rf3StageRole, rf3StageExpected, rf3StageTasks.toList(), rf3StageRole == 'selected_publication' ? terminal_candidate_manifests : Channel.value([]))
-        PublishProteinDesignRFD3Stage('protein_design', 'rfd3_backbone_filter', rfd3StageRole, rfd3StageExpected, rfd3StageTasks.toList(), rfd3StageRole == 'selected_publication' ? terminal_candidate_manifests : Channel.value([]))
     }
     ProjectProteinDesignMetadata(all_designs_metadata, terminal_candidate_manifests)
     projected_design_metadata = ProjectProteinDesignMetadata.out.csv

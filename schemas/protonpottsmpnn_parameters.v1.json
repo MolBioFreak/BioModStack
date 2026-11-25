@@ -453,7 +453,7 @@
             "default": "native",
             "x-native-default": "inverse",
             "title": "Seed source",
-            "description": "Where the placement redesign starts from (the \"initial_sequence\" per the 05 scripts): \"inverse\" \u2014 externally supplied seeds = the inverse stage's sequences (ProteinMPNN, or the model's own MPNN sampling); passed into run_ph_redesign as initial_sequences. This is the decoupled \"run the inverse stage, then only optimize\" path. \"native\"  \u2014 the single native (input-PDB / RFD3) sequence. MPNN-sampled seeds are produced by the INVERSE stage, never re-sampled inside the optimizer.",
+            "description": "Where the placement redesign starts from (the \"initial_sequence\" per the 05 scripts): \"inverse\" \u2014 externally supplied seeds = the inverse stage's sequences (ProteinMPNN, or the model's own MPNN sampling); passed into run_ph_redesign as initial_sequences. This is the decoupled \"run the inverse stage, then only optimize\" path. \"native\"  \u2014 the single native (input-PDB) sequence. MPNN-sampled seeds are produced by the INVERSE stage, never re-sampled inside the optimizer.",
             "type": "string",
             "enum": [
               "inverse",

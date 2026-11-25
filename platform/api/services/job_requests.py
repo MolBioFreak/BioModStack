@@ -25,7 +25,6 @@ from schemas import JobCreate
 from services.md.chemistry_catalog import ChemistryCatalogError, ChemistryProfileSelectionError
 from services.md.launch_contract import MDLaunchError, normalize_md_job_spec
 from services.nextflow import normalize_plr_input_pdb_path, normalize_plr_structure_validators
-from services.rfd3_generation import GenerationContractError, normalize_generation_params
 from services.frustrampnn.settings import (
     RequestedSettingsPayloadError,
     default_settings as default_frustrampnn_settings,
@@ -140,11 +139,7 @@ def _should_normalize_antibody_job_params(
         and normalized_mode == "region_redesign"
     ):
         return False
-    return not (
-        normalized_model_id == "protein_modification_experimental"
-        and normalized_mode == "de_novo_design"
-        and str((params or {}).get("generator") or "rfd3").strip().lower() == "rfd3"
-    )
+    return True
 
 
 def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1255,23 +1250,6 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
             job_data.params,
         ):
             job_data.params = _normalize_antibody_job_params(job_data.params)
-
-        if (
-            normalized_model_id == "protein_modification_experimental"
-            and normalized_mode == "de_novo_design"
-            and str(job_data.params.get("generator") or "rfd3").strip().lower() == "rfd3"
-        ):
-            try:
-                normalized_generation_params, _generation_request, _generation_digest = normalize_generation_params(
-                    job_data.params,
-                    job_name=job_data.name,
-                )
-            except GenerationContractError as exc:
-                raise HTTPException(
-                    status_code=422,
-                    detail={"rfd3_generation_contract_error": str(exc)},
-                ) from exc
-            job_data.params = normalized_generation_params
 
         if job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate":
             try:

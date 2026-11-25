@@ -5,7 +5,7 @@ Unified structure filtering script for BioModStack.
 Replaces 7 separate filter scripts with a single configurable tool.
 
 Usage:
-    # Backbone filtering (RFD/RFD3)
+    # Backbone filtering (RFD)
     python filter_structures.py backbone --input-dir . --output-dir filtered/ \\
         --min-helices 2 --max-rog 20
     
@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 
 class BackboneFilter(StructureFilter):
-    """Filter backbone structures from RFD/RFD3."""
+    """Filter backbone structures."""
     
     def extract_metrics(self, structure_path: Path, metadata: dict) -> Dict[str, Any]:
         """Extract SS and RoG metrics from backbone structure."""
@@ -221,7 +221,7 @@ def main():
     common.add_argument('--ncpus', type=int, default=1,
                         help='Number of CPUs (for compatibility, not used)')
     
-    # Backbone subparser (RFD/RFD3)
+    # Backbone subparser (RFD)
     backbone = subparsers.add_parser('backbone', parents=[common],
                                       help='Filter backbone structures')
     backbone.add_argument('--min-ss', type=int, help='Min total SS elements')
@@ -263,7 +263,7 @@ def main():
     prediction.add_argument('--rf3-max-rmsd-overall', type=float, dest='max_rmsd')
     prediction.add_argument('--rf3-max-rmsd-binder', type=float, dest='max_rmsd_binder')
     
-    # Stage receipts belong only to the existing RF3/RFD3 workflow filters.
+    # Stage receipts belong only to the existing RF3 workflow filters.
     for stage_parser in (backbone, prediction):
         stage_parser.add_argument('--stage-receipt-dir')
         stage_parser.add_argument('--stage-id')

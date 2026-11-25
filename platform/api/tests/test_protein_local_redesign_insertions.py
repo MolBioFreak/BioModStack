@@ -65,7 +65,6 @@ def test_nonfirst_model_native_seed_contigs_and_separate_masks(tmp_path):
     manifest = json.loads(path.read_text())
     assert manifest['model_number'] == 2
     assert manifest['contig_spec'] == '[A1-5]'
-    assert manifest['native_rfd3'] == {'select_fixed_atoms':{'A1-2,A5':'ALL','A3-4':[]}, 'select_unfixed_sequence':'A4'}
     assert manifest['movable_positions_spec'] == 'A3-4'
     assert manifest['fixed_positions_spec'] == 'A1-2,A5,B1-2'
     assert manifest['sequence_redesign_positions_spec'] == 'A4'

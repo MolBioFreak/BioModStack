@@ -2132,14 +2132,6 @@ def _design_to_response(
     if design.producer_model_id:
         provenance["producer_model_id"] = design.producer_model_id
     data["provenance"] = provenance or None
-    if data.get("artifact_class") == "rfd3_general_generation" and isinstance(data.get("chain_metrics"), dict):
-        # Earlier RFD3 imports duplicated these candidate-level values here.
-        # Their original metrics/acceptance remain in native provenance; do not
-        # present them as chains or rewrite retained rows during a read.
-        data["chain_metrics"] = {
-            key: value for key, value in data["chain_metrics"].items()
-            if key not in {"residue_count", "chain_count", "accepted"} or isinstance(value, dict)
-        } or None
     return DesignResponse.model_validate(data)
 
 
@@ -2549,8 +2541,8 @@ async def list_designs(
     cdr_h3_max: Optional[int] = Query(None, description="Maximum CDR-H3 length"),
     rog_min: Optional[float] = Query(None, description="Minimum radius of gyration"),
     rog_max: Optional[float] = Query(None, description="Maximum radius of gyration"),
-    rfd_rog_min: Optional[float] = Query(None, description="Minimum RFD3 radius of gyration"),
-    rfd_rog_max: Optional[float] = Query(None, description="Maximum RFD3 radius of gyration"),
+    rfd_rog_min: Optional[float] = Query(None, description="Minimum backbone radius of gyration"),
+    rfd_rog_max: Optional[float] = Query(None, description="Maximum backbone radius of gyration"),
     favorites_only: bool = Query(False, description="Show only favorites"),
     artifact_group: Optional[str] = Query(None, description="Filter by review artifact group"),
     artifact_class: Optional[str] = Query(None, description="Filter by canonical artifact class"),

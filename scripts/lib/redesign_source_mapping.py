@@ -111,7 +111,7 @@ def materialize_source(source: Path, destination: Path, *, model_serial=None) ->
     writer = MMCIFIO()
     writer.set_dict(data)
     writer.save(str(destination))
-    return {'schema': 'bms.rfd3.source-map.v1',
+    return {'schema': 'bms.redesign.source-map.v1',
             'original_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
             'native_sha256': hashlib.sha256(destination.read_bytes()).hexdigest(),
             'model': selected, 'atoms': mapping,

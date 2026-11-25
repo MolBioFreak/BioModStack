@@ -10,10 +10,9 @@ import re
 from services.rf_filter_criteria import THRESHOLDS, enabled_criteria
 
 KEY = 'rf_filter_task_roster'
-PROCESSES = {'FilterRF3': 'rf3_prediction_filter', 'FilterRFD3': 'rfd3_backbone_filter'}
-BRANCH_DEFAULTS = dict(diffusion_method='rfd3', pred_method='boltz', run_rfd_only=False,
+PROCESSES = {'FilterRF3': 'rf3_prediction_filter'}
+BRANCH_DEFAULTS = dict(diffusion_method=None, pred_method='boltz', run_rfd_only=False,
     skip_rfd=False, skip_rfd_seq=False, skip_rfd_seq_pred=False, skip_pred=False,
-    rfd3_generation_request_path=None, rfd3_request_path=None,
     plr_validation_input_pdbs=None, plr_sequence_input_pdbs=None, plr_backbone_input_pdbs=None)
 # The same event arrives bare on the console stream and with Nextflow's log framing
 # ("Oct-29 14:06:17.649 [Task submitter] INFO  nextflow.Session - ") once the workflow
@@ -36,14 +35,10 @@ def launch_settings(params):
 
 def roles(owner, settings):
     if owner == 'protein_local_redesign':
-        skipped = any(settings[key] for key in ('plr_validation_input_pdbs', 'plr_sequence_input_pdbs', 'plr_backbone_input_pdbs', 'rfd3_request_path'))
-        return {'rfd3_backbone_filter': 'skipped' if skipped else 'upstream'}
+        return {}
     rf3 = (settings['pred_method'] == 'rf3' and settings['diffusion_method'] != 'boltzgen'
            and not any(settings[key] for key in ('skip_rfd_seq_pred', 'run_rfd_only', 'skip_pred')))
-    rfd3 = (settings['diffusion_method'] == 'rfd3'
-            and not any(settings[key] for key in ('skip_rfd', 'skip_rfd_seq', 'skip_rfd_seq_pred')))
-    return {'rf3_prediction_filter': 'selected_publication' if rf3 else 'skipped',
-            'rfd3_backbone_filter': ('selected_publication' if settings['run_rfd_only'] and not settings['rfd3_generation_request_path'] else 'upstream') if rfd3 else 'skipped'}
+    return {'rf3_prediction_filter': 'selected_publication' if rf3 else 'skipped'}
 
 
 def begin(job, params):
@@ -73,7 +68,7 @@ def observe(job, line):
     if roster is None: return False
     match = EVENT.fullmatch(line.strip())
     if match is None:
-        if re.search(r'(Submitted|Cached) process >.*\b(FilterRF3|FilterRFD3)\b', line):
+        if re.search(r'(Submitted|Cached) process >.*\bFilterRF3\b', line):
             raise ValueError('filter scheduling event cannot be decoded')
         return False
     work_hash, event, process, task_id = match.groups()
@@ -134,6 +129,5 @@ async def begin_command(session, job, command):
     profiles = command[command.index('-profile') + 1].split(',') if '-profile' in command else []
     defaults = {}
     for profile in profiles:
-        if profile == 'rfd3_generation': defaults.update(run_rfd_only=True)
         if profile == 'rf3': defaults.update(pred_method='rf3', skip_rfd_seq=True)
     if begin(job, {**defaults, **params}): await session.commit()

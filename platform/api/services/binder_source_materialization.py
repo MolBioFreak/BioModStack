@@ -728,7 +728,7 @@ async def resolve_structure_source(request: StructureSourceRequest, session):
         return path, {**identity, 'candidate_ref': ref.model_dump(exclude_none=True),
                       'model': request.model_number}
     if request.request_id is not None or request.candidate_id is not None:
-        raise ValueError('RFD3 local-redesign request/candidate sources were retired; select the Design instead')
+        raise ValueError('Local-redesign request/candidate sources were retired; select the Design instead')
     elif request.design_id:
         design = await session.get(Design, request.design_id)
         if design is None:

@@ -47,7 +47,6 @@ MAX_DATASET_MEMBERS = 10_000
 PROTEIN_DATASET_KINDS: dict[str, dict[str, frozenset[str]]] = {
     "protein.generated_candidate_cohort.v1": {
         "bms.core.protein-result-reference.adapter.v1": frozenset({"protein_generated_candidate"}),
-        "bms.core-job.protein_local_redesign.adapter.v1": frozenset({"protein_generated_candidate_cohort"}),
     },
     "protein.selected_finalist_cohort.v1": {
         "bms.core.protein-result-reference.adapter.v1": frozenset({"protein_selected_finalist"}),

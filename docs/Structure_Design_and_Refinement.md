@@ -17,7 +17,7 @@ or create reduced parallel result authorities.
 
 The active FrustraMPNN global tranche is specified in
 [FrustraMPNN global configuration and analysis workbench](specs/frustrampnn-global-configuration-analysis-workbench.md).
-It must reach 100% before workflow-specific Structure Prediction, RFD3, and CM
+It must reach 100% before workflow-specific Structure Prediction and CM
 consumer tranches are considered seamless integration work.
 
 ## Main workflow families

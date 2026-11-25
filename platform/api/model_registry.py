@@ -218,7 +218,7 @@ def _denovo_runtime_dependencies() -> tuple[RuntimeDependencyRef, ...]:
     refs.extend(model_image_dependencies('caliby_experimental'))
     refs.extend(model_image_dependencies('protenix'))
     refs.extend(model_image_dependencies('boltz2'))
-    for process in ('RunRFD3', 'RunLaProteina', 'RunCalibyResequence', 'RunBoltz', 'ProtenixPredict'):
+    for process in ('RunLaProteina', 'RunCalibyResequence', 'RunBoltz', 'ProtenixPredict'):
         dependencies, _ = native_checkpoint_dependencies(process, {})
         refs.extend(RuntimeDependencyRef(kind=dep.kind, relative_path=dep.relative_path)
                     for dep in dependencies)
@@ -310,7 +310,6 @@ def workflow_pack_weight_owners(workflow_id: str) -> dict[str, str]:
 # sequence models, FrustraMPNN, Protenix); the rest are added when a run needs them.
 DENOVO_PACK_COMPONENTS = (
     ('rfd4_proteina', 'RFD4 (Proteina)', True),
-    ('rfd3', 'RFD3 (Foundry)', False),
     ('disco', 'DISCO', False),
     ('laproteina', 'La-Proteina', False),
     ('complexa', 'Complexa', False),
@@ -340,8 +339,6 @@ def _denovo_component_dependencies(component_id: str) -> tuple[RuntimeDependency
 
     if component_id == 'rfd4_proteina':
         refs = [image('RFD4Proteina'), RuntimeDependencyRef(kind='weights', relative_path='rfd4-proteina')]
-    elif component_id == 'rfd3':
-        refs = [image('Foundry'), *native('RunRFD3')]
     elif component_id == 'disco':
         refs = [image('DISCO'), RuntimeDependencyRef(kind='weights', relative_path='disco')]
     elif component_id == 'laproteina':
@@ -485,10 +482,12 @@ def native_checkpoint_dependencies(process: str, params: dict):
     if process == 'RunRFD4Proteina':
         dependencies.append(SelectedDependency('weights:rfd4-proteina', 'weights', 'rfd4-proteina',
             'scripts.lib.rfd4_proteina_contract:selected_dependencies', selector='rfd4_proteina_bundle'))
-        from services.rfd4_proteina import selected_oracle_assets
-        for asset in selected_oracle_assets(params['rfd4_request'].get('mode', 'generate'), params):
-            dependencies.append(SelectedDependency(asset['kind'] + ':' + asset['relative_path'],
-                asset['kind'], asset['relative_path'], 'services.rfd4_proteina:selected_oracle_assets'))
+        rfd4_request = params.get('rfd4_request')
+        if isinstance(rfd4_request, dict):
+            from services.rfd4_proteina import selected_oracle_assets
+            for asset in selected_oracle_assets(rfd4_request.get('mode', 'generate'), params):
+                dependencies.append(SelectedDependency(asset['kind'] + ':' + asset['relative_path'],
+                    asset['kind'], asset['relative_path'], 'services.rfd4_proteina:selected_oracle_assets'))
     elif process == 'RunComplexa':
         from scripts.lib.complexa_contract import Request, PROFILES
         request = Request.model_validate(params['complexa_request'])
@@ -674,15 +673,6 @@ def native_checkpoint_dependencies(process: str, params: dict):
         else:
             dependencies.append(SelectedDependency('weights:rf3:checkpoint', 'weights',
                 'foundry/checkpoints/rf3_foundry_01_24_latest_remapped.ckpt', owner))
-    elif process == 'RunRFD3':
-        owner = 'rfd3/cli.py; rfd3/configs/inference_engine/rfdiffusion3.yaml; foundry/inference_engines/checkpoint_registry.py'
-        if params.get('rfd3_extra_config') and not (params.get('rfd3_request_path') or params.get('rfd3_generation_request_path')):
-            require('weights:rfd3:selected-checkpoint', owner,
-                'Native Hydra overrides require resolved checkpoint/config metadata')
-        else:
-            dependencies.append(SelectedDependency('weights:rfd3:checkpoint', 'weights',
-                'foundry/checkpoints/rfd3_latest.ckpt', owner,
-                semantic_release='https://files.ipd.uw.edu/pub/rfd3/rfd3_foundry_2025_12_01_remapped.ckpt'))
     elif process == 'RunBoltzGen':
         owner = 'boltzgen/cli/boltzgen.py:ARTIFACTS,BinderDesignPipeline; modules/boltzgen.nf:RunBoltzGen'
         mode = str(params.get('boltzgen_checkpoint_mode') or 'both')
@@ -1102,7 +1092,7 @@ class ModelRegistry:
             except (TypeError, ValueError) as exc:
                 errors.append(str(exc))
 
-        selected_generator = (params.get('generator', 'rfd3')
+        selected_generator = ((params.get('generator') or 'rfd4_proteina')
             if model_id == 'protein_modification_experimental' and mode_id == 'de_novo_design'
             else model_id)
         if selected_generator in {'rfd4_proteina', 'complexa'}:
@@ -1621,10 +1611,6 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     result_payload = result.model_dump()
     admission_authority = 'platform/api/services/nextflow.py; nextflow.config:profiles'
     retrieval_authority = 'platform/api/services/result_contracts.py:resolve_result_contract'
-    from services.rfd3_generation import generation_result_contract
-    native_generation = (generation_result_contract(p)
-        if model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
-        and p.get('generator', 'rfd3') == 'rfd3' else None)
     if model_id == 'nanopore':
         from services.ont_ngs_completion import ont_native_result_contract
         result_payload = ont_native_result_contract(model_id, mode, p)
@@ -1643,9 +1629,6 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
         result_payload = {'native_contract_authority': retrieval_authority,
             'publication_authority': 'platform/api/services/rfd4_proteina_results.py:publish_native_generation',
             'analysis_contract_id': RESULT_CONTRACT, 'generator_model_id': workflow}
-    elif native_generation is not None:
-        result_payload = native_generation
-        retrieval_authority = native_generation['native_contract_authority']
     elif reviewed and model_id == 'protonpottsmpnn' and workflow == 'protonpottsmpnn_design':
         from services.protonpottsmpnn_design import result_contract
         result_payload = result_contract(mode)

@@ -84,7 +84,7 @@ def _review_stage_identity(stage: str | None, job: Job | None = None, payload: O
     normalized = str(stage or "").strip().lower()
     if normalized == "post_rfantibody":
         if _is_protein_local_redesign_job(job, payload):
-            return "protein_local_redesign", "post_rfd3"
+            return "protein_local_redesign", "post_backbone"
         return "rfantibody", normalized
     if normalized == "post_boltzgen":
         return "boltzgen", normalized
@@ -1500,8 +1500,7 @@ async def _ensure_stage_review_rows_owned(session: AsyncSession, job: Job, force
                 cdr_l1_length=structure_cdr_lengths.get("L1"),
                 cdr_l2_length=structure_cdr_lengths.get("L2"),
                 cdr_l3_length=structure_cdr_lengths.get("L3"),
-                producer_model_id=("rfd3" if review_stage_family == "protein_local_redesign"
-                                   else review_stage_family if review_stage_family != "validation" else None),
+                producer_model_id=(review_stage_family if review_stage_family not in {"protein_local_redesign", "validation"} else None),
                 stage_family=review_stage_family,
                 stage_mode=review_stage_mode,
                 source_stage=stage,

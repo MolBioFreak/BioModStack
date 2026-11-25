@@ -16,7 +16,7 @@ It adds no public mode, model integration, historical-result operation, or mutat
 | Legacy RFdiffusion general-to-FA-MPNN call in `protein_design.nf` | Declared generated protein domain (held declaration, not a fabricated residue map) | Authorized nonfixed sequence-design region; narrowing only | **HELD / UNADMITTED.** No authoritative public caller inventory entry. The admission compiler rejects legacy `rfdiffusion` callers |
 | Legacy RFdiffusion binder-to-FA-MPNN call in `protein_design.nf` | Exact generated binder-role domain (held declaration, not a guessed chain) | Authorized nonfixed binder sequence-design region; narrowing only | **HELD / UNADMITTED.** No new caller entry or activation |
 
-General RFD3 requires `run_rfd_only=true` (`workflows/protein_design.nf`), so it is not an admitted generated FA-MPNN route. BoltzGen's sequence-design stage is skipped. Neither route is enabled by publishing this table. There is no analyzer-wide biological default. Missing child declarations, unsupported parent owners, unsupported materialization sources, missing native role proof, and incompatible prepared bytes fail closed.
+BoltzGen's sequence-design stage is skipped. Neither route is enabled by publishing this table. There is no analyzer-wide biological default. Missing child declarations, unsupported parent owners, unsupported materialization sources, missing native role proof, and incompatible prepared bytes fail closed.
 
 ## Real software joins
 

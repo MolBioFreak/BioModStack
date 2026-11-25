@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _ECO_OVERRIDES: Dict[int, int] = {}
 
 # gpu_index -> capability flag overrides.
-# supports_heavy:    True if the GPU has enough VRAM for AF2/RF3/RFD3
+# supports_heavy:    True if the GPU has enough VRAM for AF2/RF3
 # supports_protenix: True if the GPU can run Protenix workloads
 _CAPABILITY_OVERRIDES: Dict[int, Dict[str, bool]] = {}
 

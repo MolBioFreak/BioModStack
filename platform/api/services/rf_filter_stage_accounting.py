@@ -1,4 +1,4 @@
-"""Read RF3/RFD3 owning-stage evidence without replacing terminal result owners."""
+"""Read RF3 owning-stage evidence without replacing terminal result owners."""
 from collections import Counter
 import hashlib
 import json
@@ -8,7 +8,7 @@ from services.core_protein_scientific_contract import revision_for_job
 from services.rf_filter_criteria import validate_outcome
 
 KEY = 'rf_filter_stages'
-STAGES = {'rf3_prediction_filter': 'rf3', 'rfd3_backbone_filter': 'rfd3'}
+STAGES = {'rf3_prediction_filter': 'rf3'}
 STATES = ('passed', 'rejected_threshold', 'unevaluable_missing', 'invalid_evidence')
 
 
@@ -72,14 +72,12 @@ def prepare_filter_stages(job, output_root):
     if owner is None:
         return None
     if owner == 'protein_local_redesign':
-        # The Redesign/Resequence workflow has no RFD3 stage any more (it was removed from the workflow) and
-        # publishes no filter-stage record, so there is nothing to account. Requiring the roster and
-        # run/filter_stages/*.json refused every completed Resequence result, local and remote.
+        # The Redesign/Resequence workflow publishes no RF filter-stage record, so there is nothing to account.
         return None
     from services.rf_filter_task_roster import authority
     roster = authority(job, owner)
     root = Path(output_root)
-    expected_stages = list(STAGES) if owner == 'protein_design' else ['rfd3_backbone_filter']
+    expected_stages = list(STAGES)
     records = {}
     for stage_id in expected_stages:
         relative = f'run/filter_stages/{stage_id}.json'
@@ -190,7 +188,7 @@ def prepare_filter_stages(job, output_root):
         if stage['role'] == 'selected_publication':
             # This is the existing PublishResults directory, not a guessed input
             # or an arbitrary fallback. Upstream fanout has no such equality.
-            branch = 'rf3_terminal' if stage_id == 'rf3_prediction_filter' else 'rfd3_only'
+            branch = 'rf3_terminal'
             selected = Counter((f"{branch}/{Path(row['artifacts']['published_structure']['path']).name}",
                                 row['artifacts']['published_structure']['sha256']) for row in rows if row['passed'])
             if len({key for key, _ in selected}) != sum(selected.values()):

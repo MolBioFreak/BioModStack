@@ -19,8 +19,7 @@ from paths import get_db_path
 BASE_TABLES = (
     "analysis_runs", "designs", "frustrampnn_comparison_rows",
     "frustrampnn_comparisons", "frustrampnn_guidance_plans", "input_files",
-    "jobs", "nucleotide_sequences", "primers", "rfd3_local_redesign_artifacts",
-    "rfd3_local_redesign_candidates", "rfd3_local_redesign_requests",
+    "jobs", "nucleotide_sequences", "primers",
     "user_sequences", "user_templates",
 )
 

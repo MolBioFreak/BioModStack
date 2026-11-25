@@ -1,6 +1,6 @@
 # Embedded predictor fidelity boundaries
 
-RF3 and RFD3 are outside this release; their deployed behavior is retained.
+RF3 is outside this release; its deployed behavior is retained.
 
 - Caliby `ddb368cbe239ddc2bd731a963f10ffe81452bb1f` self-consistency returns
   `avg_ca_plddt`, `sc_ca_rmsd`, and `tmalign_score` keyed by designed output stem.

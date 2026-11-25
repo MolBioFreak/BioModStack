@@ -22,9 +22,6 @@ from database import (
     ConformationalMappingRequest,
     Design,
     Job,
-    RFD3LocalRedesignArtifact,
-    RFD3LocalRedesignCandidate,
-    RFD3LocalRedesignRequest,
 )
 from services.result_ingester import _design_lineage_fields
 from services.result_state_integrity import finalize_successful_job, job_expects_design_results, repair_result_state
@@ -184,7 +181,7 @@ def test_design_result_expectation_is_explicit_or_known_model_only() -> None:
     assert job_expects_design_results(_job("af2-substring-collision", model_id="custom_af2_report")) is False
     assert job_expects_design_results(_job("confornets-substring-collision", model_id="custom_confornets_experimental_report")) is False
     assert job_expects_design_results(_job("unknown", model_id="custom_file_workflow", mode="run")) is False
-    assert job_expects_design_results(_job("native-rfd3", model_id="protein_local_redesign")) is False
+    assert job_expects_design_results(_job("native-plr", model_id="protein_local_redesign")) is False
     assert job_expects_design_results(
         _job(
             "explicit",

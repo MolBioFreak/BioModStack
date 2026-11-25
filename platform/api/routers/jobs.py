@@ -90,9 +90,6 @@ from services.binder_navigation_jobs import navigation_columns, navigation_job
 from services.job_control import cancel_job_lineage, reject_generic_md_lifecycle_control
 from services import alignment_access, ont_submission_trust, stage_reporting, ont_ngs_contract
 from services.proteinbase_importer import import_proteinbase_bundle
-from services.rfd3_generation import (
-    file_sha256,
-)
 from services.global_experiments.launch_contexts import (
     LaunchContextError,
     resolve_launch_context,
@@ -1791,7 +1788,7 @@ async def launch_resequence_from_structures(
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ):
-    """Resequence and validate exact structures from any generator (RFD4, RFD3, DISCO, ...) on this system.
+    """Resequence and validate exact structures from any generator (RFD4, DISCO, ...) on this system.
 
     Sources are the same exact-structure references the continuation links use, so the source
     job's model does not matter. Fixed or designable positions are caller-selected; with neither

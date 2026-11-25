@@ -524,10 +524,7 @@ async def finalize_successful_job(
                     str(job.model_id or "").strip().lower() == "protein_modification_experimental"
                     # Resequence (region_redesign) is the protein_local_redesign workflow under its current
                     # model id; it publishes no generic candidate record, so it is its own native owner.
-                    and (str(job.mode or "").strip().lower() == "region_redesign" or (
-                        str(job.mode or "").strip().lower() == "de_novo_design"
-                        and str(_parse_job_params(job.params).get("generator") or "rfd3").strip().lower() == "rfd3"
-                    ))
+                    and str(job.mode or "").strip().lower() == "region_redesign"
                 )
             primary_prevalidated = job_id in session.info.get("protein_design_primary_prevalidated", set())
             if strict_revision == 1 and not native_owner and not primary_prevalidated:
