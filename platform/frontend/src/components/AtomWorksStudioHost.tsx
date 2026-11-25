@@ -52,13 +52,16 @@ export const AtomWorksStudioHost = forwardRef<StudioCapture, AtomWorksStudioHost
       return () => window.removeEventListener('message', receive);
     }, [sessionId, onDirty, onReady]);
     return <section aria-label="AtomWorks Studio editor" style={expanded ? { position: 'fixed', inset: 0, zIndex: 1000, background: 'var(--bg-primary)', overflow: 'auto', padding: 8 } : { minWidth: 0 }}>
-      <button type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}
-        style={{ minHeight: 44, padding: '8px 12px' }}>{expanded ? 'Return to form' : 'Expand molecular editor'}</button>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+        <span className="text-xs text-[var(--text-secondary)]">AtomWorks Studio</span>
+        <button type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}
+          style={{ minHeight: 44, padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border-primary)', background: 'var(--bg-tertiary)', fontSize: 12, fontWeight: 500 }}>{expanded ? 'Return to form' : 'Expand molecular editor'}</button>
+      </div>
       {error && <p role="alert">Unsaved Studio edits: {error}. Existing saved source is unchanged; retry capture.</p>}
-      <div style={{ overflowX: 'auto' }}>
+      <div style={{ overflowX: 'auto', border: '1px solid var(--border-primary)', borderRadius: 10, overflow: 'hidden' }}>
       <iframe key={sessionId} ref={frame} title="AtomWorks Studio"
         src={studioFrameUrl(sessionId, window.location.origin)}
-        style={{ width: '100%', minWidth: 320, height: expanded ? 'calc(100dvh - 68px)' : 'max(70vh, 800px)', minHeight: expanded ? 650 : undefined, border: 0 }} />
+        style={{ width: '100%', minWidth: 320, height: expanded ? 'calc(100dvh - 68px)' : 'clamp(420px, 52vh, 580px)', minHeight: expanded ? 650 : undefined, border: 0, display: 'block' }} />
       </div>
     </section>;
   });

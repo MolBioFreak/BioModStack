@@ -265,9 +265,11 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
                 visual={currentVisual ? { slot: currentVisual.slot, ...buildComplexaNativeSelection(currentVisual.identities, { ...currentVisual.receipt, documentId: currentVisual.receipt.path }) } : undefined} />)}
             <NativeProfileSnapshot model={model} mode={activeMode} request={request} discovery={record(inventory.data).native_profile_defaults} generation={readbackGeneration.current.value} onReadback={(generation, effective) => setEffectiveReadback(effective ? { generation, effective } : undefined)} />
             {model === 'rfd4_proteina' && conditionInspection.status && <p role="status" data-condition-inspection>{conditionInspection.status}</p>}
+            <div className="grid gap-2 md:grid-cols-2">
             {<NativeSettingsDisclosure summary={<span>Input structures</span>}>{() => <DeNovoNativeSources onInspection={(slot, receipt, binding) => setInspections(previous => ({ ...previous, [slot]: { receipt, binding: JSON.stringify(binding) } }))} selection={currentVisual} value={nativeDraft.sources} onChange={sources => setNativeDraft(previous => ({ ...previous, sources }))}
                 onSelection={selectSource} />}</NativeSettingsDisclosure>}
             {!!inventory.data?.limitations?.length && <NativeSettingsDisclosure summary={<span>Model limits</span>}>{() => inventory.data?.limitations?.map(text => <p key={text} className="text-sm">{text}</p>)}</NativeSettingsDisclosure>}
+            </div>
             <DeNovoNativePreview request={payload as Partial<Job>} prepareRequest={() => prepareCurrent.current()} documentGeneration={documentGeneration} />
         </ProteinDesignPanel></div>
         <div hidden={section !== 'Native settings'}><ProteinDesignPanel title="Native settings" description="Unchanged settings use the selected profile.">
