@@ -27,56 +27,6 @@ export interface NgsMolBioBindingStatus {
     updated_at: string;
 }
 
-export interface DomainWorkflowPlanHead {
-    schema: 'bms.workflow-plan-head.v1';
-    plan_id: string;
-    name: string;
-    capability_id: string;
-    current_revision_id: string | null;
-    head_generation: number;
-    draft_id: string | null;
-    draft_generation: number | null;
-    domain_revision_id: string | null;
-    capability_contract: DomainWorkflowCapabilityContract;
-    capability_contract_sha256: string;
-    workflow_family: string;
-    adapter_id: string;
-    lifecycle_state: string;
-    draft?: JsonObject | null;
-    created_at: string;
-    updated_at: string;
-}
-
-export interface DomainWorkflowPlanRevision {
-    schema: 'bms.workflow-plan-revision.v1';
-    revision_id: string;
-    plan_id: string;
-    revision_number: number;
-    parent_revision_id: string | null;
-    payload: JsonObject;
-    payload_sha256: string;
-    dependency_graph_sha256: string;
-    change_summary?: string;
-    created_at: string;
-}
-
-export interface DomainWorkflowPreparation {
-    schema: 'bms.workflow-preparation.v1';
-    preparation_id: string;
-    workflow_revision_id: string;
-    normalized_request: JsonObject;
-    normalized_request_sha256: string;
-    requested_settings: JsonObject;
-    effective_settings: JsonObject;
-    scheduler: JsonObject;
-    validation_receipt_id: string;
-    validation: JsonObject;
-    status: string;
-    expected_cardinality: number;
-    created_at: string;
-    prepared_at: string;
-}
-
 export interface PreparedLaunchContext {
     schema: 'bms.launch-context.v2';
     launch_context_id: string;
@@ -160,98 +110,6 @@ export interface RunCloneReceipt {
     receipt_sha256: string;
 }
 
-export interface RunControlCommandDocument {
-    schema: 'bms.run-control-command.v1';
-    command_id: string;
-    command_type: 'cancel';
-    workspace_id: string;
-    run_group_id: string;
-    expected_generation: number;
-    status: string;
-    attempt_count: number;
-    created_at: string;
-    updated_at: string;
-    applied_at: string | null;
-    acknowledgement?: JsonObject;
-    conflict?: JsonObject;
-}
-
-export type DomainResultSurface = ResultSurface;
-
-export type DomainCapabilityLaunchMode = 'managed_materialization' | 'typed_launcher_handoff';
-
-export interface DomainCapabilityModelMode {
-    model_id: string;
-    mode: string;
-}
-
-export interface DomainWorkflowCapabilityContractCapability {
-    [key: string]: JsonValue;
-    capability_id: string;
-    capability_version: string;
-    label: string;
-    scientific_role: string;
-    launch_mode: DomainCapabilityLaunchMode;
-    workflow_family: string;
-    workflow_adapter_id: string;
-    canonical_source_destination: string;
-    parameter_schema_id: string;
-    plannable: true;
-    exposure_state: 'accepted';
-    result_contracts: string[];
-}
-
-export interface DomainWorkflowCapabilityContract {
-    schema: 'bms.workflow-plan-capability-contract.v1';
-    capability: DomainWorkflowCapabilityContractCapability;
-    parameter_schema: JsonObject;
-    allowed_model_modes: DomainCapabilityModelMode[];
-}
-
-export interface DomainCapabilityDescriptor {
-    capability_id: string;
-    capability_version: string;
-    label: string;
-    scientific_role: string;
-    launch_mode: DomainCapabilityLaunchMode;
-    workflow_family: string | null;
-    workflow_adapter_id: string | null;
-    parameter_schema_id: string;
-    parameter_schema: JsonObject;
-    allowed_model_modes: DomainCapabilityModelMode[];
-    result_contracts: string[];
-    canonical_source_destination: string;
-    accepted_source_roles: string[];
-    capability_contract: DomainWorkflowCapabilityContract;
-    capability_contract_sha256: string;
-}
-
-export interface DomainCapabilityList {
-    schema: 'bms.ngs-molbio.domain-capability-list.v1' | 'bms.protein.domain-capability-list.v1';
-    domain_kind?: 'ngs_molbio' | 'protein_in_silico';
-    domain_id: string;
-    domain_revision_id: string | null;
-    experiment_mode: string | null;
-    inventory_sha256: string;
-    items: DomainCapabilityDescriptor[];
-}
-
-export interface DomainDatasetKindMemberContract {
-    adapter_id: string;
-    receipt_kind: string;
-    allowed_roles: string[];
-    compatibility_rule: string;
-}
-
-export interface DomainDatasetKindDescriptor {
-    dataset_kind: string;
-    label: string;
-    minimum_members: number;
-    maximum_members: number;
-    allowed_members: DomainDatasetKindMemberContract[];
-    compatibility_rules: string[];
-}
-
 export interface DomainDatasetHead {
     schema: 'bms.dataset-head.v1';
     project_id?: string;
@@ -268,31 +126,6 @@ export interface DomainDatasetHead {
     updated_at?: string;
 }
 
-export interface DomainDatasetMemberMetadata {
-    display_label?: string | null;
-    group_label?: string | null;
-    condition_label?: string | null;
-    tags: string[];
-}
-
-export interface DomainDatasetMember {
-    schema?: string;
-    receipt_id: string;
-    adapter_id?: string;
-    store_id?: string;
-    entity_kind?: string;
-    entity_id?: string;
-    native_revision_or_generation?: string;
-    native_content_sha256?: string;
-    role: string;
-    ordinal: number;
-    media_type: string | null;
-    metadata: DomainDatasetMemberMetadata;
-    reopen_uri?: string;
-    canonical_member_sha256?: string;
-    size_bytes?: number | null;
-}
-
 export interface DomainDatasetRevisionSummary {
     revision_id: string;
     revision_number: number;
@@ -301,32 +134,121 @@ export interface DomainDatasetRevisionSummary {
     created_at: string;
 }
 
-export interface DomainDatasetRevision extends DomainDatasetRevisionSummary {
-    schema: 'bms.dataset-revision.v1';
-    dataset_id: string;
-    member_count: number;
-    members?: DomainDatasetMember[];
-    members_uri?: string;
-    head_generation?: number;
-    normalized_request_sha256?: string;
-}
-
-export interface DomainDatasetMemberDraft {
-    receipt_id: string;
-    role: string;
-    media_type: string | null;
-    metadata: DomainDatasetMemberMetadata;
-}
-
 export type HierarchyNodeType = 'project' | 'global_experiment' | 'domain_experiment' | 'virtual_folder';
 export type MapNodeType = HierarchyNodeType | 'workflow' | 'run' | 'workflow_run' | 'result' | 'dataset' | 'external_entity_receipt' | 'research_record';
 export type ResultSurfaceKind = 'protein_design' | 'molecular_dynamics' | 'conformational_mapping' | 'frustrampnn' | 'ngs' | 'molbio' | 'artifact' | 'unsupported';
 export type ResultReadiness = 'running' | 'partial' | 'ready' | 'failed' | 'blocked' | 'unsupported';
 export type ScientificAcceptanceState = 'passed' | 'failed' | 'review' | 'unavailable' | 'not_applicable';
 export type ReconciliationState = 'current' | 'pending' | 'stale' | 'source_unavailable' | 'digest_mismatch';
-export type ProteinExperimentMode = 'exploration' | 'design' | 'redesign' | 'prediction' | 'validation' | 'comparison' | 'simulation' | 'analysis';
 export type LineageRole = 'references' | 'uses_input' | 'produced' | 'validated_by';
 export type RecordKind = 'note' | 'observation' | 'decision' | 'conclusion';
+
+export type ProjectStatus = 'draft' | 'active' | 'on_hold' | 'completed' | 'archived';
+
+export interface ProjectSummaryCounts {
+    in_silico: number;
+    molecular_sequences: number;
+    molecular_operations: number;
+    ngs_ont_and_alignments: number;
+}
+
+export interface ProjectHubCapabilities {
+    has_in_silico: boolean;
+    has_molbio: boolean;
+    has_ngs_ont: boolean;
+    has_stats: boolean;
+}
+
+export interface ProjectHubDetachTarget {
+    method: string;
+    target_id: string;
+    domain_experiment_id: string;
+    expected_state_revision_id: string;
+}
+
+export interface ProjectHubItem {
+    id: string;
+    title: string;
+    subtitle: string;
+    kind: string;
+    badges: string[];
+    status: string;
+    experiment_id: string | null;
+    updated_at: string | null;
+    open_href: string;
+    detach: ProjectHubDetachTarget | null;
+}
+
+export interface ProjectHubExperimentSummary {
+    id: string;
+    name: string;
+    status: string;
+    item_count: number;
+}
+
+export interface ProjectHubLinkedLocalProject {
+    id: string;
+    name: string;
+    description: string;
+    lifecycle_state: string;
+    updated_at: string | null;
+    counts?: ProjectSummaryCounts;
+}
+
+export interface ProjectHubResponse {
+    capabilities: ProjectHubCapabilities;
+    project: {
+        id: string;
+        name: string;
+        description: string;
+        lifecycle_state: string;
+        project_scope: 'global' | 'ngs_molbio_local';
+        created_at: string | null;
+        updated_at: string | null;
+        experiments: ProjectHubExperimentSummary[];
+        linked_local_projects: ProjectHubLinkedLocalProject[];
+    };
+    counts: {
+        in_silico: number;
+        molecular_sequences: number;
+        molecular_operations: number;
+        ngs_ont: number;
+        alignments: number;
+    };
+    sections: {
+        in_silico: ProjectHubItem[];
+        molecular_sequences: ProjectHubItem[];
+        molecular_operations: ProjectHubItem[];
+        ngs_ont_and_alignments: ProjectHubItem[];
+    };
+}
+
+export interface ProjectSequenceShelfItem {
+    id: string;
+    sequence_id?: string;
+    revision_id?: string | null;
+    name: string;
+    description?: string | null;
+    sequence_type?: string;
+    length?: number;
+    gc_content?: number | null;
+    is_circular?: boolean;
+    circular?: boolean;
+    topology?: 'circular' | 'linear';
+    feature_count?: number;
+    tags?: string[];
+    created_at?: string | null;
+    updated_at?: string | null;
+    domain_experiment_id?: string | null;
+    state_revision_id?: string | null;
+    reopen_href?: string | null;
+    is_head_editable?: boolean;
+}
+
+export interface ProjectSequencesResponse {
+    project_id: string;
+    items: ProjectSequenceShelfItem[];
+}
 
 export interface ProjectListItem {
     id: string;
@@ -339,9 +261,11 @@ export interface ProjectListItem {
     head_generation: number;
     lifecycle_state: string;
     status: string;
+    project_scope?: 'global' | 'ngs_molbio_local' | null;
     name: string;
     description: string;
     payload: JsonObject | null;
+    counts?: ProjectSummaryCounts;
     active_experiment_count?: number;
     unresolved_failure_count?: number;
     created_at: string;
@@ -351,6 +275,7 @@ export interface ProjectListItem {
 export interface ProjectListPage {
     items: ProjectListItem[];
     next_cursor: string | null;
+    capabilities?: ProjectHubCapabilities;
 }
 
 export interface ProjectSearchOptions {
@@ -639,26 +564,6 @@ export interface AdapterSearchResult {
     next_cursor: string | null;
 }
 
-export interface AdapterReceiptIssueResult {
-    receipt_id: string;
-    receipt: JsonObject;
-}
-
-export interface SourceReverificationReceipt {
-    schema: 'bms.global.source-reverification-receipt.v1';
-    reverification_receipt_id: string;
-    project_id: string;
-    global_experiment_id: string;
-    domain_experiment_id: string;
-    adapter_id: string;
-    adapter_version: string;
-    source_receipt_id: string;
-    source_digest: string;
-    verified_at: string;
-    valid_until: string;
-    normalized_request_sha256: string;
-}
-
 export interface AttachExistingRequest {
     adapter_id: string;
     entity_id: string;
@@ -710,12 +615,6 @@ export interface LaunchContext {
     pinned_scheduler?: JsonObject | null;
     issued_at: string;
     expires_at: string;
-}
-
-export interface CreateLaunchContextRequest {
-    workflow_id?: string | null;
-    workflow_revision_id?: string | null;
-    return_uri: string;
 }
 
 export type ProjectCollectionFamily = 'results' | 'lineage' | 'datasets' | 'notes' | 'decisions' | 'activity';
@@ -778,31 +677,6 @@ export interface ProjectV2CreateRequest {
 
 export type ProjectCreateRequest = ProjectV1CreateRequest | ProjectV2CreateRequest;
 
-export type ProjectUpgradeRequest = ProjectV2CreateRequest & { expected_head_generation: number };
-
-export interface NgsMolBioProjectLink {
-    schema: 'bms.ngs-molbio-project-link.v1';
-    link_id: string;
-    local_project_id: string;
-    global_project_id: string;
-    experiment_ids: string[];
-    result_ids: string[];
-    change_summary: string;
-    created_at: string;
-}
-
-export interface NgsMolBioShareableResult {
-    result_receipt_id: string;
-    experiment_id: string;
-    store_id: string;
-    entity_kind: string;
-    entity_id: string;
-    generation_or_revision: string;
-    content_digest: string;
-    availability: string;
-    created_at: string;
-}
-
 export interface GlobalExperimentV1CreateRequest {
     schema: 'bms.global-experiment.v1';
     name: string;
@@ -837,8 +711,6 @@ export interface GlobalExperimentV2CreateRequest {
 }
 
 export type GlobalExperimentCreateRequest = GlobalExperimentV1CreateRequest | GlobalExperimentV2CreateRequest;
-
-export type GlobalExperimentUpgradeRequest = GlobalExperimentV2CreateRequest & { expected_head_generation: number };
 
 export interface DomainExperimentV2CreateRequest {
     schema: 'bms.domain-experiment.v2';
@@ -892,88 +764,6 @@ export interface HierarchyMutationResult {
     domain_kind?: string;
 }
 
-export interface ProteinTargetAuthority {
-    target_id: string;
-    label: string;
-    role: string;
-    source_receipt_ids: string[];
-    dataset_member_refs: Array<{ dataset_revision_id: string; member_id: string }>;
-}
-
-export interface ProteinDomainAuthority {
-    domain_kind: 'protein_in_silico';
-    domain_revision_id: string;
-    experiment_mode: string;
-    scientific_objective: string;
-    targets: ProteinTargetAuthority[];
-    planned_capabilities: string[];
-    comparison_groups: JsonObject[];
-    validation_strategy: string[];
-}
-
-export type ProteinWorkspaceSection = 'overview' | 'targets' | 'datasets' | 'plans' | 'runs' | 'results' | 'comparisons' | 'evidence' | 'history' | 'technical';
-
-export function proteinWorkspaceHref(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    section: ProteinWorkspaceSection = 'overview',
-): string {
-    const query = new URLSearchParams({ workspace: 'protein', section });
-    return `/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}?${query.toString()}`;
-}
-
-export function proteinDomainAuthority(domain: HierarchyMutationResult): ProteinDomainAuthority | null {
-    const payload = domain.payload;
-    if (!payload || payload.domain_kind !== 'protein_in_silico' || typeof domain.current_revision_id !== 'string') return null;
-    const nested = payload.domain_payload;
-    if (!nested || typeof nested !== 'object' || Array.isArray(nested)) return null;
-    const raw = nested as JsonObject;
-    if (raw.schema !== 'bms.protein-in-silico-experiment.v3' || typeof raw.experiment_mode !== 'string' || !Array.isArray(raw.targets)) return null;
-    const targets: ProteinTargetAuthority[] = [];
-    for (const value of raw.targets) {
-        if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-        const target = value as JsonObject;
-        if (
-            typeof target.target_id !== 'string'
-            || typeof target.label !== 'string'
-            || typeof target.role !== 'string'
-            || !Array.isArray(target.source_receipt_ids)
-            || target.source_receipt_ids.some((receiptId) => typeof receiptId !== 'string')
-            || !Array.isArray(target.dataset_member_refs)
-        ) return null;
-        const datasetMemberRefs = target.dataset_member_refs.flatMap((value) => {
-            if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
-            const reference = value as JsonObject;
-            return typeof reference.dataset_revision_id === 'string' && typeof reference.member_id === 'string'
-                ? [{ dataset_revision_id: reference.dataset_revision_id, member_id: reference.member_id }]
-                : [];
-        });
-        if (datasetMemberRefs.length !== target.dataset_member_refs.length) return null;
-        targets.push({
-            target_id: target.target_id,
-            label: target.label,
-            role: target.role,
-            source_receipt_ids: target.source_receipt_ids as string[],
-            dataset_member_refs: datasetMemberRefs,
-        });
-    }
-    const strings = (value: JsonValue | undefined): string[] => Array.isArray(value) && value.every((item) => typeof item === 'string') ? value as string[] : [];
-    const comparisons = Array.isArray(raw.comparison_groups)
-        ? raw.comparison_groups.filter((value): value is JsonObject => Boolean(value) && typeof value === 'object' && !Array.isArray(value))
-        : [];
-    return {
-        domain_kind: 'protein_in_silico',
-        domain_revision_id: domain.current_revision_id,
-        experiment_mode: raw.experiment_mode,
-        scientific_objective: typeof raw.scientific_objective === 'string' ? raw.scientific_objective : '',
-        targets,
-        planned_capabilities: strings(raw.planned_capability_ids),
-        comparison_groups: comparisons,
-        validation_strategy: strings(raw.validation_capability_ids),
-    };
-}
-
 export type HierarchyPatch = Record<string, JsonValue> & { expected_head_generation: number };
 
 export interface ResearchRecordSubject {
@@ -988,18 +778,6 @@ export interface ResearchRecordRequest {
     author?: string | null;
     source_receipt_ids?: string[];
     supersedes_record_id?: string | null;
-}
-
-export interface ResearchRecordItem {
-    id: string;
-    workspace_id: string;
-    subject_resource_id: string;
-    record_kind: RecordKind;
-    body: string;
-    author: string | null;
-    source_receipt_ids: string[];
-    supersedes_record_id: string | null;
-    created_at: string;
 }
 
 export interface FrustraMpnnExperimentScopeItem {
@@ -1735,6 +1513,34 @@ export async function getProject(projectId: string, signal?: AbortSignal): Promi
     return (await api.get<HierarchyMutationResult>(`/api/projects/${segment(projectId)}`, { signal })).data;
 }
 
+export async function getProjectHub(
+    projectId: string,
+    options: { experimentId?: string; limit?: number; signal?: AbortSignal } = {},
+): Promise<ProjectHubResponse> {
+    const response = await api.get<ProjectHubResponse>(`/api/projects/${segment(projectId)}/hub`, {
+        params: {
+            experiment_id: options.experimentId || undefined,
+            limit: options.limit ?? 200,
+        },
+        signal: options.signal,
+    });
+    return response.data;
+}
+
+export async function getProjectSequences(
+    projectId: string,
+    options: { domainExperimentId?: string; stateRevisionId?: string; signal?: AbortSignal } = {},
+): Promise<ProjectSequencesResponse> {
+    const response = await api.get<ProjectSequencesResponse>(`/api/projects/${segment(projectId)}/sequences`, {
+        params: {
+            domain_experiment_id: options.domainExperimentId || undefined,
+            state_revision_id: options.stateRevisionId || undefined,
+        },
+        signal: options.signal,
+    });
+    return response.data;
+}
+
 export async function listGlobalExperiments(projectId: string, signal?: AbortSignal): Promise<HierarchyMutationResult[]> {
     const response = await api.get<{ items: HierarchyMutationResult[] }>(
         `/api/projects/${segment(projectId)}/experiments`,
@@ -1986,61 +1792,6 @@ export async function searchAdapterEntities(adapterId: string, query: string, li
     return parseAdapterSearchResult(response.data);
 }
 
-export async function issueAdapterReceipt(adapterId: string, entityId: string, projectId: string): Promise<AdapterReceiptIssueResult> {
-    const response = await api.post<unknown>(
-        `/api/domain-adapters/${segment(adapterId)}/entities/${segment(entityId)}/receipt`,
-        { project_id: projectId },
-    );
-    const record = exactRecord(response.data, 'adapter receipt issue result', ['receipt_id', 'receipt']);
-    return {
-        receipt_id: requireString(record.receipt_id, 'adapter receipt issue result.receipt_id'),
-        receipt: requireJsonObject(record.receipt, 'adapter receipt issue result.receipt'),
-    };
-}
-
-export async function reverifySourceReceipt(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    sourceReceiptId: string,
-): Promise<SourceReverificationReceipt> {
-    const response = await api.post<unknown>(
-        `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}/source-receipts/${segment(sourceReceiptId)}/reverify`,
-    );
-    const record = exactRecord(response.data, 'source re-verification receipt', [
-        'schema',
-        'reverification_receipt_id',
-        'project_id',
-        'global_experiment_id',
-        'domain_experiment_id',
-        'adapter_id',
-        'adapter_version',
-        'source_receipt_id',
-        'source_digest',
-        'verified_at',
-        'valid_until',
-        'normalized_request_sha256',
-    ]);
-    const schema = requireString(record.schema, 'source re-verification receipt.schema');
-    if (schema !== 'bms.global.source-reverification-receipt.v1') {
-        throw new Error('source re-verification receipt.schema is unsupported');
-    }
-    return {
-        schema,
-        reverification_receipt_id: requireString(record.reverification_receipt_id, 'source re-verification receipt.reverification_receipt_id'),
-        project_id: requireString(record.project_id, 'source re-verification receipt.project_id'),
-        global_experiment_id: requireString(record.global_experiment_id, 'source re-verification receipt.global_experiment_id'),
-        domain_experiment_id: requireString(record.domain_experiment_id, 'source re-verification receipt.domain_experiment_id'),
-        adapter_id: requireString(record.adapter_id, 'source re-verification receipt.adapter_id'),
-        adapter_version: requireString(record.adapter_version, 'source re-verification receipt.adapter_version'),
-        source_receipt_id: requireString(record.source_receipt_id, 'source re-verification receipt.source_receipt_id'),
-        source_digest: requireString(record.source_digest, 'source re-verification receipt.source_digest'),
-        verified_at: requireString(record.verified_at, 'source re-verification receipt.verified_at'),
-        valid_until: requireString(record.valid_until, 'source re-verification receipt.valid_until'),
-        normalized_request_sha256: requireString(record.normalized_request_sha256, 'source re-verification receipt.normalized_request_sha256'),
-    };
-}
-
 export async function attachExistingEntity(
     projectId: string,
     globalExperimentId: string,
@@ -2080,21 +1831,6 @@ export function safeProjectNavigationReturn(raw: string | null): string | null {
         if (uri.origin !== 'https://bms.local' || !/^\/projects\/[^/\\\s]+$/.test(decodeURIComponent(uri.pathname))) return null;
         return `${uri.pathname}${uri.search}${uri.hash}`;
     } catch { return null; }
-}
-
-export function projectNavigationHref(href: string, returnTo: string): string {
-    const safeReturn = safeProjectNavigationReturn(returnTo);
-    if (!safeReturn || !/^\/(?:designs|jobs)\//.test(href)) return href;
-    const destination = new URL(href, 'https://bms.local');
-    if (destination.origin !== 'https://bms.local') return href;
-    // PM links name a record owner. Do not silently mix scheduler children into
-    // a note's validation result; an explicitly authored recursive scope wins.
-    if (/^\/designs\/[^/]+\/?$/.test(destination.pathname) && !destination.searchParams.has('include_children')) {
-        destination.searchParams.set('include_children', 'false');
-    }
-    destination.searchParams.set('return_to', safeReturn);
-    destination.searchParams.set('return_label', 'Return to Project');
-    return `${destination.pathname}${destination.search}${destination.hash}`;
 }
 
 export function verifiedProjectReturnUri(context: Pick<LaunchContext, 'project_id' | 'global_experiment_id' | 'domain_experiment_id' | 'return_uri'>): string | null {
@@ -2161,19 +1897,6 @@ export function projectResultHref(route: NonNullable<ResultSurface['route']>, co
     return `${destination.pathname}${destination.search}`;
 }
 
-export async function createLaunchContext(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    request: CreateLaunchContextRequest,
-): Promise<LaunchContext> {
-    const response = await api.post<unknown>(
-        `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}/launch-contexts`,
-        request,
-    );
-    return parseLaunchContext(response.data);
-}
-
 export async function getLaunchContext(launchContextId: string, signal?: AbortSignal): Promise<LaunchContext> {
     const response = await api.get<unknown>(
         `/api/launch-contexts/${segment(launchContextId)}`,
@@ -2186,38 +1909,8 @@ export async function createProject(request: ProjectCreateRequest): Promise<Hier
     return (await api.post<HierarchyMutationResult>('/api/projects', request)).data;
 }
 
-export async function listNgsMolBioProjectLinks(projectId: string, limit = 100, signal?: AbortSignal): Promise<NgsMolBioProjectLink[]> {
-    const response = await api.get<{ items: NgsMolBioProjectLink[] }>(
-        `/api/projects/${segment(projectId)}/ngs-molbio-links`,
-        { params: { limit }, signal },
-    );
-    return response.data.items;
-}
-
-export async function listNgsMolBioShareableResults(projectId: string, signal?: AbortSignal): Promise<NgsMolBioShareableResult[]> {
-    const response = await api.get<{ items: NgsMolBioShareableResult[] }>(
-        `/api/projects/${segment(projectId)}/ngs-molbio-shareable-results`,
-        { signal },
-    );
-    return response.data.items;
-}
-
-export async function linkNgsMolBioProject(
-    globalProjectId: string,
-    request: { local_project_id: string; experiment_ids: string[]; result_ids: string[]; change_summary: string },
-): Promise<NgsMolBioProjectLink> {
-    return (await api.post<NgsMolBioProjectLink>(
-        `/api/projects/${segment(globalProjectId)}/ngs-molbio-links`,
-        request,
-    )).data;
-}
-
 export async function updateProject(projectId: string, request: HierarchyPatch): Promise<HierarchyMutationResult> {
     return (await api.patch<HierarchyMutationResult>(`/api/projects/${segment(projectId)}`, request)).data;
-}
-
-export async function upgradeProject(projectId: string, request: ProjectUpgradeRequest): Promise<HierarchyMutationResult> {
-    return (await api.post<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/upgrade`, request)).data;
 }
 
 export async function archiveProject(projectId: string, expectedHeadGeneration: number): Promise<HierarchyMutationResult> {
@@ -2232,36 +1925,8 @@ export async function createGlobalExperiment(projectId: string, request: GlobalE
     return (await api.post<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments`, request)).data;
 }
 
-export async function updateGlobalExperiment(projectId: string, experimentId: string, request: HierarchyPatch): Promise<HierarchyMutationResult> {
-    return (await api.patch<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}`, request)).data;
-}
-
-export async function upgradeGlobalExperiment(projectId: string, experimentId: string, request: GlobalExperimentUpgradeRequest): Promise<HierarchyMutationResult> {
-    return (await api.post<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/upgrade`, request)).data;
-}
-
-export async function archiveGlobalExperiment(projectId: string, experimentId: string, expectedHeadGeneration: number): Promise<HierarchyMutationResult> {
-    return (await api.post<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/archive`, { expected_head_generation: expectedHeadGeneration })).data;
-}
-
-export async function restoreGlobalExperiment(projectId: string, experimentId: string, expectedHeadGeneration: number): Promise<HierarchyMutationResult> {
-    return (await api.post<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/restore`, { expected_head_generation: expectedHeadGeneration })).data;
-}
-
 export async function createDomainExperiment(projectId: string, experimentId: string, request: DomainExperimentCreateRequest): Promise<HierarchyMutationResult> {
     return (await api.post<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/domains`, request)).data;
-}
-
-export async function updateDomainExperiment(projectId: string, experimentId: string, domainId: string, request: HierarchyPatch): Promise<HierarchyMutationResult> {
-    return (await api.patch<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/domains/${segment(domainId)}`, request)).data;
-}
-
-export async function archiveDomainExperiment(projectId: string, experimentId: string, domainId: string, expectedHeadGeneration: number): Promise<HierarchyMutationResult> {
-    return (await api.post<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/domains/${segment(domainId)}/archive`, { expected_head_generation: expectedHeadGeneration })).data;
-}
-
-export async function restoreDomainExperiment(projectId: string, experimentId: string, domainId: string, expectedHeadGeneration: number): Promise<HierarchyMutationResult> {
-    return (await api.post<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/domains/${segment(domainId)}/restore`, { expected_head_generation: expectedHeadGeneration })).data;
 }
 
 export async function createResearchRecord(subject: ResearchRecordSubject, request: ResearchRecordRequest): Promise<JsonObject> {
@@ -2269,18 +1934,6 @@ export async function createResearchRecord(subject: ResearchRecordSubject, reque
     if (subject.globalExperimentId) path += `/experiments/${segment(subject.globalExperimentId)}`;
     if (subject.domainExperimentId) path += `/domains/${segment(subject.domainExperimentId)}`;
     return (await api.post<JsonObject>(`${path}/records`, request)).data;
-}
-
-export async function listDomainResearchRecords(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    signal?: AbortSignal,
-): Promise<{ items: ResearchRecordItem[]; next_cursor: string | null }> {
-    return (await api.get<{ items: ResearchRecordItem[]; next_cursor: string | null }>(
-        `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}/records`,
-        { params: { limit: 100 }, signal },
-    )).data;
 }
 
 export async function getNgsMolBioBinding(
@@ -2295,62 +1948,8 @@ export async function getNgsMolBioBinding(
     )).data;
 }
 
-export async function initializeNgsMolBioBinding(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    expectedDomainRevisionId: string,
-): Promise<NgsMolBioBindingStatus> {
-    return (await api.post<NgsMolBioBindingStatus>(
-        `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}/initialize`,
-        { expected_domain_revision_id: expectedDomainRevisionId },
-        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
-    )).data;
-}
-
-export async function reverifyNgsMolBioBinding(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    expectedDomainRevisionId: string,
-    expectedBindingRevisionId: string,
-): Promise<NgsMolBioBindingStatus> {
-    return (await api.post<NgsMolBioBindingStatus>(
-        `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}/binding/reverify`,
-        {
-            expected_domain_revision_id: expectedDomainRevisionId,
-            expected_binding_revision_id: expectedBindingRevisionId,
-        },
-        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
-    )).data;
-}
-
 function domainOperatorPath(projectId: string, globalExperimentId: string, domainExperimentId: string): string {
     return `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}`;
-}
-
-export async function listDomainCapabilities(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    signal?: AbortSignal,
-): Promise<DomainCapabilityList> {
-    return (await api.get<DomainCapabilityList>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/capabilities`,
-        { signal },
-    )).data;
-}
-
-export async function listDomainDatasetKinds(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    signal?: AbortSignal,
-): Promise<{ schema: string; registry_schema: string; registry_sha256: string; items: DomainDatasetKindDescriptor[] }> {
-    return (await api.get<{ schema: string; registry_schema: string; registry_sha256: string; items: DomainDatasetKindDescriptor[] }>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/dataset-kinds`,
-        { signal },
-    )).data;
 }
 
 export async function listDomainDatasets(
@@ -2363,32 +1962,6 @@ export async function listDomainDatasets(
     return (await api.get<{ schema: string; items: DomainDatasetHead[]; next_cursor: string | null; has_more: boolean }>(
         `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets`,
         { params: { limit: 100, cursor: cursor ?? undefined }, signal },
-    )).data;
-}
-
-export async function createDomainDataset(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    request: { name: string; dataset_kind: string; change_summary: string },
-): Promise<DomainDatasetHead> {
-    return (await api.post<DomainDatasetHead>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets`,
-        request,
-        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
-    )).data;
-}
-
-export async function getDomainDataset(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    datasetId: string,
-    signal?: AbortSignal,
-): Promise<DomainDatasetHead> {
-    return (await api.get<DomainDatasetHead>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets/${segment(datasetId)}`,
-        { signal },
     )).data;
 }
 
@@ -2406,200 +1979,6 @@ export async function listDomainDatasetRevisions(
     )).data;
 }
 
-export async function getDomainDatasetRevision(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    datasetId: string,
-    revisionId: string,
-    signal?: AbortSignal,
-): Promise<DomainDatasetRevision> {
-    return (await api.get<DomainDatasetRevision>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets/${segment(datasetId)}/revisions/${segment(revisionId)}`,
-        { signal },
-    )).data;
-}
-
-export async function listDomainDatasetRevisionMembers(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    datasetId: string,
-    revisionId: string,
-    signal?: AbortSignal,
-    cursor?: string | null,
-): Promise<{ schema: string; items: DomainDatasetMember[]; next_cursor: string | null; has_more: boolean }> {
-    return (await api.get<{ schema: string; items: DomainDatasetMember[]; next_cursor: string | null; has_more: boolean }>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets/${segment(datasetId)}/revisions/${segment(revisionId)}/members`,
-        { params: { limit: 100, cursor: cursor ?? undefined }, signal },
-    )).data;
-}
-
-export async function reviseDomainDataset(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    datasetId: string,
-    expectedHeadGeneration: number,
-    changeSummary: string,
-    members: DomainDatasetMemberDraft[],
-): Promise<DomainDatasetRevision> {
-    return (await api.post<DomainDatasetRevision>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets/${segment(datasetId)}/revisions`,
-        {
-            expected_head_generation: expectedHeadGeneration,
-            change_summary: changeSummary,
-            members: members.map((member, ordinal) => ({ ...member, ordinal })),
-        },
-        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
-    )).data;
-}
-
-async function setDomainDatasetLifecycle(
-    operation: 'archive' | 'restore',
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    datasetId: string,
-    expectedHeadGeneration: number,
-    changeSummary: string,
-): Promise<DomainDatasetHead> {
-    return (await api.post<DomainDatasetHead>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets/${segment(datasetId)}/${operation}`,
-        { expected_head_generation: expectedHeadGeneration, change_summary: changeSummary },
-        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
-    )).data;
-}
-
-export async function archiveDomainDataset(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    datasetId: string,
-    expectedHeadGeneration: number,
-    changeSummary: string,
-): Promise<DomainDatasetHead> {
-    return setDomainDatasetLifecycle('archive', projectId, globalExperimentId, domainExperimentId, datasetId, expectedHeadGeneration, changeSummary);
-}
-
-export async function restoreDomainDataset(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    datasetId: string,
-    expectedHeadGeneration: number,
-    changeSummary: string,
-): Promise<DomainDatasetHead> {
-    return setDomainDatasetLifecycle('restore', projectId, globalExperimentId, domainExperimentId, datasetId, expectedHeadGeneration, changeSummary);
-}
-
-export async function listDomainWorkflowPlans(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    signal?: AbortSignal,
-): Promise<{ schema: string; items: DomainWorkflowPlanHead[]; next_cursor: string | null }> {
-    return (await api.get<{ schema: string; items: DomainWorkflowPlanHead[]; next_cursor: string | null }>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/plans`,
-        { signal },
-    )).data;
-}
-
-export async function createDomainWorkflowPlan(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    request: { name: string; capability_id: string; expected_domain_revision_id: string },
-): Promise<DomainWorkflowPlanHead> {
-    return (await api.post<DomainWorkflowPlanHead>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/plans`,
-        request,
-        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
-    )).data;
-}
-
-export async function getDomainWorkflowPlan(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    planId: string,
-    signal?: AbortSignal,
-): Promise<DomainWorkflowPlanHead> {
-    return (await api.get<DomainWorkflowPlanHead>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/plans/${segment(planId)}`,
-        { signal },
-    )).data;
-}
-
-export async function replaceDomainWorkflowPlanDraft(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    planId: string,
-    expectedDraftGeneration: number,
-    payload: JsonObject,
-): Promise<{ schema: string; draft_id: string; plan_id: string; generation: number; payload: JsonObject; payload_sha256: string; updated_at: string }> {
-    return (await api.put(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/plans/${segment(planId)}/draft`,
-        { expected_draft_generation: expectedDraftGeneration, payload },
-    )).data;
-}
-
-export async function publishDomainWorkflowPlanRevision(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    planId: string,
-    request: { expected_head_generation: number; expected_draft_generation: number; change_summary: string },
-): Promise<DomainWorkflowPlanRevision> {
-    return (await api.post<DomainWorkflowPlanRevision>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/plans/${segment(planId)}/revisions`,
-        request,
-    )).data;
-}
-
-export async function listDomainWorkflowPlanRevisions(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    planId: string,
-    signal?: AbortSignal,
-): Promise<{ schema: string; items: DomainWorkflowPlanRevision[]; next_cursor: number | null }> {
-    return (await api.get<{ schema: string; items: DomainWorkflowPlanRevision[]; next_cursor: number | null }>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/plans/${segment(planId)}/revisions`,
-        { signal },
-    )).data;
-}
-
-export async function prepareDomainWorkflowPlanRevision(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    planId: string,
-    revisionId: string,
-    inputDatasetRevisionIds: string[],
-): Promise<DomainWorkflowPreparation> {
-    return (await api.post<DomainWorkflowPreparation>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/plans/${segment(planId)}/revisions/${segment(revisionId)}/preparations`,
-        { input_dataset_revision_ids: inputDatasetRevisionIds },
-        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
-    )).data;
-}
-
-export async function issuePreparedLaunchContext(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    preparationId: string,
-    returnUri: string,
-): Promise<PreparedLaunchContext> {
-    return (await api.post<PreparedLaunchContext>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/preparations/${segment(preparationId)}/launch-contexts`,
-        { return_uri: returnUri },
-        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
-    )).data;
-}
-
 export interface PreparationLaunchRequest {
     preparation_id: string;
     launch_context_id: string | null;
@@ -2614,52 +1993,6 @@ export async function launchDomainRunGroup(
     return (await api.post<DomainRunGroup>(
         `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups`,
         { preparation_launches: preparationLaunches },
-        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
-    )).data;
-}
-
-export async function getDomainRunGroup(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    runGroupId: string,
-    signal?: AbortSignal,
-): Promise<DomainRunGroup> {
-    return (await api.get<DomainRunGroup>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups/${segment(runGroupId)}`,
-        { signal },
-    )).data;
-}
-
-export async function retryDomainRunGroup(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    runGroupId: string,
-    expectedRunGroupGeneration: number,
-    replacements: Array<{ run_id: string; preparation_id: string; launch_context_id: string | null }>,
-): Promise<DomainRunGroup> {
-    return (await api.post<DomainRunGroup>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups/${segment(runGroupId)}/retry`,
-        { expected_run_group_generation: expectedRunGroupGeneration, replacements },
-        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
-    )).data;
-}
-
-export async function resubmitDomainRunGroup(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    runGroupId: string,
-    expectedRunGroupGeneration: number,
-    preparationLaunches: PreparationLaunchRequest[],
-): Promise<DomainRunGroup> {
-    return (await api.post<DomainRunGroup>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups/${segment(runGroupId)}/resubmit`,
-        {
-            expected_run_group_generation: expectedRunGroupGeneration,
-            preparation_launches: preparationLaunches,
-        },
         { headers: { 'Idempotency-Key': crypto.randomUUID() } },
     )).data;
 }
@@ -2686,86 +2019,6 @@ export async function cloneDomainRunIntent(
             idempotency_key: crypto.randomUUID(),
         },
     )).data;
-}
-
-export async function cancelDomainRunGroup(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    runGroupId: string,
-    expectedRunGroupGeneration: number,
-    reason: string,
-): Promise<RunControlCommandDocument> {
-    return (await api.post<RunControlCommandDocument>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups/${segment(runGroupId)}/cancel`,
-        { expected_run_group_generation: expectedRunGroupGeneration, reason },
-        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
-    )).data;
-}
-
-export async function reopenDomainResult(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    receiptId: string,
-): Promise<DomainResultSurface> {
-    return (await api.get<DomainResultSurface>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/results/${segment(receiptId)}/surface`,
-    )).data;
-}
-
-export async function retryRunGroup(
-    workspaceId: string,
-    runGroupId: string,
-    expectedGeneration: number,
-    sourceDomainId: string,
-    replacements: Array<{ run_id: string; preparation_id: string; launch_context_id: string | null }>,
-): Promise<JsonObject> {
-    const replacementPreparationIds = Object.fromEntries(
-        replacements.map((item) => [item.run_id, item.preparation_id]),
-    );
-    const replacementLaunchContextIds = Object.fromEntries(
-        replacements
-            .filter((item) => item.launch_context_id !== null)
-            .map((item) => [item.run_id, item.launch_context_id as string]),
-    );
-    return (await api.post<JsonObject>(
-        `/api/experiment-workspaces/${segment(workspaceId)}/run-groups/${segment(runGroupId)}/retry`,
-        {
-            idempotency_key: crypto.randomUUID(),
-            expected_generation: expectedGeneration,
-            source_domain_id: sourceDomainId,
-            replacement_preparation_ids: replacementPreparationIds,
-            replacement_launch_context_ids: replacementLaunchContextIds,
-        },
-    )).data;
-}
-
-export async function resubmitRunGroup(
-    workspaceId: string,
-    runGroupId: string,
-    expectedGeneration: number,
-    sourceDomainId: string,
-    preparationLaunches: PreparationLaunchRequest[],
-): Promise<JsonObject> {
-    return (await api.post<JsonObject>(
-        `/api/experiment-workspaces/${segment(workspaceId)}/run-groups/${segment(runGroupId)}/resubmit`,
-        {
-            idempotency_key: crypto.randomUUID(),
-            expected_generation: expectedGeneration,
-            source_domain_id: sourceDomainId,
-            preparation_ids: preparationLaunches.map((item) => item.preparation_id),
-            launch_context_ids: Object.fromEntries(
-                preparationLaunches
-                    .filter((item) => item.launch_context_id !== null)
-                    .map((item) => [item.preparation_id, item.launch_context_id as string]),
-            ),
-        },
-    )).data;
-}
-
-export function isPermissionError(error: unknown): boolean {
-    return isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403);
 }
 
 export function projectManagerErrorMessage(error: unknown): string {

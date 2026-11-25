@@ -92,7 +92,8 @@ import {
     type NucleotideSequenceCreate,
 } from '../../lib/api';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
-import { projectHubDNASequencesToConstructShelf } from './utils/projectConstructShelf';
+import { projectHubDNASequencesToConstructShelf, projectSequencesToConstructShelf } from './utils/projectConstructShelf';
+import { getProjectSequences, searchProjects } from '../../lib/projectManager';
 import type {
     AnalysisTrack,
     SequenceData,
@@ -193,6 +194,11 @@ interface SequenceLibraryProps {
     onAlign?: (sequences: NucleotideSequenceListItem[]) => void;
     alignmentBusy?: boolean;
     alignmentError?: string;
+    shelfSourceValue?: string;
+    activeProjectId?: string | null;
+    projectOptions?: Array<{ id: string; name: string }>;
+    onShelfSourceChange?: (nextValue: string) => void;
+    onShelfPickerEngage?: () => void;
 }
 
 export function SequenceLibrary({
@@ -214,6 +220,11 @@ export function SequenceLibrary({
     onAlign,
     alignmentBusy = false,
     alignmentError,
+    shelfSourceValue,
+    activeProjectId,
+    projectOptions = [],
+    onShelfSourceChange,
+    onShelfPickerEngage,
 }: SequenceLibraryProps) {
     const [showDemos, setShowDemos] = useState(false);
     const [alignmentSelection, setAlignmentSelection] = useState<string[]>([]);
@@ -234,9 +245,23 @@ export function SequenceLibrary({
             style={{ width: mobile ? '100%' : `${width}px` }}
         >
             <div className="flex items-center justify-between p-3 border-b border-slate-700">
-                <div>
+                <div className="min-w-0">
                     <h3 className="font-semibold text-slate-200">DNA Sequence Shelf</h3>
-                    <p className="text-xs text-slate-500">{projectScoped && !showAllConstructs ? 'DNA sequences in this Project' : 'Open and recent unassigned DNA sequences'}</p>
+                    <p className="text-xs text-slate-300">
+                        {shelfSourceValue === 'all'
+                            ? 'All saved DNA/RNA sequences'
+                            : (projectScoped && !showAllConstructs)
+                                ? 'Sequences in this Project'
+                                : 'Open and recent unassigned DNA sequences'}
+                    </p>
+                    {activeProjectId && (
+                        <Link
+                            to={`/projects/${encodeURIComponent(activeProjectId)}`}
+                            className="mt-1 inline-flex items-center text-xs font-semibold text-cyan-300 hover:underline"
+                        >
+                            ← Back to project
+                        </Link>
+                    )}
                 </div>
                 <button
                     onClick={onRefresh}
@@ -252,7 +277,36 @@ export function SequenceLibrary({
                     </svg>
                 </button>
             </div>
-            {projectScoped && <button type="button" onClick={onToggleAllConstructs} className="border-b border-slate-700 px-3 py-2 text-left text-xs font-semibold text-cyan-300 hover:bg-slate-800">{showAllConstructs ? 'Show Project DNA sequences' : 'Unassigned DNA sequences'}</button>}
+            {onShelfSourceChange ? (
+                <div className="border-b border-slate-700 px-3 py-2.5">
+                    <label className="block text-xs font-semibold text-slate-300">
+                        Sequences from
+                        <select
+                            aria-label="Sequences from"
+                            value={shelfSourceValue ?? 'unassigned'}
+                            onFocus={onShelfPickerEngage}
+                            onPointerDown={onShelfPickerEngage}
+                            onMouseEnter={onShelfPickerEngage}
+                            onChange={(event) => onShelfSourceChange(event.target.value)}
+                            className="mt-1 w-full rounded border border-slate-600 bg-slate-950 px-2 py-1.5 text-xs text-slate-100 focus:border-cyan-400 focus:outline-none"
+                        >
+                            <option value="unassigned">Unassigned</option>
+                            <option value="all">All sequences</option>
+                            {projectOptions.length > 0 && (
+                                <optgroup label="Projects">
+                                    {projectOptions.map((project) => (
+                                        <option key={project.id} value={`project:${project.id}`}>
+                                            {project.name}
+                                        </option>
+                                    ))}
+                                </optgroup>
+                            )}
+                        </select>
+                    </label>
+                </div>
+            ) : (
+                projectScoped && <button type="button" onClick={onToggleAllConstructs} className="border-b border-slate-700 px-3 py-2 text-left text-xs font-semibold text-cyan-300 hover:bg-slate-800">{showAllConstructs ? 'Show Project DNA sequences' : 'Unassigned DNA sequences'}</button>
+            )}
             {onAlign && <div className="border-b border-[var(--border-primary)] p-3 text-xs text-[var(--text-secondary)]">
                 <button type="button" disabled={alignmentBusy || alignmentSequences.length < 2 || mixedMolecules}
                     className="w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 font-semibold text-[var(--text-primary)] disabled:opacity-50"
@@ -296,8 +350,12 @@ export function SequenceLibrary({
                     )}
                 </div>}
 
-                <div className="border-b border-slate-700 px-3 py-2 text-xs font-semibold text-slate-400">
-                    {projectScoped && !showAllConstructs ? `Project DNA sequences (${sequences.length})` : `Unassigned DNA sequences (${sequences.length})`}
+                <div className="border-b border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300">
+                    {shelfSourceValue === 'all'
+                        ? `All sequences (${sequences.length})`
+                        : (projectScoped && !showAllConstructs)
+                            ? `Project DNA sequences (${sequences.length})`
+                            : `Unassigned DNA sequences (${sequences.length})`}
                 </div>
 
                 {sequences.length === 0 ? (
@@ -708,10 +766,38 @@ export function MolBioToolkitV2() {
     const openedDeepLinkRef = useRef<string | null>(null);
     // State
     const [digestAssemblyFragments, setDigestAssemblyFragments] = useState<import('../../lib/api').AssemblyFragmentInput[] | null>(null);
-    const projectShelfScope = JSON.stringify([workspaceId ?? null, globalExperimentId ?? null, domainExperimentId ?? null, stateRevisionId ?? null]);
-    const [unassignedShelfScope, setUnassignedShelfScope] = useState<string | null>(null);
-    const showAllConstructs = unassignedShelfScope === projectShelfScope;
-    const libraryScope = JSON.stringify([projectShelfScope, showAllConstructs]);
+    const urlProjectId = queryParams.get('project_id')?.trim() || queryParams.get('workspace_id')?.trim() || workspaceId || null;
+    const [shelfSelectionOverride, setShelfSelectionOverride] = useState<
+        { forUrlProjectId: string | null; value: 'unassigned' | 'all' | `project:${string}` } | null
+    >(null);
+    const effectiveOverride = shelfSelectionOverride && shelfSelectionOverride.forUrlProjectId === urlProjectId
+        ? shelfSelectionOverride.value
+        : null;
+    const activeShelfProjectId = effectiveOverride === null
+        ? urlProjectId
+        : (effectiveOverride.startsWith('project:') ? effectiveOverride.slice('project:'.length) : null);
+    const shelfSourceValue = activeShelfProjectId
+        ? `project:${activeShelfProjectId}`
+        : (effectiveOverride === 'all' ? 'all' : 'unassigned');
+    const hasExactPinnedFourTuple = Boolean(workspaceId && globalExperimentId && domainExperimentId && stateRevisionId && activeShelfProjectId === workspaceId && effectiveOverride === null);
+    const projectShelfScope = JSON.stringify([activeShelfProjectId ?? null, globalExperimentId ?? null, domainExperimentId ?? null, stateRevisionId ?? null]);
+    const showAllConstructs = effectiveOverride === 'unassigned' || effectiveOverride === 'all';
+    const libraryScope = JSON.stringify([projectShelfScope, shelfSourceValue]);
+    const [shelfPickerEngaged, setShelfPickerEngaged] = useState(false);
+    const engageShelfPicker = useCallback(() => setShelfPickerEngaged(true), []);
+    const shelfProjectsQuery = useQuery({
+        queryKey: ['molbio-shelf-projects'],
+        queryFn: ({ signal }) => searchProjects({ archive: 'active', projectScope: 'all', limit: 100, signal }),
+        enabled: shelfPickerEngaged || Boolean(activeShelfProjectId),
+        staleTime: 60_000,
+    });
+    const shelfProjectOptions = useMemo(() => {
+        const items = (shelfProjectsQuery.data?.items ?? []).map((p) => ({ id: p.id, name: p.name }));
+        if (activeShelfProjectId && !items.some((item) => item.id === activeShelfProjectId)) {
+            return [{ id: activeShelfProjectId, name: activeShelfProjectId }, ...items];
+        }
+        return items;
+    }, [activeShelfProjectId, shelfProjectsQuery.data?.items]);
     const [library, setLibrary] = useState<{ scope: string; items: NucleotideSequenceListItem[] }>({ scope: libraryScope, items: [] });
     // A scope change hides old rows in the same render, before async effects run.
     const sequences = library.scope === libraryScope ? library.items : [];
@@ -1054,13 +1140,31 @@ export function MolBioToolkitV2() {
         setLibrary({ scope: libraryScope, items: [] });
         setLibraryLoading(true);
         try {
-            if (!showAllConstructs && workspaceId && globalExperimentId && domainExperimentId && stateRevisionId) {
+            if (hasExactPinnedFourTuple && workspaceId && globalExperimentId && domainExperimentId && stateRevisionId) {
                 const model = await queryClient.fetchQuery({
                     queryKey: ['molbio-project-hub', workspaceId, globalExperimentId, domainExperimentId, stateRevisionId],
                     queryFn: ({ signal }) => fetchProjectHub(workspaceId, globalExperimentId, domainExperimentId, stateRevisionId, signal),
                     staleTime: 30_000,
                 });
                 if (controller.isCurrent(token)) setLibrary({ scope: libraryScope, items: projectHubDNASequencesToConstructShelf(model) });
+                return;
+            }
+            if (activeShelfProjectId) {
+                const payload = await queryClient.fetchQuery({
+                    queryKey: ['molbio-project-sequences', activeShelfProjectId],
+                    queryFn: ({ signal }) => getProjectSequences(activeShelfProjectId, { signal }),
+                    staleTime: 15_000,
+                });
+                if (controller.isCurrent(token)) setLibrary({ scope: libraryScope, items: projectSequencesToConstructShelf(payload.items) });
+                return;
+            }
+            if (shelfSourceValue === 'all') {
+                const response = await queryClient.fetchQuery({
+                    queryKey: ['molbio-recent-sequence-shelf', 'all'],
+                    queryFn: () => fetchNucleotideSequences({ limit: 100, sort_by: 'updated_at', sort_desc: true }),
+                    staleTime: 0,
+                });
+                if (controller.isCurrent(token)) setLibrary({ scope: libraryScope, items: response.data });
                 return;
             }
             const openIds = JSON.parse(openShelfIdsKey) as string[];
@@ -1089,7 +1193,31 @@ export function MolBioToolkitV2() {
         } finally {
             if (controller.isCurrent(token)) setLibraryLoading(false);
         }
-    }, [domainExperimentId, globalExperimentId, libraryScope, openShelfIdsKey, queryClient, showAllConstructs, stateRevisionId, workspaceId]);
+    }, [activeShelfProjectId, domainExperimentId, globalExperimentId, hasExactPinnedFourTuple, libraryScope, openShelfIdsKey, queryClient, shelfSourceValue, stateRevisionId, workspaceId]);
+
+    const handleShelfSourceChange = useCallback((nextValue: string) => {
+        if (nextValue.startsWith('project:')) {
+            const nextProjectId = nextValue.slice('project:'.length);
+            setShelfSelectionOverride({ forUrlProjectId: urlProjectId, value: `project:${nextProjectId}` });
+            updateQueryParams({
+                project_id: nextProjectId,
+                workspace_id: null,
+                global_experiment_id: null,
+                domain_experiment_id: null,
+                state_revision_id: null,
+            });
+            return;
+        }
+        const nextMode = nextValue === 'all' ? 'all' : 'unassigned';
+        setShelfSelectionOverride({ forUrlProjectId: urlProjectId, value: nextMode });
+        updateQueryParams({
+            project_id: null,
+            workspace_id: null,
+            global_experiment_id: null,
+            domain_experiment_id: null,
+            state_revision_id: null,
+        });
+    }, [updateQueryParams, urlProjectId]);
 
     useEffect(() => {
         loadLibrary();
@@ -3371,9 +3499,14 @@ export function MolBioToolkitV2() {
                             onLoadDemo={handleMobileLoadDemo}
                             loading={libraryLoading}
                             width={viewportWidth}
-                            projectScoped={Boolean(workspaceId && globalExperimentId && domainExperimentId && stateRevisionId)}
+                            projectScoped={Boolean(activeShelfProjectId)}
                             showAllConstructs={showAllConstructs}
-                            onToggleAllConstructs={() => setUnassignedShelfScope(showAllConstructs ? null : projectShelfScope)}
+                            onToggleAllConstructs={() => handleShelfSourceChange(showAllConstructs ? (urlProjectId ? `project:${urlProjectId}` : 'unassigned') : 'unassigned')}
+                            shelfSourceValue={shelfSourceValue}
+                            activeProjectId={activeShelfProjectId}
+                            projectOptions={shelfProjectOptions}
+                            onShelfSourceChange={handleShelfSourceChange}
+                            onShelfPickerEngage={engageShelfPicker}
                         />
                     </div>
                 )}
@@ -3480,7 +3613,7 @@ export function MolBioToolkitV2() {
                             alignmentError={alignmentError}
                             selectedId={selectedSequenceId}
                             onSelect={(sequence) => {
-                                if (sequence.revision_id) {
+                                if (sequence.revision_id && sequence.is_head_editable === false) {
                                     requestWorkspaceTransition('open an immutable revision', () => {
                                         approveMolecularOpenRequest({
                                             kind: 'exact',
@@ -3510,9 +3643,14 @@ export function MolBioToolkitV2() {
                             onLoadDemo={guardedLoadDemo}
                             loading={libraryLoading}
                             width={viewerLayout.leftPanelWidth}
-                            projectScoped={Boolean(workspaceId && globalExperimentId && domainExperimentId && stateRevisionId)}
+                            projectScoped={Boolean(activeShelfProjectId)}
                             showAllConstructs={showAllConstructs}
-                            onToggleAllConstructs={() => setUnassignedShelfScope(showAllConstructs ? null : projectShelfScope)}
+                            onToggleAllConstructs={() => handleShelfSourceChange(showAllConstructs ? (urlProjectId ? `project:${urlProjectId}` : 'unassigned') : 'unassigned')}
+                            shelfSourceValue={shelfSourceValue}
+                            activeProjectId={activeShelfProjectId}
+                            projectOptions={shelfProjectOptions}
+                            onShelfSourceChange={handleShelfSourceChange}
+                            onShelfPickerEngage={engageShelfPicker}
                         />
                         {viewerLayout.showLibraryResizeHandle && (
                             <button
@@ -3533,7 +3671,7 @@ export function MolBioToolkitV2() {
                         {projectExportHref && <span role="status" className="text-xs text-emerald-300">Exported. <Link to={projectExportHref} className="underline">Open destination Project</Link></span>}
                         {projectAttachmentError && <span role="alert" className="text-xs text-red-300">{projectAttachmentError}</span>}
                     </div>}
-                    <ProjectAttachmentDialog open={projectAttachmentSource !== null} source={projectAttachmentSource ?? undefined} initialProjectId={workspaceId ?? undefined}
+                    <ProjectAttachmentDialog open={projectAttachmentSource !== null} source={projectAttachmentSource ?? undefined} initialProjectId={(activeShelfProjectId ?? workspaceId) ?? undefined}
                         destination={globalExperimentId && domainExperimentId ? { globalExperimentId, domainExperimentId, stateRevisionId } : undefined}
                         onClose={() => setProjectAttachmentSource(null)} onAttached={(_receiptId, revisionId, destination) => {
                             setProjectAttachmentSource(null);

@@ -18,6 +18,7 @@ vi.mock('../../src/lib/api', async original => ({ ...await original<any>(),
     fetchNucleotideSequences: mocks.recent, fetchProjectHub: mocks.hub, fetchNucleotideSequence: mocks.get,
     fetchPrimerTmOptions: async () => ({ data: { algorithms: [{ id: 'nn_santalucia_hicks_2004', sequence_types: ['dna', 'rna'] }], defaults: {} } }),
 }));
+vi.mock('../../src/lib/projectManager', async original => ({ ...await original<any>(), searchProjects: async () => ({ items: [] }) }));
 import { MolBioToolkitV2 } from '../../src/components/MolBioToolkit/MolBioToolkitV2';
 let host: HTMLDivElement, root: Root, client: QueryClient;
 const item = (id: string) => ({ id, name: id, sequence_type: 'dna', length: 4, feature_count: 0, is_circular: false, created_at: '', updated_at: null });
@@ -29,10 +30,13 @@ async function mount(id: string | null) {
     mocks.context = context(id);
     await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><MolBioToolkitV2 /></MemoryRouter></QueryClientProvider>));
 }
-async function click(text: string) {
-    const button = [...shelf().querySelectorAll('button')].find(button => button.textContent?.trim() === text)!;
-    expect(button).toBeDefined();
-    await act(async () => button.click());
+async function selectShelfSource(value: string) {
+    const select = shelf().querySelector('select[aria-label="Sequences from"]') as HTMLSelectElement;
+    expect(select).toBeDefined();
+    await act(async () => {
+        select.value = value;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
 }
 beforeEach(() => {
     localStorage.clear(); window.innerWidth = 1400;
@@ -64,7 +68,7 @@ it('shows only the selected project and drops the unassigned override when switc
     await mount('project-a');
     expect(shelf().textContent).toContain('sequence-project-a');
     expect(mocks.recent).not.toHaveBeenCalled();
-    await click('Unassigned DNA sequences');
+    await selectShelfSource('unassigned');
     expect(shelf().textContent).toContain('orphan-sequence');
     expect(shelf().textContent).not.toContain('sequence-project-a');
     const next = deferred<any>(); mocks.hub.mockReturnValueOnce(next.promise);

@@ -24,10 +24,12 @@ it('shows dependency conflicts without clearing the sequence or claiming deletio
     mocks.remove.mockRejectedValue({response:{data:{detail:'Sequence is targeted by active primers'}}});await mount(<DeleteSequenceAction sequenceId="seq" name="QA" onDeleted={done}/>);await click('Delete sequence');await click('Confirm delete sequence');
     await vi.waitFor(()=>expect(host.querySelector('[role="alert"]')?.textContent).toContain('active primers'));expect(done).not.toHaveBeenCalled();expect(host.querySelector('[role="alertdialog"]')).not.toBeNull();
 });
-it('deletes a Project from its list card with the current generation and recoverable archival',async()=>{
+it('archives a Project from the projects index with explicit confirmation and current generation',async()=>{
     const project={id:'p',name:'QA Project',status:'active',lifecycle_state:'active',head_generation:1,payload:{},updated_at:'2026-01-01'};
     mocks.search.mockImplementation(async()=>({items:mocks.archive.mock.calls.length?[]:[project],next_cursor:null}));mocks.project.mockResolvedValue({...project,head_generation:9});mocks.archive.mockResolvedValue({});
-    const confirm=vi.spyOn(window,'confirm').mockReturnValue(false);await mount(<ProjectManager/>);
-    await vi.waitFor(()=>expect(host.querySelector('[aria-label="Delete Project QA Project"]')).not.toBeNull());await click('Delete Project');expect(mocks.archive).not.toHaveBeenCalled();
-    confirm.mockReturnValue(true);await click('Delete Project');await vi.waitFor(()=>expect(mocks.archive).toHaveBeenCalledWith('p',9));expect(confirm.mock.calls.at(-1)?.[0]).toContain('archived');
+    await mount(<ProjectManager/>);
+    await vi.waitFor(()=>expect(host.querySelector('[aria-label="Archive Project QA Project"]')).not.toBeNull());
+    await click('Archive');expect(mocks.archive).not.toHaveBeenCalled();expect(host.querySelector('[role="dialog"]')?.textContent).toContain('restored later');
+    await click('Cancel');expect(mocks.archive).not.toHaveBeenCalled();
+    await click('Archive');await click('Confirm archive');await vi.waitFor(()=>expect(mocks.archive).toHaveBeenCalledWith('p',9));
 });

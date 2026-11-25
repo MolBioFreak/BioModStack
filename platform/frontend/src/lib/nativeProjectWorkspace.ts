@@ -11,8 +11,8 @@ export async function listNativeProjectWorkspaces(projectId: string) {
         .map((domain) => ({ globalExperimentId: global.id, domainExperimentId: domain.id, label: domain.name }))))).flat();
 }
 
-// Use the managed PM connector. Opening a tool does not create acquisition or
-// analysis intent, invent scientific criteria, or write directly to native DBs.
+// Reserved for mutations that save/attach into a project with no NGS/MolBio domain yet.
+// Opening the Molecular Toolset never calls this; use nativeProjectToolHref directly.
 export function ensureNativeProjectWorkspace(projectId: string, preferred?: NativeWorkspace | null): Promise<NativeWorkspace> {
     if (preferred) return Promise.resolve(preferred);
     const existing = pending.get(projectId);
@@ -21,11 +21,10 @@ export function ensureNativeProjectWorkspace(projectId: string, preferred?: Nati
         const globals = (await listGlobalExperiments(projectId)).filter((item) => item.lifecycle_state !== 'archived' && item.status !== 'archived');
         const groups = await Promise.all(globals.map(async (global) => ({ global, domains: (await listDomainExperiments(projectId, global.id)).filter((item) => item.domain_kind === 'ngs_molbio' && item.lifecycle_state !== 'archived' && item.status !== 'archived') })));
         const candidates = groups.flatMap(({ global, domains }) => domains.map((domain) => ({ globalExperimentId: global.id, domainExperimentId: domain.id })));
-        if (candidates.length > 1) throw new Error('This Project has multiple NGS/MolBio workspaces. Select one in the Project tree first.');
+        if (candidates.length > 1) throw new Error('This Project has multiple NGS/MolBio workspaces. Choose the destination workspace before saving.');
         if (candidates.length === 1) return candidates[0];
-        // A tagged container also makes retry after connector failure reusable.
         const tagged = globals.find((item) => Array.isArray(item.payload?.tags) && item.payload.tags.includes('bns-project-workspace'));
-        if (!tagged && globals.length > 1) throw new Error('Select the experiment to use in the Project tree before adding a workspace.');
+        if (!tagged && globals.length > 1) throw new Error('Select the destination experiment before adding a workspace.');
         const global = tagged ?? globals[0] ?? await createGlobalExperiment(projectId, {
             schema: 'bms.global-experiment.v2', name: 'Sequences and NGS data',
             objective: '', description: 'Project sequence and NGS workspace', status: 'active',
@@ -38,23 +37,40 @@ export function ensureNativeProjectWorkspace(projectId: string, preferred?: Nati
             domain_payload: { schema: 'bms.ngs-molbio-experiment.v2', experiment_mode: 'molecular_design',
                 scientific_objective: '', planned_capability_ids: [], grouping_intent: [], acceptance_criteria: [], evidence_plan: [] },
         });
-        return { globalExperimentId: global.id, domainExperimentId: domain.id };
-    })().then(async (context) => {
-        for (let attempt = 0; ; attempt++) {
-            try { await fetchMolBioNgsDomainState(context.domainExperimentId); return context; }
-            catch (error) {
+        for (let attempt = 0; attempt < 15; attempt += 1) {
+            try {
+                await fetchMolBioNgsDomainState(domain.id);
+                return { globalExperimentId: global.id, domainExperimentId: domain.id };
+            } catch (error) {
                 const status = (error as { status?: number; response?: { status?: number } }).status ?? (error as { response?: { status?: number } }).response?.status;
                 if (status !== 404 || attempt >= 14) throw error;
                 await new Promise((resolve) => setTimeout(resolve, 1000));
             }
         }
-    }).finally(() => { pending.delete(projectId); });
+        return { globalExperimentId: global.id, domainExperimentId: domain.id };
+    })().finally(() => { pending.delete(projectId); });
     pending.set(projectId, work);
     return work;
 }
 
-export function nativeProjectToolHref(projectId: string, context: NativeWorkspace, tool: 'molbio' | 'ngs' | 'add-sequence') {
-    const params = new URLSearchParams({ workspace_id: projectId, global_experiment_id: context.globalExperimentId, domain_experiment_id: context.domainExperimentId });
-    if (tool === 'add-sequence') params.set('action', 'add-plasmid');
-    return `${tool === 'ngs' ? '/ngs' : '/designer'}?${params}`;
+export function nativeProjectToolHref(
+    projectId: string,
+    contextOrTool?: NativeWorkspace | 'molbio' | 'ngs' | 'add-sequence' | null,
+    toolArg?: 'molbio' | 'ngs' | 'add-sequence',
+): string {
+    const tool = typeof contextOrTool === 'string' ? contextOrTool : (toolArg ?? 'molbio');
+    const context = typeof contextOrTool === 'object' ? contextOrTool : null;
+    if (tool === 'molbio' || tool === 'add-sequence') {
+        const params = new URLSearchParams({ project_id: projectId });
+        if (tool === 'add-sequence') params.set('action', 'add-plasmid');
+        return `/designer?${params.toString()}`;
+    }
+    const params = context
+        ? new URLSearchParams({
+            workspace_id: projectId,
+            global_experiment_id: context.globalExperimentId,
+            domain_experiment_id: context.domainExperimentId,
+        })
+        : new URLSearchParams({ project_id: projectId });
+    return `/ngs?${params.toString()}`;
 }

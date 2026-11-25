@@ -92,7 +92,7 @@ describe('Project Manager API contract', () => {
 
 
     it('uses one shared attachment interaction from Project Manager and CM', () => {
-        const projectPage = readFileSync(resolve(process.cwd(), 'src/pages/ProjectManager.tsx'), 'utf8');
+        const projectPage = readFileSync(resolve(process.cwd(), 'src/components/project-manager/ProjectHubPage.tsx'), 'utf8');
         const cmViewer = readFileSync(resolve(process.cwd(), 'src/components/conformationalMapping/ConformationalMappingViewer.tsx'), 'utf8');
         for (const source of [projectPage, cmViewer]) {
             expect(source).toContain('ProjectAttachmentDialog');

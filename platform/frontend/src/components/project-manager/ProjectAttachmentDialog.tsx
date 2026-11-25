@@ -10,11 +10,9 @@ import {
     searchAdapterEntities,
     type AdapterEntityProjection,
     type LineageRole,
-    type ProjectManagerReadModel,
 } from '../../lib/projectManager';
 import { addMolecularProjectMember, exportMolecularProjectHistory, readMolecularProjectHistory, MOLECULAR_MEMBER_ADAPTER, type ProjectExportJournalEntry } from '../../lib/molecularProjectMembership';
 import { ensureNativeProjectWorkspace, listNativeProjectWorkspaces } from '../../lib/nativeProjectWorkspace';
-import { selectedDomainContext } from './projectManagerState';
 
 export type AttachmentOperationMode = 'attach_reference' | 'bind_input' | 'link_output' | 'attach_evidence' | 'clone_import_revision';
 
@@ -28,12 +26,18 @@ export interface ProjectAttachmentSource {
     historyJournal?: ProjectExportJournalEntry[];
 }
 
+interface ProjectAttachmentSummaryLike {
+    project: { name: string; head_generation: number };
+    map?: { nodes?: Array<{ canonical_identity: { entity_id: string } }> };
+}
+
 interface ProjectAttachmentDialogProps {
     open: boolean;
     source?: ProjectAttachmentSource;
     projectId?: string;
+    projectName?: string;
     initialProjectId?: string;
-    summary?: ProjectManagerReadModel;
+    summary?: ProjectAttachmentSummaryLike;
     onClose: () => void;
     destination?: { globalExperimentId: string; domainExperimentId: string; stateRevisionId?: string | null };
     onAttached?: (receiptId: string | null, stateRevisionId?: string, destination?: { projectId: string; globalExperimentId: string; domainExperimentId: string }) => void;
@@ -57,9 +61,9 @@ function metadataString(value: unknown): string | null {
     return typeof value === 'string' && value.trim() ? value : null;
 }
 
-export function ProjectAttachmentDialog({ open, source, projectId: fixedProjectId, initialProjectId, summary, destination, onClose, onAttached }: ProjectAttachmentDialogProps) {
+export function ProjectAttachmentDialog({ open, source, projectId: fixedProjectId, projectName, initialProjectId, summary, destination, onClose, onAttached }: ProjectAttachmentDialogProps) {
     const queryClient = useQueryClient();
-    const fixedContext = summary ? selectedDomainContext(summary) : null;
+    const fixedContext = destination ? { globalExperimentId: destination.globalExperimentId, domainExperimentId: destination.domainExperimentId } : null;
     const [projectId, setProjectId] = useState(fixedProjectId ?? initialProjectId ?? '');
     const [globalId, setGlobalId] = useState(fixedContext?.globalExperimentId ?? '');
     const [domainId, setDomainId] = useState(fixedContext?.domainExperimentId ?? '');
@@ -153,7 +157,14 @@ export function ProjectAttachmentDialog({ open, source, projectId: fixedProjectI
         },
         onSuccess: async (receipt) => {
             setAttached(true);
-            await Promise.all([queryClient.invalidateQueries({ queryKey: ['project-manager'] }), queryClient.invalidateQueries({ queryKey: ['molbio-project-hub'] }), queryClient.invalidateQueries({ queryKey: ['molbio-ngs-domain-state'] })]);
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ['project-manager'] }),
+                queryClient.invalidateQueries({ queryKey: ['project-hub'] }),
+                queryClient.invalidateQueries({ queryKey: ['projects-index'] }),
+                queryClient.invalidateQueries({ queryKey: ['molbio-project-sequences'] }),
+                queryClient.invalidateQueries({ queryKey: ['molbio-project-hub'] }),
+                queryClient.invalidateQueries({ queryKey: ['molbio-ngs-domain-state'] }),
+            ]);
             onAttached?.(receipt.source_receipt_id, receipt.nativeStateRevisionId, receipt.destination);
         },
         onError: async () => {
@@ -168,7 +179,7 @@ export function ProjectAttachmentDialog({ open, source, projectId: fixedProjectI
     const revision = source?.revision ?? metadataString(metadata.entity_revision_id) ?? metadataString(metadata.revision_id);
     const digest = source?.digest ?? metadataString(metadata.content_digest) ?? metadataString(metadata.digest);
     const availability = source?.availability ?? (selected?.canonical_state === 'availability_unavailable' ? null : selected?.canonical_state);
-    const alreadyAttached = attached || Boolean(selected && summary?.map.nodes.some((node) => node.canonical_identity.entity_id === selected.entity_id));
+    const alreadyAttached = attached || Boolean(selected && summary?.map?.nodes?.some((node) => node.canonical_identity.entity_id === selected.entity_id));
     const canAttach = Boolean(projectId && adapterId && compatibleAdapters.some((adapter) => adapter.adapter_id === adapterId) && Number.isInteger(expectedHeadGeneration) && (selected?.attachable || (adapterId === MOLECULAR_MEMBER_ADAPTER && selected?.entity_kind === 'molecular_revision')) && operation !== 'clone_import_revision' && !alreadyAttached && (fixedContext || (workspaces.isSuccess && (workspaces.data.length <= 1 || domainId))));
     const cloneOperatorHref = projectId && globalId && domainId
         ? `/ngs?${new URLSearchParams({
@@ -192,7 +203,7 @@ export function ProjectAttachmentDialog({ open, source, projectId: fixedProjectI
                     <div className="grid gap-3 sm:grid-cols-2">
                         <label className="text-xs font-semibold text-content-secondary">Project
                             <select aria-label="Attachment Project" value={projectId} disabled={Boolean(fixedProjectId) || attachMutation.isPending} onChange={(event) => { setProjectId(event.target.value); setGlobalId(''); setDomainId(''); }} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-content disabled:opacity-70">
-                                {fixedProjectId ? <option value={fixedProjectId}>{summary?.project.name ?? fixedProjectId}</option> : <><option value="">Select Project…</option>{(projects.data?.items ?? []).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</>}
+                                {fixedProjectId ? <option value={fixedProjectId}>{projectName ?? summary?.project.name ?? fixedProject.data?.name ?? fixedProjectId}</option> : <><option value="">Select Project…</option>{(projects.data?.items ?? []).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</>}
                             </select>
                         </label>
                         {workspaces.data && workspaces.data.length > 1 && !fixedContext && <label className="text-xs font-semibold text-content-secondary">Workspace

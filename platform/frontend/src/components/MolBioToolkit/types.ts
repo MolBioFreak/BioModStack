@@ -84,6 +84,9 @@ export interface NucleotideSequenceListItem {
     topology?: 'circular' | 'linear';
     created_at: string;
     updated_at?: string | null;
+    domain_experiment_id?: string | null;
+    state_revision_id?: string | null;
+    is_head_editable?: boolean;
 }
 
 export interface PCRProduct {

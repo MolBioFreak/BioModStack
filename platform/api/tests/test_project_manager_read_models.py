@@ -1698,7 +1698,7 @@ async def test_project_search_reuses_joined_payload_and_page_link_existence(read
             page = await search_projects(q="", status_filter=None, archive="active", cursor=None,
                 limit=size, project_scope="ngs_molbio_local", session=session)
             print(f"Project search SQL statements for {size} rows: {len(statements)}")
-            assert len(statements) == 5
+            assert len(statements) == 7
             assert len(page["items"]) == size
             assert page["next_cursor"] is not None
             for item in page["items"]:
@@ -1709,7 +1709,7 @@ async def test_project_search_reuses_joined_payload_and_page_link_existence(read
             statements.clear()
             second = await search_projects(q="", status_filter=None, archive="active", cursor=page["next_cursor"],
                 limit=size, project_scope="ngs_molbio_local", session=session)
-            assert len(statements) == 5
+            assert len(statements) == 7
             assert len(second["items"]) == 1 and second["next_cursor"] is None
             assert not ({item["id"] for item in page["items"]} & {item["id"] for item in second["items"]})
             detail = await list_ngs_molbio_project_links(project_id="local-000", limit=100, session=session)

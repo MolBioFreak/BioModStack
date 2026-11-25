@@ -18,8 +18,16 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from experiment_database import get_experiment_session
+from database import get_session as get_core_session
+from molbio_database import get_molbio_session
 from molbio_ngs_database import get_molbio_ngs_session
 from molbio_ngs_models import MolBioNGSDomainState
+from services.project_hub import (
+    get_project_hub_payload,
+    get_project_sequences_payload,
+    get_projects_summary_counts,
+    resolve_hub_capabilities,
+)
 from experiment_models import (
     ExperimentAggregateHead,
     ExperimentAuditEvent,
@@ -503,6 +511,11 @@ async def _head_json(
     if exposed_kind == "project":
         result["project_id"] = head.aggregate_id
         result["workspace_id"] = head.aggregate_id
+        result["project_scope"] = (
+            "ngs_molbio_local"
+            if payload.get("project_scope") == "ngs_molbio_local"
+            else "global"
+        )
     if exposed_kind == "global_experiment":
         result["experiment_id"] = head.aggregate_id
     if exposed_kind == "domain_experiment":
@@ -784,6 +797,8 @@ async def list_projects(
     limit: int = Query(default=50, ge=1, le=100),
     project_scope: Literal["global", "ngs_molbio_local", "all"] = Query(default="all"),
     session: AsyncSession = Depends(get_experiment_session),
+    native_session: AsyncSession = Depends(get_molbio_ngs_session),
+    molbio_session: AsyncSession = Depends(get_molbio_session),
 ) -> dict[str, Any]:
     return await search_projects(
         q="",
@@ -793,6 +808,8 @@ async def list_projects(
         limit=limit,
         project_scope=project_scope,
         session=session,
+        native_session=native_session,
+        molbio_session=molbio_session,
     )
 
 
@@ -834,6 +851,8 @@ async def search_projects(
     limit: int = Query(default=50, ge=1, le=100),
     project_scope: Literal["global", "ngs_molbio_local", "all"] = Query(default="all"),
     session: AsyncSession = Depends(get_experiment_session),
+    native_session: AsyncSession = Depends(get_molbio_ngs_session),
+    molbio_session: AsyncSession = Depends(get_molbio_session),
 ) -> dict[str, Any]:
     filters = [ExperimentAggregateHead.aggregate_kind == "workspace"]
     if project_scope == "global":
@@ -940,14 +959,17 @@ async def search_projects(
                 ExperimentLineageEdge.edge_key.like("ngs-molbio-project-link:%"),
             )
         )).scalars().all())
+    summary_counts = await get_projects_summary_counts(session, native_session, molbio_session, project_ids)
     for head, payload_text in page:
         item = await _head_json(session, head, exposed_kind="project", storage_kind="workspace", payload=json.loads(payload_text))
         item["has_ngs_molbio_links"] = head.aggregate_id in linked_project_ids
         item["active_experiment_count"] = int(active_counts.get(head.aggregate_id, 0))
         item["unresolved_failure_count"] = int(blocked_counts.get(head.aggregate_id, 0)) + int(failed_run_counts.get(head.aggregate_id, 0))
+        item["counts"] = summary_counts.get(head.aggregate_id, {"in_silico": 0, "molecular_sequences": 0, "molecular_operations": 0, "ngs_ont_and_alignments": 0})
         items.append(item)
     return {
         "items": items,
+        "capabilities": resolve_hub_capabilities(None),
         "next_cursor": (
             _encode_cursor(
                 "project-search",
@@ -968,6 +990,58 @@ async def get_project(project_id: str, session: AsyncSession = Depends(get_exper
         return await _head_json(session, head, exposed_kind="project", storage_kind="workspace")
     except ExperimentServiceError as exc:
         raise _error(exc) from exc
+
+
+@router.get("/{project_id}/hub")
+async def get_project_hub(
+    project_id: str,
+    request: Request,
+    experiment_id: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    cursor: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_experiment_session),
+    core_session: AsyncSession = Depends(get_core_session),
+    native_session: AsyncSession = Depends(get_molbio_ngs_session),
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+) -> dict[str, Any]:
+    payload = await get_project_hub_payload(
+        request,
+        session,
+        core_session,
+        native_session,
+        molbio_session,
+        project_id=project_id,
+        experiment_id=experiment_id,
+        limit=limit,
+        cursor=cursor,
+    )
+    if payload is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Project not found"})
+    return payload
+
+
+@router.get("/{project_id}/sequences")
+async def get_project_sequences(
+    project_id: str,
+    domain_experiment_id: str | None = Query(default=None),
+    state_revision_id: str | None = Query(default=None),
+    experiment_id: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_experiment_session),
+    native_session: AsyncSession = Depends(get_molbio_ngs_session),
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+) -> dict[str, Any]:
+    payload = await get_project_sequences_payload(
+        session,
+        native_session,
+        molbio_session,
+        project_id=project_id,
+        domain_experiment_id=domain_experiment_id,
+        state_revision_id=state_revision_id,
+        experiment_id=experiment_id,
+    )
+    if payload is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Project not found"})
+    return payload
 
 
 @router.post("/{project_id}/upgrade")
