@@ -989,7 +989,8 @@ def _sequence_snapshot(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _read_legacy_rows(source: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    with sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=30.0) as connection:
+    connection = sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=30.0)
+    try:
         connection.row_factory = sqlite3.Row
         table_names = {
             str(row[0])
@@ -1007,6 +1008,8 @@ def _read_legacy_rows(source: Path) -> tuple[list[dict[str, Any]], list[dict[str
                 _coerce_record(row, _PRIMER_FIELDS)
                 for row in connection.execute("SELECT * FROM primers ORDER BY id").fetchall()
             ]
+    finally:
+        connection.close()
     return sequence_rows, primer_rows
 
 
@@ -1055,8 +1058,10 @@ async def _verify_legacy_history_graph(
     primer_rows: list[dict[str, Any]],
     source_checksums: dict[str, str],
     backup_sha256: str,
+    *,
+    allow_existing_destination_rows: bool = False,
 ) -> None:
-    """Fail closed unless the destination has exactly the expected legacy history graph."""
+    """Fail closed unless the destination has the expected legacy history graph."""
 
     expected_sequence_ids = {str(record["id"]) for record in sequence_rows}
     expected_primer_ids = {str(record["id"]) for record in primer_rows}
@@ -1067,6 +1072,16 @@ async def _verify_legacy_history_graph(
     document_ids = {str(document.id) for document in documents}
     revision_document_ids = {str(revision.document_id) for revision in molecular_revisions}
     revision_primer_ids = {str(revision.primer_id) for revision in primer_revisions}
+    if allow_existing_destination_rows:
+        if (
+            not expected_sequence_ids.issubset(document_ids)
+            or not expected_sequence_ids.issubset(revision_document_ids)
+            or not expected_primer_ids.issubset(revision_primer_ids)
+        ):
+            raise MigrationVerificationError(
+                "Destination immutable history graph is missing expected legacy documents/revisions"
+            )
+        return
     if (
         document_ids != expected_sequence_ids
         or revision_document_ids != expected_sequence_ids
@@ -1151,6 +1166,7 @@ async def extract_legacy_molbio_data(
     expected_total_bases: int | None = None,
     expected_primer_count: int | None = None,
     allow_existing_destination_rows: bool = False,
+    source_connection: sqlite3.Connection | None = None,
 ) -> LegacyMolBioMigrationReport:
     """Back up, copy, and independently verify legacy Mol Bio records.
 
@@ -1172,7 +1188,7 @@ async def extract_legacy_molbio_data(
                     f"Mol Bio extraction {left_label} and {right_label} paths must be distinct "
                     "and must not alias the same file"
                 )
-    backup_report = backup_sqlite_database(source, backup)
+    backup_report = backup_sqlite_database(source, backup, source_connection=source_connection)
     # Extract from the verified online-backup snapshot so a concurrent legacy
     # writer cannot make the copied rows diverge from the provenance artifact.
     sequence_rows, primer_rows = _read_legacy_rows(backup_report.backup_path)
@@ -1394,6 +1410,7 @@ async def extract_legacy_molbio_data(
                     primer_rows,
                     source_checksums,
                     backup_report.sha256,
+                    allow_existing_destination_rows=allow_existing_destination_rows,
                 )
 
         return LegacyMolBioMigrationReport(

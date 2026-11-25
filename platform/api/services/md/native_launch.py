@@ -443,16 +443,13 @@ async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession,
             # Native preview/source verification precedes the ordinary Project
             # child handoff. The destination is never consumed as MD authority.
             from services.global_experiments.launch_contexts import prepare_child_launch_contexts, resolve_launch_context_for_display
-            from services.job_submission import _create_prepared_child_batch, _reserve_selected_run_group
+            from services.job_submission import _create_prepared_child_batch
             prepared = await prepare_child_launch_contexts(experiment_session,
                 destination_launch_context_id=destination_launch_context_id,
                 job_requests=[job_data],
                 native_entrypoints=["workflows/experimental/molecular_dynamics/orchestrator.nf"],
                 idempotency_key=round_step.step_id, core_session=session, md_input_resolver=resolver)
             bound = JobCreate.model_validate(prepared['children'][0]['job_request'])
-            destination = await resolve_launch_context_for_display(experiment_session, destination_launch_context_id)
-            await _reserve_selected_run_group(experiment_session, group_id=prepared['run_group_id'],
-                                              domain_id=destination.domain_experiment_id)
             if request.intent.execution_target_id:
                 kwargs['_approved_execution_plan'] = ApprovedExecutionPlan(
                     canonical_bytes(bound.model_dump(mode='json')),

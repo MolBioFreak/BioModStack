@@ -25,7 +25,7 @@ async def hierarchy(session, kind="protein_in_silico"):
 @pytest.mark.parametrize("kind", ["protein_in_silico", "ngs_molbio"])
 async def test_legacy_metadata_archive_restore_preserves_science(setup_store, monkeypatch, kind):
     monkeypatch.setattr(projects, "_require_mutation_owner", AsyncMock(return_value="test-owner"))
-    monkeypatch.setattr(projects, "_issue_domain_revision_reverification", AsyncMock(side_effect=AssertionError("legacy binding upgrade")))
+    monkeypatch.setattr(projects, "_bind_domain_revision", AsyncMock(side_effect=AssertionError("legacy binding upgrade")))
     async with setup_store() as session:
         project, experiment, domain = await hierarchy(session, kind)
         original = await session.get(ExperimentRevision, domain.current_revision_id)

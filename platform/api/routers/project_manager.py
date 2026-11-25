@@ -97,17 +97,7 @@ from services.protein_project_capabilities import (
     ProteinProjectCapabilityError,
     protein_capability_inventory,
 )
-from services.ngs_molbio_n5 import (
-    ResourceAdmissionDenied,
-    persist_admission_refusal,
-    reserve_run_group,
-)
-from services.ngs_molbio_run_control import (
-    command_document,
-    process_run_control_command,
-    request_run_group_cancellation,
-    require_launch_not_fenced,
-)
+from services.job_control import cancel_project_run_group
 from schemas import LaunchContextCreateRequest, LaunchContextResponse
 from routers.experiment_workspaces import _require_mutation_owner
 from services.global_experiments.launch_contexts import (
@@ -546,7 +536,6 @@ async def bind_launch_context_to_job(
             )
             if fenced_attempt is None or fenced_run is None:
                 raise ValidationFailure("prepared launch context attempt authority is unavailable")
-            await require_launch_not_fenced(session, fenced_run.run_group_id)
         job = await core_session.get(Job, payload.job_id)
         if job is None:
             raise LaunchContextError("launch_context_job_unavailable", "Bound Job does not exist.", status_code=409)
@@ -2187,7 +2176,6 @@ async def launch_domain_run_group(project_id: str, experiment_id: str, domain_id
             core_session=core_session,
             source_domain_id=domain_id,
         )
-        await reserve_run_group(session, group_id=group.resource_id, domain_id=domain_id, actor=actor)
         for preparation_id in preparation_ids:
             if preparation_id in contexts:
                 continue
@@ -2201,13 +2189,6 @@ async def launch_domain_run_group(project_id: str, experiment_id: str, domain_id
                 )
         await session.commit()
         return await _run_group_document(session, group)
-    except ResourceAdmissionDenied as exc:
-        refusal_requests = [{"workspace_id": item["preparation"].workspace_id, "preparation_id": item["preparation"].resource_id, "plan_id": item["plan"].aggregate_id, "cpu_threads": item.get("cpu_threads"), "dram_bytes": item.get("dram_bytes"), "gpu_index": item.get("gpu_index"), "gpu_uuid": item.get("gpu_uuid")} for item in exc.requests]
-        await session.rollback()
-        exc.requests = refusal_requests
-        await persist_admission_refusal(session, domain_id=domain_id, actor=actor, denial=exc)
-        await session.commit()
-        raise HTTPException(409, detail={"code": exc.code, "message": exc.reason}) from exc
     except ExperimentServiceError as exc:
         await session.rollback()
         raise _service_error(exc) from exc
@@ -2316,16 +2297,8 @@ async def retry_domain_run_group(project_id: str, experiment_id: str, domain_id:
             if preparation_id in context_by_preparation:
                 context_by_run[item.run_id] = context_by_preparation[preparation_id]
         group = await retry_failed_run_group(session, project_id, run_group_id, idempotency_key=_idempotency_key(request), replacement_preparation_ids=preparation_by_run, replacement_launch_context_ids=context_by_run, expected_generation=payload.expected_run_group_generation, core_session=core_session, source_domain_id=domain_id)
-        await reserve_run_group(session, group_id=group.resource_id, domain_id=domain_id, actor=actor)
         await session.commit()
         return await _run_group_document(session, group)
-    except ResourceAdmissionDenied as exc:
-        refusal_requests = [{"workspace_id": item["preparation"].workspace_id, "preparation_id": item["preparation"].resource_id, "plan_id": item["plan"].aggregate_id, "cpu_threads": item.get("cpu_threads"), "dram_bytes": item.get("dram_bytes"), "gpu_index": item.get("gpu_index"), "gpu_uuid": item.get("gpu_uuid")} for item in exc.requests]
-        await session.rollback()
-        exc.requests = refusal_requests
-        await persist_admission_refusal(session, domain_id=domain_id, actor=actor, denial=exc)
-        await session.commit()
-        raise HTTPException(409, detail={"code": exc.code, "message": exc.reason}) from exc
     except ExperimentServiceError as exc:
         await session.rollback()
         if isinstance(exc, ValidationFailure) and str(exc) == "replacement_preparation_required":
@@ -2349,16 +2322,8 @@ async def resubmit_domain_run_group(project_id: str, experiment_id: str, domain_
             launches=payload.preparation_launches,
         )
         group = await resubmit_run_group(session, project_id, run_group_id, idempotency_key=_idempotency_key(request), preparation_ids=preparation_ids, launch_context_ids=contexts, expected_generation=payload.expected_run_group_generation, core_session=core_session, source_domain_id=domain_id)
-        await reserve_run_group(session, group_id=group.resource_id, domain_id=domain_id, actor=actor)
         await session.commit()
         return await _run_group_document(session, group)
-    except ResourceAdmissionDenied as exc:
-        refusal_requests = [{"workspace_id": item["preparation"].workspace_id, "preparation_id": item["preparation"].resource_id, "plan_id": item["plan"].aggregate_id, "cpu_threads": item.get("cpu_threads"), "dram_bytes": item.get("dram_bytes"), "gpu_index": item.get("gpu_index"), "gpu_uuid": item.get("gpu_uuid")} for item in exc.requests]
-        await session.rollback()
-        exc.requests = refusal_requests
-        await persist_admission_refusal(session, domain_id=domain_id, actor=actor, denial=exc)
-        await session.commit()
-        raise HTTPException(409, detail={"code": exc.code, "message": exc.reason}) from exc
     except ExperimentServiceError as exc:
         await session.rollback()
         raise _service_error(exc) from exc
@@ -2606,41 +2571,14 @@ async def cancel_domain_run_group(project_id: str, experiment_id: str, domain_id
         await _require_mutation_owner(request, session, resource_id=project_id)
         _project, _experiment, domain = await _domain_hierarchy(session, project_id, experiment_id, domain_id)
         await _domain_binding_revision(session, domain_session, project_id=project_id, experiment_id=experiment_id, domain=domain)
-        command = await request_run_group_cancellation(
+        return await cancel_project_run_group(
             session,
+            core_session,
             workspace_id=project_id,
             run_group_id=run_group_id,
-            idempotency_key=_idempotency_key(request),
             expected_generation=payload.expected_run_group_generation,
             reason=payload.reason,
-            source_domain_id=domain_id,
         )
-        if command.status not in {"applied", "conflicted"}:
-            command = await process_run_control_command(
-                session,
-                core_session,
-                command_id=command.command_id,
-                worker_id=f"domain-cancel:{uuid.uuid4()}",
-            )
-        if command.status == "conflicted":
-            raise HTTPException(
-                409,
-                detail={
-                    "code": "run_control_conflicted",
-                    "command_id": command.command_id,
-                    "status": command.status,
-                },
-            )
-        if command.status != "applied":
-            raise HTTPException(
-                409,
-                detail={
-                    "code": "run_control_pending",
-                    "command_id": command.command_id,
-                    "status": command.status,
-                },
-            )
-        return command_document(command)
     except ExperimentServiceError as exc:
         await session.rollback()
         await core_session.rollback()

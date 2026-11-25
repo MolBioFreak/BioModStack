@@ -115,7 +115,10 @@ async def test_cap_still_refuses_open_chunks_but_accepts_the_closing_one(
     from services import ngs_molbio_n5
 
     project_id, group_id, attempt_id, _job = await _running_bc2(native_http, setup_store, native_core_store)
-    await _reconcile(setup_store, native_core_store, project_id, group_id)  # one status chunk
+    async with setup_store() as session:
+        await ngs_molbio_n5.append_attempt_log_chunk(
+            session, attempt_id=attempt_id, stream_name='status', content='{"open":1}')
+        await session.commit()
     monkeypatch.setattr(ngs_molbio_n5, '_ATTEMPT_LOG_CHUNK_LIMIT', 1)
     async with setup_store() as session:
         with pytest.raises(ngs_molbio_n5.ValidationFailure, match='chunk limit'):

@@ -1077,3 +1077,100 @@ async def resume_workflow_job(job_id, session, request, from_stage, background_t
          target_changed, source_changed, execution_target_id, execution_source_revision,
          execution_source_tree, grant_access,
     )
+
+
+async def cancel_project_run_group(
+    experiment_session: AsyncSession,
+    core_session: AsyncSession,
+    *,
+    workspace_id: str,
+    run_group_id: str,
+    reason: str | None = None,
+    expected_generation: int | None = None,
+) -> dict[str, Any]:
+    """Cancel bound canonical Jobs for a Project run group directly via job_control (R35)."""
+    from datetime import timezone
+    from experiment_models import (
+        ExperimentLaunchContext,
+        ExperimentRunAttempt,
+        ExperimentRunGroup,
+        ExperimentWorkflowRun,
+    )
+    from experiment_services import NotFound, RevisionConflict
+
+    group = await experiment_session.get(ExperimentRunGroup, run_group_id)
+    if group is None or group.workspace_id != workspace_id:
+        raise NotFound(f"run group {run_group_id} not found")
+    if expected_generation is not None and group.generation != expected_generation:
+        raise RevisionConflict("run group generation mismatch")
+
+    runs = list(
+        (
+            await experiment_session.execute(
+                select(ExperimentWorkflowRun).where(ExperimentWorkflowRun.run_group_id == run_group_id)
+            )
+        ).scalars().all()
+    )
+    run_ids = [run.resource_id for run in runs]
+    attempts: list[ExperimentRunAttempt] = []
+    if run_ids:
+        attempts = list(
+            (
+                await experiment_session.execute(
+                    select(ExperimentRunAttempt).where(ExperimentRunAttempt.workflow_run_id.in_(run_ids))
+                )
+            ).scalars().all()
+        )
+    attempt_ids = [attempt.resource_id for attempt in attempts]
+    bound_job_ids: list[str] = []
+    seen_job_ids: set[str] = set()
+    for attempt in attempts:
+        if attempt.scheduler_job_id and attempt.scheduler_job_id not in seen_job_ids:
+            seen_job_ids.add(attempt.scheduler_job_id)
+            bound_job_ids.append(attempt.scheduler_job_id)
+    if attempt_ids:
+        contexts = (
+            await experiment_session.execute(
+                select(ExperimentLaunchContext).where(ExperimentLaunchContext.run_attempt_id.in_(attempt_ids))
+            )
+        ).scalars().all()
+        for ctx in contexts:
+            if ctx.canonical_job_id and ctx.canonical_job_id not in seen_job_ids:
+                seen_job_ids.add(ctx.canonical_job_id)
+                bound_job_ids.append(ctx.canonical_job_id)
+
+    cancel_message = (reason or "").strip() or "Cancelled from Project"
+    cancelled_job_ids: list[str] = []
+    skipped_job_ids: list[str] = []
+    for job_id in bound_job_ids:
+        try:
+            await cancel_job_lineage(job_id, core_session, error_message=cancel_message)
+            cancelled_job_ids.append(job_id)
+        except HTTPException as exc:
+            if exc.status_code in {400, 404}:
+                skipped_job_ids.append(job_id)
+                continue
+            raise
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    terminal_states = {"completed", "failed", "cancelled"}
+    for attempt in attempts:
+        if attempt.state not in terminal_states:
+            attempt.state = "cancelled"
+    for run in runs:
+        if run.state not in terminal_states:
+            run.state = "cancelled"
+    if group.state not in terminal_states:
+        group.state = "cancelled"
+    group.generation += 1
+    group.updated_at = now_iso
+    await experiment_session.commit()
+    return {
+        "status": "applied",
+        "run_group_id": group.resource_id,
+        "workspace_id": group.workspace_id,
+        "generation": group.generation,
+        "cancelled_job_ids": cancelled_job_ids,
+        "skipped_job_ids": skipped_job_ids,
+        "reason": cancel_message,
+    }

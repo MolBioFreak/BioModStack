@@ -235,51 +235,6 @@ class ExperimentRunGroup(ExperimentBase):
         return self.resource_id
 
 
-class ExperimentRunControlCommand(ExperimentBase):
-    """Durable cancellation command authority for one run group."""
-
-    __tablename__ = "run_control_commands"
-    __table_args__ = (
-        UniqueConstraint("request_scope", "idempotency_key"),
-        Index(
-            "uq_run_control_active_command",
-            "run_group_id",
-            "command_type",
-            unique=True,
-            sqlite_where=text("status IN ('pending','leased','retryable','applied')"),
-        ),
-    )
-
-    command_id = Column(String(128), primary_key=True)
-    request_scope = Column(String(512), nullable=False)
-    idempotency_key = Column(String(255), nullable=False)
-    command_type = Column(String(32), nullable=False, default="cancel")
-    workspace_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
-    run_group_id = Column(String(128), ForeignKey("run_groups.resource_id"), nullable=False)
-    expected_generation = Column(Integer, nullable=False)
-    request_json = Column(Text, nullable=False)
-    request_sha256 = Column(String(64), nullable=False)
-    target_snapshot_json = Column(Text, nullable=False)
-    target_snapshot_sha256 = Column(String(64), nullable=False)
-    status = Column(String(32), nullable=False, default="pending")
-    lease_owner = Column(String(255), nullable=True)
-    lease_token = Column(String(128), nullable=True)
-    lease_expires_at = Column(String(64), nullable=True)
-    attempt_count = Column(Integer, nullable=False, default=0)
-    next_retry_at = Column(String(64), nullable=True)
-    progress_json = Column(Text, nullable=False, default="{}")
-    progress_sha256 = Column(String(64), nullable=False)
-    acknowledgement_json = Column(Text, nullable=True)
-    acknowledgement_sha256 = Column(String(64), nullable=True)
-    conflict_json = Column(Text, nullable=True)
-    conflict_sha256 = Column(String(64), nullable=True)
-    last_error_code = Column(String(128), nullable=True)
-    last_error_message = Column(String(2000), nullable=True)
-    created_at = Column(String(64), nullable=False, default=_timestamp)
-    updated_at = Column(String(64), nullable=False, default=_timestamp)
-    applied_at = Column(String(64), nullable=True)
-
-
 class ExperimentRunGroupPreparation(ExperimentBase):
     __tablename__ = "run_group_preparations"
 
@@ -573,53 +528,6 @@ class ExperimentAuditEvent(ExperimentBase):
     generation = Column(Integer, nullable=False)
     payload_json = Column(Text, nullable=False)
     created_at = Column(String(64), nullable=False, default=_timestamp)
-
-
-class ExperimentResourceAdmission(ExperimentBase):
-    """Durable aggregate resource reservation for one canonical workflow attempt."""
-
-    __tablename__ = "resource_admissions"
-    __table_args__ = (UniqueConstraint("run_attempt_id"), UniqueConstraint("canonical_job_id"))
-
-    admission_id = Column(String(128), primary_key=True)
-    workspace_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
-    domain_experiment_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
-    plan_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
-    preparation_id = Column(String(128), ForeignKey("workflow_preparations.resource_id"), nullable=False)
-    run_attempt_id = Column(String(128), ForeignKey("run_attempts.resource_id"), nullable=True)
-    canonical_job_id = Column(String(128), nullable=True)
-    state = Column(String(32), nullable=False)
-    cpu_threads = Column(Integer, nullable=False)
-    dram_bytes = Column(Integer, nullable=False)
-    gpu_index = Column(Integer, nullable=True)
-    gpu_uuid = Column(String(255), nullable=True)
-    policy_source = Column(String(255), nullable=False)
-    policy_version = Column(String(64), nullable=False)
-    owner = Column(String(255), nullable=False)
-    lease_token = Column(String(128), nullable=True)
-    refusal_code = Column(String(128), nullable=True)
-    refusal_reason = Column(Text, nullable=True)
-    release_reason = Column(Text, nullable=True)
-    recovery_evidence_json = Column(Text, nullable=True)
-    admitted_at = Column(String(64), nullable=True)
-    queued_at = Column(String(64), nullable=True)
-    released_at = Column(String(64), nullable=True)
-    reconciled_at = Column(String(64), nullable=True)
-    created_at = Column(String(64), nullable=False, default=_timestamp)
-    updated_at = Column(String(64), nullable=False, default=_timestamp)
-
-
-class ExperimentResourceAdmissionPolicy(ExperimentBase):
-    """Singleton write fence and persisted policy identity for atomic admission."""
-
-    __tablename__ = "resource_admission_policy"
-
-    policy_id = Column(String(64), primary_key=True)
-    policy_version = Column(String(64), nullable=False)
-    cpu_thread_limit = Column(Integer, nullable=False)
-    dram_byte_limit = Column(Integer, nullable=False)
-    lock_generation = Column(Integer, nullable=False, default=0)
-    updated_at = Column(String(64), nullable=False, default=_timestamp)
 
 
 class ExperimentOperationalReceipt(ExperimentBase):

@@ -103,7 +103,7 @@ async def resolve_hierarchy_records(
         raise OntNgsHierarchyLoadError("frozen global revision authority is invalid")
 
     binding_record = {
-        "binding_revision_id": binding_receipt_id or state_revision.id,
+        "binding_revision_id": getattr(state_revision, "binding_revision_id", None) or binding_receipt_id or state_revision.id,
         "binding_state": "acknowledged",
         "global_domain_experiment_id": domain_id,
         "global_domain_experiment_revision_id": domain_binding.get("revision_id"),

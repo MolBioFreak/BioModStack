@@ -137,13 +137,24 @@ async def test_dispatch_rejects_unregistered_generic_materializer():
 
 @pytest_asyncio.fixture
 async def project_store(tmp_path: Path):
+    from molbio_ngs_database import (
+        create_molbio_ngs_engine,
+        create_molbio_ngs_session_factory,
+    )
+    import molbio_ngs_migrations
+
     db_path = tmp_path / "experiments.db"
     run_all(db_path)
+    ngs_path = tmp_path / "molbio_ngs.db"
+    molbio_ngs_migrations.run_all(ngs_path)
     engine = create_experiment_engine(f"sqlite+aiosqlite:///{db_path}")
     factory = create_experiment_session_factory(engine)
+    ngs_engine = create_molbio_ngs_engine(f"sqlite+aiosqlite:///{ngs_path}")
+    factory._test_molbio_ngs_factory = create_molbio_ngs_session_factory(ngs_engine)
     try:
         yield db_path, factory
     finally:
+        await ngs_engine.dispose()
         await engine.dispose()
 
 
@@ -286,6 +297,15 @@ def _app(factory) -> FastAPI:
             yield session
 
     app.dependency_overrides[get_experiment_session] = override_session
+    ngs_factory = getattr(factory, "_test_molbio_ngs_factory", None)
+    if ngs_factory is not None:
+        from molbio_ngs_database import get_molbio_ngs_session
+
+        async def override_ngs_session():
+            async with ngs_factory() as session:
+                yield session
+
+        app.dependency_overrides[get_molbio_ngs_session] = override_ngs_session
     return app
 
 

@@ -138,6 +138,16 @@ At a high level the API tracks:
 The UI and results flows are built around those records rather than raw files
 alone.
 
+### Store ownership
+
+| Store file | Primary owner | Readers |
+| --- | --- | --- |
+| `biomodstack.db` | Core API & standalone background worker (`worker.py`) | API routers, worker loops, Project run view (via receipts) |
+| `experiments.db` | Project / Experiment hub routers & launch-context recovery loop (`worker.py`) | Project Manager read models, job submission launch-context binding |
+| `molbio.db` | Molecular Biology toolkit routes & services | MolBio UI, NGS/MolBio member receipt resolvers |
+| `molbio_ngs.db` | Optional NGS/MolBio domain routes & services | NGS/MolBio domain views, ONT hierarchy authority loader |
+| `remote_telemetry_state.json` | Standalone background worker (`worker.py`) | API telemetry/infra endpoints |
+
 ## Canonical docs to read next
 
 - [Nonproduction Installation](Nonproduction_Installation.md)

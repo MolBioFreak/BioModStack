@@ -39,7 +39,7 @@ async def test_reference_create_replay_uses_completed_revision_not_head(monkeypa
 
     async def get(model, key):
         if model is MolBioNGSDomainState:
-            return SimpleNamespace(binding_receipt_id="binding")
+            return SimpleNamespace(binding_receipt_id="binding", project_id="project-1")
         if model is MolBioNGSIdempotencyClaim:
             return SimpleNamespace(response_json=json.dumps({"reference_revision_id": "original"}))
         raise AssertionError(model)

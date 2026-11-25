@@ -369,13 +369,13 @@ async def bind_domain_to_hub(
                 scope=request_scope,
                 idempotency_key=key,
                 request_sha256=request_sha256,
-                response_resource_id=hub_receipt.resource_id,
+                result_resource_id=hub_receipt.resource_id,
                 response_json=canonical_json(status_body),
                 created_at=now(),
             )
         )
     else:
-        existing_claim.response_resource_id = hub_receipt.resource_id
+        existing_claim.result_resource_id = hub_receipt.resource_id
         existing_claim.response_json = canonical_json(status_body)
     await global_session.flush()
     return status_body

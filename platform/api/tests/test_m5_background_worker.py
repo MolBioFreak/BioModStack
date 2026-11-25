@@ -107,6 +107,7 @@ def test_worker_runtime_starts_and_stops_cleanly_within_timeout(tmp_path: Path, 
     monkeypatch.setattr(bms_worker, "_worker_lock_path", lambda: tmp_path / ".biomodstack-worker.lock")
     monkeypatch.setattr(bms_worker.catalog_authority, "require", lambda: None)
     monkeypatch.setattr(bms_worker, "init_db", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(bms_worker, "init_experiment_db", lambda: asyncio.sleep(0))
     monkeypatch.setattr(bms_worker, "async_session", lambda: _DummySessionCtx())
     monkeypatch.setattr(bms_worker, "install_feature_enabled", lambda _k: True)
     monkeypatch.setattr(bms_worker, "workflow_launches_allowed", lambda: True)

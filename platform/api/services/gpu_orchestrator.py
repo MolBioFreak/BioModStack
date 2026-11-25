@@ -228,6 +228,8 @@ class JobInfo:
     scheduler_reservation_mb: Optional[int] = None
     minimum_gpu_memory_mb: int = 0
     gpu_memory_mb: int = 0  # Native minimum reservation, not physical capacity.
+    cpu_threads: int = 1
+    dram_bytes: int = 1024 ** 3
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -3171,6 +3173,19 @@ class GPUOrchestrator:
                 pinned_gpus = _normalize_pinned_gpus(job_params.get('pinned_gpus'))
                 
                 effective_model = _effective_job_model_type(job)
+                from services.local_resource_placement import (
+                    DEFAULT_LOCAL_CPU_THREADS,
+                    DEFAULT_LOCAL_DRAM_BYTES,
+                    LocalResourceBudgetExceeded,
+                    extract_job_resource_request,
+                )
+                try:
+                    local_req = extract_job_resource_request(job_params)
+                except LocalResourceBudgetExceeded:
+                    local_req = SimpleNamespace(
+                        cpu_threads=DEFAULT_LOCAL_CPU_THREADS,
+                        dram_bytes=DEFAULT_LOCAL_DRAM_BYTES,
+                    )
 
                 job_infos.append(JobInfo(
                     id=job.id,
@@ -3186,6 +3201,8 @@ class GPUOrchestrator:
                     scheduler_reservation_mb=vram,
                     minimum_gpu_memory_mb=capacity_requirements["minimum_gpu_memory_mb"],
                     gpu_memory_mb=capacity_requirements.get("gpu_memory_mb", 0),
+                    cpu_threads=local_req.cpu_threads,
+                    dram_bytes=local_req.dram_bytes,
                 ))
             
             from sqlalchemy import text
@@ -3342,6 +3359,12 @@ class GPUOrchestrator:
                 temperature=g.temperature
             ))
 
+        from services.local_resource_placement import (
+            LocalResourceRequest,
+            active_local_resource_usage,
+            fits_local_resource_budget,
+        )
+        used_local = await active_local_resource_usage(session)
         limits = config.get("concurrency_limits", {})
         allowed = []
         auto_limits = {model: _compute_auto_limit(model, job_infos, gpu_states, config,
@@ -3351,6 +3374,13 @@ class GPUOrchestrator:
             limit = auto_limits.get(info.model_type, limits.get(info.model_type))
             if isinstance(limit, (float, int)) and running_by_model.get(info.model_type, 0) >= limit:
                 continue
+            req_local = LocalResourceRequest(info.cpu_threads, info.dram_bytes)
+            if not fits_local_resource_budget(used_local, req_local):
+                continue
+            used_local = LocalResourceRequest(
+                used_local.cpu_threads + req_local.cpu_threads,
+                used_local.dram_bytes + req_local.dram_bytes,
+            )
             allowed.append(info)
         # 4. Run bin-packing
         return pack_jobs_to_gpus(

@@ -15,6 +15,7 @@ import logging
 import os
 import signal
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +27,7 @@ for _p in (str(_REPO_ROOT), str(_API_ROOT)):
 
 from biomodstack_runtime_profile import install_feature_enabled
 from database import async_session, init_db
+from experiment_database import experiment_session_factory, init_experiment_db
 from paths import get_data_root
 from readiness import http_readiness
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
@@ -143,6 +145,8 @@ class WorkerRuntime:
         self._vast_inventory_task: asyncio.Task[None] | None = None
         self._remote_telemetry_stop: asyncio.Event | None = None
         self._remote_telemetry_task: asyncio.Task[None] | None = None
+        self._launch_context_stop: asyncio.Event | None = None
+        self._launch_context_task: asyncio.Task[None] | None = None
         self._started = False
 
     def _claim_single_owner_lock(self) -> None:
@@ -191,6 +195,7 @@ class WorkerRuntime:
         try:
             catalog_authority.require()
             await init_db()
+            await init_experiment_db()
 
             protein_compute_enabled = install_feature_enabled("protein_compute")
 
@@ -262,6 +267,14 @@ class WorkerRuntime:
             )
             await _analysis_worker.start()
             logger.info("[WORKER] Analysis worker started")
+
+            # Loop group 5: Launch-context stale-claim recovery and binding publication (R35).
+            self._launch_context_stop = asyncio.Event()
+            self._launch_context_task = asyncio.create_task(
+                _run_launch_context_recovery_loop(self._launch_context_stop),
+                name="launch-context-recovery",
+            )
+            logger.info("[WORKER] Launch-context recovery/binding loop started")
             self._started = True
         except Exception:
             await self.stop()
@@ -285,9 +298,15 @@ class WorkerRuntime:
                 self._remote_telemetry_stop.set()
             if self._vast_inventory_stop is not None:
                 self._vast_inventory_stop.set()
+            if self._launch_context_stop is not None:
+                self._launch_context_stop.set()
             poll_tasks = [
                 task
-                for task in (self._remote_telemetry_task, self._vast_inventory_task)
+                for task in (
+                    self._remote_telemetry_task,
+                    self._vast_inventory_task,
+                    self._launch_context_task,
+                )
                 if task is not None
             ]
             for task in poll_tasks:
@@ -296,8 +315,10 @@ class WorkerRuntime:
                 await asyncio.gather(*poll_tasks, return_exceptions=True)
             self._remote_telemetry_task = None
             self._vast_inventory_task = None
+            self._launch_context_task = None
             self._remote_telemetry_stop = None
             self._vast_inventory_stop = None
+            self._launch_context_stop = None
 
             if _orchestrator is not None:
                 await _orchestrator.stop()
@@ -326,6 +347,59 @@ class WorkerRuntime:
         finally:
             self._started = False
             self._release_single_owner_lock()
+
+
+_LAUNCH_CONTEXT_CLAIM_STALE_AFTER = timedelta(minutes=5)
+
+
+async def run_launch_context_recovery_once(
+    *,
+    limit: int = 10,
+) -> tuple[int, int, int]:
+    """Recover stale launch-context claims and publish consumed bindings once."""
+    from services.global_experiments.launch_contexts import (
+        publish_consumed_launch_context_bindings,
+        recover_stale_typed_launch_context_claims,
+    )
+
+    async with experiment_session_factory() as experiment_session:
+        async with async_session() as core_session:
+            report = await recover_stale_typed_launch_context_claims(
+                experiment_session,
+                core_session,
+                claimed_before=datetime.now(timezone.utc) - _LAUNCH_CONTEXT_CLAIM_STALE_AFTER,
+                limit=max(1, min(limit, 100)),
+            )
+            await experiment_session.commit()
+            binding_report = await publish_consumed_launch_context_bindings(
+                experiment_session,
+                core_session,
+                priority_context_ids=tuple(report["consumed_launch_context_ids"]),
+                limit=max(1, min(limit, 100)),
+            )
+    return (
+        int(report["scanned_count"]),
+        int(binding_report["published_count"]),
+        int(binding_report["conflict_count"]),
+    )
+
+
+async def _run_launch_context_recovery_loop(
+    stop_event: asyncio.Event,
+    *,
+    poll_interval: float = 2.0,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            await run_launch_context_recovery_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("[WORKER] Launch-context recovery sweep failed: %s", exc)
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
+        except asyncio.TimeoutError:
+            pass
 
 
 async def run_worker() -> None:

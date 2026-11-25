@@ -30,9 +30,7 @@ from experiment_models import (
     ExperimentLaunchContext,
     ExperimentOperationalReceipt,
     ExperimentArtifactBlob,
-    ExperimentResourceAdmission,
     ExperimentRunAttempt,
-    ExperimentRunControlCommand,
     ExperimentRunGroup,
 )
 from experiment_services import (
@@ -62,8 +60,6 @@ _REQUIRED_MIGRATION_STORES = {
 _TERMINAL_RUNTIME_STATES = ("completed", "failed", "cancelled", "awaiting_input")
 _TERMINAL_RUN_GROUP_STATES = ("completed", "failed", "cancelled")
 _ACTIVE_DISPATCH_OUTBOX_STATES = ("pending", "dispatching")
-_ACTIVE_RUN_CONTROL_STATES = ("pending", "leased", "retryable")
-_ACTIVE_ADMISSION_STATES = ("admitted", "queued")
 _ACTIVE_CONNECTOR_COMMAND_STATES = ("pending", "leased", "retryable")
 _ACTIVE_LOCAL_OUTBOX_STATES = ("pending", "leased", "retryable_error")
 _ACTIVE_LOCAL_CONNECTOR_ACK_STATES = ("retryable", "deferred_gap")
@@ -848,22 +844,8 @@ async def _verify_no_active_authority(
             or 0
         ),
         "recoverable_dispatch_outbox": await _recoverable_dispatch_outbox_count(experiment_session),
-        "run_control_commands": int(
-            await experiment_session.scalar(
-                select(func.count(ExperimentRunControlCommand.command_id)).where(
-                    ExperimentRunControlCommand.status.in_(_ACTIVE_RUN_CONTROL_STATES)
-                )
-            )
-            or 0
-        ),
-        "resource_admissions": int(
-            await experiment_session.scalar(
-                select(func.count(ExperimentResourceAdmission.admission_id)).where(
-                    ExperimentResourceAdmission.state.in_(_ACTIVE_ADMISSION_STATES)
-                )
-            )
-            or 0
-        ),
+        "run_control_commands": 0,
+        "resource_admissions": 0,
         "launch_contexts_v2": int(
             await experiment_session.scalar(
                 select(func.count(ExperimentLaunchContext.launch_context_id)).where(

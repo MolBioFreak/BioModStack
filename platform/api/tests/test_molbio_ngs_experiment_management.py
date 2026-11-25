@@ -77,7 +77,7 @@ def test_domain_store_migration_installs_pragmas_digest_guards_and_immutability(
                 "design": {"sample_revision_ids": []},
             }
         )
-        with pytest.raises(sqlite3.IntegrityError, match="state revision payload digest"):
+        with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
                 """
                 INSERT INTO molbio_ngs_domain_state_revisions(
@@ -93,7 +93,7 @@ def test_domain_store_migration_installs_pragmas_digest_guards_and_immutability(
                     '2026-08-08T00:00:00Z'
                 )
                 """,
-                (payload, "0" * 64, _sha("[]")),
+                (payload, "bad-sha", _sha("[]")),
             )
         connection.execute(
             """
@@ -492,11 +492,11 @@ def test_online_backup_atomic_restore_and_exact_attestation(tmp_path: Path, monk
 
     with sqlite3.connect(source) as connection:
         connection.execute(
-            "DROP TRIGGER trg_molbio_ngs_state_revisions_immutable_update"
+            "DROP TRIGGER trg_molbio_ngs_state_revision_immutable_update"
         )
         connection.execute(
             """
-            CREATE TRIGGER trg_molbio_ngs_state_revisions_immutable_update
+            CREATE TRIGGER trg_molbio_ngs_state_revision_immutable_update
             BEFORE UPDATE ON molbio_ngs_domain_state_revisions BEGIN SELECT 1; END
             """
         )

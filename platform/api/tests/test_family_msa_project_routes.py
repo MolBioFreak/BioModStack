@@ -48,4 +48,4 @@ def test_fresh_migration_and_repeat(tmp_path):
     migrations.run_all(path)
     with sqlite3.connect(path) as db:
         assert migrations.attest_schema(db)['ok']
-        assert db.execute('SELECT max(version) FROM experiment_schema_migrations').fetchone() == (25,)
+        assert db.execute('SELECT max(version) FROM experiment_schema_migrations').fetchone() == (migrations.LATEST_MIGRATION_VERSION,)

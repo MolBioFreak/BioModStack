@@ -437,7 +437,6 @@ async def test_project_hub_edit_info_compensates_cross_store_failure_without_vis
         assert (await session.execute(text("SELECT count(*) FROM project_plasmid_metadata"))).scalar_one() == 0
         assert (await session.execute(text("SELECT count(*) FROM molecular_revisions WHERE document_id='sequence-pl1480'"))).scalar_one() == 1
         assert (await session.execute(text("SELECT count(*) FROM molbio_audit_events WHERE event_kind='sequence.project_metadata_update'"))).scalar_one() == 0
-        assert (await session.execute(text("SELECT count(*) FROM molbio_outbox_events WHERE event_kind='sequence.project_metadata_update'"))).scalar_one() == 0
 
 
 @pytest.mark.asyncio

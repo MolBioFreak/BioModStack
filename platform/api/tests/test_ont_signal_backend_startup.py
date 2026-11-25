@@ -188,7 +188,6 @@ async def test_api_lifespan_yields_with_absent_backend(store, monkeypatch, caplo
         monkeypatch.setattr(main, name, AsyncMock())
     for name in ("async_session", "experiment_session_factory", "molbio_ngs_session_factory"):
         monkeypatch.setattr(main, name, store)
-    monkeypatch.setattr(main, "reconcile_startup_admissions", AsyncMock(return_value=0))
 
     class IdleWorker:
         def __init__(self, *args, **kwargs):
@@ -211,7 +210,6 @@ async def test_api_lifespan_yields_with_absent_backend(store, monkeypatch, caplo
         assert main._ont_signal_worker is not None
         assert main._ont_signal_worker._task is None
         assert main._ont_signal_worker._stop.is_set()
-        assert main._orchestrator is None
         assert await snapshot(store) == before
     assert await snapshot(store) == before
     assert "backend unavailable: worker blocked" in caplog.text

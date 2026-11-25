@@ -360,11 +360,26 @@ async def initialize_domain_state(
         return state
     state = await session.get(MolBioNGSDomainState, binding.global_domain_experiment_id)
     if state is None:
-        raise GlobalAdapterUnavailable(
-            "local initialization is owned by the managed connector command"
+        now = _now()
+        receipt_id = getattr(binding, "project_receipt_id", None) or f"binding-{binding.global_domain_experiment_id}"
+        state = MolBioNGSDomainState(
+            global_domain_experiment_id=binding.global_domain_experiment_id,
+            current_state_revision_id=None,
+            project_id=binding.project_id,
+            global_experiment_id=binding.global_experiment_id,
+            global_domain_experiment_revision_id=binding.global_domain_experiment_revision_id,
+            binding_receipt_id=receipt_id,
+            binding_receipt_json=None,
+            binding_receipt_sha256=None,
+            head_generation=0,
+            created_at=now,
+            updated_at=now,
         )
-    await acknowledge_global_binding(session, binding)
-    await session.flush()
+        session.add(state)
+        await session.flush()
+    else:
+        await acknowledge_global_binding(session, binding)
+        await session.flush()
     await _complete_idempotency(
         session,
         scope=scope,
@@ -398,7 +413,7 @@ async def acknowledge_global_binding(
         raise GlobalBindingError(
             "global binding authority changed: " + ", ".join(changed_authority)
         )
-    if not state.binding_receipt_sha256:
+    if not state.binding_receipt_id:
         raise GlobalBindingError("current local binding has no persisted hub receipt")
 
 
@@ -1345,7 +1360,7 @@ async def save_state_revision(
     if state is None:
         raise DomainStateNotFound("MolBio/NGS state has not been initialized")
     if (
-        not state.binding_receipt_sha256
+        not state.binding_receipt_id
         or state.global_domain_experiment_revision_id != global_domain_experiment_revision_id
     ):
         raise GlobalBindingError("The current experiment revision has not been linked to this NGS workspace.")
@@ -1360,6 +1375,8 @@ async def save_state_revision(
         id=revision_id,
         global_domain_experiment_id=global_domain_experiment_id,
         global_domain_experiment_revision_id=global_domain_experiment_revision_id,
+        project_id=state.project_id,
+        global_experiment_id=state.global_experiment_id,
         binding_receipt_id=state.binding_receipt_id,
         binding_receipt_json=state.binding_receipt_json,
         binding_receipt_sha256=state.binding_receipt_sha256,

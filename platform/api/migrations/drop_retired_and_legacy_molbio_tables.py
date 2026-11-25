@@ -64,25 +64,25 @@ def migrate_drop_retired_and_legacy_molbio_tables(db_path: str | None = None) ->
     conn = sqlite3.connect(str(resolved_core), timeout=30)
     try:
         needs_import = _has_legacy_molbio_rows(conn)
+        if needs_import:
+            from molbio_migrations import extract_legacy_molbio_data, legacy_molbio_manifest_sha256
+
+            destination = _resolve_molbio_destination(resolved_core)
+            manifest_sha256 = legacy_molbio_manifest_sha256(resolved_core)
+            with tempfile.TemporaryDirectory(prefix="bms-r18-molbio-") as tmp_dir:
+                backup_path = Path(tmp_dir) / "core-legacy-molbio-backup.db"
+                _run_coro_sync(
+                    extract_legacy_molbio_data(
+                        resolved_core,
+                        destination,
+                        backup_path=backup_path,
+                        expected_manifest_sha256=manifest_sha256,
+                        allow_existing_destination_rows=True,
+                        source_connection=conn,
+                    )
+                )
     finally:
         conn.close()
-
-    if needs_import:
-        from molbio_migrations import extract_legacy_molbio_data, legacy_molbio_manifest_sha256
-
-        destination = _resolve_molbio_destination(resolved_core)
-        manifest_sha256 = legacy_molbio_manifest_sha256(resolved_core)
-        with tempfile.TemporaryDirectory(prefix="bms-r18-molbio-") as tmp_dir:
-            backup_path = Path(tmp_dir) / "core-legacy-molbio-backup.db"
-            _run_coro_sync(
-                extract_legacy_molbio_data(
-                    resolved_core,
-                    destination,
-                    backup_path=backup_path,
-                    expected_manifest_sha256=manifest_sha256,
-                    allow_existing_destination_rows=True,
-                )
-            )
 
     conn = sqlite3.connect(str(resolved_core), timeout=30)
     try:

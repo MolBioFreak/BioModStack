@@ -1027,7 +1027,7 @@ async def test_startup_recovery_commits_terminal_nonexecution_evidence(
     assert receipt["schema"] == resource_evidence.RESOURCE_HISTORICAL_NONEXECUTION_RECEIPT_SCHEMA
     assert job.params[resource_evidence.HISTORICAL_OWNER_ABSENCE_PARAM]["matched_units"] == []
     assert receipt["outcome"] == "launch_rejected_before_spawn"
-    assert ngs_molbio_n5._producer_receipt_finished_at(receipt) == "2026-08-23T19:21:43Z"  # noqa: SLF001
+    assert receipt["finished_at"] == "2026-08-23T19:21:43Z"
 
 
 @pytest.mark.asyncio

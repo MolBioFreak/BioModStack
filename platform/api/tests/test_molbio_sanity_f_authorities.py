@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from services import ngs_molbio_capabilities as caps
 from services import ngs_molbio_n5 as n5
 from services import ngs_molbio_release_acceptance as release
-from services import ngs_molbio_run_control as control
 
 
 def test_metadata_biological_labels_and_closed_constraints():
@@ -108,41 +107,6 @@ async def test_successful_dataset_replay_precedes_mutable_catalog(monkeypatch, o
     with pytest.raises(n5.ValidationFailure, match="catalog disabled"):
         await function(session, **common, **kwargs)
     current_catalog.assert_called_once()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("entrypoint", ["foreground", "worker"])
-@pytest.mark.parametrize("failure", [None, "retry", "conflict", "unexpected"])
-async def test_leased_processing_is_shared_without_reclaim(monkeypatch, entrypoint, failure):
-    command = SimpleNamespace(command_id="c", lease_token="token", lease_owner="worker", status="leased", request_json='{"reason":"stop"}')
-    claim = AsyncMock(return_value=command)
-    monkeypatch.setattr(control, "_claim_command", claim)
-    monkeypatch.setattr(control, "_decode_command", lambda command: ({}, {}))
-    monkeypatch.setattr(control, "_flatten_targets", lambda snapshot: ["target"])
-    process = AsyncMock()
-    if failure == "retry":
-        process.side_effect = control._Retryable("retry", "retry")
-    elif failure == "conflict":
-        process.side_effect = control._Conflict("conflict", "conflict")
-    elif failure == "unexpected":
-        process.side_effect = RuntimeError("unexpected")
-    monkeypatch.setattr(control, "_process_target", process)
-    finalize, retry, conflict = AsyncMock(), AsyncMock(), AsyncMock()
-    monkeypatch.setattr(control, "_finalize", finalize)
-    monkeypatch.setattr(control, "_set_retryable", retry)
-    monkeypatch.setattr(control, "_set_conflicted", conflict)
-    session = SimpleNamespace(rollback=AsyncMock(), get=AsyncMock(return_value=command))
-    core = SimpleNamespace(rollback=AsyncMock())
-    if entrypoint == "foreground":
-        assert await control.process_run_control_command(session, core, command_id="c", worker_id="worker") is command
-    else:
-        assert await control.process_run_control_command_once(session, core, worker_id="worker") == 1
-    assert claim.await_count == process.await_count == 1
-    assert finalize.await_count == (failure is None)
-    assert session.rollback.await_count == core.rollback.await_count == (failure is not None)
-    transition = conflict if failure == "conflict" else retry
-    if failure is not None:
-        assert transition.call_args.kwargs["lease_token"] == "token"
 
 
 def test_closed_evidence_validator_rejects_instead_of_nameerror():

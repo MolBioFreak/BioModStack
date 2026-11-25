@@ -40,11 +40,6 @@ from runtime_policy import (
 from biomodstack_runtime_profile import install_feature_enabled
 from services.ont_raw_signal_worker import OntRawSignalWorker
 from services.ont_signal_worker import OntSignalWorker
-from services.global_experiments.worker import (
-    GlobalExperimentWorker,
-    install_global_experiment_worker,
-)
-from services.ngs_molbio_n5 import reconcile_startup_admissions
 from services.restriction_catalog import catalog_authority
 from worker import wait_for_workflow_adapter_admission  # noqa: F401 - compatibility re-export
 
@@ -58,7 +53,6 @@ for _noisy in ("httpx", "httpcore"):
 logger = logging.getLogger(__name__)
 
 # API-owned background controllers (remaining loops live in worker.py / biomodstack-worker).
-_global_experiment_worker: GlobalExperimentWorker | None = None
 _ont_raw_signal_worker: OntRawSignalWorker | None = None
 _ont_signal_worker: OntSignalWorker | None = None
 _ont_run_monitor = None
@@ -67,7 +61,6 @@ _ont_run_monitor = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize databases and API-owned controllers on startup."""
-    global _global_experiment_worker
     global _ont_raw_signal_worker
     global _ont_signal_worker
     bioxp_runtime = None
@@ -99,44 +92,11 @@ async def lifespan(app: FastAPI):
     else:
         set_molbio_ngs_startup_error(None)
 
-    if ngs_ont_enabled and get_molbio_ngs_startup_error() is None:
-        try:
-            async with experiment_session_factory() as admission_session:
-                async with async_session() as admission_core_session:
-                    pending_resource_evidence = await reconcile_startup_admissions(
-                        admission_session,
-                        admission_core_session,
-                    )
-                    await admission_session.commit()
-                if pending_resource_evidence:
-                    logger.warning(
-                        "[STARTUP] %s managed-workflow resource admissions await producer evidence",
-                        pending_resource_evidence,
-                    )
-        except Exception as exc:
-            logger.warning("[STARTUP] NGS startup admission reconciliation failed: %s", exc)
-    
-    # Initialize GlobalExperimentWorker only when this runtime owns workflow launches.
     # Background scheduling, MD reconciliation, remote telemetry/inventory, analysis,
-    # external imports, Boltz API, and FrustraMPNN statistics run in biomodstack-worker.
-    if workflow_launches_allowed():
-        _global_experiment_worker = GlobalExperimentWorker(
-            experiment_session_factory,
-            async_session,
-            molbio_ngs_session_factory if ngs_ont_enabled else None,
-            database_path=get_experiment_db_path(),
-        )
-        install_global_experiment_worker(_global_experiment_worker)
-        await _global_experiment_worker.start()
-        logger.info(
-            "[STARTUP] Global experiment dispatcher/reconciler lease=%s",
-            _global_experiment_worker.lease_state,
-        )
-    else:
-        _global_experiment_worker = None
+    # external imports, Boltz API, FrustraMPNN statistics, and launch-context
+    # recovery/publication run in biomodstack-worker (R31/R35).
+    if not workflow_launches_allowed():
         _ont_raw_signal_worker = None
-        install_global_experiment_worker(None)
-        logger.warning("[STARTUP] %s", workflow_launch_block_detail("start the global experiment worker"))
 
     if ngs_ont_enabled:
         from services.ont_local_images import (
@@ -217,10 +177,6 @@ async def lifespan(app: FastAPI):
     if bioxp_runtime is not None:
         await bioxp_runtime.close()
         logger.info("[SHUTDOWN] BioXP control plane closed")
-    if _global_experiment_worker:
-        await _global_experiment_worker.stop()
-        install_global_experiment_worker(None)
-        logger.info("[SHUTDOWN] Global experiment dispatcher/reconciler stopped")
     if _ont_raw_signal_worker:
         await _ont_raw_signal_worker.stop()
         logger.info("[SHUTDOWN] ONT raw-signal lease-recovery worker stopped")

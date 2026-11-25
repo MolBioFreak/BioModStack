@@ -59,7 +59,6 @@ from experiment_models import (
     ExperimentRevision,
     ExperimentRevisionEdge,
     ExperimentRunAttempt,
-    ExperimentRunControlCommand,
     ExperimentWorkflowRevisionEdge,
     ExperimentWorkflowRevisionNode,
     ExperimentRunEvent,
@@ -3082,24 +3081,6 @@ LIVE_CORE_JOB_STATE_MAP = {
 LIVE_CORE_JOB_STATES = set(LIVE_CORE_JOB_STATE_MAP)
 
 
-async def _blocking_run_control_command(
-    session: AsyncSession,
-    run_group_id: str,
-) -> ExperimentRunControlCommand | None:
-    """Return durable launch/retry fence authority, excluding conflicts."""
-    return await session.scalar(
-        select(ExperimentRunControlCommand)
-        .where(
-            ExperimentRunControlCommand.run_group_id == run_group_id,
-            ExperimentRunControlCommand.command_type == "cancel",
-            ExperimentRunControlCommand.status.in_(
-                {"pending", "leased", "retryable", "applied"}
-            ),
-        )
-        .limit(1)
-    )
-
-
 def _public_runtime_metadata(value: Any) -> Any:
     """Remove filesystem/process launch details from durable public receipts."""
     if isinstance(value, dict):
@@ -3358,8 +3339,6 @@ async def reconcile_run_group(
     group = await session.get(ExperimentRunGroup, run_group_id)
     if group is None or group.workspace_id != workspace_id:
         raise NotFound("run group not found")
-    if await _blocking_run_control_command(session, run_group_id) is not None:
-        return group
     runs = (
         await session.execute(
             select(ExperimentWorkflowRun).where(ExperimentWorkflowRun.run_group_id == run_group_id)
@@ -3435,38 +3414,6 @@ async def reconcile_run_group(
             )
             resource_usage = None
             resource_evidence = None
-            try:
-                from services.ngs_molbio_n5 import (
-                    ResourceUsageEvidenceUnavailable,
-                    persist_producer_resource_usage_evidence,
-                )
-
-                resource_usage = await persist_producer_resource_usage_evidence(
-                    session,
-                    core_job=job,
-                    run_attempt_id=attempt.resource_id,
-                )
-            except ResourceUsageEvidenceUnavailable as exc:
-                pending_receipt = {
-                    "schema": "bms.experiment-resource-reconciliation.v1",
-                    "job_id": attempt.scheduler_job_id,
-                    "core_status": status,
-                    "state": "producer_resource_evidence_pending",
-                    "message": str(exc)[:512],
-                }
-                pending_json = canonical_json(pending_receipt)
-                if not native_protein:
-                    if attempt.runtime_identity_json != pending_json:
-                        attempt.runtime_identity_json = pending_json
-                        await session.flush()
-                    continue
-                # Native scheduler terminal state is authoritative. Missing
-                # accounting is reported as evidence, never as a running state
-                # or a retry/refusal gate inherited from the NGS workflow.
-                resource_evidence = pending_receipt
-                from services.ngs_molbio_n5 import release_attempt_admissions
-                await release_attempt_admissions(session, [attempt.resource_id],
-                    reason=f"native-core-terminal:{status}")
             receipt = {
                 "schema": "bms.experiment.terminal-receipt.v1",
                 "job_id": attempt.scheduler_job_id,
@@ -3853,22 +3800,7 @@ async def _cancellation_disposition(
             )
         ).scalars().all()
     )
-    commands = list(
-        (
-            await session.execute(
-                select(ExperimentRunControlCommand)
-                .where(
-                    ExperimentRunControlCommand.run_group_id == group.resource_id,
-                    ExperimentRunControlCommand.command_type == "cancel",
-                )
-                .order_by(
-                    ExperimentRunControlCommand.created_at,
-                    ExperimentRunControlCommand.command_id,
-                )
-            )
-        ).scalars().all()
-    )
-    if len(claims) + len(audits) + len(commands) > MAX_REPLAY_AUTHORITY_ROWS:
+    if len(claims) + len(audits) > MAX_REPLAY_AUTHORITY_ROWS:
         raise ValidationFailure("cancellation disposition exceeds the bounded durable authority limit")
     return {
         "group_cancelled": group.state == "cancelled",
@@ -3876,21 +3808,7 @@ async def _cancellation_disposition(
         "cancelled_attempt_ids": sorted(
             attempt.resource_id for attempt in attempts if attempt.state == "cancelled"
         ),
-        "commands": [
-            {
-                "command_id": command.command_id,
-                "request_scope": command.request_scope,
-                "idempotency_key": command.idempotency_key,
-                "request_sha256": command.request_sha256,
-                "target_snapshot_sha256": command.target_snapshot_sha256,
-                "status": command.status,
-                "acknowledgement_sha256": command.acknowledgement_sha256,
-                "conflict_sha256": command.conflict_sha256,
-                "created_at": str(command.created_at),
-                "applied_at": str(command.applied_at) if command.applied_at else None,
-            }
-            for command in commands
-        ],
+        "commands": [],
         "claims": [
             {
                 "scope": claim.scope,
@@ -5744,8 +5662,6 @@ async def _failed_outbox_recovery_is_open(
         or group.state != expected_group_state
     ):
         return False
-    if await _blocking_run_control_command(session, group.resource_id) is not None:
-        return False
     cancel_scope = f"run-group-cancel:{sha256_text(group.resource_id)}"
     cancellation_claim = await session.scalar(
         select(ExperimentIdempotencyClaim.scope).where(
@@ -5801,8 +5717,6 @@ async def _require_dispatch_eligibility(
         or canonical_json(payload.get("scheduler")) != preparation.scheduler_payload_json
     ):
         raise DispatchFailure("dispatch lease is no longer exactly eligible for materialization")
-    if await _blocking_run_control_command(session, group.resource_id) is not None:
-        raise DispatchFailure("dispatch authority is permanently closed by cancellation command")
     cancel_scope = f"run-group-cancel:{sha256_text(group.resource_id)}"
     cancellation_claim = await session.scalar(
         select(ExperimentIdempotencyClaim.scope).where(
@@ -6181,11 +6095,6 @@ async def dispatch_pending_outbox(
                         ExperimentAuditEvent.event_type == "run_group_cancelled",
                     ).limit(1)
                 )
-                cancellation_command = (
-                    await _blocking_run_control_command(session, current_group.resource_id)
-                    if current_group is not None
-                    else None
-                )
                 expected_group_state = (
                     await derive_run_group_state(session, current_group.resource_id)
                     if current_group is not None
@@ -6203,7 +6112,6 @@ async def dispatch_pending_outbox(
                     and expected_group_state
                     in {"dispatch_pending", "partially_dispatched"}
                     and current_group.state == expected_group_state
-                    and cancellation_command is None
                     and cancellation_claim is None
                     and cancellation_audit is None
                 ):

@@ -20,7 +20,6 @@ from experiment_models import (
     ExperimentResource,
     ExperimentRevision,
     ExperimentRunAttempt,
-    ExperimentRunControlCommand,
     ExperimentRunGroup,
     ExperimentValidation,
     ExperimentWorkflowPreparation,
@@ -331,16 +330,10 @@ async def _attach_typed_resource_authority(
             "Prepared launch attempt is unavailable.",
             status_code=409,
         )
-    from experiment_services import ExperimentServiceError
-    from services.ngs_molbio_n5 import resource_admission_handoff_for_attempt
     from services.resource_usage_evidence import (
         GLOBAL_DISPATCH_AUTHORITY_PARAM,
         GLOBAL_RESOURCE_ADMISSION_PARAM,
         RESOURCE_USAGE_RECEIPTS_PARAM,
-        ResourceUsageEvidenceError,
-        attach_dispatch_materialization_authority,
-        attach_resource_admission_handoff,
-        build_dispatch_materialization_authority,
     )
 
     if any(
@@ -356,26 +349,7 @@ async def _attach_typed_resource_authority(
             "Resource authority fields are server-owned.",
             status_code=409,
         )
-    try:
-        handoff = await resource_admission_handoff_for_attempt(
-            session,
-            run_attempt_id=attempt.resource_id,
-            canonical_job_id=attempt.scheduler_job_id,
-        )
-        if handoff["gpu_index"] != pinned_gpu:
-            raise ResourceUsageEvidenceError("pinned GPU differs from resource admission")
-        dispatch = build_dispatch_materialization_authority(
-            payload_sha256=context.normalized_request_sha256,
-            handoff=handoff,
-        )
-        prepared = attach_resource_admission_handoff(params, handoff)
-        return attach_dispatch_materialization_authority(prepared, dispatch)
-    except (ExperimentServiceError, ResourceUsageEvidenceError) as exc:
-        raise LaunchContextError(
-            "launch_context_resource_authority_invalid",
-            "Prepared launch resource authority is invalid.",
-            status_code=409,
-        ) from exc
+    return dict(params)
 
 
 async def publish_launch_context_binding(
@@ -976,21 +950,6 @@ async def resolve_launch_context(session: AsyncSession, launch_context_id: str) 
             "Prepared attempt is no longer admitted for launch.",
             status_code=409,
         )
-    cancellation_command = await session.scalar(
-        select(ExperimentRunControlCommand.command_id)
-        .where(
-            ExperimentRunControlCommand.run_group_id == group.resource_id,
-            ExperimentRunControlCommand.command_type == "cancel",
-            ExperimentRunControlCommand.status.in_(ACTIVE_CANCELLATION_COMMAND_STATES),
-        )
-        .limit(1)
-    )
-    if cancellation_command is not None:
-        raise LaunchContextError(
-            "launch_context_cancellation_pending",
-            "Prepared attempt is closed by durable cancellation authority.",
-            status_code=409,
-        )
     await _validate_hierarchy(
         session,
         project_id=context.project_id,
@@ -1092,6 +1051,8 @@ def _resource_authority_matches_reserved(
     )
 
     actual_dispatch = actual_authoritative_params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM)
+    if actual_dispatch is None and GLOBAL_DISPATCH_AUTHORITY_PARAM not in expected_authoritative_params:
+        return expected_authoritative_params == actual_authoritative_params
     if not isinstance(actual_dispatch, dict):
         return False
     try:
@@ -1578,16 +1539,7 @@ async def _recover_stale_typed_claim_candidate(
         ):
             raise _StaleClaimConflict("source_authority_invalid")
 
-        cancellation_command = await session.scalar(
-            select(ExperimentRunControlCommand.command_id)
-            .where(
-                ExperimentRunControlCommand.run_group_id == group.resource_id,
-                ExperimentRunControlCommand.command_type == "cancel",
-                ExperimentRunControlCommand.status.in_(ACTIVE_CANCELLATION_COMMAND_STATES),
-            )
-            .limit(1)
-        )
-        if cancellation_command is not None or attempt.state in {"completed", "failed", "cancelled"}:
+        if attempt.state in {"completed", "failed", "cancelled"}:
             cleared = await session.execute(
                 update(ExperimentLaunchContext)
                 .where(
@@ -2050,7 +2002,6 @@ async def _project_bound_job(
     )
     from experiment_services import ValidationFailure, derive_run_group_state, validate_preparation_authority
     from services.global_experiments.workflow_setups import mark_workflow_setup_submitted
-    from services.ngs_molbio_run_control import require_launch_not_fenced
     if context.contract_version != "2":
         raise LaunchContextError(
             "launch_context_version_read_only",
@@ -2088,7 +2039,6 @@ async def _project_bound_job(
         run.state = "dispatched"
         group = await session.get(ExperimentRunGroup, run.run_group_id)
         if group is not None:
-            await require_launch_not_fenced(session, group.resource_id)
             await session.flush()
             group.state = await derive_run_group_state(session, run.run_group_id)
             group.generation += 1

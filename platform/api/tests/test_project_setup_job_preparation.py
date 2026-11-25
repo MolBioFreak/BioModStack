@@ -65,14 +65,6 @@ async def test_setup_reopen_prepare_reserve_and_validate_job(setup_store, includ
                 params={**normalized.params, "sequence": "AAAA"}, pinned_gpu=None)
         if not include_admission:
             return
-        from services.ngs_molbio_n5 import reserve_run_group, ResourceAdmissionDenied
-        try:
-            await reserve_run_group(session, group_id=group.resource_id,
-                domain_id=setup["domain_experiment_id"], actor="scratch-test")
-        except ResourceAdmissionDenied as exc:
-            if exc.code == "resource_source_revision_unavailable":
-                pytest.skip("Real resource admission blocked: candidate lacks a frozen successor runtime record; bound Job validation NOT verified")
-            raise
         context = await session.get(ExperimentLaunchContext, prepared["launch_context_id"])
         assert context.state == "reserved" and context.run_attempt_id
         scheduler = json.loads(preparation.scheduler_payload_json)

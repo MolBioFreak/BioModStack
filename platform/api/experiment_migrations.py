@@ -65,7 +65,9 @@ MIGRATION_V25_VERSION = 25
 MIGRATION_V25_NAME = "remove_hash_udfs_and_sync_state"
 MIGRATION_V26_VERSION = 26
 MIGRATION_V26_NAME = "retire_ngs_domain_connector_tables"
-LATEST_MIGRATION_VERSION = MIGRATION_V26_VERSION
+MIGRATION_V27_VERSION = 27
+MIGRATION_V27_NAME = "retire_run_control_and_resource_admission_tables"
+LATEST_MIGRATION_VERSION = MIGRATION_V27_VERSION
 MIGRATION_V2_CHECKSUM = "db24d1ef056e560f10eb2fe9f8ef4dac0d4e4dbe90fd0a49efed88f0d111935c"
 MIGRATION_V3_CHECKSUM = "46f1a1d28a02334e87d628070e2bd9c6d78e158caa23d583951fdc582e7b11d2"
 MIGRATION_V4_CHECKSUM = "ec2966efee9129f8890019bee0d569de2cdf8d2a9fc4bb2e05138839880f375b"
@@ -2725,6 +2727,25 @@ DROP TABLE IF EXISTS domain_connector_commands;
 """.strip()
 MIGRATION_V26_CHECKSUM = hashlib.sha256(MIGRATION_V26_SQL.encode("utf-8")).hexdigest()
 
+MIGRATION_V27_SQL = """
+DROP TRIGGER IF EXISTS trg_experiment_run_control_command_scope_insert;
+DROP TRIGGER IF EXISTS trg_experiment_run_control_command_identity_immutable;
+DROP TRIGGER IF EXISTS trg_experiment_run_control_command_state_transition;
+DROP TRIGGER IF EXISTS trg_experiment_run_control_command_terminal_immutable;
+DROP TRIGGER IF EXISTS trg_experiment_run_control_command_delete_forbidden;
+DROP TRIGGER IF EXISTS trg_experiment_resource_admission_identity_immutable;
+DROP TRIGGER IF EXISTS trg_experiment_resource_admission_transition;
+DROP INDEX IF EXISTS ix_experiment_run_control_commands_ready;
+DROP INDEX IF EXISTS ix_experiment_run_control_commands_group;
+DROP INDEX IF EXISTS uq_run_control_active_command;
+DROP INDEX IF EXISTS ix_experiment_resource_admissions_state;
+DROP INDEX IF EXISTS ix_experiment_resource_admissions_scope;
+DROP TABLE IF EXISTS run_control_commands;
+DROP TABLE IF EXISTS resource_admissions;
+DROP TABLE IF EXISTS resource_admission_policy;
+""".strip()
+MIGRATION_V27_CHECKSUM = hashlib.sha256(MIGRATION_V27_SQL.encode("utf-8")).hexdigest()
+
 _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_resource_owner_same_workspace_insert",
     "trg_experiment_resource_owner_same_workspace_update",
@@ -2776,8 +2797,6 @@ _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_launch_context_v2_insert",
     "trg_experiment_launch_context_v2_state",
     "trg_experiment_launch_context_v2_identity_immutable",
-    "trg_experiment_resource_admission_identity_immutable",
-    "trg_experiment_resource_admission_transition",
     "trg_experiment_operational_receipt_immutable_update",
     "trg_experiment_operational_receipt_immutable_delete",
     "trg_experiment_workflow_plan_authority_scope_insert",
@@ -2786,11 +2805,6 @@ _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_idempotency_response_digest_insert",
     "trg_experiment_idempotency_response_digest_update",
     "trg_experiment_idempotency_response_immutable_update",
-    "trg_experiment_run_control_command_scope_insert",
-    "trg_experiment_run_control_command_identity_immutable",
-    "trg_experiment_run_control_command_state_transition",
-    "trg_experiment_run_control_command_terminal_immutable",
-    "trg_experiment_run_control_command_delete_forbidden",
     "trg_experiment_workflow_setup_contract_immutable",
     "trg_experiment_workflow_setup_terminal_immutable",
 )
@@ -2905,7 +2919,6 @@ _REQUIRED_SCHEMA_COLUMNS: dict[str, set[str]] = {
     "dataset_revision_members": {"revision_id", "ordinal", "role", "semantic_identity", "value_json", "content_sha256", "size_bytes", "media_type"},
     "workflow_preparations": {"resource_id", "workspace_id", "workflow_revision_id", "normalized_request_json", "normalized_request_sha256", "scheduler_payload_json", "validation_status", "validation_receipt_json", "validation_resource_id", "expected_cardinality", "created_at", "prepared_at"},
     "run_groups": {"resource_id", "workspace_id", "launch_idempotency_key", "request_sha256", "state", "generation", "created_at", "updated_at"},
-    "run_control_commands": {"command_id", "request_scope", "idempotency_key", "command_type", "workspace_id", "run_group_id", "expected_generation", "request_json", "request_sha256", "target_snapshot_json", "target_snapshot_sha256", "status", "lease_owner", "lease_token", "lease_expires_at", "attempt_count", "next_retry_at", "progress_json", "progress_sha256", "acknowledgement_json", "acknowledgement_sha256", "conflict_json", "conflict_sha256", "last_error_code", "last_error_message", "created_at", "updated_at", "applied_at"},
     "run_group_preparations": {"run_group_id", "preparation_id", "ordinal"},
     "workflow_runs": {"resource_id", "workspace_id", "run_group_id", "preparation_id", "node_id", "requiredness", "state", "generation", "created_at"},
     "run_attempts": {"resource_id", "workspace_id", "workflow_run_id", "preparation_id", "attempt_number", "scheduler_job_id", "state", "external_binding_receipt_json", "runtime_identity_json", "terminal_receipt_json", "terminal_receipt_sha256", "created_at"},
@@ -2925,8 +2938,6 @@ _REQUIRED_SCHEMA_COLUMNS: dict[str, set[str]] = {
     "research_records": {"resource_id", "workspace_id", "subject_resource_id", "record_kind", "body", "author", "source_receipt_ids_json", "supersedes_record_id", "created_at"},
     "domain_adapter_receipts": {"resource_id", "workspace_id", "domain_experiment_id", "adapter_id", "adapter_version", "operation_kind", "normalized_request_sha256", "receipt_json", "created_at"},
     "launch_contexts": {"launch_context_id", "project_id", "global_experiment_id", "domain_experiment_id", "workflow_id", "workflow_revision_id", "preparation_id", "run_attempt_id", "contract_version", "normalized_request_sha256", "validation_receipt_id", "validation_receipt_sha256", "source_receipt_id", "return_uri", "state", "claim_token", "canonical_job_id", "binding_receipt_json", "issued_at", "expires_at", "claimed_at", "consumed_at"},
-    "resource_admission_policy": {"policy_id", "policy_version", "cpu_thread_limit", "dram_byte_limit", "lock_generation", "updated_at"},
-    "resource_admissions": {"admission_id", "workspace_id", "domain_experiment_id", "plan_id", "preparation_id", "run_attempt_id", "canonical_job_id", "state", "cpu_threads", "dram_bytes", "gpu_index", "gpu_uuid", "policy_source", "policy_version", "owner", "lease_token", "refusal_code", "refusal_reason", "release_reason", "recovery_evidence_json", "admitted_at", "queued_at", "released_at", "reconciled_at", "created_at", "updated_at"},
     "operational_receipts": {"receipt_id", "operation_kind", "workspace_id", "native_identity", "state", "receipt_json", "receipt_sha256", "source_revision", "occurred_at", "verified_at"},
     "workflow_plan_authority": {"workflow_id", "workspace_id", "domain_experiment_id", "expected_domain_revision_id", "capability_contract_json", "capability_contract_sha256", "created_at"},
     "workflow_setup_contexts": {"setup_context_id", "project_id", "global_experiment_id", "domain_experiment_id", "workflow_id", "relationship_kind", "capability_id", "capability_contract_json", "capability_contract_sha256", "setup_destination", "draft_json", "draft_sha256", "generation", "validation_state", "lifecycle_state", "created_at", "updated_at", "submitted_at", "deleted_at"},
@@ -2940,12 +2951,8 @@ _REQUIRED_INDEXES = {
     "ix_experiment_aggregate_heads_dataset_kind",
     "ix_experiment_run_attempts_preparation",
     "ux_experiment_launch_context_attempt",
-    "ix_experiment_resource_admissions_state",
-    "ix_experiment_resource_admissions_scope",
     "ix_experiment_operational_receipts_kind_time",
     "ix_experiment_workflow_plan_authority_scope",
-    "ix_experiment_run_control_commands_ready",
-    "ix_experiment_run_control_commands_group",
     "ux_experiment_domain_parent_global_revision",
     "ix_experiment_workflow_setups_project_updated",
     "ix_experiment_workflow_setups_experiment",
@@ -2978,10 +2985,11 @@ def _accepted_migration_ledgers() -> tuple[list[tuple[int, str, str]], ...]:
     v24 = (MIGRATION_V24_VERSION, MIGRATION_V24_NAME, MIGRATION_V24_CHECKSUM)
     v25 = (MIGRATION_V25_VERSION, MIGRATION_V25_NAME, MIGRATION_V25_CHECKSUM)
     v26 = (MIGRATION_V26_VERSION, MIGRATION_V26_NAME, MIGRATION_V26_CHECKSUM)
+    v27 = (MIGRATION_V27_VERSION, MIGRATION_V27_NAME, MIGRATION_V27_CHECKSUM)
     v1 = (LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM)
     return (
-        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26],
-        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26],
+        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27],
+        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27],
     )
 
 
@@ -3170,6 +3178,7 @@ def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dic
         )
         _apply_v25_remove_hash_udfs_upgrade(expected)
         _apply_v26_retire_connector_upgrade(expected)
+        _apply_v27_retire_run_control_and_admissions_upgrade(expected)
         manifest = _schema_definition_manifest(expected)
         if legacy_lineage:
             for table_name, definition in _LEGACY_FINAL_TABLE_SQL.items():
@@ -4188,9 +4197,20 @@ def _apply_v25_remove_hash_udfs_upgrade(connection: sqlite3.Connection) -> None:
     """Drop sync_state and remove Python hash UDF calls from constraints and triggers."""
     connection.execute("PRAGMA foreign_keys = OFF")
     try:
+        has_connector_tables = (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='domain_connector_commands'"
+            ).fetchone()
+            is not None
+        )
+        body = (
+            MIGRATION_V25_SQL
+            if has_connector_tables
+            else MIGRATION_V25_SQL.split("CREATE TABLE domain_connector_commands__v25")[0]
+        )
         script = (
             "BEGIN IMMEDIATE;\n"
-            + MIGRATION_V25_SQL
+            + body
             + "\nINSERT INTO experiment_schema_migrations("
             + "version, name, checksum, description, applied_at) VALUES ("
             + f"{MIGRATION_V25_VERSION}, '{MIGRATION_V25_NAME}', '{MIGRATION_V25_CHECKSUM}', "
@@ -4217,6 +4237,28 @@ def _apply_v26_retire_connector_upgrade(connection: sqlite3.Connection) -> None:
             + "version, name, checksum, description, applied_at) VALUES ("
             + f"{MIGRATION_V26_VERSION}, '{MIGRATION_V26_NAME}', '{MIGRATION_V26_CHECKSUM}', "
             + f"'Retire NGS domain connector tables (R17)', '{datetime.now(timezone.utc).isoformat()}');\n"
+            + "COMMIT;\n"
+        )
+        connection.executescript(script)
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        connection.execute("PRAGMA foreign_keys = ON")
+
+
+def _apply_v27_retire_run_control_and_admissions_upgrade(connection: sqlite3.Connection) -> None:
+    """Drop retired run_control_commands and resource_admissions/policy tables (R35)."""
+    connection.execute("PRAGMA foreign_keys = OFF")
+    try:
+        script = (
+            "BEGIN IMMEDIATE;\n"
+            + MIGRATION_V27_SQL
+            + "\nINSERT INTO experiment_schema_migrations("
+            + "version, name, checksum, description, applied_at) VALUES ("
+            + f"{MIGRATION_V27_VERSION}, '{MIGRATION_V27_NAME}', '{MIGRATION_V27_CHECKSUM}', "
+            + f"'Retire run_control_commands and resource_admissions/policy tables (R35)', '{datetime.now(timezone.utc).isoformat()}');\n"
             + "COMMIT;\n"
         )
         connection.executescript(script)
@@ -4464,7 +4506,7 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-5] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-6] for ledger in _accepted_migration_ledgers()):
             _apply_additive_migration(
                 connection, MIGRATION_V22_VERSION, MIGRATION_V22_NAME,
                 MIGRATION_V22_CHECKSUM, "Native model workflow setup routes", MIGRATION_V22_SQL,
@@ -4473,7 +4515,7 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-4] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-5] for ledger in _accepted_migration_ledgers()):
             _apply_additive_migration(
                 connection, MIGRATION_V23_VERSION, MIGRATION_V23_NAME,
                 MIGRATION_V23_CHECKSUM, "Family MSA workflow setup routes", MIGRATION_V23_SQL,
@@ -4482,7 +4524,7 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-3] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-4] for ledger in _accepted_migration_ledgers()):
             _apply_additive_migration(
                 connection, MIGRATION_V24_VERSION, MIGRATION_V24_NAME, MIGRATION_V24_CHECKSUM,
                 "Keep submitted Project setups editable", MIGRATION_V24_SQL,
@@ -4491,14 +4533,20 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-2] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-3] for ledger in _accepted_migration_ledgers()):
             _apply_v25_remove_hash_udfs_upgrade(connection)
 
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-1] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-2] for ledger in _accepted_migration_ledgers()):
             _apply_v26_retire_connector_upgrade(connection)
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in tuple(ledger[:-1] for ledger in _accepted_migration_ledgers()):
+            _apply_v27_retire_run_control_and_admissions_upgrade(connection)
             rows = connection.execute(
                 "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
             ).fetchall()

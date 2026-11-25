@@ -597,7 +597,6 @@ def project_context_preview_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
         ExperimentLaunchContext,
         ExperimentOperationalReceipt,
         ExperimentResource,
-        ExperimentResourceAdmission,
         ExperimentRevision,
         ExperimentRunAttempt,
         ExperimentRunGroup,
@@ -966,29 +965,6 @@ def project_context_preview_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
                     scheduler_job_id=scheduler_job_id,
                     state="pending",
                     created_at=issued_at,
-                )
-            )
-            session.add(
-                ExperimentResourceAdmission(
-                    admission_id=ids["admission"],
-                    workspace_id=ids["project"],
-                    domain_experiment_id=ids["domain"],
-                    plan_id=ids["plan"],
-                    preparation_id=ids["preparation"],
-                    run_attempt_id=ids["attempt"],
-                    canonical_job_id=scheduler_job_id,
-                    state="admitted",
-                    cpu_threads=1,
-                    dram_bytes=1024**3,
-                    gpu_index=None,
-                    gpu_uuid=None,
-                    policy_source="project-scheduler",
-                    policy_version="bms.resource-admission-policy.v1",
-                    owner="project-manager",
-                    lease_token=lease_token,
-                    admitted_at=issued_at,
-                    created_at=issued_at,
-                    updated_at=issued_at,
                 )
             )
             session.add(

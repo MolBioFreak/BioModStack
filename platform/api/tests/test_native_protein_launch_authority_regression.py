@@ -189,14 +189,6 @@ async def test_native_setup_handoff_launch_and_bound_job(native_http, setup_stor
             assert [lineup[0]['params']['fampnn_temperature'], lineup[1]['params']['caliby_temperature']] == [0.3, 0.2]
             assert scheduler['params']['bindcraft2_settings']['number_of_final_designs'] == 25
             assert scheduler['params']['bindcraft2_settings']['max_trajectories'] == 100
-        from services.ngs_molbio_n5 import resource_admission_handoff_for_attempt
-        from component_runtime import SourceIdentity
-        from paths import get_code_root
-        handoff = await resource_admission_handoff_for_attempt(session,
-            run_attempt_id=context.run_attempt_id,
-            canonical_job_id=group['runs'][0]['attempts'][0]['canonical_job_id'])
-        source = SourceIdentity.from_checkout(get_code_root())
-        assert (handoff['source_revision'], handoff['source_tree']) == (source.revision, source.tree)
         params = await validate_bound_job_request(session, context, job_name=scheduler['name'],
             model_id=scheduler['model_id'], mode=scheduler['mode'], params=scheduler['params'], pinned_gpu=None)
         assert all(params[key] == value for key, value in scheduler['params'].items())
@@ -263,9 +255,6 @@ async def test_native_pending_run_cancel_uses_global_owner(native_http, setup_st
             idempotency_key='pending-run', source_domain_id=setup['domain_experiment_id'],
             launch_context_ids={prepared['preparation_id']: prepared['launch_context_id']})
         group_id, generation = group.resource_id, group.generation
-        from services.ngs_molbio_n5 import reserve_run_group
-        await reserve_run_group(session, group_id=group_id,
-            domain_id=setup['domain_experiment_id'], actor='operator')
         await session.commit()
     response = await native_http.post(domain_path + '/run-groups/' + group_id + '/cancel',
         json={'expected_run_group_generation': generation, 'reason': 'Fixture cancellation'},
@@ -335,7 +324,7 @@ async def test_native_terminal_state_is_not_gated_on_missing_accounting(
     from datetime import datetime, timezone
     from database import Job
     from sqlalchemy import select
-    from experiment_models import ExperimentRunAttempt, ExperimentResourceAdmission
+    from experiment_models import ExperimentRunAttempt
     from experiment_services import reconcile_run_group
     from services.global_experiments.launch_contexts import claim_launch_context, consume_launch_context
     project_id, setup, prepared, domain_path = await prepared_setup(native_http, 'bindcraft2')
@@ -367,11 +356,6 @@ async def test_native_terminal_state_is_not_gated_on_missing_accounting(
         assert receipt['terminal_state'] == receipt['status'] == status
         assert receipt['resource_usage_receipt_id'] is None
         assert receipt['resource_usage_receipt_sha256'] is None
-        assert receipt['resource_usage_evidence']['core_status'] == status
-        assert receipt['resource_usage_evidence']['state'] == 'producer_resource_evidence_pending'
-        admission = await session.scalar(select(ExperimentResourceAdmission).where(
-            ExperimentResourceAdmission.run_attempt_id == attempt.resource_id))
-        assert admission.state == 'released'
         await session.commit()
         await core.commit()
         generation = group.generation

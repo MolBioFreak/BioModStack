@@ -27,15 +27,7 @@ def test_optional_md_native_owner_queues_once_without_prediction(project_context
             # Round context is a destination. Use its real current Plan/Domain
             # owner, rather than the handcrafted standalone MD authority above.
             from test_project_normalized_child_requests import destination
-            from experiment_models import ExperimentResourceAdmissionPolicy
-            from services.ngs_molbio_n5 import ADMISSION_POLICY_VERSION
-            from biomodstack_local_resources import applied_local_policy
             async with store['experiment_sessions']() as experiments:
-                policy = applied_local_policy()
-                experiments.add(ExperimentResourceAdmissionPolicy(policy_id='managed-workflows',
-                    policy_version=ADMISSION_POLICY_VERSION, cpu_thread_limit=policy.cpu_threads,
-                    dram_byte_limit=policy.memory_bytes))
-                await experiments.flush()
                 dest = await destination(experiments)
                 await experiments.commit()
                 intent['launch_context_id'] = dest['launch_context_id']

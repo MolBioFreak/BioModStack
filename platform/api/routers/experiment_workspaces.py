@@ -62,13 +62,8 @@ from experiment_services import (
     save_workflow_draft,
     save_workflow_revision,
 )
+from services.job_control import cancel_project_run_group
 from services.ngs_molbio_n5 import operational_receipt
-from services.ngs_molbio_run_control import (
-    command_document,
-    process_run_control_command,
-    request_run_group_cancellation,
-)
-from services.global_experiments.worker import global_experiment_worker
 
 
 router = APIRouter(prefix="/api/experiment-workspaces", tags=["experiment-workspaces"])
@@ -884,11 +879,6 @@ async def create_workspace_run_group(
 ) -> dict[str, Any]:
     try:
         await _require_mutation_owner(request, session, resource_id=workspace_id)
-        worker = global_experiment_worker()
-        if worker is None:
-            raise HTTPException(status_code=503, detail="managed dispatcher is not installed")
-        if not worker.ensure_dispatcher_available():
-            raise HTTPException(status_code=503, detail="managed dispatcher ownership is unavailable")
         group = await create_run_group(
             session,
             workspace_id,
@@ -994,40 +984,14 @@ async def cancel_workspace_run_group(
 ) -> dict[str, Any]:
     try:
         await _require_mutation_owner(request, session, resource_id=run_group_id)
-        command = await request_run_group_cancellation(
+        return await cancel_project_run_group(
             session,
+            core_session,
             workspace_id=workspace_id,
             run_group_id=run_group_id,
-            idempotency_key=payload.idempotency_key,
             expected_generation=payload.expected_generation,
             reason=payload.reason,
         )
-        if command.status not in {"applied", "conflicted"}:
-            command = await process_run_control_command(
-                session,
-                core_session,
-                command_id=command.command_id,
-                worker_id=f"workspace-cancel:{uuid.uuid4()}",
-            )
-        if command.status == "conflicted":
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "run_control_conflicted",
-                    "command_id": command.command_id,
-                    "status": command.status,
-                },
-            )
-        if command.status != "applied":
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "run_control_pending",
-                    "command_id": command.command_id,
-                    "status": command.status,
-                },
-            )
-        return command_document(command)
     except ExperimentServiceError as exc:
         await session.rollback()
         await core_session.rollback()
@@ -1349,13 +1313,12 @@ async def dispatch_one_experiment_outbox(request: Request) -> dict[str, Any]:
 
 
 @router.get("/ops/worker-health")
-async def experiment_worker_health(
-    session: AsyncSession = Depends(get_experiment_session),
-) -> dict[str, Any]:
-    worker = global_experiment_worker()
-    if worker is None:
-        raise HTTPException(status_code=503, detail="global experiment worker is not installed")
-    return await worker.health_snapshot(session)
+async def experiment_worker_health() -> dict[str, Any]:
+    return {
+        "schema": "bms.experiment.worker-health.v1",
+        "status": "retired_into_worker_process",
+        "single_owner": True,
+    }
 
 
 __all__ = ["router"]

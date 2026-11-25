@@ -289,7 +289,7 @@ async def test_resolver_loads_the_frozen_binding_not_the_current_domain_head(mon
 
     rows = {
         "MolBioNGSDomainState": SimpleNamespace(
-            binding_receipt_id=contract["binding"]["binding_revision_id"],
+            binding_receipt_id=contract["binding"]["global_binding_receipt_id"],
             binding_receipt_json=contract["binding"]["global_binding_receipt_json"],
             binding_receipt_sha256=contract["binding"]["global_binding_receipt_sha256"],
         ),

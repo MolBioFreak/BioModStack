@@ -18,7 +18,7 @@ async def test_global_upgrade_keeps_project_and_experiment_identity_order(projec
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app(factory)),
                                 base_url="http://test") as client:
         project_url, _project = (await _hierarchy(client))[0]
-        legacy = _experiment_payload("Legacy setup group")
+        legacy = {**_experiment_payload("Legacy setup group"), "schema": "bms.global-experiment.v1"}
         created = await client.post(f"{project_url}/experiments", json=legacy)
         assert created.status_code == 201, created.text
         row = created.json()

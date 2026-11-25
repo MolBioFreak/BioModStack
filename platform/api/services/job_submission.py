@@ -2454,15 +2454,6 @@ def _launch_context_http_error(exc: LaunchContextError) -> HTTPException:
     )
 
 
-async def _reserve_selected_run_group(experiment_session, *, group_id, domain_id):
-    from services.ngs_molbio_n5 import reserve_run_group, ResourceAdmissionDenied
-    try:
-        return await reserve_run_group(experiment_session, group_id=group_id,
-                                       domain_id=domain_id, actor='native-child-submission')
-    except ResourceAdmissionDenied as exc:
-        raise LaunchContextError(exc.code, exc.reason, status_code=409) from exc
-
-
 async def submit_selected_child_jobs(
     requests: list[JobCreate], background_tasks: BackgroundTasks,
     session: AsyncSession, experiment_session: AsyncSession, *,
@@ -2506,9 +2497,6 @@ async def submit_selected_child_jobs(
             responses = [await submit_job(item, background_tasks, session, _commit=False) for item in requests]
             await session.commit()
             return responses
-        destination = await resolve_launch_context_for_display(experiment_session, destination_launch_context_id)
-        await _reserve_selected_run_group(experiment_session, group_id=prepared['run_group_id'],
-                                          domain_id=destination.domain_experiment_id)
         return await _create_prepared_child_batch(requests, background_tasks, session, experiment_session)
     except LaunchContextError as exc:
         await session.rollback()
@@ -2672,10 +2660,6 @@ async def submit_job(
                             raise HTTPException(422, str(exc)) from exc
                         if retained_preview['approval_digest'] != job_data.execution_plan_approval:
                             raise HTTPException(409, 'Execution plan approval is stale; preview and approve the current request')
-                from experiment_models import ExperimentWorkflowRun
-                run = await experiment_session.get(ExperimentWorkflowRun, prepared_attempt.workflow_run_id)
-                await _reserve_selected_run_group(experiment_session, group_id=run.run_group_id,
-                    domain_id=preview_context.domain_experiment_id)
             job_data.params = await validate_bound_job_request(
                 experiment_session,
                 preview_context,
