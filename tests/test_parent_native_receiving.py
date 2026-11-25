@@ -40,7 +40,7 @@ def test_discovery_exact_tasks_and_typed_modifications():
 def test_exact_original_selected_ledger_correspondence(tmp_path, monkeypatch):
     from services import binder_source_materialization as owner
     monkeypatch.setattr(owner, 'to_allowed_relative', str)
-    raw = (ROOT / 'platform/frontend/tests/fixtures/rfd3-selection-identity.cif').read_bytes()
+    raw = (ROOT / 'tests/fixtures/selected-structure-identity.cif').read_bytes()
     receipt = owner.materialize_source_bytes(raw, '.cif', tmp_path, output_format='native', model_number=2)
     assert receipt['original_sha256'] == hashlib.sha256(raw).hexdigest()
     assert receipt['original_path'] != receipt['path'] == receipt['selected_path']

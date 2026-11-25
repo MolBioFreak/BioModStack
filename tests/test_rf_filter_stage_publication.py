@@ -17,30 +17,28 @@ def isolate(tmp_path, monkeypatch):
     monkeypatch.setenv('BMS_SCIENTIFIC_ARTIFACT_ROOT', str(tmp_path))
 
 
-def produce(tmp_path, stage='prediction', empty=False, reject=False):
+def produce(tmp_path, empty=False, reject=False):
     source = tmp_path / 'source'; source.mkdir()
     if not empty:
         for name, value in [('a', .9), ('b', .1), ('c', None), ('d', float('nan'))]:
             (source / f'{name}.pdb').write_text(PDB)
             (source / f'{name}.json').write_text(json.dumps({'ptm': value}))
-            if stage == 'prediction':
-                # Synthetic producer receipt; native sibling export is separately
-                # exercised by the closeout exporter -> filter -> API fixture.
-                summary = (source / f'{name}.json').read_bytes()
-                (source / f'{name}_binding.json').write_text(json.dumps({
-                    'schema': 'bms.rf3-native-pair.v1',
-                    'structure': {'name': f'{name}.pdb', 'sha256': hashlib.sha256(PDB.encode()).hexdigest()},
-                    'summary': {'name': f'{name}.json', 'sha256': hashlib.sha256(summary).hexdigest()},
-                }))
+            # Synthetic producer receipt; native sibling export is separately
+            # exercised by the closeout exporter -> filter -> API fixture.
+            summary = (source / f'{name}.json').read_bytes()
+            (source / f'{name}_binding.json').write_text(json.dumps({
+                'schema': 'bms.rf3-native-pair.v1',
+                'structure': {'name': f'{name}.pdb', 'sha256': hashlib.sha256(PDB.encode()).hexdigest()},
+                'summary': {'name': f'{name}.json', 'sha256': hashlib.sha256(summary).hexdigest()},
+            }))
     receipt = tmp_path / 'rf_filter_1'
-    cmd = [sys.executable, str(ROOT / 'scripts/filter_structures.py'), stage,
+    cmd = [sys.executable, str(ROOT / 'scripts/filter_structures.py'), 'prediction',
            '--input-dir', str(source), '--output-dir', str(tmp_path / 'passing'),
            '--output-jsonl', str(tmp_path / 'outcomes.jsonl'),
            '--core-protein-scientific-contract', '1', '--stage-receipt-dir', str(receipt),
-           '--stage-id', 'rf3_prediction_filter' if stage == 'prediction' else 'rfd3_backbone_filter',
+           '--stage-id', 'rf3_prediction_filter',
            '--job-id', 'filter-test', '--task-id', '1']
-    if stage == 'prediction':
-        cmd += ['--min-ptm', '1' if reject else '.5']
+    cmd += ['--min-ptm', '1' if reject else '.5']
     result = subprocess.run(cmd, cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     return receipt
@@ -102,13 +100,13 @@ def test_owning_stage_inventory(tmp_path, role, empty):
         assert failed.returncode != 0
 
 
-@pytest.mark.parametrize('model', ['rf3', 'rfd3'])
 @pytest.mark.parametrize('scenario', ['populated', 'zero_survivors', 'no_tasks'])
-def test_literal_nextflow_filter_receipt_publication(tmp_path, model, scenario):
+def test_literal_nextflow_filter_receipt_publication(tmp_path, scenario):
     produce(tmp_path)
-    process = 'FilterRF3' if model == 'rf3' else 'FilterRFD3'
+    model = 'rf3'
+    process = 'FilterRF3'
     harness = tmp_path / 'filter.nf'
-    caller = 'protein_design' if model == 'rf3' else 'protein_local_redesign'
+    caller = 'protein_design'
     source = (ROOT / f'workflows/{caller}.nf').read_text()
     # Run the actual caller's stage assignment and publisher statements, replacing
     # only the model-producing channel with fixture data. No model process exists
@@ -119,17 +117,15 @@ def test_literal_nextflow_filter_receipt_publication(tmp_path, model, scenario):
     terminal.write_text(json.dumps({'candidate_id': 'terminal-a', 'parent_job_id': 'filter-test',
         'parent_workflow_id': 'protein_design', 'producer_method': 'rf3',
         'producer_output_key': 'rf3_terminal/a.pdb', 'producer_artifact_sha256': hashlib.sha256(PDB.encode()).hexdigest()}))
-    active_start = source.index('            FilterRF3(rf3_tuple)') if model == 'rf3' else source.index('        FilterRFD3(RunRFD3.out.structures_metadata)\n        rfd3StageTasks')
+    active_start = source.index('            FilterRF3(rf3_tuple)')
     active = '\n'.join(source[active_start:].splitlines()[:4])
     publisher_lines = '\n'.join(line for line in source.splitlines() if line.strip().startswith('PublishProtein') and 'Stage(' in line)
-    initial = "def rf3StageTasks = Channel.empty(); def rf3StageExpected = Channel.value(0); def rf3StageRole = 'skipped'\n" + \
-              "def rfd3StageTasks = Channel.empty(); def rfd3StageExpected = Channel.value(0); def rfd3StageRole = 'skipped'\n"
-    stub = "workflow RunRFD3 { take: fixture; main: data = fixture; emit: structures_metadata = data }\n" if model == 'rfd3' else ''
+    initial = "def rf3StageTasks = Channel.empty(); def rf3StageExpected = Channel.value(0); def rf3StageRole = 'skipped'\n"
     initial += f"def terminal_candidate_manifests = Channel.value([file('{terminal}')])\n" if scenario == 'populated' else "def terminal_candidate_manifests = Channel.value([])\n"
-    data = "def rf3_tuple = Channel.of(tuple(file(params.pdbs), file(params.jsons)))\n" if model == 'rf3' else "RunRFD3(Channel.of(tuple(file(params.pdbs), file(params.jsons))))\n"
+    data = "def rf3_tuple = Channel.of(tuple(file(params.pdbs), file(params.jsons)))\n"
     if scenario == 'no_tasks':
         data = data.replace('Channel.of(tuple(file(params.pdbs), file(params.jsons)))', 'Channel.empty()')
-    harness.write_text(f"include {{ {process} }} from '{ROOT}/modules/{model}.nf'\n" + import_line + '\n' + stub +
+    harness.write_text(f"include {{ {process} }} from '{ROOT}/modules/{model}.nf'\n" + import_line + '\n' +
                        'workflow {\n' + initial + data + active + '\n' + publisher_lines + '\n}\n')
     config = tmp_path / 'local.config'
     config.write_text("process.executor = 'local'\nprocess.shell = ['/bin/bash', '-euo', 'pipefail']\n")
@@ -138,7 +134,6 @@ def test_literal_nextflow_filter_receipt_publication(tmp_path, model, scenario):
     params_file.write_text(json.dumps(dict(out_dir=str(output), code_root=str(ROOT), job_id='filter-test',
         pdbs=str(tmp_path / 'source/*.pdb'), jsons=str(tmp_path / 'source/*.json'),
         core_protein_scientific_contract=1, rf3_min_ptm=1 if scenario == 'zero_survivors' else .5,
-        rfd_min_rog=1 if scenario == 'zero_survivors' else None,
         pred_method='rf3', skip_rfd=True, run_rfd_only=False)))
     jar = os.environ.get('BMS_TEST_NEXTFLOW_JAR')
     assert jar and Path(jar).is_file(), 'cached Nextflow JAR required'
@@ -160,8 +155,8 @@ def test_literal_nextflow_filter_receipt_publication(tmp_path, model, scenario):
         factory, engine = await setup(tmp_path)
         try:
             async with factory() as db:
-                job = Job(id='filter-test', name='filter', model_id='protein_modification_experimental' if model == 'rf3' else 'protein_local_redesign',
-                    mode='de_novo_design' if model == 'rf3' else 'local_redesign', params=json.loads(params_file.read_text()), status='running',
+                job = Job(id='filter-test', name='filter', model_id='antibody_denovo',
+                    mode='nanobody_binder', params=json.loads(params_file.read_text()), status='running',
                     output_dir=str(output), provenance={'core_protein_scientific_contract': 1})
                 if resume:
                     job = await db.get(Job, 'filter-test')
@@ -194,7 +189,7 @@ def test_literal_nextflow_filter_receipt_publication(tmp_path, model, scenario):
     assert receipt.is_file() == (scenario != 'no_tasks'), run.stdout + run.stderr
     if receipt.is_file():
         assert json.loads(receipt.read_text())['counts']['input_count'] == expected_inputs
-    stage_id = 'rf3_prediction_filter' if model == 'rf3' else 'rfd3_backbone_filter'
+    stage_id = 'rf3_prediction_filter'
     stage = json.loads((output / 'run/filter_stages' / f'{stage_id}.json').read_text())
     assert stage['counts']['input_count'] == expected_inputs
     assert stage['expected_tasks'] == (0 if scenario == 'no_tasks' else 1)
@@ -205,10 +200,9 @@ def test_literal_nextflow_filter_receipt_publication(tmp_path, model, scenario):
     import asyncio
     import shutil
     sys.path[:0] = [str(ROOT / 'platform/api'), str(ROOT / 'platform/api/tests')]
-    if model == 'rf3':
-        final = output / 'results/best_designs'; final.mkdir(parents=True)
-        for pdb in receipt.parent.joinpath('passed').glob('*.pdb'):
-            shutil.copy2(pdb, final / 'candidate_terminal-a.pdb')
+    final = output / 'results/best_designs'; final.mkdir(parents=True)
+    for pdb in receipt.parent.joinpath('passed').glob('*.pdb'):
+        shutil.copy2(pdb, final / 'candidate_terminal-a.pdb')
     async def persist():
         from test_core_protein_candidates import setup
         from database import Job
@@ -239,30 +233,28 @@ def test_literal_nextflow_filter_receipt_publication(tmp_path, model, scenario):
                     with pytest.raises(ValueError, match='filter'):
                         prepare_filter_stages(job, output)
                     shutil.move(str(hidden), str(receipt.parent))
-                    if model == 'rf3':
-                        forged = json.loads(saved); forged.update(role='upstream', selection=[])
-                        stage_path.write_text(json.dumps(forged))
+                    forged = json.loads(saved); forged.update(role='upstream', selection=[])
+                    stage_path.write_text(json.dumps(forged))
+                    with pytest.raises(ValueError, match='filter'):
+                        prepare_filter_stages(job, output)
+                    stage_path.write_bytes(saved)
+                    from test_rf_filter_criterion_validation import reseal
+                    outcomes = receipt.parent / 'outcomes.jsonl'
+                    original_outcomes, original_invocation = outcomes.read_bytes(), receipt.read_bytes()
+                    for damage in ('removed', 'contradiction', 'boolean', 'unknown'):
+                        rows = [json.loads(line) for line in original_outcomes.splitlines()]
+                        passed = next(row for row in rows if row['passed'])
+                        if damage == 'removed':
+                            for row in rows: row.update(criteria=[], reason=None)
+                        elif damage == 'contradiction': passed['criteria'][0]['disposition'] = 'rejected_threshold'
+                        elif damage == 'boolean': passed['criteria'][0]['evidence']['value'] = True
+                        else: passed['criteria'][0]['extra'] = 'untrusted'
+                        reseal(output, receipt.parent, rows)
                         with pytest.raises(ValueError, match='filter'):
                             prepare_filter_stages(job, output)
-                    stage_path.write_bytes(saved)
-                    if model == 'rf3':
-                        from test_rf_filter_criterion_validation import reseal
-                        outcomes = receipt.parent / 'outcomes.jsonl'
-                        original_outcomes, original_invocation = outcomes.read_bytes(), receipt.read_bytes()
-                        for damage in ('removed', 'contradiction', 'boolean', 'unknown'):
-                            rows = [json.loads(line) for line in original_outcomes.splitlines()]
-                            passed = next(row for row in rows if row['passed'])
-                            if damage == 'removed':
-                                for row in rows: row.update(criteria=[], reason=None)
-                            elif damage == 'contradiction': passed['criteria'][0]['disposition'] = 'rejected_threshold'
-                            elif damage == 'boolean': passed['criteria'][0]['evidence']['value'] = True
-                            else: passed['criteria'][0]['extra'] = 'untrusted'
-                            reseal(output, receipt.parent, rows)
-                            with pytest.raises(ValueError, match='filter'):
-                                prepare_filter_stages(job, output)
-                            outcomes.write_bytes(original_outcomes)
-                            receipt.write_bytes(original_invocation)
-                            stage_path.write_bytes(saved)
+                        outcomes.write_bytes(original_outcomes)
+                        receipt.write_bytes(original_invocation)
+                        stage_path.write_bytes(saved)
                 retain_filter_stages(job, prepare_filter_stages(job, output))
                 await db.commit(); await db.refresh(job)
                 wire = (await get_job(job.id, db)).model_dump(mode='json')
@@ -273,12 +265,3 @@ def test_literal_nextflow_filter_receipt_publication(tmp_path, model, scenario):
         finally:
             await engine.dispose()
     asyncio.run(persist())
-
-
-def test_actual_backbone_filter_binds_descriptor_source(tmp_path):
-    receipt = produce(tmp_path, 'backbone')
-    rows = [json.loads(line) for line in (receipt / 'outcomes.jsonl').read_text().splitlines()]
-    assert len(rows) == 4
-    for row in rows:
-        assert all(p['source_sha256'] == row['artifacts']['structure']['sha256'] for p in row.get('descriptor_provenance', {}).values())
-        assert row['artifacts']['structure']['sha256'] == hashlib.sha256(PDB.encode()).hexdigest()

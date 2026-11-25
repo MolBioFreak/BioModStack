@@ -31,11 +31,15 @@ async def test_actual_job_http_insertion(isolated_core, setup_store, isolate_app
         payload = dict(name='native-ingress', model_id='protein_modification_experimental', mode='de_novo_design',
                        execution_target_id=None, params={'generator': 'laproteina', 'num_designs': count})
         response = await client.post('/jobs', json=payload)
-        assert response.status_code == 201, response.text
-        async with isolated_core() as session:
-            job = await session.get(Job, response.json()['id'])
-            assert job.params['num_designs'] == int(count)
-            assert job.parent_job_id is None and job.execution_target_id is None
+        if not isinstance(count, int):
+            assert response.status_code == 422, response.text
+            assert 'num_designs requires typed integer' in response.json()['detail']['validation_errors']
+        else:
+            assert response.status_code == 201, response.text
+            async with isolated_core() as session:
+                job = await session.get(Job, response.json()['id'])
+                assert job.params['num_designs'] == int(count)
+                assert job.parent_job_id is None and job.execution_target_id is None
         native = await client.post('/jobs', json=dict(name='RFD4-ingress', model_id='rfd4_proteina',
             mode='generate', execution_target_id=None, params={'rfd4_request': rfd4()}))
         assert native.status_code == 201, native.text
