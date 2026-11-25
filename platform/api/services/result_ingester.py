@@ -3996,7 +3996,7 @@ async def _ingest_job_results(
                         num_helices=(strict_projection["num_helices"] if canonical_row is not None else safe_int(row.get('pr_helices'))),
                         num_strands=(strict_projection["num_strands"] if canonical_row is not None else safe_int(row.get('pr_strands'))),
                         rog=(strict_projection["rog"] if canonical_row is not None else safe_float(row.get('pr_RoG'))),
-                        # RFdiffusion backbone metrics
+                        # RFD3 backbone metrics
                         rfd_rog=(strict_projection["rfd_rog"] if canonical_row is not None else safe_float(row.get('rfd_RoG'))),
                         
                         # Sequence design metrics

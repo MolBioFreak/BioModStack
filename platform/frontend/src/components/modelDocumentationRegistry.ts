@@ -76,9 +76,8 @@ export const MODEL_DOCUMENTATION_LINKS = {
         { label: 'RFantibody GitHub', href: 'https://github.com/RosettaCommons/RFantibody' },
         { label: 'RFantibody preprint DOI', href: 'https://doi.org/10.1101/2024.03.14.585103' },
     ],
-    rfdiffusion: [
-        { label: 'RFdiffusion GitHub', href: 'https://github.com/RosettaCommons/RFdiffusion' },
-        { label: 'RFdiffusion Science DOI', href: 'https://doi.org/10.1126/science.add2187' },
+    rfd3: [
+        { label: 'Foundry (RFD3) GitHub', href: 'https://github.com/RosettaCommons/foundry' },
     ],
 } as const;
 

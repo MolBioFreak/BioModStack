@@ -397,7 +397,7 @@ class JobCreate(BaseModel):
     )
     fampnn_analysis_overrides: FampnnAnalysisOverrides | None = None
     name: str = Field(..., min_length=1, max_length=255)
-    model_id: str = Field(..., description="ID of the model to use (e.g., rfdiffusion)")
+    model_id: str = Field(..., description="ID of the model to use (e.g., rfd3)")
     mode: str = Field(..., description="Mode ID for the selected model")
     params: dict = Field(default_factory=dict)
     pinned_gpu: Optional[int] = Field(None, description="Optional: Pin job to specific GPU (0-3)")
@@ -462,7 +462,7 @@ class JobCreate(BaseModel):
         json_schema_extra={
             "example": {
                 "name": "binder_test_001",
-                "model_id": "rfdiffusion",
+                "model_id": "rfd3",
                 "mode": "binder_denovo",
                 "params": {
                     "rfd_num_designs": 8,

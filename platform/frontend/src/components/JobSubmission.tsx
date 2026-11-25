@@ -69,7 +69,7 @@ import { FileBrowser } from './FileBrowser';
 const MODEL_DOCUMENTATION_TOPIC_KEYS = new Set<ModelDocumentationTopic>([
     'alphafold2', 'boltz2', 'boltzgen', 'caliby', 'chai1', 'confornets', 'disco', 'esmfold2',
     'fampnn', 'fold_cp', 'laproteina', 'ligandmpnn', 'ppiflow', 'proteinmpnn', 'protenix', 'rf3',
-    'rfantibody', 'rfdiffusion',
+    'rfantibody',
 ]);
 
 const getTemplateDocumentationTopics = (
@@ -93,12 +93,12 @@ const getTemplateDocumentationTopics = (
     if (identity.includes('boltz_cp_experimental') || identity.includes('fold-cp')) return ['fold_cp', 'boltz2'];
     if (identity.includes('confornets')) return ['confornets'];
     if (identity.includes('esmfold2')) return ['esmfold2'];
-    if (identity.includes('protein_modification_experimental') || identity.includes('protein_local_redesign') || identity.includes('local redesign')) return ['laproteina', 'disco', 'rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2'];
+    if (identity.includes('protein_modification_experimental') || identity.includes('protein_local_redesign') || identity.includes('local redesign')) return ['laproteina', 'disco', 'rfd3', 'fampnn', 'proteinmpnn', 'boltz2'];
     if (identity.includes('antibody_denovo') || identity.includes('nanobody') || identity.includes('rfantibody')) return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2'];
 
     if (identity.includes('structure_prediction') || identity.includes('structure prediction')) return ['boltz2', 'fold_cp', 'protenix', 'esmfold2'];
     if (identity.includes('boltz')) return ['boltz2'];
-    if (identity.includes('rfdiffusion') || identity.includes('diffusion')) return ['rfdiffusion'];
+    if (identity.includes('rfd3') || identity.includes('diffusion')) return ['rfd3'];
     return [];
 };
 
@@ -113,7 +113,7 @@ const getModelDocumentationTopics = (model: UntypedApiValue | null | undefined):
     if (identity.includes('protenix')) return ['protenix'];
     if (identity.includes('rf3') || identity.includes('rosettafold')) return ['rf3'];
     if (identity.includes('antibody') || identity.includes('rfantibody')) return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2'];
-    if (identity.includes('rfdiffusion')) return ['rfdiffusion'];
+    if (identity.includes('rfd3')) return ['rfd3'];
     if (identity.includes('boltzgen')) return ['boltzgen'];
     if (identity.includes('boltz2') || identity.includes('boltz-2')) return ['boltz2'];
     return [];
@@ -918,10 +918,7 @@ export function JobSubmission() {
         const launchParams = { ...templateDetail.preset_params, ...params };
         let modelId = launchParams.template_model_id;
         let modeId = launchParams.template_mode_id;
-        if (!(modelId && modeId) && launchParams.rfd_mode) {
-            modelId = 'rfdiffusion';
-            modeId = launchParams.rfd_mode;
-        } else if (
+        if (
             !(modelId && modeId)
             && launchParams.diffusion_method === 'boltzgen'
             && ligands.some((ligand) => ligand.type === 'dna' || ligand.type === 'rna')
@@ -1297,8 +1294,8 @@ export function JobSubmission() {
         : [];
     const fampnnLaunchParams = isTemplateMode ? { ...templateDetail?.preset_params, ...params } : params;
     const usesFampnn = wizardMode === 'manual' && selectedModelId === 'fampnn';
-    // General RFD3 is backbone-only, BoltzGen skips sequence design, and the
-    // legacy RFdiffusion FA-MPNN parent is not in the admitted caller inventory.
+    // General RFD3 is backbone-only, BoltzGen skips sequence design, and
+    // non-dedicated generic FA-MPNN parents are not in the admitted caller inventory.
     const unsupportedFampnnParent = isTemplateMode && !isDedicatedLauncherTemplate(selectedTemplateId)
         && (fampnnLaunchParams.seq_method === 'fampnn' || fampnnLaunchParams.seq_design_fampnn === true);
     const activeFampnnOverrides = fampnnLaunchParams.fampnn_analysis_overrides;
@@ -1347,10 +1344,6 @@ export function JobSubmission() {
             if (templateModelIdOverride && templateModeIdOverride) {
                 effectiveModelId = templateModelIdOverride;
                 nextflowProfile = templateModeIdOverride;
-            } else if (mergedParams.rfd_mode) {
-                // Binder or monomer design templates
-                nextflowProfile = mergedParams.rfd_mode;
-                effectiveModelId = 'rfdiffusion';
             } else if (mergedParams.diffusion_method === 'boltzgen') {
                 // Check if this is complex PREDICTION (DNA/RNA present) vs DESIGN
                 const hasNucleicAcid = ligands.some(l => l.type === 'dna' || l.type === 'rna');

@@ -217,8 +217,6 @@ def _local_collection(params, overrides):
 
 def compile_declaration(model_id, mode, params, overrides=None, *, parent=None):
     overrides = FampnnAnalysisOverrides.model_validate(overrides or {})
-    if model_id == 'rfdiffusion':
-        raise ValueError('legacy generated FA-MPNN caller held/unadmitted')
     if model_id == 'antibody_denovo' and mode == 'antibody_denovo_pipeline' and params.get('seq_design_fampnn', True):
         if overrides.summary is not None:
             raise ValueError('summary override forbidden by antibody declaration')

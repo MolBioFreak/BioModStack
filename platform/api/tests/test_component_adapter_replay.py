@@ -17,7 +17,6 @@ def test_resource_config_preserves_native_setup_and_static_authority(tmp_path):
     components = [{'authority': f'modules/{source}.nf:{name}',
                    'selection_json': {}, 'resources_json': __import__('json').loads(native_resource_policy({}))}
                   for source, name in [('rfd3', 'RunRFD3'), ('rf3', 'RunRF3'),
-                                       ('rfdiffusion', 'RunRFDiffusion'),
                                        ('conformational_mapping_protenix', 'CanonicalProtenixEnsemble')]]
     plan = {'metadata': {'static_components': components,
                         'dynamic_templates': [{'selection_json': {'native_process': 'WAIT'}}]}}
@@ -25,9 +24,9 @@ def test_resource_config_preserves_native_setup_and_static_authority(tmp_path):
                                     str(tmp_path / 'compute.lock'), root)
     assert "executor.cpus = 8" in config and "executor.memory = '4096 B'" in config
     assert 'mkdir -p rfd3_results rfd3_trajectories' in config
-    assert 'mkdir -p rf3_results' in config and 'mkdir -p outputs schedules .dgl' in config
+    assert 'mkdir -p rf3_results' in config
     assert '--executing-image "${runtime_image}" >/dev/null || exit 1' in config
-    assert config.count('flock -x 198') == 4
+    assert config.count('flock -x 198') == 3
     assert 'WAIT' not in config
 
 

@@ -161,15 +161,6 @@ OEM runtime constraints:
 - `input_format` is `config_files` or `preprocessed`
 - one Fold-CP inference owns the selected context-parallel GPU set
 
-### RFdiffusion and backbone generation
-
-Generic backbone-generation support exists for RFdiffusion-style workflows and
-related child/orchestrator paths.
-
-Primary registry entry:
-
-- [platform/api/config/models/rfdiffusion.yaml](../platform/api/config/models/rfdiffusion.yaml)
-
 ### BoltzGen
 
 Primary registry entry:
@@ -202,7 +193,6 @@ Purpose:
 ### Backbone or generative design
 
 - RFantibody
-- RFdiffusion
 - BoltzGen
 - Oligo Designer / RFDpoly
 - La-Proteina

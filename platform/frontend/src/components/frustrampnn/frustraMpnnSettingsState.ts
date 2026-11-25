@@ -495,7 +495,6 @@ export const resolveFrustraMpnnWorkflowId = (
 ): 'protein_design' | 'complex_prediction' | null => {
     const normalizedModelId = typeof modelId === 'string' ? modelId.trim().toLowerCase() : '';
     const normalizedModeId = typeof modeId === 'string' ? modeId.trim().toLowerCase() : '';
-    if (normalizedModelId === 'rfdiffusion' && normalizedModeId.length > 0) return 'protein_design';
     if (normalizedModelId === 'boltz2' && normalizedModeId === 'complex') return 'complex_prediction';
     return null;
 };

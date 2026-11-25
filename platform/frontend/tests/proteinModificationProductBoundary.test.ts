@@ -51,7 +51,7 @@ describe('De Novo Design product boundary', () => {
 
         assert.match(
             inventory,
-            /workflowId: 'protein_modification_experimental'[\s\S]*label: 'De Novo Design'[\s\S]*modelTopics: \['rfdiffusion', 'laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2'\]/,
+            /workflowId: 'protein_modification_experimental'[\s\S]*label: 'De Novo Design'[\s\S]*modelTopics: \['rfd3', 'laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2'\]/,
         );
         assert.equal(inventory.includes("workflowId: 'protein_local_redesign'"), false);
         assert.equal(inventory.includes("workflowId: 'protein_cad_experimental'"), false);

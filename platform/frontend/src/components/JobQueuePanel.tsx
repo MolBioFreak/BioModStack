@@ -285,7 +285,6 @@ function StageBadge({ stage, progress }: { stage: string | null; progress?: stri
         'rfantibody': 'RFAntibody',
         'runrfd3': 'RFD3',
         'filterrfd3': 'RFD3 Filter',
-        'rfdiffusion': 'RFdiffusion',
         'fampnn': 'FA-MPNN',
         'prepareproteinlocalvalidatorinput': 'Preparing Validators',
         'esmfold2frompdb': 'ESMFold2',

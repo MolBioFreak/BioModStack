@@ -244,7 +244,6 @@ VRAM_PROFILES = {
     'boltz_batch': {'base': 6000, 'scale': 25}, # Boltz-2 batch mode
     'boltzgen': {'base': 5000, 'scale': 20},    # BoltzGen design
     'rf3': {'base': 10000, 'scale': 55},        # RosettaFold3 (high VRAM)
-    'rfdiffusion': {'base': 5000, 'scale': 25}, # RFdiffusion
     'rfantibody': {'base': 6000, 'scale': 25},  # RFantibody antibody generation
     'rfantibody_child': {'base': 6000, 'scale': 25},  # RFantibody child (same as parent)
     # ──────────────────────────────────────────────────────────────────────────
@@ -275,7 +274,6 @@ VRAM_PROFILES = {
 
 # Models that need heavy GPUs (exclude 5060 Ti)
 HEAVY_MODELS = {
-    'rfdiffusion',
     'rf3',
     'maturation_child',
     'esmfold2',

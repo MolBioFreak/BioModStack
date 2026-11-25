@@ -688,7 +688,6 @@ def parse_stage_progress(work_dir: str, stage: str, total_designs: int = None) -
     - RFAntibody: "Making design antibody_job_X" / "Finished design"
     - FAMPNN/RunFAMPNN: "Processing design X" / pdb file counts
     - Boltz2: "[step X/1000]" or completed sample counts
-    - RFdiffusion: "[step X/50]" diffusion steps
     """
     import re
     
@@ -813,15 +812,6 @@ def parse_stage_progress(work_dir: str, stage: str, total_designs: int = None) -
             if samples and total_designs:
                 return f"{samples}/{total_designs}"
             return None
-        
-        # RFdiffusion: Diffusion steps
-        elif 'rfdiffusion' in stage_lower:
-            step_match = re.findall(r'step.*?(\d+)/(\d+)', content, re.IGNORECASE)
-            if step_match:
-                last_step = step_match[-1]
-                return f"step {last_step[0]}/{last_step[1]}"
-            return None
-        
 
         return None
         
@@ -3212,8 +3202,6 @@ async def launch_nextflow_job(
                             or 'wf-clone' in stage_clean
                         ):
                             stage = 'wf_clone_validation'
-                        elif 'rfdiffusion' in stage_clean:
-                            stage = 'rfdiffusion'
 
                         if stage != last_stage:
                             logger.info(f"[JOB {job_id}] Entering stage: {stage} (raw: {raw_stage})")

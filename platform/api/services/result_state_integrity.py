@@ -147,7 +147,6 @@ def job_expects_design_results(job: Job) -> bool:
         "boltz_2": "boltz2",
         "esm_fold": "esmfold",
         "protein_mpnn": "proteinmpnn",
-        "rf_diffusion": "rfdiffusion",
     }
     model = normalized_identifier(job.model_id)
     mode = normalized_identifier(job.mode)
@@ -175,7 +174,6 @@ def job_expects_design_results(job: Job) -> bool:
         "protenix",
         "rf3",
         "rfantibody",
-        "rfdiffusion",
         "rfdesign",
     }
     return model in design_model_ids or mode == "structure_prediction"

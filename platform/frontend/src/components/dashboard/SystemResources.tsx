@@ -417,7 +417,7 @@ function GpuPowerControlCard({
     );
 }
 
-const WORKFLOWS = ['boltz', 'fampnn', 'rfantibody', 'boltzgen', 'rfdiffusion'];
+const WORKFLOWS = ['boltz', 'fampnn', 'rfantibody', 'boltzgen'];
 
 // Workflow Pinning Section Component
 function WorkflowPinningSection({ gpuCatalog }: { gpuCatalog: GpuCatalogLike }) {

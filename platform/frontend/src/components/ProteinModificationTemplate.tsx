@@ -959,7 +959,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                         </details>}
                     </>}
                 </ProteinDesignPanel>
-                <ModelDocumentationLinks topics={generator === 'rfd3' ? ['rfdiffusion'] : backend === 'laproteina' ? ['laproteina'] : ['disco']} compact />
+                <ModelDocumentationLinks topics={generator === 'rfd3' ? ['rfd3'] : backend === 'laproteina' ? ['laproteina'] : ['disco']} compact />
             </div>
             <div hidden={section !== 'Sequence Design'}>
                 <GeneralSequenceDesignSettings value={sequenceDesign} onChange={next => { if (next.invocation_draft?.enabled || next.sequence_design.enabled) { setSequenceOmitted(false); setSequenceNull(false); } setSequenceDesign(next); }} />

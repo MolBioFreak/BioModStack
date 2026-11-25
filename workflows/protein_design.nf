@@ -131,8 +131,6 @@ params.target_template_threshold_angstrom = params.target_template_threshold_ang
 params.strict_target_rmsd = params.strict_target_rmsd ?: null
 
 include { sequenceSubmissionMetadata; normalizeProteinDesignSequenceBatchEntries } from '../modules/sequence_submission.nf'
-include { RFDiffusionWorkflow } from './rfdiffusion.nf'
-include { FilterRFD ; RunRFDiffusion } from '../modules/rfdiffusion.nf'
 include { PrepRFD3Input ; RunRFD3 ; FilterRFD3 } from '../modules/rfd3.nf'
 include { RunRF3 ; FilterRF3 } from '../modules/rf3.nf'
 include { PrepFAMPNN ; FilterFAMPNN ; RunFAMPNN } from '../modules/fampnn.nf'

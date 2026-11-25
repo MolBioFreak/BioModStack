@@ -52,7 +52,6 @@ const expectedUniqueTopics: ModelDocumentationTopic[] = [
   'protenix',
   'rf3',
   'rfantibody',
-  'rfdiffusion',
 ];
 
 test('model documentation linkout registry exposes compact shared DOI/GitHub/preprint contracts', () => {
@@ -131,7 +130,7 @@ test('workflow model inventory is source-grounded and exposes the total unique m
   assert.deepEqual(workflowsById.get('mutagenesis')?.modelTopics, ['boltz2', 'rf3', 'esmfold2']);
   assert.deepEqual(workflowsById.get('structure_prediction')?.modelTopics, ['boltz2', 'fold_cp', 'protenix', 'esmfold2', 'frustrampnn']);
   assert.equal(workflowsById.has('antibody_child'), false);
-  assert.deepEqual(workflowsById.get('protein_modification_experimental')?.modelTopics, ['rfdiffusion', 'laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2']);
+  assert.deepEqual(workflowsById.get('protein_modification_experimental')?.modelTopics, ['rfd3', 'laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2']);
   assert.equal(workflowsById.has('protein_local_redesign'), false);
   assert.equal(workflowsById.has('protein_cad_experimental'), false);
   assert.equal(workflowsById.has('esmfold2'), false);
@@ -166,7 +165,7 @@ test('JobSubmission keeps workflow cards concise, hides Advanced Models, and rou
   requireSnippet(source, "return ['fold_cp', 'boltz2'];");
   requireSnippet(source, "return ['confornets'];");
   requireSnippet(source, "return ['esmfold2'];");
-  requireSnippet(source, "return ['laproteina', 'disco', 'rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2'];");
+  requireSnippet(source, "return ['laproteina', 'disco', 'rfd3', 'fampnn', 'proteinmpnn', 'boltz2'];");
   requireSnippet(source, "return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2'];");
   requireSnippet(source, "return ['boltz2', 'fold_cp', 'protenix', 'esmfold2'];");
 

@@ -333,12 +333,6 @@ def test_antibody_summary_override_rejected_before_materialization():
         compile_declaration('antibody_denovo', 'antibody_denovo_pipeline', {}, {'summary': []})
 
 
-@pytest.mark.parametrize('owner,mode', [('rfdiffusion','binder_design'), ('rfdiffusion','design')])
-def test_held_legacy_generated_callers_cannot_compile(owner, mode):
-    with pytest.raises(ValueError, match='held|unadmitted'):
-        compile_declaration(owner, mode, {})
-
-
 def test_unsupported_parent_declaration_rejected():
     with pytest.raises(ValueError, match='unsupported'):
         compile_declaration('fampnn_child', 'sequence_design', {},

@@ -265,8 +265,6 @@ test('generic launch resolution and parameter merge preserve the governed Frustr
     assert.equal(typeof mergeLaunchParams, 'function');
 
     const resolve = resolveWorkflow as (modelId: unknown, modeId: unknown) => string | null;
-    assert.equal(resolve('rfdiffusion', 'binder_denovo'), 'protein_design');
-    assert.equal(resolve('rfdiffusion', 'monomer_partialdiff'), 'protein_design');
     assert.equal(resolve('boltz2', 'complex'), 'complex_prediction');
     assert.equal(resolve('boltz2', 'predict'), null);
     assert.equal(resolve('proteinmpnn', 'design'), null);

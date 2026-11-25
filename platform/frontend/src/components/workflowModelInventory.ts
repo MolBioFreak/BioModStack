@@ -54,7 +54,7 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
     {
         workflowId: 'protein_modification_experimental',
         label: 'De Novo Design',
-        modelTopics: ['rfdiffusion', 'laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2'],
+        modelTopics: ['rfd3', 'laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2'],
         sourceFiles: [
             'platform/api/config/models/protein_modification_experimental.yaml',
             'platform/api/config/models/protein_local_redesign.yaml',

@@ -47,7 +47,7 @@ export const launcherExperimentalTemplates: Array<{ id: string; name: string; de
 
 export function visibleLauncherTemplates<T extends { id: string }>(templates: T[], debug = false): T[] {
   return templates.filter(t => ![
-    'structure_validation', 'structure_prediction', 'boltz_cp_experimental', 'binder_design',
+    'structure_validation', 'structure_prediction', 'boltz_cp_experimental',
     'protein_cad_experimental', 'protein_local_redesign',
   ].includes(t.id) && (t.id !== 'dna_polymerase' || debug));
 }
