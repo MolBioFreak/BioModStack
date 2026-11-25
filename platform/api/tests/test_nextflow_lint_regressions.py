@@ -13,8 +13,6 @@ from services.frustrampnn.settings import default_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TARGET_LINT_FILES = [
-    "modules/protein_hunter_experimental.nf",
-    "workflows/protein_hunter_experimental.nf",
     "modules/boltz_cp_experimental.nf",
     "workflows/boltz_cp_experimental.nf",
     "workflows/ppiflow_generator_design.nf",

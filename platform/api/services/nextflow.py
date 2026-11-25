@@ -5750,15 +5750,8 @@ def compile_nextflow_invocation(
         raise ValueError("This retired workflow has been permanently removed")
     if normalized_model_id == "caliby_experimental" and normalized_mode not in CALIBY_NATIVE_MODES:
         raise ValueError("Historical Caliby design mode remains retired")
-    normalized_model_id = str(model_id or "").strip().lower()
-    normalized_mode = str(mode or "").strip().lower()
-    if normalized_model_id == "protein_hunter_experimental" or (
-        normalized_model_id == "protein_modification_experimental"
-        and normalized_mode == "iterative_binder_design"
-    ):
-        raise ValueError(
-            "Protein Hunter is reserved for the de novo binder workflow and remains blocked until PAE is preserved and interface selection uses ipSAE"
-        )
+    if normalized_model_id == "protein_modification_experimental" and normalized_mode == "iterative_binder_design":
+        raise ValueError("Unsupported protein modification mode: iterative_binder_design")
 
     is_generic_sequence_command = (model_id, mode) in PUBLIC_SEQUENCE_MODES
     definition = None

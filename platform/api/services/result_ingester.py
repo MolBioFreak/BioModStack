@@ -533,10 +533,6 @@ def _trusted_producer_review_fields(job: Optional[Job], payload: Any) -> Dict[st
             allowed_profiles = {"sequence_design_v1"}
         else:
             return {}
-    elif generator_family == "protein_hunter":
-        if model_id != "binder_design" or job_mode != "protein_hunter":
-            return {}
-        allowed_profiles = {"binder_design_v1"}
     elif model_id == "protein_local_redesign" or (
         model_id == "protein_modification_experimental"
         and (job_mode == "region_redesign" or modification_mode == "region_redesign")
@@ -561,7 +557,7 @@ def _trusted_producer_review_fields(job: Optional[Job], payload: Any) -> Dict[st
             str(payload.get("artifact_class") or "").strip() != "validated_binder_complex"
             or str(payload.get("result_set") or "").strip() != "binder_candidates"
             or str(payload.get("stage_family") or "").strip() != "binder_design"
-            or str(payload.get("stage_mode") or "").strip() not in {"rfd3_caliby", "protein_hunter"}
+            or str(payload.get("stage_mode") or "").strip() not in {"rfd3_caliby"}
         ):
             return {}
     fields = {
@@ -1145,8 +1141,6 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
             stage_mode = stage_mode or "predict"
         elif "caliby" in model_id:
             stage_family = "caliby"
-        elif "protein_hunter" in model_id:
-            stage_family = "protein_hunter"
         elif "fampnn" in model_id:
             stage_family = "fampnn"
         elif "antibody" in model_id or "antibody" in mode:

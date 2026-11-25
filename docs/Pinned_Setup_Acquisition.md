@@ -113,7 +113,7 @@ Other closure-unavailable entries (also no approved acquisition metadata):
 `boltzgen`, `boltzgen_child`, `caliby_experimental`, `conformational_mapping`,
 `confornets_experimental`, `fampnn_child`, `ligandmpnn`,
 `molecular_dynamics`, `nanopore`, `oligo_design`, `protein_cad_experimental`,
-`protein_hunter_experimental`, `protein_local_redesign`,
+`protein_local_redesign`,
 `protein_modification_experimental`, `proteinmpnn`, `rf3`, `rfdiffusion`.
 Their artifact closure must be reviewed before individual download promises.
 

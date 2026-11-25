@@ -60,9 +60,6 @@ export const MODEL_DOCUMENTATION_LINKS = {
     ppiflow: [
         { label: 'PPIFlow preprint DOI', href: 'https://doi.org/10.1101/2025.11.28.691195' },
     ],
-    protein_hunter: [
-        { label: 'Protein Hunter preprint DOI', href: 'https://doi.org/10.1101/2025.10.10.681530' },
-    ],
     proteinmpnn: [
         { label: 'ProteinMPNN GitHub', href: 'https://github.com/dauparas/ProteinMPNN' },
         { label: 'ProteinMPNN Science DOI', href: 'https://doi.org/10.1126/science.add2187' },

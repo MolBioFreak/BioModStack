@@ -93,7 +93,6 @@ prove runtime acquisition, scientific qualification, or deployment acceptance:
 - Oligo Designer / RFDpoly
 - nanopore methylation and QC
 - experimental protein CAD (La-Proteina / DISCO)
-- Protein Hunter Experimental
 - Caliby Experimental
 - NVIDIA Fold-CP inside Structure Prediction
 

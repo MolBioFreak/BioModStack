@@ -103,7 +103,6 @@ test('model documentation linkout registry exposes compact shared DOI/GitHub/pre
     'https://github.com/chaidiscovery/chai-lab',
     'https://doi.org/10.1101/2024.10.10.615955',
     'https://doi.org/10.1101/2025.09.30.679633',
-    'https://doi.org/10.1101/2025.10.10.681530',
     'https://doi.org/10.1101/2025.11.28.691195',
   ];
   const allHrefs = new Set<string>(Object.values(MODEL_DOCUMENTATION_LINKS).flat().map((link) => link.href));
@@ -138,8 +137,6 @@ test('workflow model inventory is source-grounded and exposes the total unique m
   assert.deepEqual(workflowsById.get('protein_modification_experimental')?.modelTopics, ['rfdiffusion', 'laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2']);
   assert.equal(workflowsById.has('protein_local_redesign'), false);
   assert.equal(workflowsById.has('protein_cad_experimental'), false);
-  assert.equal(workflowsById.has('protein_hunter_experimental'), false);
-  assert.deepEqual(getWorkflowModelTopics('protein_hunter_experimental'), []);
   assert.equal(workflowsById.has('esmfold2'), false);
   assert.deepEqual(getWorkflowModelTopics('esmfold2_experimental'), ['boltz2', 'fold_cp', 'protenix', 'esmfold2', 'frustrampnn']);
   assert.equal(workflowsById.has('confornets_experimental'), false);

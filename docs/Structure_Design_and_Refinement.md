@@ -119,22 +119,6 @@ Use the linked model configuration and workflow for the supported parameter and
 execution contracts. Runtime availability must be checked through the managed
 capability/preflight surfaces; no live acceptance is implied here.
 
-### Protein Hunter Experimental
-
-Registry model:
-
-- [platform/api/config/models/protein_hunter_experimental.yaml](../platform/api/config/models/protein_hunter_experimental.yaml)
-
-Purpose:
-
-- experimental iterative generator family using Protein Hunter
-- backend selection between Boltz and Chai
-- task families for protein binders, unconditional generation,
-  ligand-conditioned binders, and nucleic-acid binders
-
-This is intentionally documented as experimental launcher surface area, not a
-matured canonical production pipeline.
-
 ### Caliby Experimental
 
 Registry model:
@@ -223,7 +207,6 @@ Purpose:
 - Oligo Designer / RFDpoly
 - La-Proteina
 - DISCO
-- Protein Hunter Experimental
 - Caliby Experimental
 
 ### Sequence design and redesign

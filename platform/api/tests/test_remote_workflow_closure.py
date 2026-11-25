@@ -811,7 +811,6 @@ def test_complete_metadata_cannot_be_a_blank_reviewed_component():
 
 @pytest.mark.parametrize('model,mode', [
     ('boltzgen', 'design'), ('caliby_experimental', 'design'),
-    ('protein_hunter_experimental', 'design'),
     ('protein_modification_experimental', 'iterative_binder_design'),
 ])
 def test_compiler_rejected_routes_are_not_descriptor_acceptance(model, mode, tmp_path, compiler_environment):

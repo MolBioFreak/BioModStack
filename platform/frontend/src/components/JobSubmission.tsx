@@ -69,7 +69,7 @@ import { FileBrowser } from './FileBrowser';
 
 const MODEL_DOCUMENTATION_TOPIC_KEYS = new Set<ModelDocumentationTopic>([
     'alphafold2', 'boltz2', 'boltzgen', 'caliby', 'chai1', 'confornets', 'disco', 'esmfold2',
-    'fampnn', 'fold_cp', 'laproteina', 'ligandmpnn', 'ppiflow', 'protein_hunter', 'proteinmpnn', 'protenix', 'rf3',
+    'fampnn', 'fold_cp', 'laproteina', 'ligandmpnn', 'ppiflow', 'proteinmpnn', 'protenix', 'rf3',
     'rfantibody', 'rfdiffusion', 'rfdpoly',
 ]);
 
@@ -918,7 +918,7 @@ export function JobSubmission() {
         }
     });
 
-    const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_modification_experimental', 'protein_cad_experimental', 'protein_local_redesign', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental', 'conformational_mapping', 'esmfold2', 'esmfold2_experimental'].includes(model.id));
+    const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_modification_experimental', 'protein_cad_experimental', 'protein_local_redesign', 'boltz_cp_experimental', 'confornets_experimental', 'conformational_mapping', 'esmfold2', 'esmfold2_experimental'].includes(model.id));
     const isNativeBinderGeneration = wizardMode === 'manual' && ['ppiflow', 'boltzgen'].includes(selectedModelId ?? '') && !!selectedModeId;
     const hasProteinBinderRound = isNativeBinderGeneration
         && ['protein_binder', 'peptide_binder', 'antibody_binder', 'nanobody_binder'].includes(selectedModeId ?? '');

@@ -71,9 +71,3 @@ def test_local_redesign_does_not_expand_blank_insertion_selection(tmp_path):
     assert ['H',10,''] not in roles['fixed_positions']
     assert ['H',10,'B'] in roles['fixed_positions']
     assert [line for line in out.read_text().splitlines() if line.startswith('ATOM')] == source.read_text().splitlines()
-
-
-def test_retained_protein_hunter_fallback_preserves_insertions(tmp_path):
-    from run_protein_hunter_inference import _structure_sequence
-    source = tmp_path/'source.pdb'; backbone(source)
-    assert _structure_sequence(source, 'H') == 'AAA'

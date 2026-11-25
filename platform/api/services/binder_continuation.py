@@ -768,21 +768,6 @@ def _derive_job_stage_tags(model_id: str, mode: str, params: Dict[str, Any], chi
             or ""
         ).strip().lower()
         return "caliby", caliby_mode or "sequence_design"
-    if model_normalized == "protein_hunter_experimental":
-        protein_hunter_backend = str(
-            params.get("ph_backend")
-            or params.get("backend")
-            or ""
-        ).strip().lower()
-        protein_hunter_task = str(
-            params.get("stage_mode")
-            or params.get("ph_task")
-            or params.get("task")
-            or mode_normalized
-            or ""
-        ).strip().lower()
-        joined_mode = "_".join(part for part in (protein_hunter_backend, protein_hunter_task) if part)
-        return "protein_hunter", joined_mode or "generation"
     if "fampnn" in model_normalized:
         return "fampnn", mode_normalized or "sequence_design"
     if model_normalized in {"protenix", "boltz2", "rf3"} and mode_normalized in {"predict", "complex"}:

@@ -172,7 +172,6 @@ def job_expects_design_results(job: Job) -> bool:
         "fampnn",
         "ligandmpnn",
         "ppiflow",
-        "protein_hunter_experimental",
         "protein_modification_experimental",
         "proteinmpnn",
         "protenix",
