@@ -2,18 +2,18 @@
 
 **Inventory schema:** `frustrampnn_capability_inventory` version `1`
 
-**Inventory content SHA-256:** `e20e68d80440dd5f068d95f78ac371c8e83925defd6be26d9e50322c285ad618`
+**Inventory content SHA-256:** `6fec27041d721478bf0c2c4822dbd7be6995c19c70f2e8e9a6bf6d4176179414`
 
 ## Pinned runtime identity
 
 | Identity | Pinned value |
 |---|---|
 | Image | `$BMS_CONTAINER_DIR/frustrampnn.sif` |
-| Verified image SHA-256 | `c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da` |
+| Verified image SHA-256 | `4dc310797f9dc2b2a0d48219e0c3f692188cbbf17e59b78bf4e0ec19dcbd52ea` |
 | Executable | `/opt/venv/bin/frustrampnn` |
-| Executable SHA-256 | `32089d959f619c08a550c0e7d0fc7b66b508d009ec3179d007f13773a170212f` |
+| Executable SHA-256 | `f56c38dac14b89a00f623297ab438cc4c4696994d143556c00a0959199da798c` |
 | Installed CLI version | `frustrampnn, version 1.0.0` |
-| Source commit | `bbae1d03edf33dbe6f645d45c5604eb4464962ca` |
+| Source commit | `1f74d44748c15cc751572b0b980edcc8b0bb26d2` |
 | Checkpoint identity | `megascale.ckpt` |
 | Checkpoint path | `/opt/frustrampnn_weights/megascale.ckpt` |
 | Checkpoint SHA-256 | `eaee71adb7eec366fc672d2aadef87f2c51243042a4518cd897634784dc2da3b` |

@@ -56,7 +56,7 @@ def test_profile_configured_image_accepted_without_opening_sif(installed_runtime
         assert identity.configured_sif_path == expected
         assert runtime.runtime_identity_dict()["configured_sif_path"] == expected
         assert runtime.FRUSTRAMPNN_RUNTIME_REGISTRY["runtime_identity"]["configured_sif_path"] == expected
-        assert identity.sif_sha256 == "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da"
+        assert identity.sif_sha256 == "4dc310797f9dc2b2a0d48219e0c3f692188cbbf17e59b78bf4e0ec19dcbd52ea"
         assert identity.executable_path == "/opt/venv/bin/frustrampnn"
         assert identity.checkpoint_path == "/opt/frustrampnn_weights/megascale.ckpt"
         assert Path(runtime.__file__).resolve().is_relative_to(Path.cwd())
@@ -64,7 +64,7 @@ def test_profile_configured_image_accepted_without_opening_sif(installed_runtime
 
 
 def test_shared_selector_snapshots_only_path_not_digest(installed_runtime, monkeypatch):
-    digest = "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da"
+    digest = "4dc310797f9dc2b2a0d48219e0c3f692188cbbf17e59b78bf4e0ec19dcbd52ea"
     store = installed_runtime / ".image-store"
     selected = store / "objects" / "sha256" / digest / "runtime.sif"
     monkeypatch.setenv("BMS_FRUSTRAMPNN_SIF", str(selected))
@@ -95,7 +95,7 @@ def test_fresh_reopen_and_retry_retained_configuration_with_original_absent(inst
         Path(sys.argv[1] + '.v1').write_text(json.dumps(global_configuration()))
     ''', retained)
     original = retained.read_bytes()
-    digest = "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da"
+    digest = "4dc310797f9dc2b2a0d48219e0c3f692188cbbf17e59b78bf4e0ec19dcbd52ea"
     canonical = tmp_path / 'shared/objects/sha256' / digest / 'runtime.sif'
     monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(tmp_path / 'shared'))
     monkeypatch.setenv('BMS_FRUSTRAMPNN_SIF', str(canonical))
@@ -181,7 +181,7 @@ def test_cm_projection_retains_pinned_digest_at_configured_root(installed_runtim
         projection = runtime.cm_analysis_runtime_registry_v1(root)
         assert projection == {
             "container_name": "frustrampnn.sif",
-            "container_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
+            "container_sha256": "4dc310797f9dc2b2a0d48219e0c3f692188cbbf17e59b78bf4e0ec19dcbd52ea",
         }
         assert runtime.validate_configured_container_path(root / projection["container_name"]) == str(root / "frustrampnn.sif")
         try:

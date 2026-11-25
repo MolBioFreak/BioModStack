@@ -388,7 +388,7 @@ def _stub_identity(container: Path) -> FrustraMPNNRuntimeIdentity:
         checkpoint_path="/opt/stub/weights/stub.ckpt",
         checkpoint_sha256="3" * 64,
         package_version="stub-1",
-        source_commit="bbae1d03edf33dbe6f645d45c5604eb4464962ca",
+        source_commit="1f74d44748c15cc751572b0b980edcc8b0bb26d2",
         python_version="stub-python",
         pytorch_version="stub-torch",
         image_version="stub-image",

@@ -166,9 +166,9 @@ def _bundle(root: Path) -> None:
         ],
         "sif_path": "/proc/self/fd/41",
         "configured_sif_path": "/data/bms/apptainer/frustrampnn.sif",
-        "sif_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
+        "sif_sha256": "4dc310797f9dc2b2a0d48219e0c3f692188cbbf17e59b78bf4e0ec19dcbd52ea",
         "executable_path": "/opt/venv/bin/frustrampnn",
-        "executable_sha256": "32089d959f619c08a550c0e7d0fc7b66b508d009ec3179d007f13773a170212f",
+        "executable_sha256": "f56c38dac14b89a00f623297ab438cc4c4696994d143556c00a0959199da798c",
         "checkpoint_path": "/opt/frustrampnn_weights/megascale.ckpt",
         "checkpoint_id": "megascale.ckpt",
         "checkpoint_sha256": "eaee71adb7eec366fc672d2aadef87f2c51243042a4518cd897634784dc2da3b",
@@ -183,8 +183,8 @@ def _bundle(root: Path) -> None:
             "frustrampnn": "1.0.0", "adapter": "run_frustrampnn_component_v1",
             "normalizer": "frustrampnn_structure_normalizer_v1",
             "finalizer": "frustrampnn_landscape_finalizer_v1",
-            "source_commit": "bbae1d03edf33dbe6f645d45c5604eb4464962ca",
-            "python": "3.10.12", "pytorch": "2.11.0.dev20260126+cu128",
+            "source_commit": "1f74d44748c15cc751572b0b980edcc8b0bb26d2",
+            "python": "3.12.3", "pytorch": "2.15.0+cu134",
             "image": "1.3"},
     }
     (root / "frustrampnn_stdout.log").write_bytes(b"model stdout\n")

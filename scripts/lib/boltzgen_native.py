@@ -23,7 +23,8 @@ LIGAND_PARSER_CONTRACT = {
     'source_sha256': hashlib.sha256(json.dumps(_LIGAND_FILES, sort_keys=True,
                                              separators=(',', ':')).encode()).hexdigest(),
 }
-CONTRACTS = (CONTRACT, LIGAND_PARSER_CONTRACT)
+CONTRACT_0_3_2 = json.loads(Path(__file__).with_name('boltzgen_native_source_0_3_2.json').read_text())
+CONTRACTS = (CONTRACT, LIGAND_PARSER_CONTRACT, CONTRACT_0_3_2)
 KEYS = ('design_ptm', 'affinity_probability', 'filter_rmsd')
 
 PROTOCOLS = ('protein-anything', 'protein-small_molecule', 'peptide-anything',
@@ -184,24 +185,36 @@ def observe_source(cli=None, *, root=Path('/')):
     if root == Path('/') and os.environ.get('PYTHONPATH'):
         return unavailable_identity('unverified_pythonpath')
     try:
-        package = root / 'opt/venv/lib/python3.11/site-packages/boltzgen'
-        expected = {p for p in CONTRACT['files'] if '/site-packages/boltzgen/' in p}
+        # Check each distinct package layout across supported contracts.
+        seen_layouts = []
+        for contract in CONTRACTS:
+            pkg_files = {p for p in contract['files'] if '/site-packages/boltzgen/' in p}
+            meta_rel = next(p for p in contract['files'] if p.endswith('.dist-info/METADATA'))
+            pkg_dir_rel = meta_rel.split('/site-packages/', 1)[0] + '/site-packages/boltzgen'
+            if any(layout[0] == pkg_dir_rel for layout in seen_layouts):
+                continue
+            seen_layouts.append((pkg_dir_rel, meta_rel, pkg_files, contract))
+        matched_layout = next((layout for layout in seen_layouts if (root / layout[0]).is_dir()), None)
+        if matched_layout is None:
+            return unavailable_identity('missing_installed_source')
+        pkg_dir_rel, meta_rel, expected, base_contract = matched_layout
+        package = root / pkg_dir_rel
         observed = {p.relative_to(root).as_posix() for p in package.rglob('*.py')}
         if observed != expected:
             return unavailable_identity('unsupported_source_inventory')
         hashes = {}
-        for name in CONTRACT['files']:
+        for name in base_contract['files']:
             path = root / name
             if path.is_symlink() or any(p.is_symlink() for p in path.parents if p != root):
                 return unavailable_identity('unverified_source_symlink')
             hashes[name] = digest(path.read_bytes())
         # Version is read from the installed METADATA, not stamped from a pin.
-        metadata = (root / 'opt/venv/lib/python3.11/site-packages/boltzgen-0.2.0.dist-info/METADATA').read_text()
+        metadata = (root / meta_rel).read_text()
         version = next(line.split(': ', 1)[1] for line in metadata.splitlines() if line.startswith('Version: '))
         identity = {'schema': 1, 'state': 'ok', 'reason_code': None,
                     'package_version': version, 'files': hashes,
                     'source_sha256': digest(json.dumps(hashes, sort_keys=True, separators=(',', ':')).encode()),
-                    'reference_commit': CONTRACT['reference_commit']}
+                    'reference_commit': base_contract['reference_commit']}
         return identity if supported(identity) else unavailable_identity('unsupported_source_bytes')
     except (OSError, ValueError, StopIteration):
         return unavailable_identity('missing_installed_source')

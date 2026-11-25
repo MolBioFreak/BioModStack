@@ -2,24 +2,24 @@
   "schema_name": "frustrampnn_capability_inventory",
   "schema_version": 1,
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-  "content_sha256": "e20e68d80440dd5f068d95f78ac371c8e83925defd6be26d9e50322c285ad618",
+  "content_sha256": "6fec27041d721478bf0c2c4822dbd7be6995c19c70f2e8e9a6bf6d4176179414",
   "runtime_identity": {
     "image_path": "$BMS_CONTAINER_DIR/frustrampnn.sif",
-    "image_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
+    "image_sha256": "4dc310797f9dc2b2a0d48219e0c3f692188cbbf17e59b78bf4e0ec19dcbd52ea",
     "executable_path": "/opt/venv/bin/frustrampnn",
-    "executable_sha256": "32089d959f619c08a550c0e7d0fc7b66b508d009ec3179d007f13773a170212f",
+    "executable_sha256": "f56c38dac14b89a00f623297ab438cc4c4696994d143556c00a0959199da798c",
     "checkpoint_id": "megascale.ckpt",
     "checkpoint_path": "/opt/frustrampnn_weights/megascale.ckpt",
     "checkpoint_sha256": "eaee71adb7eec366fc672d2aadef87f2c51243042a4518cd897634784dc2da3b",
     "package_version": "1.0.0",
-    "source_commit": "bbae1d03edf33dbe6f645d45c5604eb4464962ca"
+    "source_commit": "1f74d44748c15cc751572b0b980edcc8b0bb26d2"
   },
   "evidence": [
     {
       "evidence_id": "pinned_sif_predict_help",
       "evidence_kind": "pinned_sif_cli_help",
       "source": "Exact predict help from the digest-pinned SIF",
-      "image_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
+      "image_sha256": "4dc310797f9dc2b2a0d48219e0c3f692188cbbf17e59b78bf4e0ec19dcbd52ea",
       "command": [
         "apptainer",
         "exec",
@@ -45,7 +45,7 @@
       "evidence_id": "pinned_sif_cli_version",
       "evidence_kind": "pinned_sif_cli_version",
       "source": "Exact CLI version from the digest-pinned SIF",
-      "image_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
+      "image_sha256": "4dc310797f9dc2b2a0d48219e0c3f692188cbbf17e59b78bf4e0ec19dcbd52ea",
       "command": [
         "apptainer",
         "exec",
@@ -59,7 +59,7 @@
       "evidence_id": "authoritative_runtime_registry",
       "evidence_kind": "authoritative_runtime_registry",
       "source": "platform/api/services/frustrampnn/runtime.py at source baseline 2431ac3775abc5688159bec1c91b92a957a83f9f",
-      "image_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
+      "image_sha256": "4dc310797f9dc2b2a0d48219e0c3f692188cbbf17e59b78bf4e0ec19dcbd52ea",
       "observation": "FRUSTRAMPNN_RUNTIME_IDENTITY pins the image, executable, MegaScale checkpoint, package version, source commit, and their SHA-256 identities."
     }
   ],

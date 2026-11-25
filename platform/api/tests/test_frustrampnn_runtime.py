@@ -15,8 +15,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_PATH = REPO_ROOT / "platform/api/services/frustrampnn/runtime.py"
-SIF_SHA256 = "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da"
-EXECUTABLE_SHA256 = "32089d959f619c08a550c0e7d0fc7b66b508d009ec3179d007f13773a170212f"
+SIF_SHA256 = "4dc310797f9dc2b2a0d48219e0c3f692188cbbf17e59b78bf4e0ec19dcbd52ea"
+EXECUTABLE_SHA256 = "f56c38dac14b89a00f623297ab438cc4c4696994d143556c00a0959199da798c"
 CHECKPOINT_SHA256 = "eaee71adb7eec366fc672d2aadef87f2c51243042a4518cd897634784dc2da3b"
 
 
@@ -48,9 +48,9 @@ def test_runtime_registry_is_canonical_immutable_and_projects_exact_cm_v1(tmp_pa
     assert identity.checkpoint_path == "/opt/frustrampnn_weights/megascale.ckpt"
     assert identity.checkpoint_sha256 == CHECKPOINT_SHA256
     assert identity.package_version == "1.0.0"
-    assert identity.source_commit == "bbae1d03edf33dbe6f645d45c5604eb4464962ca"
-    assert identity.python_version == "3.10.12"
-    assert identity.pytorch_version == "2.11.0.dev20260126+cu128"
+    assert identity.source_commit == "1f74d44748c15cc751572b0b980edcc8b0bb26d2"
+    assert identity.python_version == "3.12.3"
+    assert identity.pytorch_version == "2.15.0+cu134"
     assert isinstance(registry, MappingProxyType)
     assert isinstance(registry["runtime_identity"], MappingProxyType)
     with pytest.raises(TypeError):
@@ -73,11 +73,11 @@ def test_apptainer_build_uses_one_verified_runtime_source_commit_for_install_and
     definition = (
         Path(__file__).resolve().parents[3] / "apptainer" / "frustrampnn.def"
     ).read_text(encoding="utf-8")
-    commit = "bbae1d03edf33dbe6f645d45c5604eb4464962ca"
+    commit = "1f74d44748c15cc751572b0b980edcc8b0bb26d2"
     assert f"FRUSTRAMPNN_SOURCE_COMMIT={commit}" in definition
     assert 'git checkout --detach "$FRUSTRAMPNN_SOURCE_COMMIT"' in definition
     assert 'test "$(git rev-parse HEAD)" = "$FRUSTRAMPNN_SOURCE_COMMIT"' in definition
-    assert "uv pip install --compile /opt/frustrampnn" in definition
+    assert "uv pip install --python /opt/venv/bin/python --no-cache --compile /opt/frustrampnn" in definition
     assert "cp -r /opt/frustrampnn/weights/vanilla_model_weights" in definition
     assert "frustraMPNN/$FRUSTRAMPNN_SOURCE_COMMIT/weights/megascale_train_weights.ckpt" in definition
     assert (

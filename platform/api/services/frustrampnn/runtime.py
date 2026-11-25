@@ -56,16 +56,16 @@ FRUSTRAMPNN_RUNTIME_IDENTITY = FrustraMPNNRuntimeIdentity(
     # Snapshot installation authority at process startup, just like the immutable
     # registry below. Configuration changes require a new runtime process.
     configured_sif_path=os.environ.get("BMS_FRUSTRAMPNN_SIF") or str(get_container_path("frustrampnn.sif")),
-    sif_sha256="c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
+    sif_sha256="4dc310797f9dc2b2a0d48219e0c3f692188cbbf17e59b78bf4e0ec19dcbd52ea",
     executable_path="/opt/venv/bin/frustrampnn",
-    executable_sha256="32089d959f619c08a550c0e7d0fc7b66b508d009ec3179d007f13773a170212f",
+    executable_sha256="f56c38dac14b89a00f623297ab438cc4c4696994d143556c00a0959199da798c",
     checkpoint_id="megascale.ckpt",
     checkpoint_path="/opt/frustrampnn_weights/megascale.ckpt",
     checkpoint_sha256="eaee71adb7eec366fc672d2aadef87f2c51243042a4518cd897634784dc2da3b",
     package_version="1.0.0",
-    source_commit="bbae1d03edf33dbe6f645d45c5604eb4464962ca",
-    python_version="3.10.12",
-    pytorch_version="2.11.0.dev20260126+cu128",
+    source_commit="1f74d44748c15cc751572b0b980edcc8b0bb26d2",
+    python_version="3.12.3",
+    pytorch_version="2.15.0+cu134",
     image_version="1.3",
 )
 
