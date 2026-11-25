@@ -31,6 +31,7 @@ def deployment(tmp_path, monkeypatch):
         db.execute("CREATE TABLE jobs (id TEXT, status TEXT, queue_status TEXT, remote_attempt_id TEXT)")
         db.execute("INSERT INTO jobs VALUES ('job', 'running', 'running', 'original-attempt')")
     monkeypatch.setattr(sync, "_development_database", lambda _: database)
+    monkeypatch.setattr(sync, "_active_bioxp_runs", lambda _: 0)
     current = {"head": "a" * 40, "live": "a" * 40, "remote": "b" * 40, "dirty": "", "restart_failures": 0}
     calls = []
 

@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
@@ -208,6 +209,54 @@ def _development_database(root: Path) -> Path:
     return Path(str(configured or (Path.home() / ".biomodstack-dev" / "biomodstack.db"))).expanduser().resolve()
 
 
+ACTIVE_BIOXP_RUN_STATUSES = frozenset({
+    "queued",
+    "dispatched",
+    "running",
+    "awaiting_review",
+    "interrupting",
+    "issued_pending",
+    "stop_requested",
+    "abort_requested",
+    "reconciliation_required",
+})
+
+
+def _bioxp_runs_url(root: Path) -> str:
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    import biomodstack_services as services  # pylint: disable=import-outside-toplevel
+
+    health_url = services.runtime_api_health_url(services.DEV_RUNTIME_MODE, project_root=root)
+    base = health_url[:-len("/api/health")] if health_url.endswith("/api/health") else health_url.rstrip("/")
+    return f"{base}/api/bioxp/protocols/jobs?limit=50"
+
+
+def _active_bioxp_runs(root: Path) -> int:
+    """Return active BioXP method/protocol run count, or 0 if BioXP/API is off or unreachable."""
+    url = _bioxp_runs_url(root)
+    try:
+        with urllib.request.urlopen(url, timeout=3) as response:
+            if response.status != 200:
+                return 0
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, urllib.error.URLError):
+        return 0
+    if not isinstance(payload, dict):
+        return 0
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return 0
+    active = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").strip().lower()
+        if status in ACTIVE_BIOXP_RUN_STATUSES:
+            active += 1
+    return active
+
+
 def _active_development_work(root: Path) -> tuple[bool, int]:
     database = _development_database(root)
     if not database.is_file():
@@ -227,8 +276,10 @@ def _active_development_work(root: Path) -> tuple[bool, int]:
         raise RuntimeError(f"Development active-work check failed: {exc}") from exc
     finally:
         connection.close()
-    count = int(row[0]) if row is not None else 0
-    return count > 0, count
+    compute_count = int(row[0]) if row is not None else 0
+    bioxp_count = _active_bioxp_runs(root)
+    total = compute_count + bioxp_count
+    return total > 0, total
 
 
 @contextmanager

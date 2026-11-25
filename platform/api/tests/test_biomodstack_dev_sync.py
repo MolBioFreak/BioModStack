@@ -169,6 +169,7 @@ def test_active_development_work_reads_jobs_fail_closed(tmp_path: Path, monkeypa
     connection.commit()
     connection.close()
     monkeypatch.setattr(sync, "_development_database", lambda _root: database)
+    monkeypatch.setattr(sync, "_active_bioxp_runs", lambda _root: 0)
 
     assert sync._active_development_work(tmp_path) == (True, 1)
 

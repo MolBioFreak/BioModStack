@@ -339,9 +339,31 @@ app.add_middleware(FrustraMPNNUploadLimitMiddleware)
 app.add_middleware(DevIssueScreenshotUploadLimitMiddleware)
 
 
+_BIOXP_RUN_START_EXACT_PATHS = frozenset({
+    "/api/bioxp/methods/quick-runs",
+    "/api/bioxp/protocols/submit",
+})
+_BIOXP_METHOD_LIBRARY_RUN_RE = re.compile(r"^/api/bioxp/methods/library/[^/]+/runs$")
+
+
+def _is_deployment_fence_exempt(method: str, path: str) -> bool:
+    verb = method.upper()
+    if verb in {"GET", "HEAD", "OPTIONS"}:
+        return True
+    normalized = path.rstrip("/") or "/"
+    if normalized == "/api/bioxp" or normalized.startswith("/api/bioxp/"):
+        if verb == "POST" and (
+            normalized in _BIOXP_RUN_START_EXACT_PATHS
+            or _BIOXP_METHOD_LIBRARY_RUN_RE.fullmatch(normalized) is not None
+        ):
+            return False
+        return True
+    return False
+
+
 @app.middleware("http")
 async def deployment_admission_fence(request: Request, call_next):
-    if request.method.upper() in {"GET", "HEAD", "OPTIONS"}:
+    if _is_deployment_fence_exempt(request.method, request.url.path):
         return await call_next(request)
     try:
         with workflow_mutation_admission():
