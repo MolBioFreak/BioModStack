@@ -227,3 +227,15 @@ def test_a1f_more_than_ten_pieces_still_saves(app_and_sessions) -> None:
             "selected_plan_checksum": body["plan_checksum"], "new_name": "Many pieces"})
         assert saved.status_code == 200, saved.text
         assert saved.json()["saved_sequence"]["sequence"] == payload["target_sequence"]
+
+
+def test_planner_accepts_60bp_minimum_core_and_rejects_59(app_and_sessions) -> None:
+    app, _ = app_and_sessions
+    payload = {"target_sequence": dna(5, 540), "circular": False, "min_fragment_length": 60,
+               "max_fragment_length": 200, "overlap_length": 20}
+    with TestClient(app) as client:
+        ok = client.post("/api/molbio/assembly/gibson/dnaweaver/plan", json=payload)
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["order_ready"] is True
+        bad = client.post("/api/molbio/assembly/gibson/dnaweaver/plan", json={**payload, "min_fragment_length": 59})
+        assert bad.status_code == 422

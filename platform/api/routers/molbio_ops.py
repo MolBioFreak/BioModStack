@@ -1098,7 +1098,7 @@ class DnaWeaverPlanRequest(BaseModel):
     target_sequence: str = Field(min_length=1, max_length=2_000_000)
     target_sequence_id: Optional[str] = None
     circular: bool = True
-    min_fragment_length: int = Field(default=500, ge=100, le=100_000)
+    min_fragment_length: int = Field(default=500, ge=60, le=100_000)
     max_fragment_length: int = Field(default=1500, ge=101, le=200_000)
     overlap_length: int = Field(default=30, ge=15, le=80)
     vendor_name: str = Field(
