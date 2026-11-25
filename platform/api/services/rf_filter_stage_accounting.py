@@ -56,13 +56,13 @@ def _owner(job):
         MODEL_MODE_WORKFLOW_ENTRYPOINTS, WORKFLOW_ENTRYPOINTS)
     explicit = MODEL_MODE_WORKFLOW_ENTRYPOINTS.get((str(job.model_id or ''), str(job.mode or '')),
                                                   WORKFLOW_ENTRYPOINTS.get(str(job.model_id or '')))
-    if explicit not in {'workflows/protein_design.nf', 'workflows/protein_local_redesign.nf'}:
+    if explicit not in {'workflows/protein_design.nf', 'workflows/region_redesign.nf'}:
         return None
     params = job.params if isinstance(job.params, dict) else json.loads(job.params or '{}')
     entry = resolve_nextflow_entrypoint(effective_profile=str(job.model_id or ''),
         model_id=job.model_id, mode=job.mode, params=params)
     return {'workflows/protein_design.nf': 'protein_design',
-            'workflows/protein_local_redesign.nf': 'protein_local_redesign'}.get(entry)
+            'workflows/region_redesign.nf': 'protein_local_redesign'}.get(entry)
 
 
 def prepare_filter_stages(job, output_root):

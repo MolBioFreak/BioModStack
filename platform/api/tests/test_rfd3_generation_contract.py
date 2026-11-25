@@ -307,11 +307,11 @@ def test_backup_generators_keep_the_deferred_internal_entrypoint() -> None:
             "target_lengths": "100,120",
         }
         assert resolve_nextflow_entrypoint(
-            effective_profile="protein_cad_experimental",
+            effective_profile="workstation_ryzen7960x",
             model_id=MODEL_ID,
             mode=MODE,
             params=params,
-        ) == "workflows/protein_cad_experimental.nf"
+        ) == "workflows/denovo_generation.nf"
 
 
 def test_result_manifest_is_hash_bound_and_projects_exact_statistics(tmp_path: Path) -> None:

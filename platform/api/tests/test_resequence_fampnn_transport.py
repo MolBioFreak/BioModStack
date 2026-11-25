@@ -94,7 +94,7 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
     plan = invocation.execution_plan
     assert plan is not None
     prep = next(component for component in plan.metadata.static_components
-                if component.authority == 'workflows/protein_local_redesign.nf:PrepProteinLocalFAMPNN')
+                if component.authority == 'workflows/region_redesign.nf:PrepProteinLocalFAMPNN')
     helpers = {'scripts/prep_fampnn_constraints_from_spec.py', 'scripts/prep_fampnn_designs.py',
                'scripts/fampnn_policy_resolution.py', 'scripts/antibody_fampnn_provenance.py'}
     assert {'support_tool:' + path for path in helpers} <= set(prep.dependency_ids)
@@ -116,7 +116,7 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
     # Execute the actual workflow argument construction and policy receiver.
     jar = os.environ.get('BMS_TEST_NEXTFLOW_JAR')
     assert jar and Path(jar).is_file(), 'BMS_TEST_NEXTFLOW_JAR required for real Groovy receiving'
-    workflow = (ROOT / 'workflows/protein_local_redesign.nf').read_text()
+    workflow = (ROOT / 'workflows/region_redesign.nf').read_text()
     construction = workflow.split('    def manifestArg =', 1)[1].split('    def mpnnDesignableArgs', 1)[0]
     harness = tmp_path / 'receiving.groovy'
     harness.write_text('''

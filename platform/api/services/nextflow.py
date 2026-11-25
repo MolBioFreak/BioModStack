@@ -43,7 +43,7 @@ NEXTFLOW_LOG_TAIL_MAX_LINES = 2_048
 NEXTFLOW_ATTEMPT_LOG_MAX_LINES = 1_024
 NEXTFLOW_LOG_MAX_LINE_CHARS = 16_384
 FRUSTRAMPNN_SETTINGS_MAX_BYTES = 64 * 1024
-GPU_REQUIRED_MODEL_IDS = {"protein_local_redesign"}
+GPU_REQUIRED_MODEL_IDS: Set[str] = set()
 
 
 def capture_terminal_job_publication_snapshot(job: Any) -> dict[str, Any]:
@@ -489,8 +489,8 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
     "ont_fastq_qc": "workflows/ngs/ont_fastq_qc.nf",
     "ont_pooled_reference_assignment": "workflows/ngs/ont_pooled_reference_assignment.nf",
     "wf_clone_validation": "workflows/ngs/wf_clone_validation.nf",
-    "protein_local_redesign": "workflows/protein_local_redesign.nf",
-    "protein_cad_experimental": "workflows/protein_cad_experimental.nf",
+    "region_redesign": "workflows/region_redesign.nf",
+    "denovo_generation": "workflows/denovo_generation.nf",
 
 
     "boltz_cp_experimental": "workflows/boltz_cp_experimental.nf",
@@ -552,9 +552,8 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     **{('boltzgen_child', mode): 'workflows/boltzgen_child.nf'
        for mode in ('nanobody_binder', 'peptide_binder', 'protein_binder')},
     ("frustrampnn", "analyze"): "workflows/frustrampnn_analysis.nf",
-    ("protein_local_redesign", "local_redesign"): "workflows/protein_local_redesign.nf",
     ("protein_modification_experimental", "de_novo_design"): "workflows/protein_design.nf",
-    ("protein_modification_experimental", "region_redesign"): "workflows/protein_local_redesign.nf",
+    ("protein_modification_experimental", "region_redesign"): "workflows/region_redesign.nf",
     ("molecular_dynamics", "simulate"): "workflows/experimental/molecular_dynamics/orchestrator.nf",
     ("molecular_dynamics", "replica"): "workflows/experimental/molecular_dynamics/replica.nf",
     ("molecular_dynamics", "analyze"): "workflows/experimental/molecular_dynamics/analyze.nf",
@@ -622,7 +621,7 @@ def resolve_nextflow_entrypoint(
         and str((params or {}).get("generator") or "rfd3").strip().lower()
         in {"disco", "laproteina"}
     ):
-        return "workflows/protein_cad_experimental.nf"
+        return "workflows/denovo_generation.nf"
 
     if normalized_model_id in {"boltz2", "protenix"} and _params_request_complex_prediction(params):
         return COMPLEX_PREDICTION_ENTRYPOINT
@@ -5456,11 +5455,8 @@ def compile_nextflow_invocation(
         ('antibody_child', 'validation_batch'): 'boltz',
         # FAMPNN child jobs (sequence design - spawned by orchestrator)
         ('fampnn_child', 'sequence_design'): 'fampnn_predict',
-        # Protein local redesign with constrained RFD3 remodeling
-        ('protein_local_redesign', 'local_redesign'): 'protein_local_redesign',
-        ('protein_cad_experimental', 'design'): 'protein_cad_experimental',
         ('protein_modification_experimental', 'de_novo_design'): 'rfd3_generation',
-        ('protein_modification_experimental', 'region_redesign'): 'protein_local_redesign',
+        ('protein_modification_experimental', 'region_redesign'): 'workstation_ryzen7960x',
 
         ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',
         ('molecular_dynamics', 'simulate'): 'molecular_dynamics_coordinator',
@@ -5539,7 +5535,7 @@ def compile_nextflow_invocation(
         and str(params.get('generator') or 'rfd3').strip().lower()
         in {'disco', 'laproteina'}
     ):
-        effective_profile = 'protein_cad_experimental'
+        effective_profile = 'workstation_ryzen7960x'
 
     selected_generator = (params.get('generator')
         if model_id == 'protein_modification_experimental' and mode == 'de_novo_design' else model_id)
@@ -6366,7 +6362,7 @@ def compile_nextflow_invocation(
         params.setdefault('skip_rfd_seq_pred', False)
         params.setdefault('run_frustrampnn', False)
         params['modification_mode'] = 'de_novo_design'
-    elif model_id == 'protein_cad_experimental' or (
+    elif (
         model_id == 'protein_modification_experimental'
         and mode == 'de_novo_design'
         and str(params.get('generator') or '').strip().lower()

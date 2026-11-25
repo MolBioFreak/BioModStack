@@ -52,7 +52,7 @@ def test_prepared_request_portable_relocation_without_originals(assets, tmp_path
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
-    prep = load('prep_protein_cad_request')
+    prep = load('prep_denovo_generation_request')
     wrapper = load('run_disco_inference')
     original = assets['data'] / 'original'
     checkpoint = leaf(original / 'custom/model.pt')

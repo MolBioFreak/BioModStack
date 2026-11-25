@@ -39,7 +39,7 @@ def test_source_free_complexa_expires_derived_closure(tmp_path, drafts, parent):
 
 
 def prep(tmp_path, monkeypatch, backend, task, lengths, extra):
-    import prep_protein_cad_request as owner
+    import prep_denovo_generation_request as owner
     request = tmp_path/'request.json'
     monkeypatch.setattr(sys, 'argv', ['prep', '--job-id', 'test', '--job-name', 'test',
         '--backend', backend, '--task', task, '--num-designs', '1',

@@ -47,11 +47,11 @@ else:
         with fixture.open('a') as stream:
             stream.write('\nraise SystemExit(23)\n')
     # Only substitute science; declarations, prep and failed-task collection are real.
-    module = (ROOT / 'modules/protein_cad_experimental.nf').read_text()
+    module = (ROOT / 'modules/denovo_generation.nf').read_text()
     for name in ['laproteina', 'disco']:
         module = module.replace('${params.code_root}/scripts/run_' + name + '_inference.py', str(fixture))
     (tmp_path / 'cad.nf').write_text(module)
-    workflow = (ROOT / 'workflows/protein_cad_experimental.nf').read_text().replace("'../modules/protein_cad_experimental.nf'", "'./cad.nf'")
+    workflow = (ROOT / 'workflows/denovo_generation.nf').read_text().replace("'../modules/denovo_generation.nf'", "'./cad.nf'")
     (tmp_path / 'main.nf').write_text(workflow)
     params = {'out_dir': str(tmp_path / "returned's outputs"), 'weights_root': str(tmp_path / 'weights'),
               'code_root': str(ROOT), 'pcad_backend': backend, 'pcad_task': 'unconditional',

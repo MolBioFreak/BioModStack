@@ -238,7 +238,7 @@ else:
 def test_each_real_owner_passes_policy_without_psce_scope_reuse():
     cases = {
         'workflows/protein_design.nf': "'protein_design'",
-        'workflows/protein_local_redesign.nf': "'protein_local_redesign'",
+        'workflows/region_redesign.nf': "'protein_local_redesign'",
         'workflows/fampnn_child.nf': 'FampnnAnalysisPolicy.forChild(params)',
         'workflows/antibody_denovo.nf': "'antibody_denovo'",
     }

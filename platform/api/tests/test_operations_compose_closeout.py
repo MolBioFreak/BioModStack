@@ -159,10 +159,13 @@ async def test_general_invocation_successor_stays_inside_authored_branch(selecte
 
 
 def test_retired_project_override_does_not_revive_local_redesign():
-    from services.protein_project_capabilities import protein_capability_record, protein_capability_inventory
-    retired = protein_capability_record('protein.de_novo.local_redesign')
-    assert retired['plannable'] is False
-    assert retired['availability']['state'] != 'operational'
+    from services.protein_project_capabilities import (
+        ProteinProjectCapabilityError,
+        protein_capability_inventory,
+        protein_capability_record,
+    )
+    with pytest.raises(ProteinProjectCapabilityError):
+        protein_capability_record('protein.de_novo.local_redesign')
     ready = protein_capability_inventory(project_ready_only=True)['capabilities']
     assert 'protein.de_novo.local_redesign' not in {r['capability_id'] for r in ready}
     current = protein_capability_record('protein.native.protein_modification_experimental.region_redesign')

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-WORKFLOW = ROOT / 'workflows/protein_local_redesign.nf'
+WORKFLOW = ROOT / 'workflows/region_redesign.nf'
 
 
 def pdb(domain):

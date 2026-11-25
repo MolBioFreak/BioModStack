@@ -41,7 +41,7 @@ def test_admission_saved_resume_compiler_and_preparer(tmp_path, backend, field, 
     transported = json.loads(cmd[cmd.index('--'+key)+1])
     assert transported[field] == expected
     out = tmp_path/'prepared.json'
-    subprocess.run([sys.executable, str(REPO/'scripts/prep_protein_cad_request.py'),
+    subprocess.run([sys.executable, str(REPO/'scripts/prep_denovo_generation_request.py'),
                     '--backend', backend, '--task', 'unconditional', '--num-designs', '1',
                     '--target-lengths', '11', '--output', str(out), '--input-dir', str(tmp_path/'inputs'),
                     '--'+backend+'-settings-json', json.dumps(transported)], check=True)

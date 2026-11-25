@@ -37,7 +37,7 @@ def run(payload):
         output_dir=root / 'out', allowed_roots=[root])
     target = root / 'prepared'
     target.mkdir(exist_ok=True)
-    command = [sys.executable, str(paths.REPO_ROOT / 'scripts/prep_protein_cad_request.py'),
+    command = [sys.executable, str(paths.REPO_ROOT / 'scripts/prep_denovo_generation_request.py'),
         '--backend', 'disco', '--task', 'custom_json', '--num-designs', '1', '--target-lengths', '4',
         '--disco-input-json-path', params.get('pcad_disco_input_json_path', ''),
         '--disco-jobs-json', json.dumps(params['pcad_disco_jobs_json']),

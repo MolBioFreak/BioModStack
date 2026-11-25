@@ -12,7 +12,7 @@ import re
 import subprocess
 from pathlib import Path
 
-NF = Path(__file__).resolve().parents[3] / "workflows" / "protein_local_redesign.nf"
+NF = Path(__file__).resolve().parents[3] / "workflows" / "region_redesign.nf"
 # Longest task directory the remote worker produces: /root/bms/attempts/<uuid>/work/xx/<30 hex>
 WORKER_TASK_DIR = "/root/bms/attempts/5499d5f8-9674-4fc7-a590-329159417222/work/a4/0ccb1e2de1235604ff01bb392da017"
 

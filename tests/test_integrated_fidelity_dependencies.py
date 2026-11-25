@@ -66,8 +66,8 @@ def test_legacy_esm_batch_selects_same_process_as_dispatcher(params, process):
 
 
 @pytest.mark.parametrize('owner,required', [
-    ('workflows/protein_local_redesign.nf:PrepProteinLocalMPNN', {'scripts/proteinmpnn_native_binding.py'}),
-    ('workflows/protein_local_redesign.nf:PrepProteinLocalFAMPNN', FAM),
+    ('workflows/region_redesign.nf:PrepProteinLocalMPNN', {'scripts/proteinmpnn_native_binding.py'}),
+    ('workflows/region_redesign.nf:PrepProteinLocalFAMPNN', FAM),
     ('modules/boltz_cp_experimental.nf:RunBoltzCPExperimental', {'scripts/fold_cp_input.py'}),
 ])
 def test_embedded_owner_helper_declarations(owner, required):

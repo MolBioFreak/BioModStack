@@ -77,7 +77,7 @@ def test_canonical_de_novo_mode_uses_native_rfd3_generation_entrypoint(tmp_path:
 
 def test_canonical_region_mode_reuses_internal_local_redesign_entrypoint() -> None:
     assert MODEL_MODE_WORKFLOW_ENTRYPOINTS[(CANONICAL_MODEL_ID, "region_redesign")] == (
-        "workflows/protein_local_redesign.nf"
+        "workflows/region_redesign.nf"
     )
 
     cmd = build_nextflow_command(
@@ -96,8 +96,8 @@ def test_canonical_region_mode_reuses_internal_local_redesign_entrypoint() -> No
     joined = " ".join(cmd)
 
     assert cmd[1] == "run"
-    assert cmd[2] == "workflows/protein_local_redesign.nf"
-    assert "protein_local_redesign,workstation_ryzen7960x" in cmd
+    assert cmd[2] == "workflows/region_redesign.nf"
+    assert cmd[4] == "workstation_ryzen7960x"
     assert "--plr_backbone_input_pdbs /tmp/designs" in joined
     assert "--plr_fixed_positions A1-20" in joined
     assert "--plr_designable_positions A21-40" in joined

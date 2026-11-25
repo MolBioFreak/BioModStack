@@ -263,19 +263,18 @@ def test_minimal_insertion_contig_is_source_derived_and_claim_bound() -> None:
 
 
 def test_retired_local_redesign_catalog_preserves_active_region_loop() -> None:
+    from model_registry import ModelRegistry
     from services.nextflow import resolve_nextflow_entrypoint
 
-    retired = yaml.safe_load((API_ROOT / "config/models/protein_local_redesign.yaml").read_text())
-    assert retired["id"] == "protein_local_redesign"
-    assert retired["public_launch"] is False
-    assert retired["enabled"] is False
+    assert not (API_ROOT / "config/models/protein_local_redesign.yaml").exists()
+    assert ModelRegistry().get_model("protein_local_redesign") is None
     active = yaml.safe_load((API_ROOT / "config/models/protein_modification_experimental.yaml").read_text())
     assert "region_redesign" in {mode["id"] for mode in active["modes"]}
     assert resolve_nextflow_entrypoint(
-        effective_profile="protein_local_redesign",
+        effective_profile="workstation_ryzen7960x",
         model_id="protein_modification_experimental", mode="region_redesign", params={},
-    ) == "workflows/protein_local_redesign.nf"
-    workflow = (REPO_ROOT / "workflows/protein_local_redesign.nf").read_text()
+    ) == "workflows/region_redesign.nf"
+    workflow = (REPO_ROOT / "workflows/region_redesign.nf").read_text()
     assert "workflow PROTEIN_LOCAL_REDESIGN" in workflow
     assert "PROTEIN_LOCAL_REDESIGN()" in workflow
 
@@ -293,8 +292,8 @@ def test_build_nextflow_command_maps_active_region_loop_params(padding) -> None:
     }
     cmd = build_nextflow_command("protein_modification_experimental", "region_redesign",
                                  params, "/output", job_id="region-loop")
-    assert cmd[1:4] == ["run", "workflows/protein_local_redesign.nf", "-profile"]
-    assert "protein_local_redesign,workstation_ryzen7960x" in cmd
+    assert cmd[1:4] == ["run", "workflows/region_redesign.nf", "-profile"]
+    assert cmd[4] == "workstation_ryzen7960x"
     expected = {
         "plr_input_pdb": "/source/input.pdb", "plr_design_chains": "A", "plr_context_chains": "B",
         "plr_region_padding": str(padding), "plr_seq_method": "fampnn", "seqs_per_design": "6",
@@ -547,7 +546,7 @@ def test_plr_profile_does_not_override_scheduler_gpu_concurrency() -> None:
             *launcher,
             "config",
             "-profile",
-            "protein_local_redesign,workstation_ryzen7960x",
+            "workstation_ryzen7960x",
             "-flat",
         ],
         cwd=REPO_ROOT,
@@ -571,7 +570,7 @@ def test_plr_profile_does_not_override_scheduler_gpu_concurrency() -> None:
 ])
 def test_boltz_suite_counts_only_successful_exports(tmp_path, case, completed, other_count, state):
     """Exact export and receipt DAG with inert producer files, no model calls."""
-    source = (REPO_ROOT / "workflows/protein_local_redesign.nf").read_text()
+    source = (REPO_ROOT / "workflows/region_redesign.nf").read_text()
     module = (REPO_ROOT / "modules/boltz.nf").read_text()
 
     def process(name):

@@ -489,9 +489,14 @@ process RunProtonPottsResequence {
 
 workflow PROTEIN_LOCAL_REDESIGN {
     main:
-    if (!params.containsKey('interactive_gating')) params.interactive_gating = false
+    if (!params.containsKey('plr_region_mode') || params.plr_region_mode == null) params.plr_region_mode = 'manual_ranges'
+    if (!params.containsKey('plr_num_designs') || params.plr_num_designs == null) params.plr_num_designs = 8
+    if (!params.containsKey('plr_seq_method') || !params.plr_seq_method) params.plr_seq_method = 'fampnn'
+    if (!params.containsKey('plr_fix_fixed_sidechains') || params.plr_fix_fixed_sidechains == null) params.plr_fix_fixed_sidechains = true
+    if (!params.containsKey('plr_structure_validators') || params.plr_structure_validators == null) params.plr_structure_validators = 'protenix_v2'
+    if (!params.containsKey('interactive_gating') || params.interactive_gating == null) params.interactive_gating = true
     if (!params.containsKey('interactive_gate_stage') || !params.interactive_gate_stage) params.interactive_gate_stage = 'post_structure_validation'
-    if (!params.containsKey('interactive_gate_continue')) params.interactive_gate_continue = false
+    if (!params.containsKey('interactive_gate_continue') || params.interactive_gate_continue == null) params.interactive_gate_continue = false
 
     if (!params.plr_backbone_input_pdbs && !params.plr_sequence_input_pdbs && !params.plr_validation_input_pdbs) {
         error('Missing required parameter: plr_backbone_input_pdbs, plr_sequence_input_pdbs or plr_validation_input_pdbs')

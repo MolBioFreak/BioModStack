@@ -37,7 +37,7 @@ def leaf(path):
     return path
 
 
-def plan(params, *, entrypoint='protein_cad_experimental', model=MODEL, mode='de_novo_design'):
+def plan(params, *, entrypoint='denovo_generation', model=MODEL, mode='de_novo_design'):
     entrypoint = 'workflows/' + entrypoint + '.nf'
     metadata = selected_execution_metadata(model, mode, params, entrypoint)
     return SelectedExecutionPlan(SourceIdentity('a' * 40, 'b' * 40),
@@ -103,7 +103,7 @@ def test_nested_managed_ref_rejects_unsafe_spellings(value):
 @pytest.mark.parametrize('validator', ['boltz2', 'esmfold2', 'protenix_v2'])
 def test_validated_redesign_keeps_selected_designer_and_validator(designer, validator):
     params = {'plr_seq_method': designer, 'plr_structure_validators': [validator]}
-    selected = plan(params, mode='region_redesign', entrypoint='protein_local_redesign')
+    selected = plan(params, mode='region_redesign', entrypoint='region_redesign')
     images = {d.relative_path for d in selected.dependencies if d.kind == 'image'}
     # No foundry.sif: the RFD3 region/prep stages were removed from Redesign (58af06d).
     assert images == {'pyrosetta_tools.sif',
@@ -119,7 +119,7 @@ def test_native_redesign_ignores_stray_rfd3_request_and_selects_no_generator():
     # 58af06d removed the RFD3 region/prep stages from Redesign, so a leftover
     # rfd3_request_path selects only the default FAMPNN designer + Boltz validator closure.
     selected = plan({'rfd3_request_path': '/not-materialized/request.json'},
-                    model='protein_local_redesign', mode='local_redesign', entrypoint='protein_local_redesign')
+                    model='protein_local_redesign', mode='local_redesign', entrypoint='region_redesign')
     assert {d.relative_path for d in selected.dependencies if d.kind == 'image'} == {
         'pyrosetta_tools.sif', 'fampnn.sif', 'boltz2.sif'}
     weights = {d.relative_path for d in selected.dependencies if d.kind == 'weights'}
@@ -333,7 +333,7 @@ def test_boltz_selected_bundle_and_family_manifest_native_closure(assets, custom
     params: dict = {'plr_seq_method': 'fampnn', 'plr_structure_validators': ['boltz2']}
     if custom:
         params['boltz_models'] = str(root)
-    kwargs = {'mode': 'region_redesign', 'entrypoint': 'protein_local_redesign'}
+    kwargs = {'mode': 'region_redesign', 'entrypoint': 'region_redesign'}
     selected = plan(params, **kwargs)
     deps = [d for d in selected.dependencies if d.logical_id.startswith('weights:boltz')]
     assert {d.selector_subpath for d in deps} == {'boltz2_conf.ckpt', 'boltz2_aff.ckpt', 'mols'}

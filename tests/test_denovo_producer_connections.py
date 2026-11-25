@@ -6,7 +6,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-import prep_protein_cad_request as prep
+import prep_denovo_generation_request as prep
 from run_laproteina_inference import collect_outputs
 from lib.disco_contract import native_overrides, legacy_effective_settings
 

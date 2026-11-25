@@ -6,7 +6,7 @@ from services import rf_filter_task_roster as roster
 
 
 def owner(tmp_path, **params):
-    return Job(id='roster', name='roster', model_id='protein_local_redesign', mode='local_redesign',
+    return Job(id='roster', name='roster', model_id='protein_modification_experimental', mode='region_redesign',
                params=params, output_dir=str(tmp_path), status='running',
                provenance={'core_protein_scientific_contract': 1})
 
@@ -68,7 +68,7 @@ async def test_compiled_launch_settings_persist_before_spawn(tmp_path):
     try:
         async with factory() as db:
             job = owner(tmp_path); db.add(job); await db.commit()
-            await roster.begin_command(db, job, ['nextflow', 'run', 'workflows/protein_local_redesign.nf',
+            await roster.begin_command(db, job, ['nextflow', 'run', 'workflows/region_redesign.nf',
                 '--rfd_min_rog', '0', '--skip_rfd', 'false'])
         async with factory() as db:
             job = await db.get(Job, 'roster')

@@ -106,9 +106,9 @@ PROCESS_CONTRACTS = {
     'modules/ppiflow.nf:ScorePartialFlowImprovement': (('pyrosetta_tools',), ('tuple val(meta), path(original_pdb), path(matured_pdbs), path(ppiflow_positions), path(cdr_positions_by_loop_json)',), ('tuple val(meta), path("scores/*_partial_flow_score.json"), emit: scores',), ('scripts/score_maturation.py',), ()),
     'modules/ppiflow.nf:FilterByMaturation': (('process_low',), ('tuple val(meta), path(matured_pdbs), path(score_jsons)',), ('tuple val(meta), path("filtered_output/*.pdb"), emit: pdbs, optional: true', 'path ("filter_reports/*_maturation_filter.json"), emit: filter_reports'), ('scripts/filter_maturation.py',), ()),
     'modules/predict_target_complex.nf:PredictTargetComplex': (('Boltz', 'gpu'), ('tuple val(meta), val(protein_seq), val(dna_seq)',), ('tuple val(meta), path("target_complex.pdb"), emit: complex', 'path "confidence.json", emit: confidence', 'path "predict_complex.log", emit: log'), ('scripts/prep_complex_yaml.py', 'scripts/run_boltz_wrapper.py', 'scripts/lib/boltz_fidelity.py'), ()),
-    'modules/protein_cad_experimental.nf:PrepProteinCadRequest': (('process_low',), (), ("path 'protein_cad_request.json', emit: request", "path 'protein_cad_inputs', emit: input_dir"), ('scripts/prep_protein_cad_request.py',), ()),
-    'modules/protein_cad_experimental.nf:RunLaProteina': (('LaProteina', 'gpu'), ('path request_json', 'path input_dir'), ("path 'raw/pdbs/*.pdb', optional: true, emit: pdbs", "path 'raw/metadata/*.json', optional: true, emit: jsons", "path 'design_manifest.json', emit: manifest", "path 'raw', emit: native_raw", "path 'invocation_*', emit: invocations", "path 'laproteina_publication.json', emit: publication", "path '*.log'"), ('scripts/run_laproteina_inference.py', 'scripts/lib/laproteina_motif_custody.py'), ()),
-    'modules/protein_cad_experimental.nf:RunDISCO': (('DISCO', 'gpu'), ('path request_json', 'path input_dir'), ("path 'raw/pdbs/*.pdb', optional: true, emit: pdbs", "path 'raw/metadata/*.json', optional: true, emit: jsons", "path 'design_manifest.json', emit: manifest", "path 'raw', optional: true, emit: native_raw", "path 'native', optional: true, emit: native_samples", "path 'disco_output', emit: native_output", "path 'disco_*.json', emit: publication", "path 'native_events.jsonl', optional: true, emit: events", "path '*.log'"), ('scripts/run_disco_inference.py',), ()),
+    'modules/denovo_generation.nf:PrepProteinCadRequest': (('process_low',), (), ("path 'protein_cad_request.json', emit: request", "path 'protein_cad_inputs', emit: input_dir"), ('scripts/prep_denovo_generation_request.py',), ()),
+    'modules/denovo_generation.nf:RunLaProteina': (('LaProteina', 'gpu'), ('path request_json', 'path input_dir'), ("path 'raw/pdbs/*.pdb', optional: true, emit: pdbs", "path 'raw/metadata/*.json', optional: true, emit: jsons", "path 'design_manifest.json', emit: manifest", "path 'raw', emit: native_raw", "path 'invocation_*', emit: invocations", "path 'laproteina_publication.json', emit: publication", "path '*.log'"), ('scripts/run_laproteina_inference.py', 'scripts/lib/laproteina_motif_custody.py'), ()),
+    'modules/denovo_generation.nf:RunDISCO': (('DISCO', 'gpu'), ('path request_json', 'path input_dir'), ("path 'raw/pdbs/*.pdb', optional: true, emit: pdbs", "path 'raw/metadata/*.json', optional: true, emit: jsons", "path 'design_manifest.json', emit: manifest", "path 'raw', optional: true, emit: native_raw", "path 'native', optional: true, emit: native_samples", "path 'disco_output', emit: native_output", "path 'disco_*.json', emit: publication", "path 'native_events.jsonl', optional: true, emit: events", "path '*.log'"), ('scripts/run_disco_inference.py',), ()),
     'modules/proteinmpnn.nf:PrepMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("mpnn_fixed/*.pdb"), emit: pdbs', 'path ("mpnn_prep_*.log")'), ('scripts/prep_mpnn_designs.py', 'scripts/add_fixed_labels.py', 'scripts/prep_fampnn_constraints_generic.py', 'scripts/proteinmpnn_binder_roles.py', 'scripts/proteinmpnn_native_binding.py'), ()),
     'modules/proteinmpnn.nf:RunMPNN': (('MPNN', 'gpu_light'), ('path pdbs',), ('tuple path("${params.get(\'sequence_design_engine\') == \'proteinmpnn\' ? \'mpnn_canonical\' : \'results\'}/*.pdb"), path("${params.get(\'sequence_design_engine\') == \'proteinmpnn\' ? \'mpnn_canonical\' : \'results\'}/*.json"), emit: pdbs_jsons', 'path "mpnn_native_output", emit: raw', 'path ("mpnn_metadata_${task.index}.jsonl"), topic: metadata_ch_fold_seq', 'path "*.log"'), ('scripts/proteinmpnn_binder_roles.py', 'scripts/proteinmpnn_native_binding.py'), ("errorStrategy { params.allow_retries && task.exitStatus in [137, 139] ? 'retry' : 'terminate' }", 'maxRetries { params.allow_retries ? 2 : 0 }')),
     'modules/proteinmpnn.nf:FilterMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("filtered_output/*.pdb"), emit: pdbs, optional: true', 'path ("filtered_output/*.json"), emit: jsons, optional: true', 'path ("filter_mpnn_${task.index}.log"), emit: logs'), (), ()),
@@ -185,6 +185,7 @@ PROCESS_CONTRACTS = {
     'workflows/protein_design.nf:ReportProteinDesignFrustraMPNNComplete': (('CPU',), ('path published_markers',), ("path 'frustrampnn_complete.reported'",), ('scripts/stage_reporter.py',), ()),
     'workflows/protein_design.nf:PrepareGeneralRFD3Input': (('pyrosetta_tools',), ('path request_json', 'path staged_sources'), ("tuple val('generation_0'), path('rfd3_generation_native_input.json'), path({ [request_json, 'rfd3_sources'] }), emit: input_json", "path 'rfd3_generation_preparation_receipt.json', emit: receipt", "path 'rfd3_sources', emit: sources"), ('scripts/rfd3_generation/prepare_native_input.py',), ()),
     'workflows/protein_design.nf:BuildGeneralRFD3ResultManifest': (('process_low',), ('path native_outputs', 'path request_json'), ("path 'rfd3_generation_result_manifest.json', emit: manifest",), ('scripts/rfd3_generation/build_result_manifest.py',), ()),
+<<<<<<< HEAD
     'workflows/protein_local_redesign.nf:PrepareProteinLocalValidatorInput': (('process_low',), ('tuple val(producer_meta), path(source_pdb)',), ("tuple val(producer_meta), path(source_pdb), path('*.validator_contract.json'), path('*.protenix.json'), emit: prepared",), ('scripts/prepare_protein_local_validator_input.py',), ("errorStrategy 'ignore'",)),
     'workflows/protein_local_redesign.nf:FinalizeProteinLocalValidatorSuite': (('process_low',), ('val requested_validators', 'val expected_candidate_count', 'val validator_summaries'), ("path 'validator_suite_receipt.json', emit: receipt",), (), ()),
     'workflows/protein_local_redesign.nf:EnforceProteinLocalValidatorSuite': (('process_low',), ('path suite_receipt',), ("path 'validator_suite_complete', emit: complete",), (), ()),
@@ -198,6 +199,22 @@ PROCESS_CONTRACTS = {
     'workflows/protein_local_redesign.nf:PrepProteinLocalMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)', 'val designable_args'), ("path('mpnn_fixed/*.pdb'), emit: pdbs",), ('scripts/add_fixed_labels_from_spec.py', 'scripts/prep_mpnn_designs.py', 'scripts/proteinmpnn_native_binding.py'), ()),
     'workflows/protein_local_redesign.nf:ExportProteinLocalMPNNResults': (('process_low',), ('tuple path(pdb_files), path(json_files)',), ("path('published/*.pdb'), emit: pdbs", "path('published/*.json'), emit: jsons"), (), ()),
     'workflows/protein_local_redesign.nf:ExportProteinLocalBoltzPredictions': (('process_low',), ('tuple val(batch_id), path(sample_dir), path(completion_receipt)',), ("path('published/*.pdb'), emit: pdbs", "path('published/*.json'), emit: jsons", "path('published/*.npz'), emit: pae, optional: true", "path('published/*.manifest'), emit: manifests"), (), ("errorStrategy 'ignore'",)),
+=======
+    'workflows/region_redesign.nf:PrepareProteinLocalValidatorInput': (('process_low',), ('tuple val(producer_meta), path(source_pdb)',), ("tuple val(producer_meta), path(source_pdb), path('*.validator_contract.json'), path('*.protenix.json'), emit: prepared",), ('scripts/prepare_protein_local_validator_input.py',), ("errorStrategy 'ignore'",)),
+    'workflows/region_redesign.nf:FinalizeProteinLocalValidatorSuite': (('process_low',), ('val requested_validators', 'val expected_candidate_count', 'val validator_summaries'), ("path 'validator_suite_receipt.json', emit: receipt",), (), ()),
+    'workflows/region_redesign.nf:EnforceProteinLocalValidatorSuite': (('process_low',), ('path suite_receipt',), ("path 'validator_suite_complete', emit: complete",), (), ()),
+    'workflows/region_redesign.nf:StageProteinLocalValidatedCandidates': (('process_low',), ('path candidate_pdbs', 'path suite_receipt', 'path validator_suite_complete', "path boltz_scores, stageAs: 'score_inputs/boltz2/*'", "path esm_scores, stageAs: 'score_inputs/esmfold2/*'", "path protenix_scores, stageAs: 'score_inputs/protenix_v2??/*'"), ("path 'review_candidates/*.pdb', emit: candidates", "path 'review_scores', emit: scores"), (), ()),
+    'workflows/region_redesign.nf:FinalizeProteinLocalSelectedResults': (('process_low',), ("path candidate_pdbs, stageAs: 'selected/*'",), ("path '*.pdb', emit: candidates",), (), ()),
+    'workflows/region_redesign.nf:OpenInteractiveGate': (('process_low',), ('val job_id', 'val stage_name', 'val gate_trigger', 'val candidate_dir', 'val raw_dir', 'val filtered_dir', 'val framework_type', 'val antibody_chains', 'val structure_validator'), ('path "gate_${stage_name}.json", emit: report',), ('scripts/open_stage_gate.py',), ()),
+    'workflows/region_redesign.nf:RunLigandMPNNResequence': (('Foundry', 'gpu'), ('tuple path(pdb_files), path(json_files)', 'path template', 'val position_args'), ("path('designs/*.pdb'), emit: pdbs", "path('native_results'), emit: native_results"), ('scripts/run_resequence_designer.py', 'scripts/run_ligandmpnn_design.py', 'scripts/designer_outputs_to_pdb.py', 'scripts/add_fixed_labels_from_spec.py'), ()),
+    'workflows/region_redesign.nf:RunCalibyResequence': (('Caliby', 'gpu'), ('tuple path(pdb_files), path(json_files)', 'path template', 'val position_args'), ("path('designs/*.pdb'), emit: pdbs", "path('native_results'), emit: native_results"), ('scripts/run_resequence_designer.py', 'scripts/run_caliby_experimental.py', 'scripts/prep_caliby_request.py', 'scripts/caliby_runtime.py', 'scripts/designer_outputs_to_pdb.py', 'scripts/add_fixed_labels_from_spec.py'), ()),
+    'workflows/region_redesign.nf:RunProtonPottsResequence': (('cpu',), ('tuple path(pdb_files), path(json_files)', 'path template', 'val position_args'), ("path('designs/*.pdb'), emit: pdbs", "path('native_results'), emit: native_results"), ('scripts/run_resequence_designer.py', 'scripts/run_protonpottsmpnn_design.py', 'scripts/lib/protonpottsmpnn_contract.py', 'scripts/designer_outputs_to_pdb.py', 'scripts/add_fixed_labels_from_spec.py'), ()),
+    'workflows/region_redesign.nf:PrepProteinLocalFAMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)', 'val fixed_args'), ("path('fampnn_input/*.pdb'), emit: pdbs", "path('fampnn_input/*.fampnn_prep.json'), emit: provenance, optional: true", "path('fampnn.csv'), emit: csv"), ('scripts/prep_fampnn_constraints_from_spec.py', 'scripts/prep_fampnn_designs.py', 'scripts/fampnn_policy_resolution.py', 'scripts/antibody_fampnn_provenance.py', 'lib/FampnnNativeControls.groovy', 'lib/FampnnAnalysisPolicy.groovy', 'scripts/fampnn_native_runtime.py', 'scripts/fampnn_native_binding.py', 'scripts/prep_fampnn_constraints_generic.py', 'scripts/maturation_native_adapter.py', 'scripts/maturation_correspondence.py', 'scripts/analyse_fampnn.py', 'scripts/analyse_fampnn_seq_probs.py'), ()),
+    'workflows/region_redesign.nf:PrepProteinLocalMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)', 'val designable_args'), ("path('mpnn_fixed/*.pdb'), emit: pdbs",), ('scripts/add_fixed_labels_from_spec.py', 'scripts/prep_mpnn_designs.py', 'scripts/proteinmpnn_native_binding.py'), ()),
+    'workflows/region_redesign.nf:ExportProteinLocalMPNNResults': (('process_low',), ('tuple path(pdb_files), path(json_files)',), ("path('published/*.pdb'), emit: pdbs", "path('published/*.json'), emit: jsons"), (), ()),
+    'workflows/region_redesign.nf:ExportProteinLocalBoltzPredictions': (('process_low',), ('tuple val(batch_id), path(sample_dir), path(completion_receipt)',), ("path('published/*.pdb'), emit: pdbs", "path('published/*.json'), emit: jsons", "path('published/*.npz'), emit: pae, optional: true", "path('published/*.manifest'), emit: manifests"), (), ("errorStrategy 'ignore'",)),
+    'workflows/rfantibody_backbone.nf:NormalizeTargetPDB': (('process_low',), ('path target_pdb',), ('path "normalized_target.pdb", emit: normalized',), ('scripts/normalize_target_pdb.py',), ()),
+>>>>>>> b05c889 (Remove standalone protein_cad_experimental and protein_local_redesign and rename surviving runners (R7))
 }
 
 
@@ -863,7 +880,7 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         a.stage('RunComplexa')
         return True
 
-    if workflow == 'protein_cad_experimental':
+    if workflow == 'denovo_generation':
         backend = p.get('pcad_backend') or 'disco'
         after = a.chain(['PrepProteinCadRequest', 'RunLaProteina' if backend == 'laproteina' else 'RunDISCO'])
         if backend == 'disco':
@@ -871,7 +888,7 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
                         else 'disco_cutlass_path')
             if p.get(selector):
                 a.asset('runtime_data', None,
-                    'modules/protein_cad_experimental.nf:PrepProteinCadRequest', selector,
+                    'modules/denovo_generation.nf:PrepProteinCadRequest', selector,
                     condition='explicit DISCO CUTLASS path')
         return True
 
@@ -959,7 +976,17 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         a.stage('CanonicalConformationalAnalysisPlaneV2', (*after, *frustra))
         return True
 
+<<<<<<< HEAD
     if workflow == 'protein_local_redesign':
+=======
+    if workflow == 'oligo_design':
+        after = a.chain(['RFDPolyDesign', 'NAMPNNDesign', 'PyRosettaRebuild'])
+        if yes('oligo_validate_boltz'):
+            a.chain(['PrepBoltzOligo', 'RunBoltz', 'FilterBoltz'], after)
+        return True
+
+    if workflow == 'region_redesign':
+>>>>>>> b05c889 (Remove standalone protein_cad_experimental and protein_local_redesign and rename surviving runners (R7))
         resume_validation = bool(p.get('plr_validation_input_pdbs'))
         if resume_validation:
             a.stage('FinalizeProteinLocalSelectedResults')
@@ -998,7 +1025,7 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
                           if yes('plr_validator_suite_active') and not p.get('protenix_prepared_msa_dir') else None)
                 else:unresolved(workflow, 'dependency_closure', entrypoint, 'Unsupported validator: ' + str(validator))
             after = a.chain(['FinalizeProteinLocalValidatorSuite', 'EnforceProteinLocalValidatorSuite', 'StageProteinLocalValidatedCandidates'], tuple(branches))
-        # The region_redesign profile (nextflow.config profiles.protein_local_redesign) defaults interactive_gating
+        # workflows/region_redesign.nf defaults interactive_gating
         # to true and the job params do not carry it, so an absent value is the gate that actually runs. Without
         # it the plan omitted the gate and its component_adapter dependency, the worker launched no component
         # context, and the gate task fell back to the controller-HTTP path.

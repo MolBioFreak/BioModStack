@@ -201,7 +201,7 @@ def _job(output, params, identity, *, model_id='protenix', mode='predict'):
 
 @pytest.mark.parametrize('workflow', [
     'conformational_mapping', 'protein_design', 'boltz_cp_experimental',
-    'antibody_denovo', 'protein_local_redesign', 'ppiflow_generator_design',
+    'antibody_denovo', 'region_redesign', 'ppiflow_generator_design',
 ])
 def test_commands_without_native_plan_rejected_without_disabling_science(workflow):
     """A command alone is not a plan; callback filenames are not admission gates."""
@@ -714,11 +714,11 @@ def test_launch_callers_structurally_share_helper_and_forward_command():
 
 
 @pytest.mark.parametrize('model,mode,entrypoint,params,expected', [
-    ('protein_cad_experimental', 'design', 'protein_cad_experimental', {'pcad_backend': 'disco'}, {'PrepProteinCadRequest', 'RunDISCO'}),
-    ('protein_cad_experimental', 'design', 'protein_cad_experimental', {'pcad_backend': 'laproteina'}, {'PrepProteinCadRequest', 'RunLaProteina'}),
+    ('protein_modification_experimental', 'de_novo_design', 'denovo_generation', {'pcad_backend': 'disco'}, {'PrepProteinCadRequest', 'RunDISCO'}),
+    ('protein_modification_experimental', 'de_novo_design', 'denovo_generation', {'pcad_backend': 'laproteina'}, {'PrepProteinCadRequest', 'RunLaProteina'}),
     ('boltz_cp_experimental', 'design', 'boltz_cp_experimental', {'run_frustrampnn': False}, {'RunBoltzCPExperimental', 'FinalizeBoltzCPExperimental'}),
     ('antibody_child', 'validation_batch', 'antibody_child', {'structure_validator': 'boltz2'}, {'BatchBoltzValidation', 'AlignBoltzValidation'}),
-    ('protein_local_redesign', 'local_redesign', 'protein_local_redesign', {'plr_seq_method': 'mpnn'}, {'PrepProteinLocalMPNN', 'RunMPNN', 'ExportProteinLocalMPNNResults'}),
+    ('protein_modification_experimental', 'region_redesign', 'region_redesign', {'plr_seq_method': 'mpnn'}, {'PrepProteinLocalMPNN', 'RunMPNN', 'ExportProteinLocalMPNNResults'}),
     ('nanopore', 'fastq_qc', 'ngs/ont_fastq_qc', {'ont_workflow_id': 'ont_fastq_qc', 'ont_input_mode': 'fastq', 'fastq_path': '/logical/reads.fastq', 'reference_fasta': '/logical/ref.fasta'}, {'FastqAlign', 'FastqDimerAnalysis', 'BuildDimerCanonicalOutputs', 'FastqPlasmidQC', 'ConstructVerify'}),
 ])
 def test_selected_native_family_graphs_are_typed_not_placeholders(model, mode, entrypoint, params, expected):
@@ -727,12 +727,12 @@ def test_selected_native_family_graphs_are_typed_not_placeholders(model, mode, e
     nodes = (*metadata.static_components, *metadata.dynamic_templates)
     assert expected <= {row.component_key for row in nodes}
     assert 'native_workflow' not in {row.component_key for row in nodes}
-    if model == 'protein_local_redesign':
+    if entrypoint == 'region_redesign':
         assert not {'PrepareProteinLocalNativeRFD3Input', 'RunRFD3', 'BuildProteinLocalRFD3ResultManifest'} & {row.component_key for row in nodes}
         assert not any(row.relative_path == 'foundry.sif' for row in metadata.dependencies)
-    if model == 'protein_cad_experimental':
+    if entrypoint == 'denovo_generation':
         assert {row.component_key for row in nodes} == expected
-        assert 'FinalizeProteinCadOutputs' not in (Path(__file__).resolve().parents[3] / 'workflows/protein_cad_experimental.nf').read_text()
+        assert 'FinalizeProteinCadOutputs' not in (Path(__file__).resolve().parents[3] / 'workflows/denovo_generation.nf').read_text()
     dependencies = {row.logical_id for row in metadata.dependencies}
     roles = {row.role_id for row in metadata.artifact_roles}
     keys = {row.component_key for row in nodes}
@@ -797,8 +797,8 @@ def test_complete_metadata_cannot_be_a_blank_reviewed_component():
     from dataclasses import replace
     from component_runtime import NativeComponent, canonical_bytes
     from model_registry import selected_execution_metadata
-    metadata = selected_execution_metadata('protein_cad_experimental', 'design',
-        {'pcad_backend': 'disco'}, 'workflows/protein_cad_experimental.nf')
+    metadata = selected_execution_metadata('protein_modification_experimental', 'de_novo_design',
+        {'pcad_backend': 'disco'}, 'workflows/denovo_generation.nf')
     invalid = replace(metadata, static_components=(NativeComponent('blank', 'native', canonical_bytes({})),),
                       dynamic_templates=(), blockers=(), closure_reviewed=True, descriptors_reviewed=True)
     assert not invalid.complete

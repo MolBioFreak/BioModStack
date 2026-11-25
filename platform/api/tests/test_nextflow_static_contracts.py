@@ -20,8 +20,8 @@ DIRECT_ENTRYPOINTS = {
     "ont_construct_screening": "workflows/ngs/ont_construct_screening.nf",
     "ont_methylation_analysis": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_fastq_qc": "workflows/ngs/ont_fastq_qc.nf",
-    "protein_local_redesign": "workflows/protein_local_redesign.nf",
-    "protein_cad_experimental": "workflows/protein_cad_experimental.nf",
+    "region_redesign": "workflows/region_redesign.nf",
+    "denovo_generation": "workflows/denovo_generation.nf",
 
 
     "boltz_cp_experimental": "workflows/boltz_cp_experimental.nf",
@@ -39,14 +39,14 @@ DIRECT_ENTRYPOINTS = {
 
 
 def test_protein_local_fampnn_batches_process_output_without_collect_group_operator_collision() -> None:
-    source = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "workflows" / "region_redesign.nf").read_text(encoding="utf-8")
 
     assert "PrepProteinLocalFAMPNN.out.pdbs\n            .map { pdbs -> [0, pdbs] }\n            .set { fampnnPdbs }" in source
     assert "PrepProteinLocalFAMPNN.out.pdbs\n            .collect()" not in source
 
 
 def test_region_loop_shell_quotes_current_source_and_selection_arguments() -> None:
-    source = (REPO_ROOT / "workflows/protein_local_redesign.nf").read_text()
+    source = (REPO_ROOT / "workflows/region_redesign.nf").read_text()
     assert "def shellQuote(value)" in source
     for argument in (
         "--input-pdb ${shellQuote(source_pdb)}",
@@ -229,7 +229,7 @@ def test_direct_workflow_entrypoints_expose_unnamed_workflows() -> None:
 
 
 def test_protein_local_redesign_uses_peer_validator_suite_contract() -> None:
-    workflow_text = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
+    workflow_text = (REPO_ROOT / "workflows" / "region_redesign.nf").read_text(encoding="utf-8")
     esmfold_text = (REPO_ROOT / "modules" / "esmfold2.nf").read_text(encoding="utf-8")
     model_text = (REPO_ROOT / "platform" / "api" / "config" / "models" / "protein_modification_experimental.yaml").read_text(encoding="utf-8")
 
@@ -255,7 +255,7 @@ def test_protein_local_redesign_uses_peer_validator_suite_contract() -> None:
 
 
 def test_protein_local_validator_failure_policy_is_scoped_to_plr() -> None:
-    workflow_text = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
+    workflow_text = (REPO_ROOT / "workflows" / "region_redesign.nf").read_text(encoding="utf-8")
     boltz_text = (REPO_ROOT / "modules" / "boltz.nf").read_text(encoding="utf-8")
     protenix_text = (REPO_ROOT / "modules" / "protenix.nf").read_text(encoding="utf-8")
 
@@ -276,7 +276,7 @@ def test_protein_local_validator_failure_policy_is_scoped_to_plr() -> None:
 
 
 def test_protein_local_boltz_batches_use_flatmap_so_group_tuple_gets_pairs() -> None:
-    source = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "workflows" / "region_redesign.nf").read_text(encoding="utf-8")
 
     assert ".map { allPdbs -> partitionProteinLocalGpuBatches(allPdbs, params.gpus) }\n                .flatMap { batches -> batches }\n                .groupTuple()" in source
     assert "partitionProteinLocalGpuBatches(allPdbs, params.gpus) }\n                .flatten()" not in source

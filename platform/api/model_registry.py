@@ -604,7 +604,7 @@ def native_checkpoint_dependencies(process: str, params: dict):
                     'weights', 'boltz/' + member, owner,
                     selector='boltz_models', selector_subpath=member))
     elif process == 'RunDISCO':
-        owner = 'modules/protein_cad_experimental.nf:PrepProteinCadRequest'
+        owner = 'modules/denovo_generation.nf:PrepProteinCadRequest'
         selector = ('pcad_disco_checkpoint_path' if params.get('pcad_disco_checkpoint_path')
                     else 'disco_checkpoint_path')
         selected = params.get(selector)
@@ -648,7 +648,7 @@ def native_checkpoint_dependencies(process: str, params: dict):
     elif process == 'RunLaProteina':
         from paths import get_weights_root
 
-        owner = 'modules/protein_cad_experimental.nf:PrepProteinCadRequest'
+        owner = 'modules/denovo_generation.nf:PrepProteinCadRequest'
         from paths import default_weight_location
 
         default = default_weight_location('laproteina', params.get('weights_root'))
@@ -1612,7 +1612,7 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     generator_family = ({'nanobody_binder': 'boltzgen',
                          'generator_backbone_refine': 'ppiflow'}.get(mode)
                         if model_id == 'antibody_denovo' else None)
-    if workflow == 'protein_cad_experimental':
+    if workflow == 'denovo_generation':
         # Both native CAD producers publish this generator_family. Do not grant
         # the parent model's other tasks a generation result contract.
         generator_family = 'protein_cad_experimental'

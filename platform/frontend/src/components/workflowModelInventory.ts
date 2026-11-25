@@ -57,11 +57,10 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
         modelTopics: ['rfd3', 'laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2'],
         sourceFiles: [
             'platform/api/config/models/protein_modification_experimental.yaml',
-            'platform/api/config/models/protein_local_redesign.yaml',
             'platform/frontend/src/components/ProteinModificationTemplate.tsx',
             'platform/frontend/src/components/RFD3GenerationResultsPane.tsx',
-            'workflows/protein_cad_experimental.nf',
-            'workflows/protein_local_redesign.nf',
+            'workflows/denovo_generation.nf',
+            'workflows/region_redesign.nf',
             'modules/rfd3.nf',
             'nextflow.config',
         ],

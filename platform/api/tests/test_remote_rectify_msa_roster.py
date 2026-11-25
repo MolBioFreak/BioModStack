@@ -73,7 +73,7 @@ def test_plr_actual_compiler_producer_consumer(invocation, tmp_path, provider):
     plan = invocation.execution_plan
     params = json.loads(plan.native_parameters_json)
     assert params['plr_validator_suite_active'] is True
-    assert invocation.entrypoint == 'workflows/protein_local_redesign.nf'
+    assert invocation.entrypoint == 'workflows/region_redesign.nf'
     assert invocation.command[invocation.command.index('--protenix_use_msa') + 1] == 'true'
     services = [s for s in plan.metadata.external_services if handoff.generated_msa_service_supported(s)]
     assert len(services) == 1
@@ -82,10 +82,10 @@ def test_plr_actual_compiler_producer_consumer(invocation, tmp_path, provider):
     # Reuse only the labelled PDB fixture; PLR's own producer builds the roster.
     r03.native_roster(tmp_path)
     pdb = tmp_path / 'candidate_0007.pdb'
-    module = (ROOT / 'workflows/protein_local_redesign.nf').read_text()
+    module = (ROOT / 'workflows/region_redesign.nf').read_text()
     helpers = module[module.index('def shellQuote('):module.index('def parseProteinLocalValidators')]
     params['code_root'] = str(ROOT)  # test-owned source relocation, not science
-    producer = render(tmp_path, 'workflows/protein_local_redesign.nf', 'PrepareProteinLocalValidatorInput',
+    producer = render(tmp_path, 'workflows/region_redesign.nf', 'PrepareProteinLocalValidatorInput',
         dict(params=params, producer_meta={'candidate_id': pdb.stem}, source_pdb=str(pdb)), helpers)
     result = subprocess.run(['bash', '-euo', 'pipefail', '-c', producer], cwd=tmp_path,
                             capture_output=True, text=True, timeout=20)

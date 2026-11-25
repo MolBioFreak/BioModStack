@@ -344,8 +344,6 @@ async def create_workflow_setup(
     experiment_mode = (
         "prediction"
         if family == "structure_prediction"
-        else "redesign"
-        if capability_id == "protein.de_novo.local_redesign"
         else "exploration"
     )
     domain = await create_domain_experiment(

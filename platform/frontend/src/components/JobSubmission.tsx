@@ -1091,7 +1091,6 @@ export function JobSubmission() {
     };
 
     const getTemplateIconLabel = (template: UntypedApiValue) => {
-        if (template.id === 'protein_cad_experimental') return 'PC';
 
 
         if (template.id === 'boltz_cp_experimental') return 'CP';

@@ -17,35 +17,17 @@ from services.nextflow import build_nextflow_command
 from template_registry import TemplateRegistry
 
 
-def test_model_registry_loads_protein_cad_experimental() -> None:
-    registry = ModelRegistry()
-
-    model = registry.get_model("protein_cad_experimental")
-
-    assert model is not None
-    assert model.name == "Protein CAD Experimental"
-    assert any(mode.id == "design" for mode in model.modes)
-    assert any(param.name == "backend" for param in model.params)
-    assert any(param.name == "disco_input_json_path" for param in model.params)
+def test_standalone_protein_cad_experimental_model_and_template_are_removed() -> None:
+    assert ModelRegistry().get_model("protein_cad_experimental") is None
+    assert TemplateRegistry(API_ROOT / "config" / "templates").get_template("protein_cad_experimental") is None
 
 
-def test_template_registry_loads_protein_cad_experimental() -> None:
-    registry = TemplateRegistry(API_ROOT / "config" / "templates")
-
-    template = registry.get_template("protein_cad_experimental")
-
-    assert template is not None
-    assert template.name == "Protein CAD Experimental"
-    assert template.preset_params["template_model_id"] == "protein_cad_experimental"
-    assert template.preset_params["template_mode_id"] == "design"
-    assert any(param.name == "backend" for param in template.user_params)
-
-
-def test_build_nextflow_command_maps_protein_cad_experimental_params() -> None:
+def test_build_nextflow_command_maps_denovo_generation_params() -> None:
     cmd = build_nextflow_command(
-        "protein_cad_experimental",
-        "design",
+        "protein_modification_experimental",
+        "de_novo_design",
         {
+            "generator": "disco",
             "backend": "disco",
             "design_task": "ligand_conditioned",
             "num_designs": 24,
@@ -61,8 +43,8 @@ def test_build_nextflow_command_maps_protein_cad_experimental_params() -> None:
 
     joined = " ".join(cmd)
 
-    assert cmd[1:4] == ["run", "workflows/protein_cad_experimental.nf", "-profile"]
-    assert "protein_cad_experimental,workstation_ryzen7960x" in cmd
+    assert cmd[1:4] == ["run", "workflows/denovo_generation.nf", "-profile"]
+    assert cmd[4] == "workstation_ryzen7960x"
     assert "--pcad_backend disco" in joined
     assert "--pcad_task ligand_conditioned" in joined
     assert "--pcad_num_designs 24" in joined
@@ -71,20 +53,19 @@ def test_build_nextflow_command_maps_protein_cad_experimental_params() -> None:
     assert "--pcad_disco_effort max" in joined
     assert "--pcad_disco_ligand_sdf /tmp/heme_b.sdf" in joined
     assert "--pcad_disco_ligand_name heme_b" in joined
-    assert "--rfd_mode protein_cad_experimental" in joined
     assert "--rfd_num_designs 24" in joined
     assert "--backend disco" not in joined
     assert "--design_task ligand_conditioned" not in joined
 
 
-def test_prep_protein_cad_request_compiles_disco_dna_job(tmp_path: Path) -> None:
+def test_prep_denovo_generation_request_compiles_disco_dna_job(tmp_path: Path) -> None:
     output_path = tmp_path / "protein_cad_request.json"
     input_dir = tmp_path / "inputs"
 
     subprocess.run(
         [
             sys.executable,
-            str(REPO_ROOT / "scripts" / "prep_protein_cad_request.py"),
+            str(REPO_ROOT / "scripts" / "prep_denovo_generation_request.py"),
             "--job-id",
             "job-cad-2",
             "--job-name",

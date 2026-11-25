@@ -21,9 +21,9 @@ process PrepProteinCadRequest {
     """
     mkdir -p protein_cad_inputs
 
-    python3 ${params.code_root}/scripts/prep_protein_cad_request.py \\
+    python3 ${params.code_root}/scripts/prep_denovo_generation_request.py \\
         --job-id "${params.job_id ?: 'unknown'}" \\
-        --job-name "${params.name ?: params.batch_name ?: 'protein_cad_experimental'}" \\
+        --job-name "${params.name ?: params.batch_name ?: 'denovo_generation'}" \\
         --backend "${params.pcad_backend ?: 'disco'}" \\
         --task "${params.pcad_task ?: 'unconditional'}" \\
         --num-designs ${params.pcad_num_designs ?: 8} \\

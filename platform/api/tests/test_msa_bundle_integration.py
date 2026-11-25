@@ -476,7 +476,7 @@ def test_nextflow_stages_declared_handoff_as_process_path():
     assert 'tuple val(name), path("protenix_input.json"), path(prepared_msa)' in module
     assert 'tuple val(input_sample), path(complex_json), path(prepared_msa)' in module
     assert module.count('--prepared-inputs') == 2
-    plr = (ROOT/'workflows/protein_local_redesign.nf').read_text()
+    plr = (ROOT/'workflows/region_redesign.nf').read_text()
     assert 'tuple(producerMeta, protenixJson, params.protenix_prepared_msa_dir ? file(' in plr
 
 

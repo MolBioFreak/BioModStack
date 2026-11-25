@@ -34,8 +34,8 @@ EXPECTED_PROFILE_ENTRYPOINTS = {
     "ont_methylation_analysis": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_fastq_qc": "workflows/ngs/ont_fastq_qc.nf",
     "wf_clone_validation": "workflows/ngs/wf_clone_validation.nf",
-    "protein_local_redesign": "workflows/protein_local_redesign.nf",
-    "protein_cad_experimental": "workflows/protein_cad_experimental.nf",
+    "region_redesign": "workflows/region_redesign.nf",
+    "denovo_generation": "workflows/denovo_generation.nf",
 
 
     "boltz_cp_experimental": "workflows/boltz_cp_experimental.nf",
@@ -103,6 +103,8 @@ def test_api_generated_profiles_are_defined_in_nextflow_config() -> None:
             ("antibody_child", "validation_batch", {"pdb_paths": "/tmp/a.pdb"}),
             ("fampnn_child", "sequence_design", {"pdb_paths": "/tmp/a.pdb"}),
             ("antibody_child", "maturation_child", {"pdb_paths": "/tmp/a.pdb"}),
+            ("protein_modification_experimental", "region_redesign", {"backbone_input_pdbs": "/tmp/designs", "design_chains": "A"}),
+            ("protein_modification_experimental", "de_novo_design", {"generator": "disco", "backend": "disco", "design_task": "unconditional", "num_designs": 4, "target_lengths": "100"}),
         ]
     )
 

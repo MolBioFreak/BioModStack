@@ -23,7 +23,7 @@ def _plan(designer, tmp_path, **extra):
     template = tmp_path / 'designer.json'
     template.write_text(json.dumps(extra.pop('template', {})))
     params = {'plr_seq_method': designer, 'plr_structure_validators': ['boltz2'], 'plr_designer_template': str(template)}
-    return plan(params, mode='region_redesign', entrypoint='protein_local_redesign')
+    return plan(params, mode='region_redesign', entrypoint='region_redesign')
 
 
 @pytest.mark.parametrize('designer,stage,image', [

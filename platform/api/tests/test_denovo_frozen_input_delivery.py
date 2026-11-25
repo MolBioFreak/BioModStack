@@ -186,7 +186,7 @@ def test_real_cad_preparer_receives_cold_portable_inputs(roots, tmp_path, monkey
     assert bool(refs) is not source_free
     shutil.rmtree(roots['inputs'])
     output = tmp_path / 'worker/prepared.json'
-    command = [sys.executable, str(Path(__file__).resolve().parents[3] / 'scripts/prep_protein_cad_request.py'),
+    command = [sys.executable, str(Path(__file__).resolve().parents[3] / 'scripts/prep_denovo_generation_request.py'),
                '--backend', backend, '--task', params.get('design_task', 'unconditional'),
                '--num-designs', '1', '--target-lengths', '40', '--output', str(output),
                '--input-dir', str(tmp_path / 'worker/prepared'),

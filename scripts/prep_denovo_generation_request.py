@@ -103,7 +103,7 @@ def _build_disco_jobs(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compile BMS Protein CAD params into a normalized request.")
     parser.add_argument("--job-id", default="unknown")
-    parser.add_argument("--job-name", default="protein_cad_experimental")
+    parser.add_argument("--job-name", default="denovo_generation")
     parser.add_argument("--backend", required=True, choices=["laproteina", "disco"])
     parser.add_argument("--task", required=True)
     parser.add_argument("--num-designs", type=int, required=True)

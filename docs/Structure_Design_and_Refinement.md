@@ -82,7 +82,7 @@ Important distinction:
 
 Primary workflow:
 
-- [workflows/protein_local_redesign.nf](../workflows/protein_local_redesign.nf)
+- [workflows/region_redesign.nf](../workflows/region_redesign.nf)
 
 Purpose:
 
@@ -95,11 +95,11 @@ Purpose:
 
 Primary workflow:
 
-- [workflows/protein_cad_experimental.nf](../workflows/protein_cad_experimental.nf)
+- [workflows/denovo_generation.nf](../workflows/denovo_generation.nf)
 
 Registry model:
 
-- [platform/api/config/models/protein_cad_experimental.yaml](../platform/api/config/models/protein_cad_experimental.yaml)
+- [platform/api/config/models/protein_modification_experimental.yaml](../platform/api/config/models/protein_modification_experimental.yaml)
 
 Purpose:
 

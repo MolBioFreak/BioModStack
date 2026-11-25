@@ -152,7 +152,7 @@ async def test_mounted_legacy_capture_cold_http_prepare(generator, capture_api, 
         # Resolve this private logical path into its exact already persisted bytes.
         settings['motif_pdb'] = str(inputs / Path(settings['motif_pdb']).relative_to('inputs'))
         output = tmp_path / 'cad.json'
-        command = [sys.executable, str(Path(__file__).resolve().parents[3] / 'scripts/prep_protein_cad_request.py'), '--backend', 'laproteina', '--task', 'motif_scaffolding', '--num-designs', str(params['num_designs']), '--target-lengths', params['target_lengths'], '--laproteina-preset', params['laproteina_preset'], '--laproteina-contig-string', params['laproteina_contig_string'], '--laproteina-motif-task-name', params['laproteina_motif_task_name'], '--laproteina-settings-json', json.dumps(settings), '--output', str(output), '--input-dir', str(tmp_path / 'cad')]
+        command = [sys.executable, str(Path(__file__).resolve().parents[3] / 'scripts/prep_denovo_generation_request.py'), '--backend', 'laproteina', '--task', 'motif_scaffolding', '--num-designs', str(params['num_designs']), '--target-lengths', params['target_lengths'], '--laproteina-preset', params['laproteina_preset'], '--laproteina-contig-string', params['laproteina_contig_string'], '--laproteina-motif-task-name', params['laproteina_motif_task_name'], '--laproteina-settings-json', json.dumps(settings), '--output', str(output), '--input-dir', str(tmp_path / 'cad')]
         done = subprocess.run(command, capture_output=True, text=True)
         assert done.returncode == 0, done.stderr
         native = json.loads(output.read_text())['laproteina']

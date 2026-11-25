@@ -1,7 +1,7 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
-include { PrepProteinCadRequest ; RunLaProteina ; RunDISCO } from '../modules/protein_cad_experimental.nf'
+include { PrepProteinCadRequest ; RunLaProteina ; RunDISCO } from '../modules/denovo_generation.nf'
 
 workflow PROTEIN_CAD_EXPERIMENTAL {
     main:

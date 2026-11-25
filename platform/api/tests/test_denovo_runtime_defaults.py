@@ -162,7 +162,7 @@ def test_complexa_publishes_its_results_directory_where_the_reader_looks():
 
 
 def test_laproteina_sample_count_follows_requested_designs_unless_set_explicitly():
-    module = (REPO_ROOT / 'modules/protein_cad_experimental.nf').read_text()
+    module = (REPO_ROOT / 'modules/denovo_generation.nf').read_text()
     la = "params.pcad_laproteina_samples_per_length ?: params.laproteina_samples_per_length ?: params.pcad_num_designs ?: 8"
     assert la in module
     # DISCO's own count already follows the request the same way.
@@ -181,12 +181,10 @@ def test_compiled_laproteina_job_carries_requested_designs_and_no_invented_sampl
 
 
 def test_profile_does_not_pin_laproteina_samples_per_length_ahead_of_requested_designs():
-    import re
     config = (REPO_ROOT / 'nextflow.config').read_text()
-    profile = re.search(r"\n    protein_cad_experimental \{.*?\n    \}\n", config, re.S).group(0)
-    # A profile default would always win over the requested design count.
-    assert 'laproteina_samples_per_length' not in profile
-    assert 'pcad_num_designs = 8' in profile
+    assert 'protein_cad_experimental {' not in config
+    # A config default would always win over the requested design count.
+    assert 'pcad_laproteina_samples_per_length' not in config
 
 
 def test_complexa_container_points_the_af2_reward_at_the_acquired_parameters():

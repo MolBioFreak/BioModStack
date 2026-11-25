@@ -17,7 +17,7 @@ from run_laproteina_inference import _configure_laproteina
 
 def prepare(tmp_path, backend='disco', task='custom_json', **args):
     output = tmp_path / 'request.json'
-    cmd = [sys.executable, str(ROOT / 'scripts/prep_protein_cad_request.py'), '--backend', backend,
+    cmd = [sys.executable, str(ROOT / 'scripts/prep_denovo_generation_request.py'), '--backend', backend,
            '--task', task, '--num-designs', '1', '--target-lengths', '40', '--output', str(output),
            '--input-dir', str(tmp_path / 'prepared')]
     for key, value in args.items():

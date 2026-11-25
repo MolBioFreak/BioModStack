@@ -95,18 +95,13 @@ def test_setup_context_persistence_authority_is_registered() -> None:
     } <= set(model.__table__.columns.keys())
 
 
-def _de_novo_capabilities() -> tuple[dict, dict, Path]:
+def _de_novo_capabilities() -> tuple[dict, Path]:
     rfd3_mode = next(
         record
         for record in protein_project_capabilities._CAPABILITIES
         if record["capability_id"] == "protein.de_novo.rfd3"
     )
-    local_redesign = next(
-        record
-        for record in protein_project_capabilities._CAPABILITIES
-        if record["capability_id"] == "protein.de_novo.local_redesign"
-    )
-    return rfd3_mode, local_redesign, Path(__file__).resolve().parents[1] / "config" / "templates"
+    return rfd3_mode, Path(__file__).resolve().parents[1] / "config" / "templates"
 
 
 async def _project_capability_api() -> dict:
@@ -123,18 +118,18 @@ async def _project_capability_api() -> dict:
 def _configure_legacy_protein_cad_catalog(
     monkeypatch, tmp_path: Path, *, enabled: bool = True, experimental: bool = False
 ) -> None:
-    _, _, templates_dir = _de_novo_capabilities()
+    _, templates_dir = _de_novo_capabilities()
     promoted_templates_dir = tmp_path / "templates"
     shutil.copytree(templates_dir, promoted_templates_dir)
     promoted_yaml = promoted_templates_dir / "protein_cad_experimental.yaml"
-    source_metadata = yaml.safe_load(
-        (templates_dir / "protein_cad_experimental.yaml").read_text()
-    )
-    promoted_metadata = yaml.safe_load(promoted_yaml.read_text())
-    promoted_metadata["enabled"] = enabled
-    promoted_metadata["experimental"] = experimental
-    assert promoted_metadata == {
-        **source_metadata,
+    promoted_metadata = {
+        "id": "protein_cad_experimental",
+        "name": "Protein CAD Experimental",
+        "description": "Legacy CAD template fixture",
+        "category": "experimental",
+        "difficulty": "advanced",
+        "model_id": "protein_modification_experimental",
+        "mode": "de_novo_design",
         "enabled": enabled,
         "experimental": experimental,
     }
@@ -150,15 +145,16 @@ def _configure_legacy_protein_cad_catalog(
 async def test_native_project_picker_is_independent_of_legacy_cad_publication(
     monkeypatch, tmp_path: Path
 ) -> None:
-    rfd3_mode, local_redesign, templates_dir = _de_novo_capabilities()
+    rfd3_mode, templates_dir = _de_novo_capabilities()
     assert rfd3_mode["exposure_state"] == "accepted"
     assert rfd3_mode["availability"]["state"] == "operational"
     assert rfd3_mode["workflow_adapter_id"].startswith("bms.core-job.")
     assert rfd3_mode["allowed_model_modes"]
     assert rfd3_mode["project_setup_destination"] == "/submit?template=protein_modification_experimental"
-    assert local_redesign["exposure_state"] == "integrated_component"
-    assert local_redesign["availability"]["state"] == "operational_as_child"
-    assert local_redesign["launch_mode"] == "scheduler_owned_child"
+    assert all(
+        record["capability_id"] != "protein.de_novo.local_redesign"
+        for record in protein_project_capabilities._CAPABILITIES
+    )
     baseline_registry = TemplateRegistry(templates_dir)
     monkeypatch.setattr(
         protein_project_capabilities, "get_template_registry", lambda: baseline_registry
@@ -177,9 +173,8 @@ async def test_native_project_picker_is_independent_of_legacy_cad_publication(
     assert inventory["schema"] == "bms.protein-project-workflow-picker.v1"
     ready_ids = {item["capability_id"] for item in inventory["capabilities"]}
     assert ready_ids == existing_ids
-    assert protein_project_capabilities.protein_capability_record(
-        "protein.de_novo.local_redesign"
-    )["project_setup_state"] != "ready"
+    with pytest.raises(protein_project_capabilities.ProteinProjectCapabilityError):
+        protein_project_capabilities.protein_capability_record("protein.de_novo.local_redesign")
     for item in inventory["capabilities"]:
         assert set(item) == {
             "capability_id", "label", "state", "adapter_id", "native_owner_id",
@@ -282,7 +277,7 @@ def test_project_picker_rejects_disabled_canonical_workflow_publication(
     monkeypatch, tmp_path: Path
 ) -> None:
     capability = _ready_esmfold2_capability()
-    _, _, templates_dir = _de_novo_capabilities()
+    _, templates_dir = _de_novo_capabilities()
     disabled_templates_dir = tmp_path / "templates"
     shutil.copytree(templates_dir, disabled_templates_dir)
     structure_yaml = disabled_templates_dir / "structure_prediction.yaml"

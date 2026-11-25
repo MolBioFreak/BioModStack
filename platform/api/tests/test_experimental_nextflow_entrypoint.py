@@ -15,16 +15,14 @@ from services.nextflow import build_nextflow_command
 
 
 EXPERIMENTAL_WORKFLOW_ENTRYPOINTS = {
-    "protein_local_redesign": ("local_redesign", "workflows/protein_local_redesign.nf", "PROTEIN_LOCAL_REDESIGN"),
-    "protein_cad_experimental": ("design", "workflows/protein_cad_experimental.nf", "PROTEIN_CAD_EXPERIMENTAL"),
-
-
-    "boltz_cp_experimental": ("design", "workflows/boltz_cp_experimental.nf", "BOLTZ_CP_EXPERIMENTAL"),
+    "region_redesign": ("protein_modification_experimental", "region_redesign", "workflows/region_redesign.nf", "PROTEIN_LOCAL_REDESIGN"),
+    "denovo_generation": ("protein_modification_experimental", "de_novo_design", "workflows/denovo_generation.nf", "PROTEIN_CAD_EXPERIMENTAL"),
+    "boltz_cp_experimental": ("boltz_cp_experimental", "design", "workflows/boltz_cp_experimental.nf", "BOLTZ_CP_EXPERIMENTAL"),
 }
 
 MINIMAL_PARAMS = {
-    "protein_local_redesign": {"input_pdb": "/tmp/input.pdb", "design_chains": "A", "redesign_ranges": "1-5"},
-    "protein_cad_experimental": {},
+    "region_redesign": {"backbone_input_pdbs": "/tmp/designs", "design_chains": "A"},
+    "denovo_generation": {"generator": "disco", "backend": "disco"},
 }
 
 
@@ -33,7 +31,7 @@ def test_no_aggregate_experimental_entrypoint_bucket_exists() -> None:
 
 
 def test_experimental_tab_workflows_are_individually_direct_runnable() -> None:
-    for workflow_id, (_mode, rel_path, symbol) in EXPERIMENTAL_WORKFLOW_ENTRYPOINTS.items():
+    for workflow_id, (_model_id, _mode, rel_path, symbol) in EXPERIMENTAL_WORKFLOW_ENTRYPOINTS.items():
         workflow_path = REPO_ROOT / rel_path
         assert workflow_path.exists(), workflow_id
 
@@ -46,7 +44,7 @@ def test_experimental_tab_workflows_are_individually_direct_runnable() -> None:
 def test_main_entrypoint_no_longer_dispatches_experimental_tab_workflows() -> None:
     main_text = (REPO_ROOT / "main.nf").read_text(encoding="utf-8")
 
-    for workflow_id, (_mode, rel_path, symbol) in EXPERIMENTAL_WORKFLOW_ENTRYPOINTS.items():
+    for workflow_id, (_model_id, _mode, rel_path, symbol) in EXPERIMENTAL_WORKFLOW_ENTRYPOINTS.items():
         assert rel_path not in main_text
         assert f"./{rel_path}" not in main_text
         assert symbol not in main_text
@@ -56,13 +54,13 @@ def test_main_entrypoint_no_longer_dispatches_experimental_tab_workflows() -> No
 def test_api_routes_experimental_tab_workflows_to_workflow_specific_entrypoints(tmp_path) -> None:
     config = tmp_path / "complex.yaml"
     config.write_text("version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: ACDEFGHIK\n")
-    for model_id, (mode, rel_path, _symbol) in EXPERIMENTAL_WORKFLOW_ENTRYPOINTS.items():
+    for workflow_id, (model_id, mode, rel_path, _symbol) in EXPERIMENTAL_WORKFLOW_ENTRYPOINTS.items():
         cmd = build_nextflow_command(
             model_id,
             mode,
-            ({"input_path": str(config)} if model_id == "boltz_cp_experimental" else dict(MINIMAL_PARAMS[model_id])),
+            ({"input_path": str(config)} if workflow_id == "boltz_cp_experimental" else dict(MINIMAL_PARAMS[workflow_id])),
             "/tmp/out",
-            job_id=f"job-{model_id}",
+            job_id=f"job-{workflow_id}",
         )
 
         assert cmd[1:4] == ["run", rel_path, "-profile"]
@@ -72,18 +70,17 @@ def test_api_routes_experimental_tab_workflows_to_workflow_specific_entrypoints(
 
 def test_api_resume_routes_experimental_tab_workflows_to_workflow_specific_entrypoint() -> None:
     cmd = build_nextflow_command(
-        "protein_local_redesign",
-        "local_redesign",
+        "protein_modification_experimental",
+        "region_redesign",
         {
-            "input_pdb": "/tmp/input.pdb",
+            "backbone_input_pdbs": "/tmp/designs",
             "design_chains": "A",
-            "redesign_ranges": "1-5",
             "resume_work_dir": "/tmp/nxf-work",
         },
         "/tmp/out",
         job_id="job-plr-resume",
     )
 
-    assert cmd[1:4] == ["run", "workflows/protein_local_redesign.nf", "-profile"]
+    assert cmd[1:4] == ["run", "workflows/region_redesign.nf", "-profile"]
     assert "-resume" in cmd
     assert cmd[cmd.index("-w") + 1] == "/tmp/nxf-work"

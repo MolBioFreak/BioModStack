@@ -15,11 +15,9 @@ from test_denovo_parent_source_workflows import process_source
 
 
 def test_retired_catalog_is_not_a_launch_surface():
-    import yaml
-    from model_registry import ModelDefinition
-    model = ModelDefinition.model_validate(yaml.safe_load((ROOT / 'platform/api/config/models/protein_local_redesign.yaml').read_text()))
-    assert model.public_launch is False
-    assert model.enabled is False
+    from model_registry import ModelRegistry
+    assert not (ROOT / 'platform/api/config/models/protein_local_redesign.yaml').exists()
+    assert ModelRegistry().get_model('protein_local_redesign') is None
 
 
 @pytest.mark.parametrize('conditioning,task,expected', [

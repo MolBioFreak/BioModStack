@@ -36,7 +36,7 @@ def test_complexa_exact_request_and_primary_pair(tmp_path, parent):
 def test_cad_typed_json_transport_once(tmp_path, backend, key, value):
     invocation = compile('protein_modification_experimental', 'de_novo_design',
         {'generator': backend, key: value}, tmp_path)
-    assert invocation.entrypoint == 'workflows/protein_cad_experimental.nf'
+    assert invocation.entrypoint == 'workflows/denovo_generation.nf'
     index = invocation.command.index('--' + key)
     assert json.loads(invocation.command[index + 1]) == value
     assert invocation.native_parameters[key] == value

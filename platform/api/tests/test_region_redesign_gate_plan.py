@@ -25,7 +25,7 @@ def _gate(selected):
 @pytest.mark.parametrize('validators', [['boltz2'], ['esmfold2'], ['protenix_v2'], ['boltz2', 'esmfold2']])
 def test_default_gate_is_declared_for_every_validator_choice(designer, validators):
     selected = plan({'plr_seq_method': designer, 'plr_structure_validators': validators},
-                    mode='region_redesign', entrypoint='protein_local_redesign')
+                    mode='region_redesign', entrypoint='region_redesign')
     declared, adapter = _gate(selected)
     assert declared and adapter
     assert needs_component_runtime(SimpleNamespace(execution_plan=SimpleNamespace(metadata=selected.metadata)))
@@ -34,6 +34,6 @@ def test_default_gate_is_declared_for_every_validator_choice(designer, validator
 def test_explicit_no_gate_and_continuation_declare_no_gate():
     base = {'plr_seq_method': 'fampnn', 'plr_structure_validators': ['boltz2']}
     assert _gate(plan(dict(base, interactive_gating=False), mode='region_redesign',
-                      entrypoint='protein_local_redesign'))[0] is False
+                      entrypoint='region_redesign'))[0] is False
     assert _gate(plan(dict(base, interactive_gate_continue=True), mode='region_redesign',
-                      entrypoint='protein_local_redesign'))[0] is False
+                      entrypoint='region_redesign'))[0] is False

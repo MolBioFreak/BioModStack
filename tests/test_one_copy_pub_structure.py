@@ -228,7 +228,7 @@ def test_all_owned_modules_parse_without_native_execution(tmp_path):
 def test_real_export_task_cached_republish_and_work_deletion(tmp_path):
     source = tmp_path / 'candidate.pdb'; source.write_text('REMARK INERT EXPORT\nEND\n')
     meta = tmp_path / 'candidate.json'; meta.write_text('{"identity":"retained"}\n')
-    workflow = f"""include {{ ExportProteinLocalMPNNResults }} from '{ROOT}/workflows/protein_local_redesign.nf'
+    workflow = f"""include {{ ExportProteinLocalMPNNResults }} from '{ROOT}/workflows/region_redesign.nf'
 workflow {{ ExportProteinLocalMPNNResults(Channel.of(tuple(file('{source}'), file('{meta}')))) }}
 """
     output = tmp_path / 'results'
