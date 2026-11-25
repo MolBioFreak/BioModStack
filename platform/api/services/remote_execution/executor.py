@@ -3504,21 +3504,6 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
         await session.flush()
         if job.model_id == "nanopore" and ngs_completion_path not in {"shared_native_import", "pooled_review"}:
             job.completed_at = job.completed_at or datetime.utcnow()
-        elif job.model_id == "msa_batch":
-            msa_manifest = local_output / "msa_manifest.json"
-            if msa_manifest.is_symlink() or not msa_manifest.is_file():
-                raise RemoteExecutionError("Remote MSA batch returned no msa_manifest.json")
-            from services.nextflow import apply_msa_manifest_to_child_jobs
-
-            await apply_msa_manifest_to_child_jobs(
-                session,
-                str(job.id),
-                str(msa_manifest),
-            )
-            job.status = JobStatus.COMPLETED.value
-            job.queue_status = "completed"
-            job.msa_manifest_path = str(msa_manifest)
-            job.completed_at = job.completed_at or datetime.utcnow()
         elif job.awaiting_input:
             job.status = JobStatus.AWAITING_INPUT.value
             job.queue_status = "completed"

@@ -33,7 +33,6 @@ from local_msa_runtime import (
     DEFAULT_GPUSERVER_WAIT_TIMEOUT,
     resolve_protenix_local_gpu_server_mode,
 )
-from local_msa.batching import run_batch_msa
 from local_msa.runtime import inspect_mmseqs_runtime, parse_gpu_csv
 
 DEFAULT_COLABFOLD_API_HOST = os.getenv("BMS_COLABFOLD_API_HOST") or "https://api.colabfold.com"
@@ -656,57 +655,6 @@ def prepare_with_local_msa(
         sequence_to_chain_ids.setdefault(sequence, set()).update(_chain_ids(chain))
         missing_sequences.setdefault(sequence, hashlib.sha256(sequence.encode("utf-8")).hexdigest()[:16])
 
-    use_true_batch_fast = preset.strip().lower() == "fast" and len(missing_sequences) > 1
-    if use_true_batch_fast:
-        batch_output_dir = work_dir / "local_msa_batch"
-        batch_output_dir.mkdir(parents=True, exist_ok=True)
-        print(
-            f"[prepare_protenix_msa] Using true batched local MSA for {len(missing_sequences)} unique sequences.",
-            flush=True,
-        )
-        sequences = [
-            {"name": seq_hash, "sequence": sequence}
-            for sequence, seq_hash in missing_sequences.items()
-        ]
-        manifest = run_batch_msa(
-            sequences=sequences,
-            output_dir=batch_output_dir,
-            db_path=Path(db_path),
-            cache_dir=Path(cache_dir) if cache_dir else None,
-            gpu_id=selected_gpu_id,
-            force_refresh=False,
-            cache_only=cache_only,
-            cpu_only=cpu_only,
-            threads=threads,
-            preset=preset,
-            gpu_mode=gpu_mode,
-            gpu_threshold=gpu_threshold,
-            preferred_gpus=preferred_gpus,
-            excluded_gpus=excluded_gpus,
-            gpu_server_mode=gpu_server_mode,
-            gpu_server_wait_timeout=gpu_server_wait_timeout,
-            gpu_server_db_load_mode=gpu_server_db_load_mode,
-            gpu_server_startup_wait=gpu_server_startup_wait,
-        )
-        manifest_map = {
-            str(item.get("name")): item
-            for item in manifest.get("sequences", [])
-            if isinstance(item, dict) and item.get("name")
-        }
-        for sequence, seq_hash in missing_sequences.items():
-            result = manifest_map.get(seq_hash)
-            if not result or not result.get("success") or not result.get("msa_path"):
-                failure_reason = None
-                if isinstance(result, dict):
-                    failure_reason = result.get("error")
-                if cache_only:
-                    raise RuntimeError(
-                        f"Batched local Protenix MSA cache miss for sequence {seq_hash}: {failure_reason or 'no cached MSA found'}"
-                    )
-                raise RuntimeError(
-                    f"Batched local Protenix MSA failed for sequence {seq_hash}: {failure_reason or 'unknown error'}"
-                )
-            raw_msa_by_sequence[sequence] = Path(str(result["msa_path"])).resolve()
 
     for _task_idx, _seq_idx, chain in iter_protein_chains(payload):
         _hydrate_old_precomputed_dir(chain)

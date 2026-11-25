@@ -53,7 +53,6 @@ def test_compile_recipe_uses_real_compiler_without_biological_files(tmp_path, mo
     monkeypatch.setattr(SourceIdentity, 'from_checkout', classmethod(lambda cls, root: identity))
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
-    monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
     params = {'complex_components': [{'type': 'protein', 'id': 'A', 'sequence': 'ACDEFG'}],
               'protenix_use_msa': False}
     job = SimpleNamespace(id='recipe', model_id='protenix', mode='complex', params=params,
@@ -84,21 +83,6 @@ def test_compile_recipe_uses_real_compiler_without_biological_files(tmp_path, mo
     p.compile_recipe(job, native_invocations=changed)
     assert changed != collected
     assert p.recipe_digest(job) != digest
-    assert not list(tmp_path.iterdir())
-
-
-def test_compile_recipe_preserves_legacy_msa_rejection(tmp_path, monkeypatch):
-    from services import nextflow
-    job = SimpleNamespace(model_id='msa_batch', params={}, child_output_dir=None,
-        output_dir=str(tmp_path / 'uncreated'))
-    collected = []
-    def forbidden(*args, **kwargs):
-        pytest.fail('Legacy MSA must not use the Nextflow invocation compiler')
-    monkeypatch.setattr(nextflow, 'build_job_nextflow_command', forbidden)
-    # The unchanged legacy producer rejects local search before any input writes.
-    with pytest.raises(Exception, match='(?i)local.*msa|msa.*local'):
-        p.compile_recipe(job, native_invocations=collected)
-    assert collected == []
     assert not list(tmp_path.iterdir())
 
 

@@ -407,7 +407,6 @@ def initializeAntibodyDenovoParams(params) {
     ensureParamDefault(params, 'protenix_allow_cpu_msa_fallback', false)
     ensureParamDefault(params, 'protenix_msa_max_seqs_per_validation_job', 1)
     ensureParamDefault(params, 'protenix_local_msa_max_seqs_per_validation_job', 1)
-    ensureParamDefault(params, 'protenix_local_msa_timeout_seconds', 900)
     ensureParamDefault(params, 'target_model_number', null)
     ensureParamDefault(params, 'maturation_selected_loops', null)
     ensureParamDefault(params, 'selected_cdr_loops', null)

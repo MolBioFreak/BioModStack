@@ -2,9 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MsaHubView, type MsaHubViewProps, type MsaLocalServerSectionProps } from '../src/components/MsaHubView';
+import { MsaHubView, type MsaHubViewProps } from '../src/components/MsaHubView';
 import {
-    DEFAULT_MSA_LOCAL_SERVER_SETTINGS,
     msaHubIndicatorClass,
     msaProviderKeyStatus,
     normalizeMsaHubProviders,
@@ -24,18 +23,6 @@ const providers = normalizeMsaHubProviders({
 
 const noop = () => undefined;
 
-const local: MsaLocalServerSectionProps = {
-    settings: { ...DEFAULT_MSA_LOCAL_SERVER_SETTINGS },
-    loading: null,
-    availableGpus: [{ index: 0, name: 'Fixture GPU', memory_total_mb: 24576 }],
-    summary: 'Running: no',
-    onRefresh: noop,
-    onStart: noop,
-    onStop: noop,
-    onSaveSettings: noop,
-    onIdleMinutesChange: noop,
-};
-
 const base: MsaHubViewProps = {
     isOpen: true,
     onToggle: noop,
@@ -48,7 +35,6 @@ const base: MsaHubViewProps = {
     onSaveCredential: noop,
     onClearCredential: noop,
     onSetController: noop,
-    local: null,
 };
 
 const render = (props: Partial<MsaHubViewProps> = {}) => renderToStaticMarkup(<MsaHubView {...base} {...props} />);
@@ -70,22 +56,12 @@ test('remote-only hub lists providers and shows no local controls', () => {
     }
 });
 
-test('remote + local hub adds the existing local server controls', () => {
-    const markup = render({ local });
-    assert.ok(markup.includes('Remote providers'));
-    for (const present of ['Local MSA server', 'Start Server', 'Stop Server', 'Pinned GPU', 'Fixture GPU',
-        'Auto-stop when idle', 'Start EnvDB server with UniRef', 'Running: no']) {
-        assert.ok(markup.includes(present), `missing local control: ${present}`);
-    }
-});
-
 test('no key value appears in the markup and the key input is never pre-filled', () => {
-    for (const markup of [render(), render({ local })]) {
-        assert.ok(!markup.includes(SECRET));
-        const input = markup.match(/<input[^>]*type="password"[^>]*>/)?.[0] ?? '';
-        assert.ok(input.length > 0);
-        assert.ok(!/\svalue=/.test(input));
-    }
+    const markup = render();
+    assert.ok(!markup.includes(SECRET));
+    const input = markup.match(/<input[^>]*type="password"[^>]*>/)?.[0] ?? '';
+    assert.ok(input.length > 0);
+    assert.ok(!/\svalue=/.test(input));
     assert.ok(!JSON.stringify(providers).includes(SECRET));
 });
 
@@ -105,9 +81,8 @@ test('closed hub renders only the button; an unconfigured provider shows its mes
     assert.equal(msaProviderKeyStatus(missing[0]), 'No key');
     assert.ok(render({ providers: missing }).includes('Save a Neurosnap API key in the MSA hub'));
     assert.deepEqual(normalizeMsaHubProviders(null), []);
-    assert.equal(msaHubIndicatorClass(missing, null), 'bg-slate-600');
-    assert.equal(msaHubIndicatorClass(providers, null), 'bg-blue-400');
-    assert.equal(msaHubIndicatorClass(providers, { running: true, allRunning: false }), 'bg-amber-400');
+    assert.equal(msaHubIndicatorClass(missing), 'bg-slate-600');
+    assert.equal(msaHubIndicatorClass(providers), 'bg-blue-400');
 });
 
 test('a controller provider gets an on/off button for this computer and no key field', () => {

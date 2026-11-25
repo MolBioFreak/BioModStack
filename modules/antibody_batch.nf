@@ -247,7 +247,6 @@ process BatchProtenixValidation {
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
     def msa_backend = params.protenix_msa_backend ?: 'auto'
     def msa_allow_cpu_fallback = (params.protenix_allow_cpu_msa_fallback == true || params.protenix_allow_cpu_msa_fallback == 'true')
-    def local_msa_timeout_seconds = params.protenix_local_msa_timeout_seconds ?: 900
     def externalTargetAsTarget = (
         params.protenix_external_target_as_target == true ||
         params.protenix_external_target_as_target == 'true' ||
@@ -404,7 +403,6 @@ PY
             --gpu-server-wait-timeout ${params.msa_gpu_server_wait_timeout ?: 120} \\
             --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 2} \\
             --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 5.0} \\
-            --local-msa-timeout-seconds ${local_msa_timeout_seconds} \\
             ${msa_cache_only_flag} \\
             ${msa_allow_cpu_fallback_flag} \\
             2>&1 | tee protenix_msa_prep.log

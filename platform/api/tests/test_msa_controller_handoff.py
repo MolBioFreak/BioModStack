@@ -90,7 +90,7 @@ def test_wrong_computer_denied(controller):
         prepare(controller, {}, lambda: pytest.fail('worker submit'))
 
 
-@pytest.mark.parametrize('module', ['run_local_msa', 'lib.local_msa.providers.colabfold_api'])
+@pytest.mark.parametrize('module', ['lib.local_msa.providers.colabfold_api'])
 def test_worker_provider_entry_denied_before_io(module, monkeypatch, tmp_path):
     provider = importlib.import_module(module)
     monkeypatch.setattr(provider, '_http_post_form_json', lambda **kw: pytest.fail('network'))
@@ -182,7 +182,7 @@ def test_mismatched_query_and_missing_cache_do_not_become_no_msa(tmp_path):
         boltz.generate_yaml_with_msa('test', {'PEPTIDE': ['A']}, {})
 
 
-@pytest.mark.parametrize('module', ['run_local_msa', 'lib.local_msa.providers.colabfold_api'])
+@pytest.mark.parametrize('module', ['lib.local_msa.providers.colabfold_api'])
 def test_real_provider_control_flow_uses_one_ticket_with_offline_transport(module, controller, tmp_path, monkeypatch):
     provider = importlib.import_module(module)
     submitted = []

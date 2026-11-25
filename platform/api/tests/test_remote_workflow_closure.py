@@ -128,8 +128,6 @@ def test_selected_native_aliases_keep_inputs_and_public_boundary(stage, model, m
         lambda **kwargs: pytest.fail('native child probed ANARCII/GPU compatibility'))
     monkeypatch.setattr('services.gpu_config.read_scheduler_config',
         lambda: pytest.fail('native child read host scheduler reservation'))
-    monkeypatch.setattr('services.msa_server.read_server_settings',
-        lambda: pytest.fail('native child read host MSA device policy'))
     invocation = nextflow.compile_component_nextflow_invocation(request, context)
     assert invocation.entrypoint == entrypoint
     assert json.loads(invocation.requested_json) == payload['params']
@@ -187,7 +185,6 @@ def compiler_environment(tmp_path, monkeypatch):
     # Isolate host configuration; retain the real compiler and native adapters.
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
-    monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
     identity = SourceIdentity('a' * 40, 'b' * 40)
     monkeypatch.setattr(SourceIdentity, 'from_checkout', classmethod(lambda cls, root: identity))
     return identity

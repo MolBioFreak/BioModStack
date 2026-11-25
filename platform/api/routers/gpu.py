@@ -3328,7 +3328,7 @@ async def get_workflow_pins():
         "workflow_pins": config.get("workflow_pins", {}),
         "available_workflows": [
             "boltz", "fampnn", "rfantibody", "rfdiffusion", "rfd3", "rf3",
-            "mpnn", "boltzgen", "msa_batch",
+            "mpnn", "boltzgen",
             "antibody_child"
         ]
     }

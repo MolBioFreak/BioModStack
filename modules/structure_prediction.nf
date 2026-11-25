@@ -673,43 +673,6 @@ process GenerateLocalMSA {
 }
 
 
-// Batch MSA Generation - processes multiple sequences in parallel
-// Used by orchestrator for MSA batch jobs
-process BatchMSAGeneration {
-    label 'GPU'
-    // Uses GPU for MSA generation
-    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "*.a3m"
-    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa_manifest.json"
-
-    input:
-    val sequences_json
-    // JSON string with array of {name, sequence} objects
-    val reference_sequence
-
-    output:
-    path ("msa_manifest.json"), emit: manifest
-    path ("*.a3m"), emit: msas, optional: true
-    path "*.log"
-
-    script:
-    def dbPath = params.msa_local_db
-    def cacheDir = params.msa_cache_dir
-    def refSeqArg = reference_sequence ? "--reference_sequence '${reference_sequence}'" : ""
-    def forceRefresh = params.msa_force_refresh ? "--force_refresh" : ""
-    def maxSeqsArg = params.msa_max_seqs ? "--max-seqs ${params.msa_max_seqs}" : ""
-    """
-    python3 ${params.code_root}/scripts/batch_msa.py \\
-        --sequences '${sequences_json}' \\
-        --output_dir . \\
-        --db_path ${dbPath} \\
-        --cache_dir ${cacheDir} \\
-        ${refSeqArg} \\
-        ${forceRefresh} \\
-        ${maxSeqsArg} \\
-        2>&1 | tee batch_msa.log
-    """
-}
-
 process BoltzFromSequenceTask {
     label 'Boltz'
     publishDir { "${params.out_dir}/scientific/boltz/${producer_meta.producer_artifact_id}" }, mode: 'copy', pattern: 'boltz_task_binding.json', enabled: params.protein_science_contract_revision == 1

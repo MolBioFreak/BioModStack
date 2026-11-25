@@ -640,48 +640,6 @@ def _validate_plr_validator_availability(registry, params: dict) -> None:
         )
 
 
-def _build_msa_batch_child_params(
-    source_params: Dict[str, Any],
-    sequences_for_msa: List[Dict[str, Any]],
-    source_model_id: Any = None,
-    source_mode: Any = None,
-) -> Dict[str, Any]:
-    child_params = {
-        'sequences': sequences_for_msa,
-        'sequences_json': json.dumps(sequences_for_msa),
-        'reference_sequence': source_params.get('msa_reference_sequence'),
-        'msa_force_refresh': source_params.get('msa_force_refresh', False),
-        'msa_cache_only': source_params.get('msa_cache_only', False),
-        'msa_use_gpu': source_params.get('msa_use_gpu', True),
-        'msa_max_seqs': source_params.get('msa_max_seqs'),
-        'msa_preset': source_params.get('msa_preset', 'fast'),
-        'msa_use_expand': source_params.get('msa_use_expand'),
-        'msa_use_env': source_params.get('msa_use_env'),
-        'msa_num_iterations': source_params.get('msa_num_iterations'),
-        'msa_evalue': source_params.get('msa_evalue'),
-        'msa_min_seq_id': source_params.get('msa_min_seq_id'),
-        'msa_min_coverage': source_params.get('msa_min_coverage'),
-        'msa_taxon_list': source_params.get('msa_taxon_list'),
-        'msa_min_depth_warning': source_params.get('msa_min_depth_warning'),
-        'msa_min_depth_fail': source_params.get('msa_min_depth_fail'),
-        'msa_gpu_mode': source_params.get('msa_gpu_mode'),
-        'msa_gpu_threshold': source_params.get('msa_gpu_threshold'),
-        'msa_preferred_gpus': source_params.get('msa_preferred_gpus'),
-        'msa_excluded_gpus': source_params.get('msa_excluded_gpus'),
-        'msa_gpu_server_mode': source_params.get('msa_gpu_server_mode'),
-        'msa_gpu_server_wait_timeout': source_params.get('msa_gpu_server_wait_timeout'),
-        'msa_gpu_server_db_load_mode': source_params.get('msa_gpu_server_db_load_mode'),
-        'msa_gpu_server_startup_wait': source_params.get('msa_gpu_server_startup_wait'),
-        'msa_local_db': source_params.get('msa_local_db'),
-        'msa_cache_dir': source_params.get('msa_cache_dir'),
-        'msa_threads': source_params.get('msa_threads'),
-        'msa_target_shard_mode': source_params.get('msa_target_shard_mode'),
-        'msa_target_shards': source_params.get('msa_target_shards'),
-        'msa_target_shard_min_size_gb': source_params.get('msa_target_shard_min_size_gb'),
-    }
-    return child_params
-
-
 def _standard_job_output_dir(name: str, timestamp: str, preallocated_job_id: str | None) -> Path:
     if preallocated_job_id is not None:
         return get_results_dir() / preallocated_job_id
@@ -1015,80 +973,7 @@ async def _find_reusable_child(session, job_data):
 
 def _create_batch_msa_job(session, job_data, num_jobs, mutagenesis_variants, msa_provider,
                           base_output_dir, batch_id, batch_name, inherited_source_revision, inherited_source_tree):
-    msa_job = None
-    needs_msa = False
-    sequences_for_msa = []
-
-    # Logging MSA batch intent
-
-
-    # Mutagenesis: generate per-variant MSAs when using MSA
-    if mutagenesis_variants and num_jobs > 1 and msa_provider not in {'colabfold_api', 'neurosnap_api'}:
-        use_msa = job_data.params.get('boltz_use_msa', True) or job_data.params.get('rf3_use_msa', False)
-        if use_msa:
-            sequences_for_msa = []
-            for idx, variant in enumerate(mutagenesis_variants):
-                seq = variant.get('sequence')
-                if not seq:
-                    continue
-                name = variant.get('name', f'var_{idx + 1}')
-                sequences_for_msa.append({'name': name, 'sequence': seq})
-            # Always regenerate MSAs for mutagenesis variants
-            job_data.params['msa_force_refresh'] = True
-            # Ensure no shared reference MSA is used
-            job_data.params.pop('msa_reference_sequence', None)
-            needs_msa = len(sequences_for_msa) > 0
-            if needs_msa:
-                logger.info(f"[MSA BATCH] Mutagenesis mode: {len(sequences_for_msa)} per-variant MSAs")
-    # Legacy: single reference MSA for multi-sequence batches
-    if not needs_msa and job_data.params.get('msa_reference_sequence') and num_jobs > 1:
-        needs_msa = True
-        sequences_for_msa = [{
-            'name': 'reference_msa',
-            'sequence': job_data.params['msa_reference_sequence']
-        }]
-        logger.info(f"[MSA BATCH] Reference MSA for {num_jobs} variants")
-    elif num_jobs > 1 and 'sequence_input' in job_data.params:
-        # Multiple inference jobs with potentially different sequences
-        # For now, skip MSA batching if all use same sequence (normal parallel runs)
-        pass
-    elif 'boltz_use_msa' in job_data.params and job_data.params.get('boltz_use_msa', True):
-        # Single job that needs MSA - handled by normal flow (no separate MSA job)
-        pass
-
-    if needs_msa and sequences_for_msa:
-        msa_job_id = str(uuid.uuid4())
-        msa_output_dir = str(Path(base_output_dir) / "msa_batch")
-        os.makedirs(msa_output_dir, exist_ok=True)
-
-        msa_job = Job(
-            id=msa_job_id,
-            name=f"{job_data.name}_msa",
-            model_id='msa_batch',
-            mode='msa_generation',
-            params={**_build_msa_batch_child_params(
-                source_params=job_data.params,
-                sequences_for_msa=sequences_for_msa,
-                source_model_id=job_data.model_id,
-                source_mode=job_data.mode,
-            ), "remote_result_policy": job_data.execution_policy.remote_result_policy},
-            output_dir=msa_output_dir,
-            status=JobStatus.QUEUED.value,
-            batch_id=batch_id,
-            batch_name=batch_name,
-            queue_status='queued',
-            vram_estimate_mb=3000,  # MSA uses ~3GB VRAM
-            sequence_length=len(sequences_for_msa[0]['sequence']) if sequences_for_msa else 300,
-            priority=10,  # HIGH priority - unblocks inference jobs
-            job_phase='msa_generation',
-            msa_sequences=sequences_for_msa,
-            execution_target_id=job_data.execution_target_id,
-            execution_source_revision=inherited_source_revision,
-            execution_source_tree=inherited_source_tree,
-        )
-        session.add(msa_job)
-        logger.info(f"[MSA BATCH] Created MSA batch job {msa_job_id[:8]}... for {len(sequences_for_msa)} sequences")
-    return msa_job
+    return None
 
 
 async def _materialize_job_inputs(job_params, job_id, output_dir, normalized_model_id, normalized_mode,

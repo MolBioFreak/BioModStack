@@ -19,7 +19,6 @@ async def test_standalone_rows(tmp_path, method, mode, monkeypatch):
     from services import nextflow
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
-    monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
     jar = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR', Path.home() / '.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar'))
     assert jar.is_file(), 'offline Nextflow jar required'
     request = dict(sequence_name='parent', run_frustrampnn=False, num_parallel_jobs=2)

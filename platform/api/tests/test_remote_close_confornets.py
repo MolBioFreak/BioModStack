@@ -66,7 +66,6 @@ def upstream_namespace():
 def compiled(tmp_path, monkeypatch):
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
-    monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
     return nextflow.compile_nextflow_invocation('confornets_experimental', 'design',
         dict(sequence='ACDE', chain_id='B', task='diversity', msa_provider='colabfold_api',
              colabfold_use_env=False, colabfold_pairing_mode='unpaired', skip_msa=False),

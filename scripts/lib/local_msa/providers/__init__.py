@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["run_colabfold_api_msa_workflow", "run_colabfold_msa_workflow"]
+__all__ = ["run_colabfold_api_msa_workflow"]
 
 
 def __getattr__(name: str) -> Any:
@@ -16,8 +16,4 @@ def __getattr__(name: str) -> Any:
         from .colabfold_api import run_colabfold_api_msa_workflow
 
         return run_colabfold_api_msa_workflow
-    if name == "run_colabfold_msa_workflow":
-        from .local_mmseqs import run_colabfold_msa_workflow
-
-        return run_colabfold_msa_workflow
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

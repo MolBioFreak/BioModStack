@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from services.msa_policy import POLICY, apply_msa_policy
 from schemas import JobCreate
-from services.nextflow import build_nextflow_command, _build_msa_batch_command
+from services.nextflow import build_nextflow_command
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -62,26 +62,6 @@ async def test_internal_construct_cannot_bypass_admission():
     assert exc.value.status_code == 422
     assert 're-preview' in exc.value.detail
 
-
-def test_local_batch_and_server_block_before_side_effects(monkeypatch):
-    from services import msa_server
-    monkeypatch.setattr(msa_server, 'get_colabfold_db', lambda: pytest.fail('DB accessed'))
-    monkeypatch.delenv('BMS_FEATURE_LOCAL_MSA', raising=False)
-    with pytest.raises(ValueError, match='Local MSA is not enabled for this installation'):
-        msa_server.ensure_server_for_db('uniref', 0)
-    with pytest.raises(ValueError, match='Local MSA search is disabled'):
-        _build_msa_batch_command({}, '/unused')
-
-
-@pytest.mark.asyncio
-async def test_local_msa_routes_block_before_db_or_runtime():
-    from routers import msa
-    with pytest.raises(HTTPException) as exc:
-        await msa.create_msa_job(None, session=None, molbio_session=None)
-    assert exc.value.status_code == 422
-    with pytest.raises(HTTPException) as exc:
-        await msa.start_msa_server(None)
-    assert exc.value.status_code == 422
 
 
 def test_protenix_auto_never_selects_local_for_large_jobs():

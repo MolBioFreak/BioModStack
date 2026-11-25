@@ -484,7 +484,6 @@ def test_compiler_selected_native_generated_service(context, tmp_path, monkeypat
     params = dict(params, pdb_paths=str(tmp_path / 'candidate_0007.pdb'))
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
-    monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
     invocation = nextflow.compile_nextflow_invocation('antibody_child', 'validation_batch', params,
         str(tmp_path / 'compiled-results'), 'root', source_identity=SourceIdentity(**value['source_identity']),
         execution_context=nextflow.NativeCompilerExecutionContext(0, (0,), 'cpu'))

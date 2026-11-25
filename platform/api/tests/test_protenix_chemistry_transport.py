@@ -14,7 +14,6 @@ from scripts.prepare_protenix_msa import build_native_protenix_input, load_nativ
 def compiler_environment(monkeypatch):
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
-    monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
 
 
 def science():

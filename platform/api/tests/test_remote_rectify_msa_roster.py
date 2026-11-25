@@ -60,7 +60,6 @@ def invocation(tmp_path, monkeypatch):
     monkeypatch.setenv('PATH', str(Path(sys.executable).parent) + os.pathsep + os.environ['PATH'])
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
-    monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
     return nextflow.compile_nextflow_invocation('protein_modification_experimental', 'region_redesign',
         dict(input_pdb=str(tmp_path / 'candidate_0007.pdb'), design_chains='H', context_chains='T',
              structure_validators=['protenix_v2'], msa_provider='colabfold_api',

@@ -18,7 +18,6 @@ def compiler_infrastructure(monkeypatch):
     monkeypatch.setattr(SourceIdentity, 'from_checkout', classmethod(lambda cls, root: identity))
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
-    monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
 
 
 def scientific_request():

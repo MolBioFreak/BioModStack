@@ -66,7 +66,6 @@ def test_real_compiler_binds_acquired_layout_when_plain_path_is_absent(
     monkeypatch.setattr(SourceIdentity, 'from_checkout', classmethod(lambda cls, root: identity))
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
-    monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
     generation = tmp_path / 'layouts' / member / DIGEST_A
     generation.mkdir(parents=True)
     monkeypatch.setattr(paths, 'get_weights_root', lambda: tmp_path)

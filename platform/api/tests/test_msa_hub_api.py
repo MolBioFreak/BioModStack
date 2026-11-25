@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from routers import msa
 from services import msa_provider_credentials as store
-from services import msa_provider_setup, msa_server
+from services import msa_provider_setup
 
 SECRET = "ns-test-key-0123456789abcdef"
 
@@ -128,30 +128,6 @@ def test_remote_clients_cannot_change_credentials(hub, monkeypatch):
     assert hub.get("/api/msa/providers").status_code == 200
     assert store.saved_key_path("neurosnap_api").read_text() == SECRET
 
-
-def test_local_start_refused_when_feature_off(hub, monkeypatch):
-    monkeypatch.setattr(msa, "ensure_server_for_db", lambda **_: pytest.fail("local server started"))
-    assert msa_server.local_msa_enabled() is False
-    response = hub.post("/api/msa/server/start", json={})
-    assert response.status_code == 422
-    assert response.json()["detail"] == "Local MSA is not enabled for this installation"
-    with pytest.raises(ValueError, match="Local MSA is not enabled for this installation"):
-        msa_server.ensure_server_for_db("uniref", 0)
-
-
-def test_local_start_allowed_when_feature_on(hub, monkeypatch):
-    monkeypatch.setenv("BMS_FEATURE_LOCAL_MSA", "1")
-    started = []
-    monkeypatch.setattr(msa, "read_server_settings", lambda: {})
-    monkeypatch.setattr(msa, "resolve_msa_gpu_id", lambda requested: 0)
-    monkeypatch.setattr(msa, "touch_query_activity", lambda metadata=None: {})
-    monkeypatch.setattr(msa, "ensure_server_for_db",
-                        lambda **kwargs: started.append(kwargs["db_alias"]) or {"db_alias": kwargs["db_alias"]})
-    assert msa_server.local_msa_enabled() is True
-    response = hub.post("/api/msa/server/start", json={})
-    assert response.status_code == 200, response.text
-    assert started == ["uniref"]
-    msa_server.require_local_msa_enabled()
 
 
 def test_colabfold_is_enabled_per_computer_from_the_hub(hub, tmp_path, monkeypatch):

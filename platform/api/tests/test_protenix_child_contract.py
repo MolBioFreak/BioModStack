@@ -2,7 +2,7 @@
 import pytest
 
 from model_registry import selected_execution_metadata
-from services import gpu_config, msa_server, nextflow
+from services import gpu_config, nextflow
 from services.result_contracts import resolve_result_contract
 
 
@@ -11,7 +11,6 @@ from services.result_contracts import resolve_result_contract
 def test_child_compilation_retains_native_validator_and_dependencies(tmp_path, monkeypatch, selector, msa):
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr(gpu_config, 'read_scheduler_config', lambda: {})
-    monkeypatch.setattr(msa_server, 'read_server_settings', lambda: {})
     source = tmp_path / 'candidate.pdb'
     source.write_text('END\n')  # Compiler-only fixture; no molecular validity claim.
     params = dict(pdb_paths=str(source), structure_validator=selector,

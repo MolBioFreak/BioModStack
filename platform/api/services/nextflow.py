@@ -1833,316 +1833,6 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
         logger.error(f"[MUT-SEED] Error triggering seeded refinement: {e}", exc_info=True)
 
 
-def _build_msa_batch_command(params: Dict[str, Any], output_dir: str) -> List[str]:
-    from services.msa_policy import reject_local_search
-    reject_local_search()
-    sequences_json = params.get('sequences_json', '[]')
-    if isinstance(sequences_json, (list, dict)):
-        sequences_json = json.dumps(sequences_json)
-    elif not isinstance(sequences_json, str):
-        sequences_json = '[]'
-
-    raw_gpu_id = params.get('gpu_id')
-    try:
-        gpu_id = int(raw_gpu_id) if raw_gpu_id is not None else None
-    except (TypeError, ValueError):
-        gpu_id = None
-
-    reference_sequence = params.get('reference_sequence', '')
-    force_refresh = _coerce_bool(params.get('msa_force_refresh', False), default=False)
-    cache_only = _coerce_bool(params.get('msa_cache_only', False), default=False)
-    msa_use_gpu = _coerce_bool(params.get('msa_use_gpu', True), default=True)
-    msa_max_seqs = params.get('msa_max_seqs')
-    msa_preset = _normalize_msa_preset(params.get('msa_preset', 'fast'))
-    msa_use_expand = params.get('msa_use_expand')
-    msa_use_env = params.get('msa_use_env')
-    msa_num_iterations = params.get('msa_num_iterations')
-    msa_evalue = params.get('msa_evalue')
-    msa_min_seq_id = params.get('msa_min_seq_id')
-    msa_min_coverage = params.get('msa_min_coverage')
-    msa_taxon_list = params.get('msa_taxon_list')
-    msa_min_depth_warning = params.get('msa_min_depth_warning')
-    msa_min_depth_fail = params.get('msa_min_depth_fail')
-    msa_gpu_mode = params.get('msa_gpu_mode')
-    msa_gpu_threshold = params.get('msa_gpu_threshold')
-    msa_preferred_gpus = params.get('msa_preferred_gpus')
-    msa_excluded_gpus = params.get('msa_excluded_gpus')
-    msa_gpu_server_mode = params.get('msa_gpu_server_mode')
-    msa_gpu_server_wait_timeout = params.get('msa_gpu_server_wait_timeout')
-    msa_gpu_server_db_load_mode = params.get('msa_gpu_server_db_load_mode')
-    msa_gpu_server_startup_wait = params.get('msa_gpu_server_startup_wait')
-    msa_threads = params.get('msa_threads')
-    msa_target_shard_mode = params.get('msa_target_shard_mode')
-    msa_target_shards = params.get('msa_target_shards')
-    msa_target_shard_min_size_gb = params.get('msa_target_shard_min_size_gb')
-
-    from paths import get_colabfold_db, get_msa_cache_dir
-    db_path = str(params.get('msa_local_db') or get_colabfold_db())
-    cache_dir = str(params.get('msa_cache_dir') or get_msa_cache_dir())
-    script_path = PROJECT_ROOT / 'scripts' / 'batch_msa.py'
-    cmd = [
-        'python3', str(script_path),
-        '--sequences', sequences_json,
-        '--output_dir', output_dir,
-        '--db_path', db_path,
-        '--cache_dir', cache_dir,
-        '--preset', msa_preset,
-    ]
-    if gpu_id is not None:
-        cmd.extend(['--gpu_id', str(gpu_id)])
-    if reference_sequence:
-        cmd.extend(['--reference_sequence', reference_sequence])
-    if force_refresh:
-        cmd.append('--force_refresh')
-    if cache_only:
-        cmd.append('--cache-only')
-    if msa_use_gpu is False:
-        cmd.append('--cpu-only')
-    if msa_max_seqs is not None:
-        cmd.extend(['--max-seqs', str(msa_max_seqs)])
-    if msa_threads is not None:
-        cmd.extend(['--threads', str(max(1, int(msa_threads)))])
-    if msa_use_expand is not None:
-        cmd.extend(['--use-expand', '1' if _coerce_bool(msa_use_expand) else '0'])
-    if msa_use_env is not None:
-        cmd.extend(['--use-env', '1' if _coerce_bool(msa_use_env) else '0'])
-    if msa_num_iterations is not None:
-        cmd.extend(['--num-iterations', str(msa_num_iterations)])
-    if msa_evalue is not None:
-        cmd.extend(['--evalue', str(msa_evalue)])
-    if msa_min_seq_id is not None:
-        cmd.extend(['--min-seq-id', str(msa_min_seq_id)])
-    if msa_min_coverage is not None:
-        cmd.extend(['--min-coverage', str(msa_min_coverage)])
-    if msa_taxon_list:
-        cmd.extend(['--taxon-list', str(msa_taxon_list)])
-    if msa_min_depth_warning is not None:
-        cmd.extend(['--min-depth-warning', str(msa_min_depth_warning)])
-    if msa_min_depth_fail is not None:
-        cmd.extend(['--min-depth-fail', str(msa_min_depth_fail)])
-    if msa_gpu_mode:
-        cmd.extend(['--gpu-mode', str(msa_gpu_mode)])
-    if msa_gpu_threshold is not None:
-        cmd.extend(['--gpu-threshold', str(msa_gpu_threshold)])
-    if msa_preferred_gpus:
-        preferred = (
-            ','.join(str(v) for v in msa_preferred_gpus if str(v).strip())
-            if isinstance(msa_preferred_gpus, list)
-            else str(msa_preferred_gpus).strip()
-        )
-        if preferred:
-            cmd.extend(['--preferred-gpus', preferred])
-    if msa_excluded_gpus:
-        excluded = (
-            ','.join(str(v) for v in msa_excluded_gpus if str(v).strip())
-            if isinstance(msa_excluded_gpus, list)
-            else str(msa_excluded_gpus).strip()
-        )
-        if excluded:
-            cmd.extend(['--excluded-gpus', excluded])
-    if msa_gpu_server_mode:
-        cmd.extend(['--gpu-server-mode', str(msa_gpu_server_mode)])
-    if msa_gpu_server_wait_timeout is not None:
-        cmd.extend(['--gpu-server-wait-timeout', str(msa_gpu_server_wait_timeout)])
-    if msa_gpu_server_db_load_mode is not None:
-        cmd.extend(['--gpu-server-db-load-mode', str(msa_gpu_server_db_load_mode)])
-    if msa_gpu_server_startup_wait is not None:
-        cmd.extend(['--gpu-server-startup-wait', str(msa_gpu_server_startup_wait)])
-    if msa_target_shard_mode:
-        cmd.extend(['--target-shard-mode', str(msa_target_shard_mode)])
-    if msa_target_shards is not None:
-        cmd.extend(['--target-shards', str(max(1, int(msa_target_shards)))])
-    if msa_target_shard_min_size_gb is not None:
-        cmd.extend(['--target-shard-min-size-gb', str(msa_target_shard_min_size_gb)])
-    return cmd
-
-
-async def launch_msa_batch_job(
-    job_id: str,
-    params: Dict[str, Any],
-    output_dir: str
-) -> None:
-    """
-    Launch an MSA batch job using batch_msa.py directly.
-
-    This runs the batch MSA script and then unlocks child inference jobs.
-    """
-    if not transient_workflow_runner_mode():
-        raise ExecutionOwnershipError(
-            "msa_batch execution is only permitted inside the transient workflow runner"
-        )
-    from database import async_session, Job
-    from sqlalchemy import update
-    from schemas import JobStatus
-
-    logger.info(f"[MSA BATCH] Launching job {job_id}")
-
-    async with async_session() as session:
-        # Update job to running, unless it is missing or no longer queued/running.
-        started = await session.execute(
-            update(Job)
-            .where(
-                Job.id == job_id,
-                Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
-                Job.queue_status.in_(['queued', 'running']),
-            )
-            .values(
-                status=JobStatus.RUNNING.value,
-                queue_status='running',
-                started_at=datetime.utcnow(),
-            )
-            .execution_options(synchronize_session=False)
-        )
-        if started.rowcount != 1:
-            await session.rollback()
-            logger.error(f"[MSA BATCH] Job {job_id} not found or no longer queued/running")
-            return
-        await session.commit()
-
-    # Terminal writes apply only while the row is still this runner's running Job.
-    still_running = (
-        Job.id == job_id,
-        Job.status == JobStatus.RUNNING.value,
-        Job.queue_status == 'running',
-    )
-
-    # Get activity metadata from params for logging/touch_query_activity.
-    raw_gpu_id = params.get('gpu_id')
-    try:
-        gpu_id = int(raw_gpu_id) if raw_gpu_id is not None else None
-    except (TypeError, ValueError):
-        gpu_id = None
-    msa_use_gpu_raw = params.get('msa_use_gpu', True)
-    if isinstance(msa_use_gpu_raw, str):
-        msa_use_gpu = msa_use_gpu_raw.strip().lower() not in {"0", "false", "no", "off"}
-    else:
-        msa_use_gpu = bool(msa_use_gpu_raw)
-    msa_preset = _normalize_msa_preset(params.get('msa_preset', 'fast'))
-
-    # Build batch_msa.py command
-    cmd = _build_msa_batch_command(params=params, output_dir=output_dir)
-    
-    logger.info(f"[MSA BATCH] Command: {' '.join(cmd[:6])}...")
-    
-    try:
-        from services.msa_server import touch_query_activity
-        touch_query_activity(
-            {
-                "event": "msa_batch_start",
-                "job_id": job_id,
-                "gpu_id": gpu_id if msa_use_gpu else None,
-                "preset": msa_preset,
-            }
-        )
-
-        # Run batch_msa.py
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=str(PROJECT_ROOT),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        
-        stdout, _ = await process.communicate()
-        exit_code = process.returncode
-        
-        # Save log
-        log_path = Path(output_dir) / "msa_batch.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, 'w') as f:
-            f.write(stdout.decode() if stdout else "")
-        
-        async with async_session() as session:
-            if exit_code == 0:
-                manifest_path = str(Path(output_dir) / "msa_manifest.json")
-                unlocked = await apply_msa_manifest_to_child_jobs(
-                    session,
-                    job_id,
-                    manifest_path,
-                )
-                finished = await session.execute(
-                    update(Job)
-                    .where(*still_running)
-                    .values(
-                        status=JobStatus.COMPLETED.value,
-                        queue_status='completed',
-                        completed_at=datetime.utcnow(),
-                        msa_manifest_path=manifest_path,
-                    )
-                    .execution_options(synchronize_session=False)
-                )
-                if finished.rowcount != 1:
-                    await session.rollback()
-                    logger.info(f"[MSA BATCH] Job {job_id} is no longer running; completion not published")
-                    return
-                logger.info(f"[MSA BATCH] Job {job_id} completed successfully")
-                touch_query_activity(
-                    {
-                        "event": "msa_batch_complete",
-                        "job_id": job_id,
-                        "gpu_id": gpu_id if msa_use_gpu else None,
-                        "preset": msa_preset,
-                    }
-                )
-                
-                await session.commit()
-                logger.info("[MSA COMPLETE] Unlocked %s inference jobs", unlocked)
-            else:
-                finished = await session.execute(
-                    update(Job)
-                    .where(*still_running)
-                    .values(
-                        status=JobStatus.FAILED.value,
-                        queue_status='failed',
-                        error_message=f"MSA batch failed with exit code {exit_code}",
-                    )
-                    .execution_options(synchronize_session=False)
-                )
-                if finished.rowcount != 1:
-                    await session.rollback()
-                    logger.info(f"[MSA BATCH] Job {job_id} is no longer running; failure not published")
-                    return
-                logger.error(f"[MSA BATCH] Job {job_id} failed: exit code {exit_code}")
-                touch_query_activity(
-                    {
-                        "event": "msa_batch_failed",
-                        "job_id": job_id,
-                        "gpu_id": gpu_id if msa_use_gpu else None,
-                        "preset": msa_preset,
-                        "exit_code": exit_code,
-                    }
-                )
-                await session.commit()
-    
-    except Exception as e:
-        logger.error(f"[MSA BATCH] Job {job_id} error: {e}")
-        try:
-            from services.msa_server import touch_query_activity
-            touch_query_activity(
-                {
-                    "event": "msa_batch_error",
-                    "job_id": job_id,
-                    "gpu_id": gpu_id if msa_use_gpu else None,
-                    "preset": msa_preset,
-                    "error": str(e),
-                }
-            )
-        except Exception:
-            pass
-        async with async_session() as session:
-            await session.execute(
-                update(Job)
-                .where(*still_running)
-                .values(
-                    status=JobStatus.FAILED.value,
-                    queue_status='failed',
-                    error_message=str(e),
-                )
-                .execution_options(synchronize_session=False)
-            )
-            await session.commit()
-
-
 async def apply_msa_manifest_to_child_jobs(
     session: Any,
     msa_job_id: str,
@@ -2982,13 +2672,6 @@ async def launch_nextflow_job(
             logger.info(stale_log_message, job_id)
         return bool(rowcount)
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # MSA BATCH JOBS: Run batch_msa.py directly (not Nextflow)
-    # ═══════════════════════════════════════════════════════════════════════════
-    if model_id == 'msa_batch' and transient_runner:
-        await launch_msa_batch_job(job_id, params, output_dir)
-        return
-
     if model_id in {'family_msa_protein', 'family_msa_nucleic'} and transient_runner:
         from services.family_msa.execution import run_owned_job
         await run_owned_job(job_id, params, output_dir, async_session)
@@ -3162,10 +2845,6 @@ async def launch_nextflow_job(
                 gpu_id = _resolve_launch_gpu_id(job, launch_params, model_id)
                 if gpu_id is not None:
                     launch_params["gpu_id"] = gpu_id
-                if model_id == "msa_batch":
-                    # Retain the existing local-search rejection; this phase
-                    # does not introduce a direct-script invocation compiler.
-                    _build_msa_batch_command(launch_params, output_dir)
                 remote_invocation = await _compile_launch_nextflow_invocation(
                     session, job, launch_params, output_dir,
                     **({'prepared_invocation': prepared_invocation} if prepared_invocation is not None else {}))
@@ -3196,11 +2875,6 @@ async def launch_nextflow_job(
                     remote_run_id,
                 )
                 return
-
-            if model_id == "msa_batch":
-                raise ExecutionOwnershipError(
-                    "msa_batch execution requires a transient local runner or remote execution target"
-                )
 
             if workflow_adapter_enabled() and not transient_runner:
                 # Native local/remote launch seals in _compile_launch_nextflow_invocation.
@@ -6371,43 +6045,25 @@ def compile_nextflow_invocation(
     # Inject MSA GPU policy defaults when caller did not explicitly specify them.
     # Precedence:
     # 1) job params
-    # 2) persisted MSA Server Settings GPU pin
-    # 3) scheduler global MSA preference list
+    # 2) scheduler global MSA preference list
     try:
         if execution_context is not None:
-            scheduler_cfg, global_cfg, overrides_cfg, msa_server_settings = {}, {}, {}, {}
+            scheduler_cfg, global_cfg, overrides_cfg = {}, {}, {}
         elif is_fastq_only_ont_command:
             scheduler_cfg = {}
             global_cfg = {}
             overrides_cfg = {}
-            msa_server_settings = {}
             params.pop("msa_preferred_gpus", None)
             params.pop("msa_excluded_gpus", None)
         else:
             from services.gpu_config import read_scheduler_config
-            from services.msa_server import read_server_settings
             scheduler_cfg = read_scheduler_config() or {}
             global_cfg = scheduler_cfg.get("global", {}) if isinstance(scheduler_cfg, dict) else {}
             overrides_cfg = scheduler_cfg.get("overrides", {}) if isinstance(scheduler_cfg, dict) else {}
-            msa_server_settings = read_server_settings() or {}
-        skip_persisted_msa_pin = (
-            str(params.get("structure_validator", "")).strip().lower() == "protenix"
-            and str(params.get("protenix_msa_backend", "auto")).strip().lower() == "local"
-        )
 
         if params.get("msa_preferred_gpus") in (None, ""):
             preferred_ids = []
             preferred_source = None
-            raw_pinned_gpu = None if skip_persisted_msa_pin else msa_server_settings.get("pinned_gpu_id")
-            if raw_pinned_gpu not in (None, ""):
-                try:
-                    preferred_ids = [int(raw_pinned_gpu)]
-                except (TypeError, ValueError):
-                    preferred_ids = []
-                if preferred_ids:
-                    preferred_source = "persisted MSA server settings"
-            elif skip_persisted_msa_pin:
-                logger.info("[MSA] Skipping persisted MSA GPU pin for Protenix local MSA; allowing normal GPU selection")
             if not preferred_ids:
                 raw_preferred = global_cfg.get("msa_preferred_gpu_ids")
                 seen_preferred = set()

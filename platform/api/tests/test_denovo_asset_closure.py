@@ -39,7 +39,6 @@ def test_saved_job_uses_exact_native_request_not_pack(tmp_path, monkeypatch, mod
     monkeypatch.setattr(SourceIdentity, 'from_checkout', classmethod(lambda cls, root: identity))
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
-    monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
     params = ({'rfd4_request': rfd4()} if model == 'rfd4_proteina' else
               {'complexa_request': {'task': 'AME', 'task_name': 'fixture', 'reward': None, 'seed': 0}})
     if model == 'rfd4_proteina':

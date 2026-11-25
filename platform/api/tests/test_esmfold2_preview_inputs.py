@@ -28,7 +28,6 @@ def roots(tmp_path, monkeypatch):
                 monkeypatch.setattr(module, name, lambda value=value: value)
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
-    monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
     monkeypatch.delenv(portable_inputs.ENV, raising=False)
     return data, inputs, results
 

@@ -126,7 +126,6 @@ def test_replay_actual_mounted_native_request(tmp_path, monkeypatch):
     assert request.source_structure.model_number == 2
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
-    monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
     for batch in (False, True):
         from services.job_requests import _normalize_frustrampnn_settings
         params = _normalize_frustrampnn_settings(request.model_id, request.mode, request.params)

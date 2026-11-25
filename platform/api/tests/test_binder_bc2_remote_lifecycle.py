@@ -48,7 +48,6 @@ async def remote_action(tmp_path, monkeypatch):
     monkeypatch.setattr(bundle, 'current_source_identity', lambda: (identity.revision, identity.tree))
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
-    monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
     calls = []
     materialize = launch.materialize_native_action
 

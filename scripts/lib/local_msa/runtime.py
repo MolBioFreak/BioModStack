@@ -8,7 +8,6 @@ SCRIPT_DIR = Path(__file__).resolve().parents[2]
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from local_msa.providers.local_mmseqs import _load_legacy_run_local_msa_module  # noqa: E402
 from local_msa_runtime import (  # noqa: E402
     DEFAULT_GPUSERVER_DB_LOAD_MODE,
     DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
@@ -22,9 +21,6 @@ from local_msa_runtime import (  # noqa: E402
     normalize_gpuserver_wait_timeout,
     query_host_gpuserver_status,
 )
-
-_inspect_mmseqs_runtime_impl: Callable[..., Dict[str, Any]] | None = None
-
 
 def parse_gpu_csv(csv_value: Optional[str]) -> Optional[List[int]]:
     """Parse comma-separated GPU IDs into an ordered unique list."""
@@ -47,20 +43,14 @@ def parse_gpu_csv(csv_value: Optional[str]) -> Optional[List[int]]:
     return gpu_ids if gpu_ids else None
 
 
-def _load_legacy_inspect_mmseqs_runtime() -> Callable[..., Dict[str, Any]]:
-    global _inspect_mmseqs_runtime_impl
-    if _inspect_mmseqs_runtime_impl is not None:
-        return _inspect_mmseqs_runtime_impl
-    module = _load_legacy_run_local_msa_module()
-    impl = getattr(module, "inspect_mmseqs_runtime", None)
-    if impl is None:
-        raise RuntimeError("Legacy local MSA implementation is missing inspect_mmseqs_runtime")
-    _inspect_mmseqs_runtime_impl = impl
-    return _inspect_mmseqs_runtime_impl
+def inspect_mmseqs_runtime(*_args: Any, **_kwargs: Any) -> Dict[str, Any]:
+    repo_root = Path(__file__).resolve().parents[3]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from biomodstack_msa_policy import reject_local_search
 
-
-def inspect_mmseqs_runtime(*args: Any, **kwargs: Any) -> Dict[str, Any]:
-    return _load_legacy_inspect_mmseqs_runtime()(*args, **kwargs)
+    reject_local_search()
+    raise RuntimeError("Local MMseqs2 MSA search has been removed.")
 
 
 __all__ = [

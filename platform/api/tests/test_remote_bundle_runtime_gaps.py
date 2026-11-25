@@ -161,9 +161,8 @@ def package(tmp_path, monkeypatch):
                         'BMS_WORK': roots['data']/'work', 'BMS_MSA_CACHE': roots['data']/'cache',
                         'BMS_COLABFOLD_DB': roots['data']/'absent-offline'}.items():
         monkeypatch.setenv(name, str(value))
-    from services import gpu_config, msa_server
+    from services import gpu_config
     monkeypatch.setattr(gpu_config, 'read_scheduler_config', lambda: {})
-    monkeypatch.setattr(msa_server, 'read_server_settings', lambda: {})
     # Runtime-only probes explicitly request the model-supported no-MSA path.
     # Prepared/search MSA transport is exercised by test_msa_bundle_integration.
     command.extend(['--protenix_use_msa', 'false'])

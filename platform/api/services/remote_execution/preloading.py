@@ -66,12 +66,10 @@ def recipe_digest(job):
 
 
 def compile_recipe(job, *, native_invocations=None) -> list[str]:
-    from services.nextflow import build_job_nextflow_command, _build_msa_batch_command
+    from services.nextflow import build_job_nextflow_command
     output = job.child_output_dir or job.output_dir
     if not output:
         raise ExecutionTargetError("Saved Job has no authoritative output identity")
-    if job.model_id == "msa_batch":
-        return _build_msa_batch_command(deepcopy(job.params), output)
     return build_job_nextflow_command(job, deepcopy(job.params), output,
         materialize_inputs=False, native_invocations=native_invocations)
 

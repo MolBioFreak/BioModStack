@@ -59,7 +59,6 @@ async def test_http_sqlite_clone_resubmit_compiled_chemistry(admission, monkeypa
     app.dependency_overrides[jobs.get_experiment_session] = isolated_session
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
-    monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
     science = params()
     science['unexpected_nested_science'] = {'iterations': 999}
     payload = {'name': 'chemistry-roundtrip', 'model_id': 'protenix', 'mode': 'complex',

@@ -23,10 +23,8 @@ def test_package_providers_match_run_local_msa_dispatch_targets() -> None:
     run_local_msa = _load_run_local_msa_module()
 
     from local_msa.providers.colabfold_api import run_colabfold_api_msa_workflow
-    from local_msa.providers.local_mmseqs import run_colabfold_msa_workflow
 
     assert run_colabfold_api_msa_workflow is run_local_msa.run_colabfold_api_msa_workflow
-    assert run_colabfold_msa_workflow is run_local_msa.run_colabfold_msa_workflow
 
 
 def test_package_cli_build_arg_parser_preserves_default_gpuserver_db_load_mode() -> None:
