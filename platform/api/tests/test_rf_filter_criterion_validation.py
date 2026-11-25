@@ -44,7 +44,7 @@ async def test_resealed_criteria_rejected_before_first_ingestion(tmp_path, monke
             async def stronger(*a, **k):
                 calls.append(True)
                 return 17
-            monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', stronger)
+            monkeypatch.setattr(result_ingester, 'ingest_loose_files', stronger)
             with pytest.raises(ValueError, match='filter'):
                 await result_ingester.ingest_job_results(owner.id, str(tmp_path), db)
             assert not calls
@@ -70,7 +70,7 @@ async def test_no_enabled_threshold_and_computation_failure_controls(tmp_path, m
         async with factory() as db:
             db.add(owner); await db.commit()
             async def stronger(*a, **k): return 17
-            monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', stronger)
+            monkeypatch.setattr(result_ingester, 'ingest_loose_files', stronger)
             assert await result_ingester.ingest_job_results(owner.id, str(tmp_path), db) == 17
             await db.commit()
             await db.refresh(owner)

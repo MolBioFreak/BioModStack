@@ -85,7 +85,7 @@ async def test_stage_metadata_persists_and_serializes_without_replacing_owner(tm
             owner = job(tmp_path); db.add(owner); await db.commit()
             async def stronger_owner(*args, **kwargs):
                 return 17  # Later owner has its own, deliberately different domain.
-            monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', stronger_owner)
+            monkeypatch.setattr(result_ingester, 'ingest_loose_files', stronger_owner)
             assert await result_ingester.ingest_job_results(owner.id, str(tmp_path), db, commit=False) == 17
             await db.commit(); await db.refresh(owner)
             assert owner.provenance[KEY]['rf3_prediction_filter']['counts']['input_count'] == 4
@@ -105,10 +105,12 @@ async def test_zero_survivor_stage_retained_on_terminal_failure(tmp_path, monkey
     factory, engine = await setup(tmp_path)
     try:
         async with factory() as db:
-            owner = job(tmp_path); db.add(owner); await db.commit()
+            owner = job(tmp_path)
+            owner.params = {**owner.params, 'result_integrity_requires_designs': True}
+            db.add(owner); await db.commit()
             async def stronger_owner(*args, **kwargs):
                 return 0
-            monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', stronger_owner)
+            monkeypatch.setattr(result_ingester, 'ingest_loose_files', stronger_owner)
             from services.result_state_integrity import finalize_successful_job
             result = await finalize_successful_job(owner, str(tmp_path), db)
             assert not result.completed
@@ -164,7 +166,7 @@ async def test_required_stage_damage_fails_before_stronger_owner(tmp_path, monke
             async def stronger_owner(*args, **kwargs):
                 calls.append(True)
                 return 17
-            monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', stronger_owner)
+            monkeypatch.setattr(result_ingester, 'ingest_loose_files', stronger_owner)
             with pytest.raises((ValueError, RuntimeError), match='filter'):
                 await result_ingester.ingest_job_results(owner.id, str(tmp_path), db)
             assert not calls

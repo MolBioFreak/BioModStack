@@ -202,7 +202,7 @@ async def test_rf3_export_filter_receipt_sqlite_api(tmp_path, monkeypatch):
     owner.provenance = {'core_protein_scientific_contract': 1}
     roster.begin(owner, owner.params); roster.observe(owner, '[ab/123456] Submitted process > FilterRF3 (1)'); roster.finish(owner, 0)
     async def later_owner(*a, **k): return 17
-    monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', later_owner)
+    monkeypatch.setattr(result_ingester, 'ingest_loose_files', later_owner)
     factory, engine = await setup(tmp_path)
     try:
         async with factory() as db:
