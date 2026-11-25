@@ -272,7 +272,7 @@ LABEL_ASSETS = {
     'ESMFold2': ('esmfold2.sif', 'esmf_container_path', 'esmfold2', None),
     'Caliby': ('caliby.sif', None, None, None),
     'FAMPNN': ('fampnn.sif', None, None, None),
-    'MPNN': ('dl_binder_design.sif', None, None, None),
+    'MPNN': ('proteinmpnn.sif', None, None, None),
     'pyrosetta_tools': ('pyrosetta_tools.sif', None, None, None),
     # A container label does not imply inference: RF3/RFD3 filters only use
     # structure readers. Checkpoints are selected by the native process below.

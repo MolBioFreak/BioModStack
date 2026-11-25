@@ -1,22 +1,22 @@
 {
   "schema": "bms.tool-recipe.v1",
-  "id": "dl-binder-design",
-  "name": "ProteinMPNN (dl_binder_design)",
+  "id": "proteinmpnn",
+  "name": "ProteinMPNN",
   "label": "starting-point",
   "modules": [
     "design"
   ],
   "upstream": {
-    "homepage": "https://github.com/PapenfussLab/dl_binder_design",
+    "homepage": "https://github.com/dauparas/ProteinMPNN",
     "also": [
-      "https://github.com/RosettaCommons/RFdiffusion",
-      "https://github.com/dauparas/ProteinMPNN"
+      "https://github.com/PapenfussLab/dl_binder_design",
+      "https://github.com/RosettaCommons/RFdiffusion"
     ]
   },
-  "notes": "The image holds dl_binder_design and ProteinMPNN with the ProteinMPNN weights inside; it does not contain RFdiffusion. The optional RFdiffusion checkpoints are the ones BMS binds for RFdiffusion workflows, whose own image (rfdiffusion.sif) has no build definition here yet. Not yet built from clean by us: expect to fix things.",
+  "notes": "The image holds ProteinMPNN with its FastRelax wrapper and the ProteinMPNN weights inside; it does not contain RFdiffusion. The optional RFdiffusion checkpoints are the ones BMS binds for RFdiffusion workflows, whose own image (rfdiffusion.sif) has no build definition here yet. Not yet built from clean by us: expect to fix things.",
   "images": [
     {
-      "filename": "dl_binder_design.sif",
+      "filename": "proteinmpnn.sif",
       "def": "apptainer/dl_binder_design.def",
       "approx_size_gb": 10,
       "run_definition_test": false

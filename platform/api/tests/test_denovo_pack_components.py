@@ -54,7 +54,7 @@ def test_default_selection_leaves_out_the_heavy_models_it_does_not_need():
     for omitted in ('laproteina.sif', 'complexa.sif', 'disco.sif', 'esmfold2.sif', 'boltz2.sif', 'foundry.sif',
                     'laproteina', 'esmfold2', 'boltz'):
         assert omitted not in chosen
-    assert {'protenix.sif', 'frustrampnn.sif', 'fampnn.sif', 'dl_binder_design.sif', 'rfd4_proteina.sif'} <= chosen
+    assert {'protenix.sif', 'frustrampnn.sif', 'fampnn.sif', 'proteinmpnn.sif', 'rfd4_proteina.sif'} <= chosen
 
 
 def test_shared_dependencies_are_counted_once():

@@ -46,7 +46,7 @@ def test_binder_union_matches_native_generator_and_consumer_members():
     assert len(refs) == len(workflow_pack_dependencies('antibody_denovo'))
     assert {p for k, p in refs if k == 'image'} == {
         'bindcraft2.sif', 'boltzgen.sif', 'ppiflow.sif', 'rfantibody.sif',
-        'dl_binder_design.sif', 'fampnn.sif', 'caliby.sif', 'pyrosetta_tools.sif',
+        'proteinmpnn.sif', 'fampnn.sif', 'caliby.sif', 'pyrosetta_tools.sif',
         'boltz2.sif', 'protenix.sif', 'esmfold2.sif', 'foundry.sif', 'frustrampnn.sif',
         'md-preparation-v1.sif', 'gromacs-md-2025.3.sif', 'md-analysis-1.0.0.sif',
     }

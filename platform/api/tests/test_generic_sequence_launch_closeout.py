@@ -78,7 +78,7 @@ def test_public_sequence_request_reaches_only_selected_native_model(model, mode,
     assert not plan.metadata.dynamic_templates
     assert not plan.metadata.external_services
     image_names = {d.relative_path for d in plan.metadata.dependencies if d.kind == 'image'}
-    assert image_names == {'pyrosetta_tools.sif', 'fampnn.sif' if model == 'fampnn' else 'dl_binder_design.sif'}
+    assert image_names == {'pyrosetta_tools.sif', 'fampnn.sif' if model == 'fampnn' else 'proteinmpnn.sif'}
     contract = json.loads(plan.metadata.result_contract_json)
     assert contract['analysis_contract_id'] == 'sequence_design_v1'
     for key, value in typed.params.items():

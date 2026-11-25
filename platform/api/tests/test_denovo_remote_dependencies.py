@@ -63,7 +63,7 @@ def test_family_union_exact_deduplicated_native_members_and_no_unrelated_assets(
     refs = model_runtime_dependencies(MODEL)
     images = {r.relative_path for r in refs if r.kind == 'image'}
     assert images == {'foundry.sif', 'shape_rfd3.sif', 'disco.sif', 'laproteina.sif',
-                      'pyrosetta_tools.sif', 'fampnn.sif', 'dl_binder_design.sif',
+                      'pyrosetta_tools.sif', 'fampnn.sif', 'proteinmpnn.sif',
                       'boltz2.sif', 'esmfold2.sif', 'protenix.sif', 'caliby.sif'}
     protenix, blockers = native_checkpoint_dependencies('RunShapeProtenixValidator', {})
     assert not blockers
@@ -107,7 +107,7 @@ def test_validated_redesign_keeps_selected_designer_and_validator(designer, vali
     images = {d.relative_path for d in selected.dependencies if d.kind == 'image'}
     # No foundry.sif: the RFD3 region/prep stages were removed from Redesign (58af06d).
     assert images == {'pyrosetta_tools.sif',
-        'fampnn.sif' if designer == 'fampnn' else 'dl_binder_design.sif',
+        'fampnn.sif' if designer == 'fampnn' else 'proteinmpnn.sif',
         {'boltz2': 'boltz2.sif', 'esmfold2': 'esmfold2.sif', 'protenix_v2': 'protenix.sif'}[validator]}
     family = {(d.kind, d.relative_path) for d in model_runtime_dependencies(MODEL)}
     assert {(d.kind, d.relative_path) for d in selected.dependencies
@@ -122,7 +122,7 @@ def test_shape_selected_sequence_and_peers_are_subset_of_family(designer, valida
     selected = plan(params, mode='shape_blueprint', entrypoint='shape_blueprint_design')
     images = {d.relative_path for d in selected.dependencies if d.kind == 'image'}
     assert images == {'shape_rfd3.sif', 'esmfold2.sif',
-        'fampnn.sif' if designer == 'fampnn' else 'dl_binder_design.sif',
+        'fampnn.sif' if designer == 'fampnn' else 'proteinmpnn.sif',
         *({'boltz2': 'boltz2.sif', 'protenix_v2': 'protenix.sif'}[v] for v in validators)}
     family = {(d.kind, d.relative_path) for d in model_runtime_dependencies(MODEL)}
     assert {(d.kind, d.relative_path) for d in selected.dependencies
@@ -193,7 +193,7 @@ def test_independent_nested_member_keeps_containment_owner(assets, tmp_path, mon
 
 @pytest.mark.parametrize('model,expected', [
     ('protenix', {('image', 'protenix.sif'), ('weights', 'protenix')}),
-    ('proteinmpnn', {('image', 'dl_binder_design.sif'), ('image', 'pyrosetta_tools.sif')}),
+    ('proteinmpnn', {('image', 'proteinmpnn.sif'), ('image', 'pyrosetta_tools.sif')}),
 ])
 def test_unrelated_independent_model_closures_unchanged(model, expected):
     assert {(d.kind, d.relative_path) for d in model_runtime_dependencies(model)} == expected

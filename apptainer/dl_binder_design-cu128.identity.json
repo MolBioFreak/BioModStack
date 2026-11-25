@@ -2,7 +2,7 @@
   "adopted": false,
   "artifact": {
     "bytes": 9263149056,
-    "path": "$BMS_CONTAINER_DIR/dl_binder_design-cu128-20261003.sif",
+    "path": "$BMS_CONTAINER_DIR/proteinmpnn-cu128-20261003.sif",
     "sha256": "822d76ef1e9e2b9c187210f155a6389d3cc93e12921d036415f38f648929e06b"
   },
   "build": {
@@ -12,7 +12,7 @@
     "local_recipe": "task-evidence/binder-cuda-repair-20261003/mpnn/repair-local.def",
     "mode": "verified-parent localimage; offline hash-locked wheels",
     "parent_bytes": 5413904384,
-    "parent_path": "$BMS_CONTAINER_DIR/dl_binder_design.sif",
+    "parent_path": "$BMS_CONTAINER_DIR/proteinmpnn.sif",
     "parent_sha256": "314c1d0bcf605bc85dfe076073adb616fe8aef1fc7f981119a1ebbeef09261db"
   },
   "inputs": {

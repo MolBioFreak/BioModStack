@@ -8,7 +8,7 @@ category: sequence_design
 description: >
   Fast backbone-based sequence design using message passing neural networks.
   Includes optional FastRelax cycles for iterative refinement.
-container: dl_binder_design.sif
+container: proteinmpnn.sif
 
 ui_icon: dna
 ui_color: "#10B981"

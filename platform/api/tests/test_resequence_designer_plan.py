@@ -46,7 +46,7 @@ def test_caliby_declares_the_checkpoint_the_template_names(tmp_path):
     assert 'caliby/model_params/caliby/soluble_caliby_v1.ckpt' in weights or any(w.endswith('soluble_caliby_v1.ckpt') for w in weights)
 
 
-@pytest.mark.parametrize('designer,stage,image', [('mpnn', 'RunMPNN', 'dl_binder_design.sif'), ('fampnn', 'RunFAMPNN', 'fampnn.sif')])
+@pytest.mark.parametrize('designer,stage,image', [('mpnn', 'RunMPNN', 'proteinmpnn.sif'), ('fampnn', 'RunFAMPNN', 'fampnn.sif')])
 def test_proteinmpnn_and_fampnn_plans_are_unchanged(designer, stage, image, tmp_path):
     stages, images, _, _ = _declared(_plan(designer, tmp_path))
     assert stage in stages and image in images
