@@ -170,6 +170,7 @@ export default defineConfig({
             './tests/vitest/deNovoConstructionParentMounted.test.tsx',
             './tests/vitest/molecularConstructionWorkbench.test.tsx',
             './tests/vitest/molecularGeometryWorkbench.test.tsx',
+            './tests/vitest/nativeGeneratedSequences.test.tsx',
             './tests/vitest/preparedGeometryMounted.test.tsx',
             './tests/vitest/deNovoCompleteAuthoringMounted.test.tsx',
             './tests/vitest/generalSequenceDesignMounted.test.tsx',
