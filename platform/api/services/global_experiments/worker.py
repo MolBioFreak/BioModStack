@@ -56,7 +56,7 @@ class GlobalExperimentWorker:
         self,
         experiment_session_factory: async_sessionmaker[AsyncSession],
         core_session_factory: async_sessionmaker[AsyncSession],
-        molbio_ngs_session_factory: async_sessionmaker[AsyncSession],
+        molbio_ngs_session_factory: async_sessionmaker[AsyncSession] | None = None,
         *,
         database_path: Path,
         poll_interval: float = 2.0,
@@ -214,24 +214,35 @@ class GlobalExperimentWorker:
         )
         connector_commands = 0
         connector_events = 0
-        for _ in range(self._dispatch_batch_size):
-            async with self._experiment_sessions() as experiment_session:
-                async with self._molbio_ngs_sessions() as domain_session:
-                    processed = await process_command_once(
-                        experiment_session, domain_session, worker_id=self.worker_id
-                    )
-            if processed == 0:
-                break
-            connector_commands += processed
-        for _ in range(self._dispatch_batch_size):
-            async with self._experiment_sessions() as experiment_session:
-                async with self._molbio_ngs_sessions() as domain_session:
-                    processed = await process_outbox_once(
-                        experiment_session, domain_session, worker_id=self.worker_id
-                    )
-            if processed == 0:
-                break
-            connector_events += processed
+        if self._molbio_ngs_sessions is not None:
+            for _ in range(self._dispatch_batch_size):
+                try:
+                    async with self._experiment_sessions() as experiment_session:
+                        async with self._molbio_ngs_sessions() as domain_session:
+                            processed = await process_command_once(
+                                experiment_session, domain_session, worker_id=self.worker_id
+                            )
+                except Exception as exc:
+                    self.failure_count += 1
+                    self.last_error = str(exc)[:512]
+                    break
+                if processed == 0:
+                    break
+                connector_commands += processed
+            for _ in range(self._dispatch_batch_size):
+                try:
+                    async with self._experiment_sessions() as experiment_session:
+                        async with self._molbio_ngs_sessions() as domain_session:
+                            processed = await process_outbox_once(
+                                experiment_session, domain_session, worker_id=self.worker_id
+                            )
+                except Exception as exc:
+                    self.failure_count += 1
+                    self.last_error = str(exc)[:512]
+                    break
+                if processed == 0:
+                    break
+                connector_events += processed
         dispatched = 0
         for _ in range(self._dispatch_batch_size):
             async with self._experiment_sessions() as experiment_session:
@@ -362,8 +373,14 @@ class GlobalExperimentWorker:
                 oldest_age = max(0, int((datetime.now(timezone.utc) - created).total_seconds()))
             except ValueError:
                 oldest_age = None
-        async with self._molbio_ngs_sessions() as domain_session:
-            connector = await connector_health(active_session, domain_session)
+        if self._molbio_ngs_sessions is None:
+            connector: dict[str, Any] = {"status": "disabled", "enabled": False}
+        else:
+            try:
+                async with self._molbio_ngs_sessions() as domain_session:
+                    connector = await connector_health(active_session, domain_session)
+            except Exception as exc:
+                connector = {"status": "unavailable", "error": str(exc)[:512]}
         return {
             "schema": "bms.experiment.worker-health.v1",
             "worker_id": self.worker_id,

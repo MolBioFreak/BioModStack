@@ -26,6 +26,19 @@ function RouteLoadingFallback() {
   );
 }
 
+function OptionalModuleUnavailable({ moduleName, flagName }: { moduleName: string; flagName: string }) {
+  return (
+    <div className="mx-auto max-w-2xl p-6 text-[var(--text-primary)]">
+      <section className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-6">
+        <h1 className="text-xl font-semibold">{moduleName} is disabled</h1>
+        <p className="mt-2 text-sm text-[var(--text-secondary)]">
+          This installation has <code>{flagName}</code> disabled. Existing Project records remain intact, and re-enabling the module restores access.
+        </p>
+      </section>
+    </div>
+  );
+}
+
 function HistoricalMolBioReopenRoute() {
   const location = useLocation();
   const query = new URLSearchParams(location.search);
@@ -103,14 +116,25 @@ function App() {
             {/* NGS Data Visualization Toolkit - Nanopore-focused orchestration surface */}
             <Route
               path="/ngs"
-              element={(
-                  <div className="w-full max-w-none">
-                    <NGSToolkit />
-                  </div>
-                )}
+              element={!bmsFeaturesResolved
+                ? <RouteLoadingFallback />
+                : bmsFeatures.ngs_ont || !bmsFeaturesKnown
+                  ? (
+                    <div className="w-full max-w-none">
+                      <NGSToolkit />
+                    </div>
+                  )
+                  : <OptionalModuleUnavailable moduleName="NGS Toolkit" flagName="ngs_ont" />}
             />
             {/* Isolated Stats Toolkit rendered inside the BioModStack workspace. */}
-            <Route path="/stats" element={<StatsToolkitLauncher />} />
+            <Route
+              path="/stats"
+              element={!bmsFeaturesResolved
+                ? <RouteLoadingFallback />
+                : bmsFeatures.stats || !bmsFeaturesKnown
+                  ? <StatsToolkitLauncher />
+                  : <OptionalModuleUnavailable moduleName="Stats Toolkit" flagName="stats" />}
+            />
             {/* Build or adopt the third-party tools this install uses. */}
             <Route path="/tools" element={<ToolsInstaller />} />
             {/* Historical analytics route now resolves to Dashboard telemetry. */}

@@ -629,30 +629,34 @@ export function Layout({ children }: LayoutProps) {
                                 >
                                     Mol Bio Toolkit
                                 </Link>
-                                <Link
-                                    to="/ngs"
-                                    data-bms-primary-nav-active={isActive('/ngs') ? 'true' : undefined}
-                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
-                                    style={{
-                                        backgroundColor: isActive('/ngs') ? 'color-mix(in srgb, var(--accent-secondary) 20%, transparent)' : 'transparent',
-                                        color: isActive('/ngs') ? 'var(--accent-secondary)' : 'var(--text-secondary)'
-                                    }}
-                                    title="NGS Toolkit"
-                                >
-                                    NGS Toolkit
-                                </Link>
-                                <Link
-                                    to="/stats"
-                                    data-bms-primary-nav-active={isActive('/stats') ? 'true' : undefined}
-                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
-                                    style={{
-                                        backgroundColor: isActive('/stats') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                        color: isActive('/stats') ? 'var(--accent-primary)' : 'var(--text-secondary)'
-                                    }}
-                                    title="BioModStack Stats Toolkit"
-                                >
-                                    Stats Toolkit
-                                </Link>
+                                {bmsFeatureState.features.ngs_ont && (
+                                    <Link
+                                        to="/ngs"
+                                        data-bms-primary-nav-active={isActive('/ngs') ? 'true' : undefined}
+                                        className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                        style={{
+                                            backgroundColor: isActive('/ngs') ? 'color-mix(in srgb, var(--accent-secondary) 20%, transparent)' : 'transparent',
+                                            color: isActive('/ngs') ? 'var(--accent-secondary)' : 'var(--text-secondary)'
+                                        }}
+                                        title="NGS Toolkit"
+                                    >
+                                        NGS Toolkit
+                                    </Link>
+                                )}
+                                {bmsFeatureState.features.stats && (
+                                    <Link
+                                        to="/stats"
+                                        data-bms-primary-nav-active={isActive('/stats') ? 'true' : undefined}
+                                        className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                        style={{
+                                            backgroundColor: isActive('/stats') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                            color: isActive('/stats') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                        }}
+                                        title="BioModStack Stats Toolkit"
+                                    >
+                                        Stats Toolkit
+                                    </Link>
+                                )}
 
                                 {showBioXpDevFeature && (
                                     <Link

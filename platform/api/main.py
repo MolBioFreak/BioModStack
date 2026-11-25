@@ -16,8 +16,13 @@ import re
 from database import async_session, current_launch_context_id, init_db
 from experiment_database import experiment_session_factory, get_experiment_db_path, init_experiment_db
 from molbio_database import init_molbio_db, molbio_health
-from molbio_ngs_database import init_molbio_ngs_db, molbio_ngs_health
-from molbio_ngs_database import molbio_ngs_session_factory
+from molbio_ngs_database import (
+    get_molbio_ngs_startup_error,
+    init_molbio_ngs_db,
+    molbio_ngs_health,
+    molbio_ngs_session_factory,
+    set_molbio_ngs_startup_error,
+)
 from build_identity import current_build_identity
 from readiness import collect_runtime_readiness, http_readiness
 from dev_issue_screenshot_upload_limit import DevIssueScreenshotUploadLimitMiddleware
@@ -70,6 +75,39 @@ _ont_raw_signal_worker: OntRawSignalWorker | None = None
 _ont_signal_worker: OntSignalWorker | None = None
 _frustrampnn_statistics_worker: FrustraMPNNStatisticsWorker | None = None
 _ont_run_monitor = None
+_adapter_wait_task: asyncio.Task[None] | None = None
+
+
+async def _start_workflow_orchestrator() -> None:
+    global _orchestrator
+    if _orchestrator is not None:
+        return
+    _orchestrator = GPUOrchestrator(
+        db_session_factory=async_session,
+        get_gpu_stats_fn=get_gpu_stats,
+        launch_nextflow_job_fn=_orchestrator_launch_job,
+        poll_interval=3.0,
+    )
+    await _orchestrator.start()
+    logger.info("[STARTUP] GPU Orchestrator started")
+
+
+async def _wait_and_start_workflow_orchestrator(
+    *,
+    poll_interval_seconds: float = 0.5,
+) -> None:
+    """Wait in the background until the workflow adapter answers, then start the scheduler once."""
+    base_url = workflow_adapter_base_url()
+    if not base_url:
+        await _start_workflow_orchestrator()
+        return
+    health_url = f"{base_url}/api/workflow-adapter/health"
+    while True:
+        ready, _ = await http_readiness(health_url)
+        if ready:
+            await _start_workflow_orchestrator()
+            return
+        await asyncio.sleep(max(0.05, float(poll_interval_seconds)))
 
 
 async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
@@ -123,13 +161,17 @@ async def lifespan(app: FastAPI):
     global _ont_raw_signal_worker
     global _ont_signal_worker
     global _frustrampnn_statistics_worker
+    global _adapter_wait_task
     bioxp_runtime = None
     global _ont_run_monitor
+    ngs_ont_enabled = install_feature_enabled("ngs_ont")
+    protein_compute_enabled = install_feature_enabled("protein_compute")
+    bioxp_enabled = install_feature_enabled("bioxp")
     
     # Required checked-in scientific authority must be complete before workers start.
     catalog_authority.require()
 
-    # Initialize independently owned core, global experiment, MolBio, and MolBio/NGS state stores.
+    # Initialize independently owned core, global experiment, and MolBio state stores (fatal on error).
     await init_db()
     from services.remote_execution.targets import AttachmentController, invalidate_vast_inventory, run_vast_inventory_refresh
     from services.remote_execution.preloading import PreloadController
@@ -150,43 +192,53 @@ async def lifespan(app: FastAPI):
     )
     await init_experiment_db()
     await init_molbio_db()
-    await init_molbio_ngs_db()
-    _frustrampnn_statistics_worker = FrustraMPNNStatisticsWorker(async_session)
-    await _frustrampnn_statistics_worker.start()
-    logger.info("[STARTUP] FrustraMPNN statistics worker started")
-    async with experiment_session_factory() as admission_session:
-        async with async_session() as admission_core_session:
-            pending_resource_evidence = await reconcile_startup_admissions(
-                admission_session,
-                admission_core_session,
-            )
-            await admission_session.commit()
-        if pending_resource_evidence:
-            logger.warning(
-                "[STARTUP] %s managed-workflow resource admissions await producer evidence",
-                pending_resource_evidence,
-            )
-    
-    # Initialize GPU orchestrator only when this runtime is allowed to own workflow launches.
-    if workflow_launches_allowed():
-        await wait_for_workflow_adapter_admission()
-        _orchestrator = GPUOrchestrator(
-            db_session_factory=async_session,
-            get_gpu_stats_fn=get_gpu_stats,
-            launch_nextflow_job_fn=_orchestrator_launch_job,
-            poll_interval=3.0
-        )
 
-        # Start orchestrator in background
-        await _orchestrator.start()
-        logger.info("[STARTUP] GPU Orchestrator started")
+    # Optional MolBio/NGS store: never opened when disabled; startup error degrades only NGS routes.
+    if ngs_ont_enabled:
+        try:
+            await init_molbio_ngs_db()
+        except Exception as exc:
+            set_molbio_ngs_startup_error(str(exc))
+            logger.warning("[STARTUP] MolBio/NGS store unavailable (NGS routes will return 503): %s", exc)
+    else:
+        set_molbio_ngs_startup_error(None)
+
+    if protein_compute_enabled:
+        _frustrampnn_statistics_worker = FrustraMPNNStatisticsWorker(async_session)
+        await _frustrampnn_statistics_worker.start()
+        logger.info("[STARTUP] FrustraMPNN statistics worker started")
+    else:
+        _frustrampnn_statistics_worker = None
+
+    if ngs_ont_enabled and get_molbio_ngs_startup_error() is None:
+        try:
+            async with experiment_session_factory() as admission_session:
+                async with async_session() as admission_core_session:
+                    pending_resource_evidence = await reconcile_startup_admissions(
+                        admission_session,
+                        admission_core_session,
+                    )
+                    await admission_session.commit()
+                if pending_resource_evidence:
+                    logger.warning(
+                        "[STARTUP] %s managed-workflow resource admissions await producer evidence",
+                        pending_resource_evidence,
+                    )
+        except Exception as exc:
+            logger.warning("[STARTUP] NGS startup admission reconciliation failed: %s", exc)
+    
+    # Initialize workflow workers only when this runtime is allowed to own workflow launches.
+    # Never block API boot waiting on the workflow adapter; start the scheduler once it answers.
+    _orchestrator = None
+    _adapter_wait_task = None
+    if workflow_launches_allowed():
         _md_reconciler = MdReconcilerWorker(async_session, poll_interval=5.0)
         await _md_reconciler.start()
         logger.info("[STARTUP] MD lifecycle reconciler started")
         _global_experiment_worker = GlobalExperimentWorker(
             experiment_session_factory,
             async_session,
-            molbio_ngs_session_factory,
+            molbio_ngs_session_factory if ngs_ont_enabled else None,
             database_path=get_experiment_db_path(),
         )
         install_global_experiment_worker(_global_experiment_worker)
@@ -195,6 +247,22 @@ async def lifespan(app: FastAPI):
             "[STARTUP] Global experiment dispatcher/reconciler lease=%s",
             _global_experiment_worker.lease_state,
         )
+        adapter_url = workflow_adapter_base_url()
+        if not adapter_url:
+            await _start_workflow_orchestrator()
+        else:
+            adapter_ready, adapter_status = await http_readiness(f"{adapter_url}/api/workflow-adapter/health")
+            if adapter_ready:
+                await _start_workflow_orchestrator()
+            else:
+                logger.warning(
+                    "[STARTUP] Workflow adapter not ready (%s); API starting and deferring GPU Orchestrator until adapter answers",
+                    adapter_status,
+                )
+                _adapter_wait_task = asyncio.create_task(
+                    _wait_and_start_workflow_orchestrator(),
+                    name="workflow-adapter-admission-wait",
+                )
     else:
         _orchestrator = None
         _md_reconciler = None
@@ -203,45 +271,53 @@ async def lifespan(app: FastAPI):
         install_global_experiment_worker(None)
         logger.warning("[STARTUP] %s", workflow_launch_block_detail("start the GPU workflow scheduler"))
 
-    from services.ont_local_images import (
-        configured_container_runtime as _ont_container_runtime,
-        local_image_identity as _ont_local_image_identity,
-    )
-    try:
-        _ont_local_image_identity(
-            "BMS_ONT_SLOW5TOOLS_IMAGE", _ont_container_runtime()
+    if ngs_ont_enabled:
+        from services.ont_local_images import (
+            configured_container_runtime as _ont_container_runtime,
+            local_image_identity as _ont_local_image_identity,
         )
-    except RuntimeError:
-        ont_raw_image_present = False
-    else:
-        ont_raw_image_present = True
-    if ont_raw_image_present:
-        _ont_raw_signal_worker = OntRawSignalWorker(async_session, poll_interval=5.0)
-        await _ont_raw_signal_worker.start()
-        logger.info("[STARTUP] ONT raw-signal derivation worker started")
+        try:
+            _ont_local_image_identity(
+                "BMS_ONT_SLOW5TOOLS_IMAGE", _ont_container_runtime()
+            )
+        except RuntimeError:
+            ont_raw_image_present = False
+        else:
+            ont_raw_image_present = True
+        if ont_raw_image_present:
+            _ont_raw_signal_worker = OntRawSignalWorker(async_session, poll_interval=5.0)
+            await _ont_raw_signal_worker.start()
+            logger.info("[STARTUP] ONT raw-signal derivation worker started")
+        else:
+            _ont_raw_signal_worker = None
+            logger.info("[STARTUP] ONT raw-signal worker disabled: raw-signal image is not built on this machine")
+
+        # The raw-signal worker already polls active runs; otherwise run a plain
+        # status monitor so MinKNOW runs started from BMS still reach completion.
+        if _ont_raw_signal_worker is None and os.getenv("BMS_ONT_MINKNOW_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+            from services.ont_run_control import OntRunMonitor
+            _ont_run_monitor = OntRunMonitor(poll_interval=10.0)
+            await _ont_run_monitor.start()
+            logger.info("[STARTUP] ONT run status monitor started")
+
+        if get_molbio_ngs_startup_error() is None:
+            try:
+                OntSignalWorker._runtime_identity()
+            except (OSError, RuntimeError):
+                _ont_signal_worker = None
+                logger.info("[STARTUP] ONT signal-workbench worker disabled: Squigualiser image is not built on this machine")
+            else:
+                _ont_signal_worker = OntSignalWorker(async_session, molbio_ngs_session_factory, poll_interval=5.0)
+                if await _ont_signal_worker.start():
+                    logger.info("[STARTUP] governed ONT signal-workbench worker started")
+                else:
+                    logger.warning("[STARTUP] ONT signal-workbench backend unavailable: worker blocked; scientific work unchanged; restart after provisioning to retry recovery")
+        else:
+            _ont_signal_worker = None
     else:
         _ont_raw_signal_worker = None
-        logger.info("[STARTUP] ONT raw-signal worker disabled: raw-signal image is not built on this machine")
-
-    # The raw-signal worker already polls active runs; otherwise run a plain
-    # status monitor so MinKNOW runs started from BMS still reach completion.
-    if _ont_raw_signal_worker is None and os.getenv("BMS_ONT_MINKNOW_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
-        from services.ont_run_control import OntRunMonitor
-        _ont_run_monitor = OntRunMonitor(poll_interval=10.0)
-        await _ont_run_monitor.start()
-        logger.info("[STARTUP] ONT run status monitor started")
-
-    try:
-        OntSignalWorker._runtime_identity()
-    except (OSError, RuntimeError):
+        _ont_run_monitor = None
         _ont_signal_worker = None
-        logger.info("[STARTUP] ONT signal-workbench worker disabled: Squigualiser image is not built on this machine")
-    else:
-        _ont_signal_worker = OntSignalWorker(async_session, molbio_ngs_session_factory, poll_interval=5.0)
-        if await _ont_signal_worker.start():
-            logger.info("[STARTUP] governed ONT signal-workbench worker started")
-        else:
-            logger.warning("[STARTUP] ONT signal-workbench backend unavailable: worker blocked; scientific work unchanged; restart after provisioning to retry recovery")
 
     _analysis_worker = AnalysisWorker(
         db_session_factory=async_session,
@@ -255,25 +331,35 @@ async def lifespan(app: FastAPI):
     await _external_import_worker.start()
     logger.info("[STARTUP] External result import worker started")
 
+    if protein_compute_enabled:
+        _boltz_api_job_worker = BoltzApiJobWorker(async_session)
+        await _boltz_api_job_worker.start()
+        logger.info("[STARTUP] Boltz API submission worker started")
+    else:
+        _boltz_api_job_worker = None
 
-    _boltz_api_job_worker = BoltzApiJobWorker(async_session)
-    await _boltz_api_job_worker.start()
-    logger.info("[STARTUP] Boltz API submission worker started")
+    app.state.bioxp_runtime = None
+    app.state.bioxp_startup_error = None
+    if bioxp_enabled:
+        try:
+            from services.bioxp.runtime import create_bioxp_runtime
 
-    if install_feature_enabled("bioxp"):
-        from services.bioxp.runtime import create_bioxp_runtime
-
-        bioxp_runtime = create_bioxp_runtime()
-        app.state.bioxp_runtime = bioxp_runtime
-        await bioxp_runtime.start()
-        snapshot = bioxp_runtime.connection.snapshot()
-        logger.info(
-            "[STARTUP] BioXP control plane initialized active=%s reachable=%s runtime_ready=%s hardware_ready=%s",
-            snapshot.active,
-            snapshot.reachable,
-            snapshot.runtime_ready,
-            snapshot.hardware_ready,
-        )
+            bioxp_runtime = create_bioxp_runtime()
+            await bioxp_runtime.start()
+            app.state.bioxp_runtime = bioxp_runtime
+            snapshot = bioxp_runtime.connection.snapshot()
+            logger.info(
+                "[STARTUP] BioXP control plane initialized active=%s reachable=%s runtime_ready=%s hardware_ready=%s",
+                snapshot.active,
+                snapshot.reachable,
+                snapshot.runtime_ready,
+                snapshot.hardware_ready,
+            )
+        except Exception as exc:
+            bioxp_runtime = None
+            app.state.bioxp_runtime = None
+            app.state.bioxp_startup_error = str(exc)
+            logger.warning("[STARTUP] BioXP control plane unavailable (BioXP routes will return 503): %s", exc)
     
     yield
     
@@ -281,6 +367,10 @@ async def lifespan(app: FastAPI):
     # them: the Vast refresh can sit in a 15 s provider request and remote
     # telemetry in an SSH probe, and waiting for either pushed the stop past
     # systemd's 20 s TimeoutStopSec, so restarts ended in SIGKILL.
+    if _adapter_wait_task is not None:
+        _adapter_wait_task.cancel()
+        await asyncio.gather(_adapter_wait_task, return_exceptions=True)
+        _adapter_wait_task = None
     remote_telemetry_stop.set()
     vast_inventory_stop.set()
     for task in (remote_telemetry_task, vast_inventory_task):
@@ -324,16 +414,28 @@ async def lifespan(app: FastAPI):
         logger.info("[SHUTDOWN] ONT signal-workbench worker stopped")
 
 
+_BIOXP_ENABLED = install_feature_enabled("bioxp")
+_NGS_ONT_ENABLED = install_feature_enabled("ngs_ont")
+_STATS_ENABLED = install_feature_enabled("stats")
+_PROTEIN_COMPUTE_ENABLED = install_feature_enabled("protein_compute")
+
 app = FastAPI(
     title="BioModStack Control Platform",
     description="Extensible platform for protein modification and design",
     version="0.2.0",
     lifespan=lifespan
 )
-app.add_exception_handler(
-    ngs_alignment_sessions.OntNgsRouteError,
-    ngs_alignment_sessions.ont_ngs_route_error_handler,
-)
+app.state.mounted_features = {
+    "bioxp": _BIOXP_ENABLED,
+    "ngs_ont": _NGS_ONT_ENABLED,
+    "stats": _STATS_ENABLED,
+    "protein_compute": _PROTEIN_COMPUTE_ENABLED,
+}
+if _NGS_ONT_ENABLED:
+    app.add_exception_handler(
+        ngs_alignment_sessions.OntNgsRouteError,
+        ngs_alignment_sessions.ont_ngs_route_error_handler,
+    )
 
 app.add_middleware(FrustraMPNNUploadLimitMiddleware)
 app.add_middleware(DevIssueScreenshotUploadLimitMiddleware)
@@ -420,14 +522,20 @@ app.include_router(models.router, prefix="/api/models", tags=["models"])
 app.include_router(molecular_dynamics.router)
 app.include_router(templates.router, prefix="/api/templates", tags=["templates"])
 app.include_router(inputs.router, prefix="/api/inputs", tags=["inputs"])
-app.include_router(boltz_api_jobs.router, prefix="/api/jobs/boltz-api", tags=["boltz-api-jobs"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(sequence_native.router, prefix="/api", tags=["native-sequence-results"])
-app.include_router(protonpottsmpnn.router, prefix="/api/jobs", tags=["protonpottsmpnn"])
-app.include_router(protonpottsmpnn_prediction.router, prefix="/api/jobs", tags=["protonpottsmpnn"])
-app.include_router(binder_blind_pose.router, prefix="/api/blind-pose", tags=["blind-pose"])
-app.include_router(binder_continuation.router, prefix="/api/binder-continuation", tags=["binder-continuation"])
-app.include_router(ligandmpnn_interface_context.router)
+if _PROTEIN_COMPUTE_ENABLED:
+    app.include_router(boltz_api_jobs.router, prefix="/api/jobs/boltz-api", tags=["boltz-api-jobs"])
+    app.include_router(protonpottsmpnn.router, prefix="/api/jobs", tags=["protonpottsmpnn"])
+    app.include_router(protonpottsmpnn_prediction.router, prefix="/api/jobs", tags=["protonpottsmpnn"])
+    app.include_router(binder_blind_pose.router, prefix="/api/blind-pose", tags=["blind-pose"])
+    app.include_router(binder_continuation.router, prefix="/api/binder-continuation", tags=["binder-continuation"])
+    app.include_router(ligandmpnn_interface_context.router)
+    app.include_router(conformational_mapping.router)
+    app.include_router(frameworks.router)  # /api/frameworks/* - SAbDab integration
+    app.include_router(boltzgen.router)
+    app.include_router(msa.router)
+    app.include_router(frustrampnn.router)  # /api/frustrampnn/* - Energetic frustration analysis
 app.include_router(
     execution_targets.router,
     prefix="/api/execution-targets",
@@ -437,7 +545,6 @@ app.include_router(external_imports.router, prefix="/api/jobs/imports/external",
 app.include_router(md_results.router, prefix="/api/jobs", tags=["molecular-dynamics-results"])
 app.include_router(viewer_resources.router, prefix="/api/jobs", tags=["viewer-resources"])
 app.include_router(plr_results.router, prefix="/api/jobs", tags=["plr-workflow-results"])
-app.include_router(conformational_mapping.router)
 app.include_router(designs.router, prefix="/api/designs", tags=["designs"])
 app.include_router(analyses.router, prefix="/api", tags=["analyses"])
 app.include_router(gpu.router, prefix="/api/gpu", tags=["gpu"])
@@ -449,12 +556,10 @@ app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"]
 app.include_router(user_sequences.router, prefix="/api/user-sequences", tags=["user-sequences"])
 app.include_router(user_templates.router, prefix="/api/user-templates", tags=["user-templates"])
 app.include_router(experiment_workspaces.router)
-app.include_router(molbio_ngs_experiments.router)
 app.include_router(projects.router)
 app.include_router(project_manager.router)
 from routers import family_msa_results
 app.include_router(family_msa_results.router)
-app.include_router(ngs_molbio_n5.router)
 app.include_router(payload_ownership_audit.router)
 if dev_issues.dev_issue_ledger_enabled():
     app.include_router(dev_issues.router)
@@ -467,8 +572,6 @@ app.include_router(system.router, prefix="/api", tags=["system"])  # /api/system
 app.include_router(telemetry.router, prefix="/api", tags=["telemetry"])
 from routers import tools_installer
 app.include_router(tools_installer.router)  # /api/tools/* - tool installer
-app.include_router(frameworks.router)  # /api/frameworks/* - SAbDab integration
-app.include_router(boltzgen.router)
 app.include_router(molbio_ops.router)
 from routers import molbio_golden_gate_design
 app.include_router(molbio_golden_gate_design.router)
@@ -481,22 +584,41 @@ from routers import molbio_branches
 app.include_router(molbio_branches.router)
 app.include_router(molbio_end_operations.router)
 app.include_router(rna_structure.router)
-app.include_router(msa.router)
 app.include_router(ribocentre.router, prefix="/api/ribocentre", tags=["ribocentre"])
-app.include_router(frustrampnn.router)  # /api/frustrampnn/* - Energetic frustration analysis
-if install_feature_enabled("bioxp"):
+if _BIOXP_ENABLED:
     from routers import bioxp
 
     app.include_router(bioxp.router, prefix="/api/bioxp", tags=["bioxp"])
-app.include_router(sequence_qc.router, prefix="/api/sequence-qc", tags=["sequence-qc"])
-app.include_router(ngs_alignment_sessions.router, prefix="/api", tags=["ngs-alignment"])
-ngs_alignment_sessions.install_governed_ngs_openapi(app)
-app.include_router(ont_devices.router, prefix="/api/ont", tags=["ont-devices"])
-app.include_router(ont_runs.router, prefix="/api/ont", tags=["ont-runs"])
-app.include_router(ont_signal_workbench.router, prefix="/api/ont/signal-workbench", tags=["ont-signal-workbench"])
-app.include_router(ont_runs.barcode_router, prefix="/api/jobs", tags=["ont-barcode-units"])
+if _NGS_ONT_ENABLED:
+    app.include_router(molbio_ngs_experiments.router)
+    app.include_router(ngs_molbio_n5.router)
+    app.include_router(sequence_qc.router, prefix="/api/sequence-qc", tags=["sequence-qc"])
+    app.include_router(ngs_alignment_sessions.router, prefix="/api", tags=["ngs-alignment"])
+    ngs_alignment_sessions.install_governed_ngs_openapi(app)
+    app.include_router(ont_devices.router, prefix="/api/ont", tags=["ont-devices"])
+    app.include_router(ont_runs.router, prefix="/api/ont", tags=["ont-runs"])
+    app.include_router(ont_signal_workbench.router, prefix="/api/ont/signal-workbench", tags=["ont-signal-workbench"])
+    app.include_router(ont_runs.barcode_router, prefix="/api/jobs", tags=["ont-barcode-units"])
 app.include_router(mobile_apk_updates.router, prefix="/api")
 app.include_router(mobile_ui_updates.router, prefix="/api")
+
+async def _safe_molbio_ngs_health(*, deep: bool = False) -> dict[str, object]:
+    startup_error = get_molbio_ngs_startup_error()
+    if startup_error is not None:
+        return {
+            "status": "unavailable",
+            "error": startup_error,
+            "attestation": {"ok": False},
+        }
+    try:
+        return await molbio_ngs_health(deep=deep)
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "error": str(exc),
+            "attestation": {"ok": False},
+        }
+
 
 @app.get("/api/health")
 async def health_check(deep: bool = False):
@@ -505,10 +627,17 @@ async def health_check(deep: bool = False):
     Explicit ``?deep=true`` requests keep the full diagnostic integrity audit.
     Startup, release and exact scientific reads retain their own checks.
     """
-    molbio, molbio_ngs = await asyncio.gather(
-        molbio_health(deep=deep), molbio_ngs_health(deep=deep),
+    ngs_enabled = bool(app.state.mounted_features.get("ngs_ont", True))
+    if ngs_enabled:
+        molbio, molbio_ngs = await asyncio.gather(
+            molbio_health(deep=deep), _safe_molbio_ngs_health(deep=deep),
+        )
+    else:
+        molbio = await molbio_health(deep=deep)
+        molbio_ngs = {"status": "disabled", "enabled": False}
+    readiness = await collect_runtime_readiness(
+        molbio=molbio, molbio_ngs=molbio_ngs,
     )
-    readiness = await collect_runtime_readiness(molbio=molbio, molbio_ngs=molbio_ngs)
     return {
         "status": "healthy" if readiness["ready"] else "degraded",
         "service": "biomodstack-api",

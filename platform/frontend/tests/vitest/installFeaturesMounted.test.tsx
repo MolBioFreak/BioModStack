@@ -2,7 +2,7 @@ import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { isBmsFeatureVisible, useBmsFeatureState, useResolvedBmsFeatures } from '../../src/runtime/installFeatures';
+import { DEFAULT_BMS_FEATURES, isBmsFeatureVisible, normalizeBmsFeatureState, normalizeBmsFeatures, resolveBmsFeatureQueryState, useBmsFeatureState, useResolvedBmsFeatures } from '../../src/runtime/installFeatures';
 
 const key = ['bms-install-features'];
 const enabled = { features: { bioxp: true }, dev_features: { bioxp: false } };
@@ -102,4 +102,34 @@ it('cold pending is not enabled and valid developer visibility changes are appli
     await refresh();
     check('BioXP', 'BioXP route');
     expect(root!.root.findByType('aside').children).toEqual(['hidden']);
+});
+
+it('defaults ngs_ont, stats, and protein_compute on and normalizes M2 module flags', () => {
+    expect(DEFAULT_BMS_FEATURES).toEqual({
+        bioxp: false,
+        ngs_ont: true,
+        stats: true,
+        protein_compute: true,
+    });
+    const state = normalizeBmsFeatureState({
+        features: { bioxp: true, ngs_ont: false, stats: false, protein_compute: true },
+        configured_features: { bioxp: true, ngs_ont: true, stats: false, protein_compute: true },
+        dev_features: { bioxp: true, ngs_ont: false, stats: false, protein_compute: false },
+    });
+    expect(state.features).toEqual({
+        bioxp: true,
+        ngs_ont: false,
+        stats: false,
+        protein_compute: true,
+    });
+    expect(state.configuredFeatures.ngs_ont).toBe(true);
+    expect(state.devFeatures.bioxp).toBe(true);
+    expect(state.devFeatures.ngs_ont).toBe(false);
+    expect(resolveBmsFeatureQueryState(undefined, true).features).toEqual(DEFAULT_BMS_FEATURES);
+    expect(normalizeBmsFeatures({ features: { bioxp: true } })).toEqual({
+        bioxp: true,
+        ngs_ont: true,
+        stats: true,
+        protein_compute: true,
+    });
 });

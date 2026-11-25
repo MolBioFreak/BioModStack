@@ -835,14 +835,28 @@ async def list_sequences(
             candidates = (await session.execute(query.offset(scan_offset).limit(batch_size))).all()
             if not candidates:
                 break
-            assigned = set((await native.scalars(
-                select(receipt_sequence_id).select_from(MolBioNGSMemberReceipt)
-                .join(MolBioNGSDomainStateMember, MolBioNGSDomainStateMember.receipt_id == MolBioNGSMemberReceipt.receipt_id)
-                .join(MolBioNGSDomainState, MolBioNGSDomainState.current_state_revision_id == MolBioNGSDomainStateMember.state_revision_id)
-                .where(MolBioNGSMemberReceipt.entity_kind == "molecular_revision",
-                       receipt_sequence_id.in_([candidate.id for candidate in candidates]))
-                .distinct()
-            )).all())
+            if getattr(native, "_is_lazy_molbio_ngs_session", False):
+                from biomodstack_runtime_profile import install_feature_enabled
+                if not install_feature_enabled("ngs_ont"):
+                    assigned = set()
+                else:
+                    assigned = set((await native.scalars(
+                        select(receipt_sequence_id).select_from(MolBioNGSMemberReceipt)
+                        .join(MolBioNGSDomainStateMember, MolBioNGSDomainStateMember.receipt_id == MolBioNGSMemberReceipt.receipt_id)
+                        .join(MolBioNGSDomainState, MolBioNGSDomainState.current_state_revision_id == MolBioNGSDomainStateMember.state_revision_id)
+                        .where(MolBioNGSMemberReceipt.entity_kind == "molecular_revision",
+                               receipt_sequence_id.in_([candidate.id for candidate in candidates]))
+                        .distinct()
+                    )).all())
+            else:
+                assigned = set((await native.scalars(
+                    select(receipt_sequence_id).select_from(MolBioNGSMemberReceipt)
+                    .join(MolBioNGSDomainStateMember, MolBioNGSDomainStateMember.receipt_id == MolBioNGSMemberReceipt.receipt_id)
+                    .join(MolBioNGSDomainState, MolBioNGSDomainState.current_state_revision_id == MolBioNGSDomainStateMember.state_revision_id)
+                    .where(MolBioNGSMemberReceipt.entity_kind == "molecular_revision",
+                           receipt_sequence_id.in_([candidate.id for candidate in candidates]))
+                    .distinct()
+                )).all())
             for candidate in candidates:
                 if candidate.id in assigned:
                     continue

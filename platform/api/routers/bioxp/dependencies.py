@@ -73,7 +73,13 @@ def require_bioxp_mutation_access(request: Request) -> None:
 def get_bioxp_runtime(request: Request) -> BioXpRuntime:
     runtime = getattr(request.app.state, "bioxp_runtime", None)
     if runtime is None:
-        raise HTTPException(status_code=503, detail="BioXP runtime is not initialized")
+        startup_error = getattr(request.app.state, "bioxp_startup_error", None)
+        detail = (
+            f"BioXP runtime unavailable: {startup_error}"
+            if startup_error
+            else "BioXP runtime is not initialized"
+        )
+        raise HTTPException(status_code=503, detail=detail)
     if not isinstance(runtime, BioXpRuntime):
         # Tests may use a structurally compatible runtime double.
         return runtime

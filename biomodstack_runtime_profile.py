@@ -125,10 +125,16 @@ RESERVED_AUXILIARY_PORTS: dict[int, str] = {
 _FEATURE_DEFAULTS = {
     "bioxp": True,
     "molecular_dynamics": False,
+    "ngs_ont": True,
+    "stats": True,
+    "protein_compute": True,
 }
 _FEATURE_ENV_NAMES = {
     "bioxp": "BMS_FEATURE_BIOXP",
     "molecular_dynamics": "BMS_FEATURE_MOLECULAR_DYNAMICS",
+    "ngs_ont": "BMS_FEATURE_NGS_ONT",
+    "stats": "BMS_FEATURE_STATS",
+    "protein_compute": "BMS_FEATURE_PROTEIN_COMPUTE",
 }
 
 
@@ -881,6 +887,9 @@ def _compat_env_lines(resolved: Mapping[str, object]) -> list[str]:
         'export BMS_WORKFLOW_ADAPTER_LANE="${BMS_WORKFLOW_ADAPTER_LANE:-production}"',
         f'export BMS_FEATURE_BIOXP="${{BMS_FEATURE_BIOXP:-{1 if resolved["features"]["bioxp"] else 0}}}"',
         f'export BMS_FEATURE_MOLECULAR_DYNAMICS="${{BMS_FEATURE_MOLECULAR_DYNAMICS:-{1 if resolved["features"]["molecular_dynamics"] else 0}}}"',
+        f'export BMS_FEATURE_NGS_ONT="${{BMS_FEATURE_NGS_ONT:-{1 if resolved["features"]["ngs_ont"] else 0}}}"',
+        f'export BMS_FEATURE_STATS="${{BMS_FEATURE_STATS:-{1 if resolved["features"]["stats"] else 0}}}"',
+        f'export BMS_FEATURE_PROTEIN_COMPUTE="${{BMS_FEATURE_PROTEIN_COMPUTE:-{1 if resolved["features"]["protein_compute"] else 0}}}"',
         f'export BMS_WORKFLOW_ADAPTER_URL="${{BMS_WORKFLOW_ADAPTER_URL:-{resolved["workflow_adapter_url"]}}}"',
         f'export BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL="${{BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL:-{resolved["development_workflow_adapter_url"]}}}"',
         f'export BMS_PRODUCTION_WORKFLOW_ADAPTER_URL="${{BMS_PRODUCTION_WORKFLOW_ADAPTER_URL:-{resolved["production_workflow_adapter_url"]}}}"',
@@ -1005,6 +1014,9 @@ def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
         'BMS_WORKFLOW_ADAPTER_LANE=production',
         f'BMS_FEATURE_BIOXP={1 if resolved["features"]["bioxp"] else 0}',
         f'BMS_FEATURE_MOLECULAR_DYNAMICS={1 if resolved["features"]["molecular_dynamics"] else 0}',
+        f'BMS_FEATURE_NGS_ONT={1 if resolved["features"]["ngs_ont"] else 0}',
+        f'BMS_FEATURE_STATS={1 if resolved["features"]["stats"] else 0}',
+        f'BMS_FEATURE_PROTEIN_COMPUTE={1 if resolved["features"]["protein_compute"] else 0}',
         f'BMS_WORKFLOW_ADAPTER_URL={resolved["workflow_adapter_url"]}',
         f'BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL={resolved["development_workflow_adapter_url"]}',
         f'BMS_PRODUCTION_WORKFLOW_ADAPTER_URL={resolved["production_workflow_adapter_url"]}',

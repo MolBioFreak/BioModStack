@@ -2,10 +2,16 @@ import { useQuery } from '@tanstack/react-query';
 
 export const DEFAULT_BMS_FEATURES = {
     bioxp: false,
+    ngs_ont: true,
+    stats: true,
+    protein_compute: true,
 } as const;
 
 export const DEFAULT_BMS_DEV_FEATURES = {
     bioxp: true,
+    ngs_ont: false,
+    stats: false,
+    protein_compute: false,
 } as const;
 
 export type BmsFeatureKey = keyof typeof DEFAULT_BMS_FEATURES;
@@ -13,11 +19,13 @@ export type BmsFeatures = Record<BmsFeatureKey, boolean>;
 
 export interface BmsFeatureState {
     features: BmsFeatures;
+    configuredFeatures: BmsFeatures;
     devFeatures: BmsFeatures;
 }
 
 interface BmsFeaturesEnvelope {
     features?: Partial<Record<BmsFeatureKey, unknown>> | null;
+    configured_features?: Partial<Record<BmsFeatureKey, unknown>> | null;
     dev_features?: Partial<Record<BmsFeatureKey, unknown>> | null;
 }
 
@@ -40,35 +48,40 @@ function coerceFeatureBool(value: unknown, fallback: boolean): boolean {
     return fallback;
 }
 
-export function normalizeBmsFeatures(payload: unknown): BmsFeatures {
-    const defaults: BmsFeatures = { ...DEFAULT_BMS_FEATURES };
-    const envelope = payload && typeof payload === 'object' ? payload as BmsFeaturesEnvelope : null;
-    const rawFeatures = envelope?.features;
-    if (!rawFeatures || typeof rawFeatures !== 'object') {
-        return defaults;
+function normalizeFeatureMap(
+    raw: Partial<Record<BmsFeatureKey, unknown>> | null | undefined,
+    defaults: BmsFeatures,
+): BmsFeatures {
+    if (!raw || typeof raw !== 'object') {
+        return { ...defaults };
     }
-
     return {
-        bioxp: coerceFeatureBool(rawFeatures.bioxp, defaults.bioxp),
+        bioxp: coerceFeatureBool(raw.bioxp, defaults.bioxp),
+        ngs_ont: coerceFeatureBool(raw.ngs_ont, defaults.ngs_ont),
+        stats: coerceFeatureBool(raw.stats, defaults.stats),
+        protein_compute: coerceFeatureBool(raw.protein_compute, defaults.protein_compute),
     };
+}
+
+export function normalizeBmsFeatures(payload: unknown): BmsFeatures {
+    const envelope = payload && typeof payload === 'object' ? payload as BmsFeaturesEnvelope : null;
+    return normalizeFeatureMap(envelope?.features, { ...DEFAULT_BMS_FEATURES });
 }
 
 function normalizeBmsDevFeatures(payload: unknown): BmsFeatures {
-    const defaults: BmsFeatures = { ...DEFAULT_BMS_DEV_FEATURES };
     const envelope = payload && typeof payload === 'object' ? payload as BmsFeaturesEnvelope : null;
-    const rawFeatures = envelope?.dev_features;
-    if (!rawFeatures || typeof rawFeatures !== 'object') {
-        return defaults;
-    }
-
-    return {
-        bioxp: coerceFeatureBool(rawFeatures.bioxp, defaults.bioxp),
-    };
+    return normalizeFeatureMap(envelope?.dev_features, { ...DEFAULT_BMS_DEV_FEATURES });
 }
 
 export function normalizeBmsFeatureState(payload: unknown): BmsFeatureState {
+    const envelope = payload && typeof payload === 'object' ? payload as BmsFeaturesEnvelope : null;
+    const features = normalizeBmsFeatures(payload);
+    const configuredFeatures = envelope?.configured_features
+        ? normalizeFeatureMap(envelope.configured_features, features)
+        : { ...features };
     return {
-        features: normalizeBmsFeatures(payload),
+        features,
+        configuredFeatures,
         devFeatures: normalizeBmsDevFeatures(payload),
     };
 }
@@ -140,10 +153,11 @@ export function resolveBmsFeatureQueryState(
     data: BmsFeatureState | undefined,
     _failed: boolean,
 ): BmsFeatureState {
-    // Refetch errors retain validated query data; a cold query remains disabled.
+    // Refetch errors retain validated query data; a cold query remains disabled for opt-in dev features.
     if (!data) {
         return {
             features: { ...DEFAULT_BMS_FEATURES },
+            configuredFeatures: { ...DEFAULT_BMS_FEATURES },
             devFeatures: { ...DEFAULT_BMS_DEV_FEATURES },
         };
     }

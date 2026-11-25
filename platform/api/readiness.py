@@ -184,7 +184,10 @@ async def collect_runtime_readiness(
     migration_ready, migration_status, migration_metadata = await core_migration_readiness()
     telemetry_ready, telemetry_status, telemetry_metadata = await telemetry_collection_readiness()
     molbio_ready = molbio.get("status") == "healthy" or molbio.get("ready") is True
-    molbio_ngs_required = molbio_ngs is not None
+    molbio_ngs_disabled = isinstance(molbio_ngs, dict) and (
+        molbio_ngs.get("enabled") is False or molbio_ngs.get("status") == "disabled"
+    )
+    molbio_ngs_required = (not molbio_ngs_disabled) and (molbio_ngs is not None)
     molbio_ngs = molbio_ngs or {}
     molbio_ngs_attestation = molbio_ngs.get("attestation")
     molbio_ngs_ready = bool(
@@ -251,9 +254,13 @@ async def collect_runtime_readiness(
         "molbio_ngs_database": _check(
             required=molbio_ngs_required,
             ready=molbio_ngs_ready if molbio_ngs_required else True,
-            status=("ready" if molbio_ngs_ready else "unavailable")
-            if molbio_ngs_required
-            else "not_supplied",
+            status="disabled"
+            if molbio_ngs_disabled
+            else (
+                ("ready" if molbio_ngs_ready else "unavailable")
+                if molbio_ngs_required
+                else "not_supplied"
+            ),
         ),
         "workflow_adapter": _check(
             required=adapter_required,

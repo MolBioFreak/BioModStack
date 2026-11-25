@@ -370,25 +370,50 @@ async def get_install_profile(request: Request):
 def _effective_runtime_features(request: Request, configured: Mapping[str, object]) -> dict[str, object]:
     """Return only feature surfaces mounted in this running API process."""
     effective = dict(configured)
+    route_paths = {
+        str(getattr(route, "path", ""))
+        for route in getattr(request.app, "routes", ())
+    }
+    openapi_paths: set[str] = set()
+    openapi_factory = getattr(request.app, "openapi", None)
+    if callable(openapi_factory):
+        try:
+            schema = openapi_factory()
+            paths = schema.get("paths") if isinstance(schema, Mapping) else None
+            if isinstance(paths, Mapping):
+                openapi_paths = {str(path) for path in paths}
+        except (AttributeError, TypeError, ValueError):
+            openapi_paths = set()
+    all_paths = route_paths | openapi_paths
+    app_state = getattr(request.app, "state", None)
+    mounted_features = getattr(app_state, "mounted_features", None)
+    if not isinstance(mounted_features, Mapping):
+        mounted_features = {}
+
     if "bioxp" in effective:
-        route_paths = {
-            str(getattr(route, "path", ""))
-            for route in getattr(request.app, "routes", ())
-        }
-        openapi_paths: set[str] = set()
-        openapi_factory = getattr(request.app, "openapi", None)
-        if callable(openapi_factory):
-            try:
-                schema = openapi_factory()
-                paths = schema.get("paths") if isinstance(schema, Mapping) else None
-                if isinstance(paths, Mapping):
-                    openapi_paths = {str(path) for path in paths}
-            except (AttributeError, TypeError, ValueError):
-                openapi_paths = set()
-        effective["bioxp"] = any(
-            path.startswith("/api/bioxp")
-            for path in route_paths | openapi_paths
-        )
+        effective["bioxp"] = any(path.startswith("/api/bioxp") for path in all_paths)
+    if "ngs_ont" in effective:
+        if "ngs_ont" in mounted_features:
+            effective["ngs_ont"] = bool(mounted_features["ngs_ont"])
+        else:
+            effective["ngs_ont"] = any(
+                path.startswith(("/api/ont", "/api/sequence-qc", "/api/ngs", "/api/molbio-ngs"))
+                for path in all_paths
+            )
+    if "protein_compute" in effective:
+        if "protein_compute" in mounted_features:
+            effective["protein_compute"] = bool(mounted_features["protein_compute"])
+        else:
+            effective["protein_compute"] = any(
+                path.startswith(("/api/frustrampnn", "/api/conformational-mapping", "/api/boltzgen", "/api/jobs/boltz-api", "/api/msa", "/api/blind-pose"))
+                for path in all_paths
+            )
+    if "stats" in effective:
+        if "stats" in mounted_features:
+            effective["stats"] = bool(mounted_features["stats"])
+        else:
+            from biomodstack_runtime_profile import install_feature_enabled
+            effective["stats"] = install_feature_enabled("stats")
     return effective
 
 
@@ -406,7 +431,16 @@ async def get_install_features(request: Request):
 
 
 @router.get("/stats-toolkit")
-async def get_stats_toolkit_status():
+async def get_stats_toolkit_status(request: Request = None):  # type: ignore[assignment]
+    app_state = getattr(getattr(request, "app", None), "state", None)
+    mounted_features = getattr(app_state, "mounted_features", None)
+    if isinstance(mounted_features, Mapping) and "stats" in mounted_features:
+        stats_enabled = bool(mounted_features["stats"])
+    else:
+        from biomodstack_runtime_profile import install_feature_enabled
+        stats_enabled = install_feature_enabled("stats")
+    if not stats_enabled:
+        raise HTTPException(status_code=404, detail="Stats Toolkit integration is disabled for this installation")
     # Publish only a same-origin path. The frontend maps this back to the local
     # loopback add-on when it is not running behind the Tailnet origin.
     status = await run_in_threadpool(probe_stats_addon)
