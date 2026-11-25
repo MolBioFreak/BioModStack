@@ -2613,11 +2613,7 @@
   ],
   "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-<<<<<<< HEAD
-  "content_sha256": "9911bb39dd86a0d657d7575eb9915c7ae9e4df215f5b5dcb54481259947f6a90",
-=======
-  "content_sha256": "0c4bed561ab9544fa05a9e89adb543535013d2a4248a1fc27f9bf4092f030683",
->>>>>>> 2dfceb1 (Remove RFD3 backend, workflows, scripts, tables, and fallbacks (R1))
+  "content_sha256": "eb280aad39e548fb9109302df252c460d085524af75c78a49bd5f1f0fb5cf4a8",
   "contract_ids": {
     "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
     "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",
