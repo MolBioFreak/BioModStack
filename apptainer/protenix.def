@@ -7,7 +7,7 @@
 # - NVIDIA CUTLASS v3.5.1 (headers for the DeepSpeed attention kernel), as in the upstream Dockerfile
 # Weights and data files are not part of the image; they are bound at run time.
 Bootstrap: docker
-From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+From: nvidia/cuda:13.5.0-cudnn-devel-ubuntu24.04
 
 %post
     set -eu
@@ -18,7 +18,30 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     apt-get clean
     rm -rf /var/lib/apt/lists/*
 
-    curl -LsSf https://astral.sh/uv/0.8.4/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+    # Install pinned uv 0.13.10 with SHA256 verification
+    UV_VERSION="0.13.10"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    curl -fsSL --retry 3 --retry-delay 2         "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz"         -o "${UV_TMP}/uv.tar.gz"
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
+    uv --version
     uv python install 3.11
     uv venv --python 3.11 /opt/venv
     export PATH="/opt/venv/bin:${PATH}"
@@ -26,16 +49,20 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     export PYTHONNOUSERSITE=1
     PYTHON_BIN="/opt/venv/bin/python3"
 
-    # Blackwell-capable torch runtime (sm_120 support).
-    uv pip install --index-url https://download.pytorch.org/whl/cu128 \
-        torch==2.7.1+cu128 \
-        torchvision==0.22.1+cu128 \
-        torchaudio==2.7.1+cu128
+    # Hold the chosen CUDA wheels during later tool dependency resolution.
+    export UV_CONSTRAINT=/opt/bms-gpu-constraints.txt
+    export UV_INDEX="https://download.pytorch.org/whl/cu134"
+    export UV_DEFAULT_INDEX="https://pypi.org/simple"
+    printf '%s\n' 'torch==2.15.0+cu134' 'torchvision==0.29.2+cu134' 'torchaudio==2.11.1+cu134' 'triton==3.9.0' > "$UV_CONSTRAINT"
+    # PyTorch release built for CUDA 13.4 (includes RTX 50-series sm_120 kernels).
+    uv pip install --python /opt/venv/bin/python --compile --no-cache         torch==2.15.0+cu134 torchvision==0.29.2+cu134 torchaudio==2.11.1+cu134         --index https://download.pytorch.org/whl/cu134 --default-index https://pypi.org/simple
 
     # Upstream Protenix at a fixed commit that includes Protenix-v2 model support.
     git clone https://github.com/bytedance/Protenix.git /opt/protenix
     git -C /opt/protenix checkout bd54a05d047b8925a241056f36d619700604068a
-    uv pip install /opt/protenix
+    # Drop upstream triton==3.3.1 pin (conflicts with torch 2.15+cu134 triton>=3.9) and use cu13 cuequivariance ops.
+    sed -i -e "/^triton==/d" -e "s/^cuequivariance-ops-torch-cu12==0.8.0$/cuequivariance-ops-torch-cu13==0.8.0/" /opt/protenix/requirements.txt
+    uv pip install --python /opt/venv/bin/python --compile --no-cache --override "$UV_CONSTRAINT" --index-strategy unsafe-best-match /opt/protenix
     git clone --depth 1 -b v3.5.1 https://github.com/NVIDIA/cutlass.git /opt/cutlass
     rm -rf /opt/protenix/.git /opt/cutlass/.git
 
@@ -55,12 +82,13 @@ for base in targets:
         'os.environ["TORCH_CUDA_ARCH_LIST"] = "7.0;8.0"',
         'os.environ["TORCH_CUDA_ARCH_LIST"] = "7.0;8.0;8.6;9.0;12.0"',
     )
-    marker = '            "-gencode",\n            "arch=compute_90,code=sm_90",\n'
-    if 'arch=compute_120,code=sm_120' not in updated and marker in updated:
-        updated = updated.replace(
-            marker,
-            marker + '            "-gencode",\n            "arch=compute_120,code=sm_120",\n',
-        )
+    updated = updated.replace("-std=c++17", "-std=c++20")
+    for arch_tok in ("arch=compute_100,code=sm_100", "arch=compute_90,code=sm_90"):
+        if "arch=compute_120,code=sm_120" not in updated and arch_tok in updated:
+            target_str = chr(34) + arch_tok + chr(34) + ","
+            add_str = target_str + chr(10) + "            " + chr(34) + "-gencode" + chr(34) + "," + chr(10) + "            " + chr(34) + "arch=compute_120,code=sm_120" + chr(34) + ","
+            updated = updated.replace(target_str, add_str, 1)
+            break
     if updated != text:
         path.write_text(updated)
         print(f"Patched Blackwell CUDA flags in {path}")
@@ -203,14 +231,14 @@ PY
 %labels
     Author BioModStack
     Version 2.0-upstream
-    Description "Protenix built from upstream sources with a CUDA 12.8 runtime"
+    Description "Protenix built from upstream sources with a CUDA 13.5 runtime"
 
 %help
     Protenix structure prediction container with Blackwell-safe runtime.
 
     Key properties:
     - Protenix upstream revision with Protenix-v2 support installed in-image
-    - PyTorch 2.7.1 + CUDA 12.8 wheels (sm_120 support)
+    - PyTorch 2.15.0+cu134 + CUDA 13.5 runtime (sm_120 support)
     - No dependency on host/user-site Python packages
     - LayerNorm fallback baked when base nvcc cannot target compute_120
 

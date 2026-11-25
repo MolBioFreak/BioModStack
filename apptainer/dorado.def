@@ -1,7 +1,7 @@
 # Dorado + modkit container for ONT Nanopore basecalling and methylation analysis
 # Self-contained: BMS-lite extractable
 Bootstrap: docker
-From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
+From: nvidia/cuda:13.5.0-cudnn-runtime-ubuntu24.04
 
 %files
     templates/ngs/igv_variant_standalone.html /opt/bms/igv-reports/igv_variant_standalone.html
@@ -48,16 +48,16 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
     test "$(samtools --version | awk 'NR == 1 {print $2}')" = "${SAMTOOLS_VERSION}"
     rm -rf "/tmp/samtools-${SAMTOOLS_VERSION}" "${SAMTOOLS_TARBALL}"
 
-    # Install pinned uv 0.13.9 with SHA256 verification
-    UV_VERSION="0.13.9"
+    # Install pinned uv 0.13.10 with SHA256 verification
+    UV_VERSION="0.13.10"
     case "$(uname -m)" in
         x86_64|amd64)
             UV_TARGET="x86_64-unknown-linux-gnu"
-            UV_SHA256="a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5"
+            UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
             ;;
         aarch64|arm64)
             UV_TARGET="aarch64-unknown-linux-gnu"
-            UV_SHA256="0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d"
+            UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2"
             ;;
         *)
             echo "Unsupported architecture for uv: $(uname -m)" >&2
@@ -65,9 +65,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
             ;;
     esac
     UV_TMP="$(mktemp -d)"
-    curl -fsSL --retry 3 --retry-delay 2 \
-        "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
-        -o "${UV_TMP}/uv.tar.gz"
+    curl -fsSL --retry 3 --retry-delay 2         "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz"         -o "${UV_TMP}/uv.tar.gz"
     printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
     tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
     install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv

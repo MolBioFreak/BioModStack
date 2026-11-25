@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+From: nvidia/cuda:13.5.0-cudnn-devel-ubuntu24.04
 
 %labels
     Author BioModStack
@@ -11,7 +11,30 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     set -eu
     export DEBIAN_FRONTEND=noninteractive
     apt-get update && apt-get install -y git curl ca-certificates build-essential libgomp1 libxrender1 libxext6 libsm6 python3 python3-pip && rm -rf /var/lib/apt/lists/*
-    python3 -m pip install --no-cache-dir uv==0.8.22
+    # Install pinned uv 0.13.10 with SHA256 verification
+    UV_VERSION="0.13.10"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    curl -fsSL --retry 3 --retry-delay 2         "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz"         -o "${UV_TMP}/uv.tar.gz"
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
+    uv --version
     export UV_PYTHON_INSTALL_DIR=/opt/python
     uv python install 3.11.13
     git clone https://github.com/DISCO-design/DISCO.git /opt/disco
@@ -19,9 +42,9 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     git checkout --detach 82b594f838eb61dd8c78ae3a403ccb8f00cf7abf
     git rev-parse HEAD > /opt/disco/NATIVE_REVISION
     # Packaging constraints only; native configs and model source stay unchanged.
-    printf '\n[tool.uv]\nconstraint-dependencies = ["torch==2.7.1+cu128", "triton==3.3.1", "deepspeed==0.18.3", "transformers==4.50.3", "numpy==1.26.4"]\n' >> pyproject.toml
+    printf '\n[tool.uv]\nconstraint-dependencies = ["torch==2.15.0+cu134", "torchvision==0.29.2+cu134", "torchaudio==2.11.1+cu134", "deepspeed==0.18.3", "transformers==4.50.3", "numpy==1.26.4"]\n' >> pyproject.toml
     export DS_BUILD_OPS=0
-    uv sync --no-dev --python 3.11.13 --index https://download.pytorch.org/whl/cu128 --index-strategy unsafe-best-match
+    uv sync --no-dev --python 3.11.13 --index https://download.pytorch.org/whl/cu134 --default-index https://pypi.org/simple --index-strategy unsafe-best-match
     # Optional attention remains selectable, with its native JIT source available.
     git clone https://github.com/NVIDIA/cutlass.git /opt/cutlass
     git -C /opt/cutlass checkout --detach ad7b2f5e84fcfa124cb02b91d5bd26d238c0459e
@@ -36,7 +59,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     export HF_HUB_DISABLE_TELEMETRY=1
 
 %test
-    /opt/disco/.venv/bin/python -c "import torch; assert torch.__version__ == '2.7.1+cu128'; assert torch.version.cuda == '12.8'; import disco; print('DISCO package / CUDA stack import OK')"
+    /opt/disco/.venv/bin/python -c "import torch; assert torch.__version__ == '2.15.0+cu134'; assert torch.version.cuda == '13.4'; import disco; print('DISCO package / CUDA stack import OK')"
     /opt/disco/.venv/bin/python -c "from pdbeccdutils.core import ccd_reader; print('CCD native extension imports OK')"
     test "$(cat /opt/disco/NATIVE_REVISION)" = 82b594f838eb61dd8c78ae3a403ccb8f00cf7abf
 

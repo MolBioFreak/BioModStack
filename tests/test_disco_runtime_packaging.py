@@ -81,8 +81,8 @@ def test_writable_cwd_selected_cache_native_fallback_and_unchanged_options(tmp_p
 def test_recipe_pins_native_and_cuda_stack():
     recipe = (ROOT / "apptainer/disco.def").read_text()
     assert "82b594f838eb61dd8c78ae3a403ccb8f00cf7abf" in recipe
-    assert "torch==2.7.1+cu128" in recipe
-    assert "triton==3.3.1" in recipe
+    assert "torch==2.15.0+cu134" in recipe
+    assert "nvidia/cuda:13.5.0-cudnn-devel-ubuntu24.04" in recipe
     assert "cu124" not in recipe
     assert "HF_HUB_OFFLINE=" not in recipe
     assert "TRANSFORMERS_OFFLINE=" not in recipe

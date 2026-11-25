@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+From: nvidia/cuda:13.5.0-cudnn-devel-ubuntu24.04
 
 %labels
     Author ProteinDJ Extended Pipeline
@@ -24,44 +24,55 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
         software-properties-common \
         && rm -rf /var/lib/apt/lists/*
     
-    # Install Python 3.12 (required by Foundry)
-    add-apt-repository -y ppa:deadsnakes/ppa
-    apt-get update && apt-get install -y \
-        python3.12 \
-        python3.12-dev \
-        python3.12-venv \
-        && rm -rf /var/lib/apt/lists/*
+    # Install Python 3.12 (native on Ubuntu 24.04)
+    apt-get update && apt-get install -y         python3.12         python3.12-dev         python3.12-venv         python3-pip         && rm -rf /var/lib/apt/lists/*
     
     # Set Python 3.12 as default
     update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
     update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
     
-    # Install pip for Python 3.12, then UV
-    curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
-    
-    # Install UV package manager (10-100x faster than pip)
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="/root/.local/bin:$PATH"
-    
-    # Upgrade pip/setuptools
-    uv pip install --compile --system --upgrade pip setuptools wheel
-    
-    # Install Foundry with all dependencies (RFD3, RF3, MPNN)
-    # Note: This will install torch from PyPI (cu126), we override it below
-    uv pip install --compile --system "rc-foundry[all]==0.1.9"
+    # Install pinned uv 0.13.10 with SHA256 verification
+    UV_VERSION="0.13.10"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    curl -fsSL --retry 3 --retry-delay 2         "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz"         -o "${UV_TMP}/uv.tar.gz"
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
+    uv --version
+
+    # Hold the chosen CUDA wheels during later tool dependency resolution.
+    export UV_CONSTRAINT=/opt/bms-gpu-constraints.txt
+    export UV_INDEX="https://download.pytorch.org/whl/cu134"
+    export UV_DEFAULT_INDEX="https://pypi.org/simple"
+    printf '%s\n' 'torch==2.15.0+cu134' 'torchvision==0.29.2+cu134' 'torchaudio==2.11.1+cu134' > "$UV_CONSTRAINT"
+    uv pip install --system --break-system-packages --compile --no-cache         torch==2.15.0+cu134 torchvision==0.29.2+cu134 torchaudio==2.11.1+cu134         --index https://download.pytorch.org/whl/cu134 --default-index https://pypi.org/simple
+
+    # Install Foundry with all dependencies (RFD3, RF3, MPNN) keeping cu134 torch pinned
+    uv pip install --system --break-system-packages --compile --no-cache "rc-foundry[all]==0.1.9"
     python3.12 /opt/bms/install_schedule_return.py
-    
-    # Force reinstall PyTorch with CUDA 12.8 (stable cu128 for Blackwell sm_120 support)
-    # This overrides the torch version that rc-foundry installed
-    uv pip install --compile --system --force-reinstall torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cu128
     
     # Download Foundry model weights
     mkdir -p /root/.foundry/checkpoints
     foundry install base-models --checkpoint-dir /root/.foundry/checkpoints || echo "Model download deferred"
     # The optional interface-context leaf must never silently download its
     # checkpoint at first run or accept a different scientific weight set.
-    foundry install mpnn --checkpoint-dir /root/.foundry/checkpoints
+    foundry install proteinmpnn ligandmpnn --checkpoint-dir /root/.foundry/checkpoints
     printf '%s  %s\n' \
         161cd264061fda9680cbb940255522ae42f2966c552d045d87913d9452a80970 \
         /root/.foundry/checkpoints/ligandmpnn_v_32_010_25.pt | sha256sum -c -

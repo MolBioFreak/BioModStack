@@ -1,69 +1,77 @@
 Bootstrap: docker
-From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+From: nvidia/cuda:13.5.0-cudnn-devel-ubuntu24.04
 
 %post
-    # Update and install system dependencies
-    apt-get update && apt-get install -y \
-        wget \
-        git \
-        curl \
-        python3 \
-        python3-pip \
-        python3-venv \
-        hmmer \
-        && apt-get clean \
-        && rm -rf /var/lib/apt/lists/*
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y --no-install-recommends         wget         git         curl         ca-certificates         python3         python3-pip         python3-venv         hmmer         && apt-get clean         && rm -rf /var/lib/apt/lists/*
 
-    # Install UV package manager (10-100x faster than pip)
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="/root/.local/bin:$PATH"
+    # Install pinned uv 0.13.10 with SHA256 verification
+    UV_VERSION="0.13.10"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    curl -fsSL --retry 3 --retry-delay 2         "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz"         -o "${UV_TMP}/uv.tar.gz"
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
 
     # Create virtual environment
-    uv venv /opt/venv
+    uv python install 3.13
+    uv venv --python 3.13 /opt/venv
     export VIRTUAL_ENV=/opt/venv
     export PATH="/opt/venv/bin:$PATH"
 
-    # Install PyTorch with CUDA 12.4 support (pinned to compatible versions)
-    # torch.library.register_fake requires torch 2.4+, torchvision 0.20+ requires torch 2.5
-    uv pip install --compile torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+    # Install PyTorch 2.15.0+cu134 for CUDA 13.5 / Blackwell
+    uv pip install --compile --no-cache         torch==2.15.0+cu134 torchvision==0.29.2+cu134 torchaudio==2.11.1+cu134         --index-url https://download.pytorch.org/whl/cu134
+
+    cat > /opt/bms-gpu-constraints.txt <<'EOF'
+torch==2.15.0+cu134
+torchvision==0.29.2+cu134
+torchaudio==2.11.1+cu134
+triton==3.9.0
+EOF
 
     # Install biopython (required by antibody tools)
-    uv pip install --compile biopython
-
-    # Note: We use ANARCII (deep learning), not legacy ANARCI (HMM-based)
-    # ANARCI's setup.py runs hmmpress which can hang for hours
+    uv pip install --compile --no-cache --override /opt/bms-gpu-constraints.txt --index-strategy unsafe-best-match biopython
 
     # Install ANARCII (deep learning antibody numbering - IMGT scheme)
-    # Superior to ANARCI: Seq2Seq model, faster, Python 3.9-3.13 compatible
     git clone https://github.com/oxpig/ANARCII.git /opt/ANARCII
     cd /opt/ANARCII
-    uv pip install --compile -e .
+    uv pip install --compile --no-cache --override /opt/bms-gpu-constraints.txt --index-strategy unsafe-best-match -e .
     cd /
 
     # Install AntiFold
     git clone https://github.com/oxpig/AntiFold.git /opt/AntiFold
     cd /opt/AntiFold
-    uv pip install --compile .
+    uv pip install --compile --no-cache --override /opt/bms-gpu-constraints.txt --index-strategy unsafe-best-match .
     cd /
 
     # Install OpenMM and pdbfixer for structure refinement
-    # OpenMM: molecular dynamics for energy minimization
-    # black-pdbfixer: pip-installable fork of pdbfixer (original requires conda)
-    uv pip install --compile openmm black-pdbfixer
+    uv pip install --compile --no-cache --override /opt/bms-gpu-constraints.txt --index-strategy unsafe-best-match openmm black-pdbfixer
 
     # Install ImmuneBuilder (structure prediction from sequence)
-    # Requires OpenMM/pdbfixer for structure relaxation step
-    uv pip install --compile ImmuneBuilder
+    uv pip install --compile --no-cache --override /opt/bms-gpu-constraints.txt --index-strategy unsafe-best-match ImmuneBuilder
 
     # Install AntiBERTy for immunogenicity scoring
-    # Uses pseudo-log-likelihood to score sequence "naturalness"
-    uv pip install --compile antiberty
-
-    # CRITICAL: Force reinstall torch 2.6+ to satisfy transformers CVE-2025-32434 security check
-    # Also reinstall numpy<2 to avoid NumPy 2.x compatibility issues with torch
-    uv pip install --compile --force-reinstall torch==2.6.0 torchvision==0.21.0 numpy==1.26.4 --index-url https://download.pytorch.org/whl/cu124
+    uv pip install --compile --no-cache --override /opt/bms-gpu-constraints.txt --index-strategy unsafe-best-match antiberty
 
     # Cleanup
+    rm -f /opt/bms-gpu-constraints.txt
     rm -rf /root/.cache/uv
 
     # Generate lockfile for reproducibility
