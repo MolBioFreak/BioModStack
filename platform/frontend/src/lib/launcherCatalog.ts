@@ -32,7 +32,7 @@ export const launcherWorkflowTemplates = [
         {
             id: 'protein_modification_experimental',
             name: 'De Novo Design',
-            description: 'Start with RFD4-Proteina, choose another generation engine, or open a redesign, resequencing or shape editor.',
+            description: 'Start with RFD4-Proteina, choose another generation engine, or open a redesign or resequencing editor.',
             icon: 'cube',
             color: '#22C55E',
             stages: [

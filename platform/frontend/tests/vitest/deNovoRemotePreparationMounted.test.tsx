@@ -149,7 +149,7 @@ it.each(['disco', 'laproteina'])('keeps %s exact requested science separate and 
 it('does not post on task, goal, engine or worker navigation', async () => {
   await mount(<ProteinModificationTemplate onBack={() => {}} />);
   await edit('Engine', 'disco'); await edit('Goal', 'dna_conditioned');
-  await click('Redesign structure'); await click('Shape'); await click('Generate');
+  await click('Redesign structure'); await click('Generate');
   await click('Vast · Other');
   expect(posts).toEqual([]);
   expect(sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBe(other.id);

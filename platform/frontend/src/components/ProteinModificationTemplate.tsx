@@ -91,8 +91,6 @@ const editedNumber = (value: string): number | '' => value === '' ? '' : Number(
 const resolveNavigation = (values?: Record<string, unknown>): DeNovoNavigationState => {
     const rawMode = values?.backbone_input_pdbs && values?.seq_method ? 'resequence' : normalizeModificationMode(values?.modification_mode);
     const modification_mode = rawMode === 'redesign_structure' || rawMode === 'region_redesign' || rawMode === 'resequence' ? rawMode : 'de_novo_design';
-    const native = values?.generator === 'rfd4_proteina' || values?.generator === 'complexa' || values?.generator === 'laproteina';
-    const nativeMode = native ? { native_mode: typeof values?.native_mode === 'string' ? values.native_mode : 'generate' } : {};
     if (modification_mode === 'resequence') return { modification_mode };
     if (modification_mode !== 'de_novo_design') {
         return {
@@ -103,10 +101,13 @@ const resolveNavigation = (values?: Record<string, unknown>): DeNovoNavigationSt
         };
     }
     const engine = values?.generator ?? values?.backend;
+    const generator = typeof engine === 'string' ? engine : 'rfd4_proteina';
+    const native = generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina';
+    const nativeMode = native ? { native_mode: typeof values?.native_mode === 'string' ? values.native_mode : 'generate' } : {};
     return {
         modification_mode,
         ...nativeMode,
-        generator: typeof engine === 'string' ? engine : 'rfd4_proteina',
+        generator,
         design_task: typeof values?.design_task === 'string' ? values.design_task : 'unconditional',
     };
 };

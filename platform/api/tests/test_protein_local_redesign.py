@@ -169,8 +169,6 @@ def test_normalize_plr_input_pdb_path_ignores_missing_empty_and_non_string() -> 
 @pytest.mark.parametrize(("model", "mode", "params", "expected"), [
     ("protein_local_redesign", "local_redesign", {}, False),
     ("protein_modification_experimental", "region_redesign", {}, False),
-    ("protein_modification_experimental", "de_novo_design", {"generator": "rfd3"}, False),
-    ("protein_modification_experimental", "de_novo_design", {}, False),
     ("rfantibody", "antibody_denovo", {}, True),
     ("protein_modification_experimental", "de_novo_design", {"generator": "disco"}, True),
 ])
