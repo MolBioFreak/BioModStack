@@ -16,7 +16,7 @@ from test_denovo_complete_terminal_project import _bound_terminal, _publish, _re
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('capability', ['protein.de_novo.rfd3', 'protein.de_novo.disco', 'protein.de_novo.laproteina'])
+@pytest.mark.parametrize('capability', ['protein.de_novo.disco', 'protein.de_novo.laproteina'])
 async def test_incomplete_native_editor_null_persists_and_cold_reopens(native_http, setup_store, capability):
     response = await native_http.post('/api/projects', json=_project_payload('Incomplete editor'))
     assert response.status_code == 201, response.text

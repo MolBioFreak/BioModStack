@@ -71,7 +71,6 @@ def test_plr_result_surface_has_model_native_tabs_and_bound_artifacts(tmp_path: 
 
     sequence = "ACDE"
     designs = [
-        _design(root, "collected/protein_local_redesign_backbones/model_0.pdb", design_id="rfd3-0", name="candidate_model_0"),
         _design(
             root,
             "pdb_files/candidate_model_0_seq_0.pdb",
@@ -95,14 +94,14 @@ def test_plr_result_surface_has_model_native_tabs_and_bound_artifacts(tmp_path: 
 
     assert surface["schema"] == "bms.workflow.protein-local-redesign.results.v1"
     assert surface["composition"]["sha256"]
-    assert [tab["id"] for tab in surface["tabs"]] == ["rfd3", "fampnn", "esmfold2", "protenix_v2"]
-    assert [tab["label"] for tab in surface["tabs"]] == ["RFD3", "FA-MPNN", "ESMFold2", "Protenix V2"]
+    assert [tab["id"] for tab in surface["tabs"]] == ["fampnn", "esmfold2", "protenix_v2"]
+    assert [tab["label"] for tab in surface["tabs"]] == ["FA-MPNN", "ESMFold2", "Protenix V2"]
     assert all("[Validation]" not in tab["label"] for tab in surface["tabs"])
-    assert [tab["count"] for tab in surface["tabs"]] == [1, 1, 1, 1]
-    assert surface["tabs"][1]["items"][0]["sequence"] == sequence
-    assert surface["tabs"][2]["items"][0]["metrics"]["mean_plddt"] == 91.2
-    assert surface["tabs"][3]["items"][0]["sample_index"] == 0
-    assert surface["tabs"][3]["items"][0]["msa"]["backend"] == "cache"
+    assert [tab["count"] for tab in surface["tabs"]] == [1, 1, 1]
+    assert surface["tabs"][0]["items"][0]["sequence"] == sequence
+    assert surface["tabs"][1]["items"][0]["metrics"]["mean_plddt"] == 91.2
+    assert surface["tabs"][2]["items"][0]["sample_index"] == 0
+    assert surface["tabs"][2]["items"][0]["msa"]["backend"] == "cache"
     assert all("/tmp/" not in json.dumps(surface_item) for surface_item in surface["tabs"])
     assert all(item["structure"]["content_url"].startswith("/api/jobs/job-1/workflow-results/artifacts/") for tab in surface["tabs"] for item in tab["items"])
 

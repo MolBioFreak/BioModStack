@@ -188,7 +188,7 @@ async def test_rf3_export_filter_receipt_sqlite_api(tmp_path, monkeypatch):
         'producer_output_key': 'rf3_terminal/' + selected.name,
         'producer_artifact_sha256': hashlib.sha256(selected.read_bytes()).hexdigest()}))
     stages = tmp_path / 'run/filter_stages'; stages.mkdir()
-    for stage in ('rf3_prediction_filter', 'rfd3_backbone_filter'):
+    for stage in ('rf3_prediction_filter',):
         active = stage == 'rf3_prediction_filter'
         command = [sys.executable, str(SCRIPTS / 'collect_rf_filter_stage.py'), '--job-id', 'filter-test',
             '--owner', 'protein_design', '--stage-id', stage, '--role', 'selected_publication' if active else 'skipped',
@@ -203,8 +203,6 @@ async def test_rf3_export_filter_receipt_sqlite_api(tmp_path, monkeypatch):
     roster.begin(owner, owner.params); roster.observe(owner, '[ab/123456] Submitted process > FilterRF3 (1)'); roster.finish(owner, 0)
     async def later_owner(*a, **k): return 17
     monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', later_owner)
-    # Primary publication now runs before the optional component; this Job's primary owner is RFD3.
-    monkeypatch.setattr('services.rfd3_generation_results._ingest_rfd3_generation_manifest', later_owner)
     factory, engine = await setup(tmp_path)
     try:
         async with factory() as db:

@@ -14,8 +14,6 @@ import json
 import os
 import re
 import shutil
-import signal
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
@@ -26,14 +24,6 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
-
-from local_msa_runtime import (
-    DEFAULT_GPUSERVER_DB_LOAD_MODE,
-    DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
-    DEFAULT_GPUSERVER_WAIT_TIMEOUT,
-    resolve_protenix_local_gpu_server_mode,
-)
-from local_msa.runtime import inspect_mmseqs_runtime, parse_gpu_csv
 
 DEFAULT_COLABFOLD_API_HOST = os.getenv("BMS_COLABFOLD_API_HOST") or "https://api.colabfold.com"
 DEFAULT_SMALL_MAX_TASKS = 1
@@ -498,239 +488,6 @@ def prepare_with_colabfold_api(input_json: Path, output_json: Path, work_dir: Pa
     return output_json.resolve()
 
 
-def _run_local_msa(
-    sequence: str,
-    output_dir: Path,
-    db_path: str,
-    cache_dir: str,
-    threads: int,
-    preset: str,
-    cpu_only: bool,
-    gpu_mode: str,
-    gpu_threshold: int,
-    preferred_gpus: str | None,
-    excluded_gpus: str | None,
-    gpu_server_mode: str,
-    gpu_server_wait_timeout: int,
-    gpu_server_db_load_mode: int,
-    gpu_server_startup_wait: float,
-    allow_cpu_fallback: bool,
-    local_msa_timeout_seconds: int,
-    cache_only: bool,
-) -> Path:
-    script_path = Path(__file__).resolve().with_name("run_local_msa.py")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    def build_cmd(force_cpu_only: bool) -> list[str]:
-        cmd = [
-            sys.executable,
-            str(script_path),
-            "--sequence",
-            sequence,
-            "--name",
-            "query",
-            "--out_dir",
-            str(output_dir),
-            "--db_path",
-            db_path,
-            "--cache_dir",
-            cache_dir,
-            "--threads",
-            str(max(1, int(threads))),
-            "--preset",
-            preset,
-            "--msa-provider",
-            "local",
-            "--gpu-mode",
-            gpu_mode,
-            "--gpu-threshold",
-            str(int(gpu_threshold)),
-            "--gpu-server-mode",
-            gpu_server_mode,
-            "--gpu-server-wait-timeout",
-            str(int(gpu_server_wait_timeout)),
-            "--gpu-server-db-load-mode",
-            str(int(gpu_server_db_load_mode)),
-            "--gpu-server-startup-wait",
-            str(float(gpu_server_startup_wait)),
-        ]
-        if force_cpu_only:
-            cmd.append("--cpu-only")
-        if preferred_gpus:
-            cmd.extend(["--preferred-gpus", preferred_gpus])
-        if excluded_gpus:
-            cmd.extend(["--excluded-gpus", excluded_gpus])
-        if not allow_cpu_fallback and not force_cpu_only:
-            cmd.append("--disallow-cpu-fallback")
-        if cache_only:
-            cmd.append("--cache-only")
-        return cmd
-
-    def run_cmd(cmd: list[str], timeout_seconds: int) -> None:
-        proc = subprocess.Popen(cmd, start_new_session=True)
-        try:
-            if timeout_seconds and int(timeout_seconds) > 0:
-                proc.wait(timeout=int(timeout_seconds))
-            else:
-                proc.wait()
-        except subprocess.TimeoutExpired as exc:
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                proc.wait()
-            raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout_seconds) from exc
-        if proc.returncode != 0:
-            raise subprocess.CalledProcessError(proc.returncode, cmd)
-
-    timeout_seconds = max(0, int(local_msa_timeout_seconds or 0))
-    try:
-        run_cmd(build_cmd(force_cpu_only=cpu_only), timeout_seconds)
-    except subprocess.TimeoutExpired as exc:
-        if allow_cpu_fallback and not cpu_only:
-            print(
-                f"[prepare_protenix_msa] Local GPU MSA timed out after {timeout_seconds}s; retrying on CPU for this sequence.",
-                flush=True,
-            )
-            run_cmd(build_cmd(force_cpu_only=True), timeout_seconds)
-        else:
-            raise RuntimeError(
-                f"Local Protenix MSA timed out after {timeout_seconds}s for a sequence of length {len(sequence)}."
-            ) from exc
-
-    msa_path = output_dir / "query.a3m"
-    if not msa_path.exists():
-        raise FileNotFoundError(f"Local MSA generation did not create {msa_path}")
-    return msa_path.resolve()
-
-
-def prepare_with_local_msa(
-    payload: List[Dict[str, Any]],
-    output_json: Path,
-    work_dir: Path,
-    db_path: str,
-    cache_dir: str,
-    threads: int,
-    preset: str,
-    cpu_only: bool,
-    gpu_mode: str,
-    gpu_threshold: int,
-    preferred_gpus: str | None,
-    excluded_gpus: str | None,
-    gpu_server_mode: str,
-    gpu_server_wait_timeout: int,
-    gpu_server_db_load_mode: int,
-    gpu_server_startup_wait: float,
-    allow_cpu_fallback: bool,
-    local_msa_timeout_seconds: int,
-    selected_gpu_id: int | None = None,
-    cache_only: bool = False,
-    binder_chain_ids: Sequence[str] | None = None,
-    binder_max_unpaired_rows: int | None = None,
-    binder_min_residue_coverage_fraction: float = 0.0,
-) -> Path:
-    msa_root = work_dir / "local_msa"
-    msa_root.mkdir(parents=True, exist_ok=True)
-    binder_chain_id_set = {token.strip() for token in (binder_chain_ids or []) if str(token).strip()}
-    raw_msa_by_sequence: Dict[str, Path] = {}
-    seq_role_to_msa_dir: Dict[Tuple[str, str], Path] = {}
-    sequence_to_chain_ids: Dict[str, set[str]] = {}
-
-    missing_sequences: Dict[str, str] = {}
-    for _task_idx, _seq_idx, chain in iter_protein_chains(payload):
-        _hydrate_old_precomputed_dir(chain)
-        paired_path, unpaired_path = _existing_msa_paths(chain)
-        if (paired_path and paired_path.exists()) or (unpaired_path and unpaired_path.exists()):
-            continue
-        sequence = str(chain.get("sequence", "") or "").strip()
-        if not sequence:
-            continue
-        sequence_to_chain_ids.setdefault(sequence, set()).update(_chain_ids(chain))
-        missing_sequences.setdefault(sequence, hashlib.sha256(sequence.encode("utf-8")).hexdigest()[:16])
-
-
-    for _task_idx, _seq_idx, chain in iter_protein_chains(payload):
-        _hydrate_old_precomputed_dir(chain)
-        paired_path, unpaired_path = _existing_msa_paths(chain)
-        if (paired_path and paired_path.exists()) or (unpaired_path and unpaired_path.exists()):
-            continue
-
-        sequence = str(chain.get("sequence", "") or "").strip()
-        if not sequence:
-            continue
-        chain_id_set = set(_chain_ids(chain))
-        role_key = "binder" if chain_id_set & binder_chain_id_set else "default"
-        profile_key = (sequence, role_key)
-
-        if profile_key not in seq_role_to_msa_dir:
-            seq_hash = hashlib.sha256(sequence.encode("utf-8")).hexdigest()[:16]
-            role_suffix = "_binder" if role_key == "binder" else ""
-            msa_dir = msa_root / f"{seq_hash}{role_suffix}"
-            msa_dir.mkdir(parents=True, exist_ok=True)
-            query_a3m = raw_msa_by_sequence.get(sequence)
-            if query_a3m is None:
-                query_a3m = _run_local_msa(
-                    sequence=sequence,
-                    output_dir=msa_dir,
-                    db_path=db_path,
-                    cache_dir=cache_dir,
-                    threads=threads,
-                    preset=preset,
-                    cpu_only=cpu_only,
-                    gpu_mode=gpu_mode,
-                    gpu_threshold=gpu_threshold,
-                    preferred_gpus=preferred_gpus,
-                    excluded_gpus=excluded_gpus,
-                    gpu_server_mode=gpu_server_mode,
-                    gpu_server_wait_timeout=gpu_server_wait_timeout,
-                    gpu_server_db_load_mode=gpu_server_db_load_mode,
-                    gpu_server_startup_wait=gpu_server_startup_wait,
-                    allow_cpu_fallback=allow_cpu_fallback,
-                    local_msa_timeout_seconds=local_msa_timeout_seconds,
-                    cache_only=cache_only,
-                )
-                raw_msa_by_sequence[sequence] = query_a3m
-            non_pairing = msa_dir / "non_pairing.a3m"
-            pairing = msa_dir / "pairing.a3m"
-            is_binder = role_key == "binder"
-            kept_records = _write_sanitized_a3m(
-                query_a3m,
-                non_pairing,
-                query_sequence=sequence,
-                max_rows=binder_max_unpaired_rows if is_binder else None,
-                min_residue_coverage_fraction=binder_min_residue_coverage_fraction if is_binder else 0.0,
-            )
-            if is_binder and kept_records <= 8 and binder_min_residue_coverage_fraction > 0:
-                kept_records = _write_sanitized_a3m(
-                    query_a3m,
-                    non_pairing,
-                    query_sequence=sequence,
-                    max_rows=binder_max_unpaired_rows,
-                    min_residue_coverage_fraction=0.0,
-                )
-                print(
-                    f"[prepare_protenix_msa] Binder MSA for sequence {seq_hash} was too sparse after coverage pruning; "
-                    f"reused capped hits without coverage filtering ({kept_records} rows).",
-                    flush=True,
-                )
-            pairing.write_text(f">query\n{sequence}\n", encoding="utf-8")
-            seq_role_to_msa_dir[profile_key] = msa_dir.resolve()
-
-        msa_dir = seq_role_to_msa_dir[profile_key]
-        chain["pairedMsaPath"] = str((msa_dir / "pairing.a3m").resolve())
-        chain["unpairedMsaPath"] = str((msa_dir / "non_pairing.a3m").resolve())
-
-    dump_json(output_json, payload)
-    return output_json.resolve()
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare Protenix-compatible MSA inputs")
     parser.add_argument('--generated-service', default='', choices=['', 'protenix:generated_msa'],
@@ -742,22 +499,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out_dir", required=True, help="Working directory for MSA artifacts")
     parser.add_argument("--backend", default="auto", choices=["auto", "colabfold_api", "neurosnap_api", "local"], help="MSA backend")
     parser.add_argument("--colabfold-api-host", default=DEFAULT_COLABFOLD_API_HOST, help="ColabFold API host")
-    parser.add_argument("--db-path", default=os.getenv("BMS_COLABFOLD_DB") or "", help="Local ColabFold DB path")
     parser.add_argument("--cache-dir", default=os.getenv("BMS_MSA_CACHE") or "", help="MSA cache directory")
-    parser.add_argument("--threads", type=int, default=32, help="Threads for local MSA")
-    parser.add_argument("--preset", default="fast", choices=["maximum", "balanced", "fast"], help="Local MSA preset")
-    parser.add_argument("--cpu-only", action="store_true", help="Force CPU-only local MSA")
-    parser.add_argument("--gpu-mode", default="auto", help="Local MSA GPU mode")
-    parser.add_argument("--gpu-threshold", type=int, default=80, help="Local MSA GPU threshold")
-    parser.add_argument("--preferred-gpus", default=None, help="Preferred GPU CSV for local MSA")
-    parser.add_argument("--excluded-gpus", default=None, help="Excluded GPU CSV for local MSA")
-    parser.add_argument("--gpu-server-mode", default="persistent", help="Local MSA gpuserver mode")
-    parser.add_argument("--gpu-server-wait-timeout", type=int, default=DEFAULT_GPUSERVER_WAIT_TIMEOUT, help="Local MSA gpuserver wait timeout")
-    parser.add_argument("--gpu-server-db-load-mode", type=int, default=DEFAULT_GPUSERVER_DB_LOAD_MODE, help="Local MSA gpuserver db load mode")
-    parser.add_argument("--gpu-server-startup-wait", type=float, default=DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS, help="Local MSA gpuserver startup wait")
-    parser.add_argument("--allow-cpu-fallback", action="store_true", help="Allow CPU MMseqs when GPU MMseqs is unavailable")
     parser.add_argument("--cache-only", action="store_true", help="Use only cached MSAs; fail on any cache miss")
-    parser.add_argument("--local-msa-timeout-seconds", type=int, default=900, help="Kill and fail a local per-sequence MSA attempt after this many seconds (0 disables)")
     parser.add_argument("--report_json", default="", help="Optional JSON report path summarizing prepared MSA inputs")
     parser.add_argument("--small-max-tasks", type=int, default=DEFAULT_SMALL_MAX_TASKS, help="Auto mode ColabFold API max task count")
     parser.add_argument("--small-max-protein-chains", type=int, default=DEFAULT_SMALL_MAX_PROTEIN_CHAINS, help="Auto mode ColabFold API max protein chains")

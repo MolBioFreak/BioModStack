@@ -14,7 +14,6 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(prepare_protenix_msa)
 
 _write_sanitized_a3m = prepare_protenix_msa._write_sanitized_a3m
-prepare_with_local_msa = prepare_protenix_msa.prepare_with_local_msa
 write_msa_report = prepare_protenix_msa.write_msa_report
 
 

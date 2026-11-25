@@ -23,7 +23,7 @@ async def test_populated_v22_upgrade_and_reopen(tmp_path):
                 session, project_id=project_id, relationship_kind='primary',
                 global_experiment_id=None, experiment_name='Retained v22',
                 experiment_objective='Reopen unchanged', domain_kind='protein_in_silico',
-                capability_id='protein.de_novo.rfd3', idempotency_key='create-v22')
+                capability_id='protein.de_novo.laproteina', idempotency_key='create-v22')
             await workflow_setups.save_workflow_setup_draft(
                 session, project_id=project_id, setup_context_id=setup['setup_context_id'],
                 expected_generation=0, idempotency_key='save-v22',

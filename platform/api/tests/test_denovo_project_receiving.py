@@ -11,13 +11,10 @@ from test_project_workflow_setups import setup_store, _project
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('generator', ['rfd3', 'laproteina', 'disco'])
+@pytest.mark.parametrize('generator', ['laproteina', 'disco'])
 async def test_native_generator_project_save_reopen_prepare(setup_store, generator):
     params = {'generator': generator, 'num_designs': 2, 'seed': 0}
-    if generator == 'rfd3':
-        params.update(min_length=100, max_length=100, dump_trajectories=False)
-    else:
-        params.update(backend=generator, design_task='unconditional', target_lengths='100')
+    params.update(backend=generator, design_task='unconditional', target_lengths='100')
     request = {'model_id': 'protein_modification_experimental', 'mode': 'de_novo_design',
                'name': 'Native Project fixture', 'params': params, 'execution_target_id': None}
     async with setup_store() as session:

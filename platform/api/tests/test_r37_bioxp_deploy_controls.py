@@ -121,14 +121,16 @@ def test_c61_dev_sync_defers_when_bioxp_run_active(tmp_path: Path, monkeypatch: 
     db_path = tmp_path / "biomodstack.db"
     _create_idle_dev_db(db_path)
     monkeypatch.setattr(sync, "_development_database", lambda _root: db_path)
-    monkeypatch.setattr(
-        sync.urllib.request,
-        "urlopen",
-        lambda _url, timeout=3: _FakeHTTPResponse(
-            200,
-            json.dumps({"rows": [{"job_id": "bx-1", "status": "running"}]}).encode("utf-8"),
-        ),
-    )
+    # Serialize the actual endpoint response type, not an ad hoc rows dictionary.
+    from services.bioxp.protocol_models import ProtocolJobs, ProtocolJobSummary
+
+    page = ProtocolJobs(rows=[ProtocolJobSummary(
+        job_id="bx-1", status="running", dry_run=True, protocol_id="fixture",
+        source_type="native", created_at="2026-01-01T00:00:00Z", updated_at="2026-01-01T00:00:00Z",
+        pending_review=None,
+    )])
+    monkeypatch.setattr(sync.urllib.request, "urlopen", lambda _url, timeout=3:
+                        _FakeHTTPResponse(200, page.model_dump_json(exclude_unset=True).encode()))
     active, count = sync._active_development_work(tmp_path)
     assert active is True
     assert count == 1
@@ -163,3 +165,11 @@ def test_c62_dev_sync_proceeds_when_bioxp_off_or_unreachable(tmp_path: Path, mon
     active, count = sync._active_development_work(tmp_path)
     assert active is False
     assert count == 0
+
+
+@pytest.mark.parametrize("body", [b"not-json", b'{"rows":null}'])
+def test_status_read_failure_is_not_positive_idle_evidence(tmp_path, monkeypatch, body):
+    # Characterize the approved fail-open policy. No robot or listening API.
+    sync = _load_dev_sync()
+    monkeypatch.setattr(sync.urllib.request, "urlopen", lambda _url, timeout=3: _FakeHTTPResponse(200, body))
+    assert sync._active_bioxp_runs(tmp_path) == 0

@@ -21,7 +21,7 @@ from test_project_workflow_setups import setup_store  # noqa: F401
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('generator', ['rfd3', 'laproteina'])
+@pytest.mark.parametrize('generator', ['laproteina'])
 async def test_mounted_legacy_capture_cold_http_prepare(generator, capture_api, admission, setup_store, monkeypatch, tmp_path):
     wire_root = os.environ.get('BMS_LEGACY_CAPTURE_DIR')
     if not wire_root:
@@ -30,7 +30,7 @@ async def test_mounted_legacy_capture_cold_http_prepare(generator, capture_api, 
     envelope = wire['envelope']
     request = envelope['native_job_request']
     params = request['params']
-    slot = 'input' if generator == 'rfd3' else 'motif'
+    slot = 'motif'
     document = envelope['editor_state']['molecular_documents'][slot]
     assert document['sha256'] == hashlib.sha256(wire['cif'].encode()).hexdigest()
     assert document['provenance']['revision'] == 4
@@ -136,27 +136,16 @@ async def test_mounted_legacy_capture_cold_http_prepare(generator, capture_api, 
         assert scheduler['params']['generator'] == generator
         assert 'molecular_documents' not in scheduler['params']
     # Exercise the selected native preparation without running a model.
-    if generator == 'rfd3':
-        from services.rfd3_generation import normalize_generation_params
-        normalized, _, _ = normalize_generation_params(params, job_name='captured')
-        from scripts.rfd3_generation import contract
-        monkeypatch.setitem(sys.modules, 'contract', contract)
-        from scripts.rfd3_generation.prepare_native_input import prepare
-        native, _ = prepare(normalized['rfd3_generation_request'], source_destination=tmp_path / 'native-source.cif')
-        for key, value in params['conditioning'].items():
-            assert native['generation_0'][key] == value
-        assert (tmp_path / native['generation_0']['input']).is_file()
-    else:
-        settings = dict(params['pcad_laproteina_settings_json'])
-        # The ordinary path resolver normally receives staged absolute bindings.
-        # Resolve this private logical path into its exact already persisted bytes.
-        settings['motif_pdb'] = str(inputs / Path(settings['motif_pdb']).relative_to('inputs'))
-        output = tmp_path / 'cad.json'
-        command = [sys.executable, str(Path(__file__).resolve().parents[3] / 'scripts/prep_denovo_generation_request.py'), '--backend', 'laproteina', '--task', 'motif_scaffolding', '--num-designs', str(params['num_designs']), '--target-lengths', params['target_lengths'], '--laproteina-preset', params['laproteina_preset'], '--laproteina-contig-string', params['laproteina_contig_string'], '--laproteina-motif-task-name', params['laproteina_motif_task_name'], '--laproteina-settings-json', json.dumps(settings), '--output', str(output), '--input-dir', str(tmp_path / 'cad')]
-        done = subprocess.run(command, capture_output=True, text=True)
-        assert done.returncode == 0, done.stderr
-        native = json.loads(output.read_text())['laproteina']
-        assert native['contig_string'] == '10/A2/10'
-        assert native['motif_atom_spec'] is None and native['future_option'] is False
-        assert 'GLY A   2' in Path(native['motif_pdb']).read_text()
-        assert 'ALA A   1' not in Path(native['motif_pdb']).read_text()
+    settings = dict(params['pcad_laproteina_settings_json'])
+    # The ordinary path resolver normally receives staged absolute bindings.
+    # Resolve this private logical path into its exact already persisted bytes.
+    settings['motif_pdb'] = str(inputs / Path(settings['motif_pdb']).relative_to('inputs'))
+    output = tmp_path / 'cad.json'
+    command = [sys.executable, str(Path(__file__).resolve().parents[3] / 'scripts/prep_denovo_generation_request.py'), '--backend', 'laproteina', '--task', 'motif_scaffolding', '--num-designs', str(params['num_designs']), '--target-lengths', params['target_lengths'], '--laproteina-preset', params['laproteina_preset'], '--laproteina-contig-string', params['laproteina_contig_string'], '--laproteina-motif-task-name', params['laproteina_motif_task_name'], '--laproteina-settings-json', json.dumps(settings), '--output', str(output), '--input-dir', str(tmp_path / 'cad')]
+    done = subprocess.run(command, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    native = json.loads(output.read_text())['laproteina']
+    assert native['contig_string'] == '10/A2/10'
+    assert native['motif_atom_spec'] is None and native['future_option'] is False
+    assert 'GLY A   2' in Path(native['motif_pdb']).read_text()
+    assert 'ALA A   1' not in Path(native['motif_pdb']).read_text()

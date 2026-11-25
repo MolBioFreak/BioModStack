@@ -263,7 +263,6 @@ VRAM_PROFILES = {
     'protenix_esm': {'base': 6000, 'scale': 60},      # Protenix ESM2-3B (no-MSA, heavier)
     'protenix_mini_esm': {'base': 5000, 'scale': 50}, # Protenix mini ESM (lighter no-MSA)
     # ──────────────────────────────────────────────────────────────────────────
-    'msa_batch': {'base': 3000, 'scale': 2},    # MSA Generation (GPU streaming, LOW VRAM)
     'antibody_child': {'base': 6000, 'scale': 25},  # Antibody validation (Boltz + scoring) ~6-8GB
     'maturation_child': {'base': 18500, 'scale': 25},  # PPIFlow child jobs need one-per-24/32GB GPU, not startup VRAM
     'esmfold2': {'base': 22000, 'scale': 35},  # Canonical ESMFold2 high-pressure profile
@@ -1488,7 +1487,7 @@ async def _claim_job_for_gpu(
     return await _claim_local_job(session, job, gpu_id, vram_estimate_mb, scheduler_params)
 
 
-async def _claim_local_job(session, job, gpu_id, vram_estimate_mb, scheduler_params, *, conditions=()):
+async def _claim_local_job(session, job, gpu_id, vram_estimate_mb, scheduler_params):
     """Publish the exclusive Job owner before either local handoff."""
     from sqlalchemy import update, func
     from database import Job
@@ -1507,7 +1506,6 @@ async def _claim_local_job(session, job, gpu_id, vram_estimate_mb, scheduler_par
     transition = await session.execute(
         update(Job)
         .where(
-            *conditions,
             (Job.provenance == provenance if getattr(job, "provenance", None) is not None
              else func.json_extract(Job.provenance, '$').is_(None)),
             Job.execution_target_id.is_(None),
@@ -2251,9 +2249,6 @@ def pack_jobs_to_gpus(
     ]
     active_gpu_ids = {g.index for g in active_gpus}
     global_config = config.get("global", {})
-    msa_preferred = _normalize_gpu_id_list(global_config.get("msa_preferred_gpu_ids")) or []
-    msa_preferred_active = [gpu_id for gpu_id in msa_preferred if gpu_id in active_gpu_ids]
-    msa_avoid_heavy = bool(global_config.get("msa_avoid_heavy_gpus", False))
     busy_threshold = max(0.0, min(1.0, float(global_config.get("busy_threshold", 0.5) or 0.0)))
     cooldown_ms = max(0, int(global_config.get("cooldown_ms", 0) or 0))
     cooldown_delta = timedelta(milliseconds=cooldown_ms)
@@ -2263,16 +2258,10 @@ def pack_jobs_to_gpus(
         g.index: (1 if _gpu_quick_enable(g.index, config) else 0)
         for g in active_gpus
     }
-    non_heavy_active_ids = {
-        g.index for g in active_gpus
-        if not capabilities.get(g.index, {'supports_heavy': True}).get('supports_heavy', True)
-    }
     
     if not active_gpus:
         logger.warning("[PACK] No active GPUs available (all disabled)")
         return []
-    if msa_preferred and not msa_preferred_active:
-        logger.warning(f"[PACK] MSA preferred GPUs {msa_preferred} are unavailable; using general GPU selection")
     
     # ═══════════════════════════════════════════════════════════════════════
     # 2. SORT JOBS - Priority first, then VRAM descending, then age
@@ -2376,11 +2365,6 @@ def pack_jobs_to_gpus(
                 if gpu.index not in job.pinned_gpus:
                     continue  # This GPU is not in the allowlist
 
-            # Check 1c: MSA preferred GPU allowlist from scheduler config (if active)
-            if job.model_type == 'msa_batch' and msa_preferred_active:
-                if gpu.index not in msa_preferred_active:
-                    continue
-            
             # Check 2: GPU lock exclusion (skip GPUs locked by other batches)
             job_batch_id = getattr(job, 'batch_id', None)
             if is_gpu_locked(gpu.index, job_batch_id, config):
@@ -2449,13 +2433,6 @@ def pack_jobs_to_gpus(
                 - gpu.index * 0.001  # Tie-breaker: prefer GPU 0
             )
 
-            # Keep MSA lightweight by favoring non-heavy GPUs when requested.
-            if job.model_type == 'msa_batch' and msa_avoid_heavy and non_heavy_active_ids:
-                if gpu.index in non_heavy_active_ids:
-                    score += 1000.0
-                else:
-                    score -= 1000.0
-            
             if score > best_score:
                 best_score = score
                 best_gpu = gpu.index
@@ -2617,9 +2594,6 @@ def build_queue_scheduler_diagnostics(
         if (not is_gpu_disabled(g.index, config)) or _gpu_force_available(g.index, config) or _gpu_quick_enable(g.index, config)
     ]
     active_gpu_ids = {g.index for g in active_gpus}
-    msa_preferred = _normalize_gpu_id_list(global_config.get("msa_preferred_gpu_ids")) or []
-    msa_preferred_active = [gpu_id for gpu_id in msa_preferred if gpu_id in active_gpu_ids]
-    msa_avoid_heavy = bool(global_config.get("msa_avoid_heavy_gpus", False))
     busy_threshold = max(0.0, min(1.0, float(global_config.get("busy_threshold", 0.5) or 0.0)))
     cooldown_ms = max(0, int(global_config.get("cooldown_ms", 0) or 0))
     cooldown_delta = timedelta(milliseconds=cooldown_ms)
@@ -2630,10 +2604,6 @@ def build_queue_scheduler_diagnostics(
     projected = {g.index: g.memory_used_mb for g in active_gpus}
     capacity = {g.index: g.memory_total_mb for g in active_gpus}
     projected_jobs_per_gpu = {g.index: running_jobs_per_gpu.get(g.index, 0) for g in active_gpus}
-    non_heavy_active_ids = {
-        g.index for g in active_gpus
-        if not GPU_CAPABILITIES.get(g.index, {'supports_heavy': True}).get('supports_heavy', True)
-    }
 
     concurrency_limits = config.get("concurrency_limits", {})
     auto_limits: Dict[str, int] = {}
@@ -2736,10 +2706,6 @@ def build_queue_scheduler_diagnostics(
             if job.pinned_gpus is not None and len(job.pinned_gpus) > 0 and gpu.index not in job.pinned_gpus:
                 continue
 
-            if job.model_type == 'msa_batch' and msa_preferred_active and gpu.index not in msa_preferred_active:
-                reason_buckets.setdefault("not in MSA preferred GPU set", []).append(gpu.index)
-                continue
-
             if is_gpu_locked(gpu.index, getattr(job, 'batch_id', None), config):
                 reason_buckets.setdefault("locked by another batch", []).append(gpu.index)
                 continue
@@ -2789,11 +2755,6 @@ def build_queue_scheduler_diagnostics(
                 base_tier = (capacity[gpu.index] / 10000) * capacity_weight
             emptiness_bonus = (1.0 - current_utilization) * emptiness_weight
             score = base_tier + emptiness_bonus - gpu.index * 0.001
-            if job.model_type == 'msa_batch' and msa_avoid_heavy and non_heavy_active_ids:
-                if gpu.index in non_heavy_active_ids:
-                    score += 1000.0
-                else:
-                    score -= 1000.0
             candidate_gpu_scores.append((score, gpu.index))
 
         if not candidate_gpu_scores:
@@ -2917,21 +2878,6 @@ class GPUOrchestrator:
             from sqlalchemy import select, and_, or_, func
             from database import Job
             
-            # ═══════════════════════════════════════════════════════════════════
-            # CRITICAL: MSA job limiting - only ONE MSA batch at a time
-            # Multiple MSA jobs in parallel can cause DRAM pressure.
-            # Concurrency is configurable via scheduler global.msa_concurrency_limit.
-            # ═══════════════════════════════════════════════════════════════════
-            msa_count_query = select(func.count()).select_from(Job).where(
-                Job.model_id == 'msa_batch', Job.queue_status.in_(('running', 'cancelling', 'canceling'))
-            ).correlate(None)
-            running_msa_count = await session.scalar(msa_count_query)
-            msa_concurrency_limit = config.get("global", {}).get("msa_concurrency_limit", 1)
-            try:
-                msa_concurrency_limit = max(1, int(msa_concurrency_limit))
-            except (TypeError, ValueError):
-                msa_concurrency_limit = 1
-            
             # Build the base query for queued jobs. A typed launch-context Job
             # stays fenced until its source binding receipt is committed and
             # projected back into the canonical core record.
@@ -2961,14 +2907,6 @@ class GPUOrchestrator:
                 # They get their queue_status changed from pending_msa -> queued only after MSA completes
                 or_(Job.parent_job_id.is_(None), Job.queue_status != "pending_msa")
             ]
-            
-            # If MSA concurrency limit is reached, exclude additional MSA jobs.
-            if running_msa_count >= msa_concurrency_limit:
-                base_conditions.append(Job.model_id != 'msa_batch')
-                logger.debug(
-                    "[ORCHESTRATOR] MSA concurrency reached "
-                    f"({running_msa_count}/{msa_concurrency_limit}); blocking additional MSA jobs"
-                )
             
             result = await session.execute(
                 select(Job).where(
@@ -3190,9 +3128,7 @@ class GPUOrchestrator:
             gpu_jobs = [j for j in pending_jobs if j.vram_estimate_mb != 0]
             
             for job in cpu_only_jobs:
-                conditions = (msa_count_query.scalar_subquery() < msa_concurrency_limit,) if job.model_id == 'msa_batch' else ()
-                params = await _claim_local_job(session, job, None, 0, _normalize_job_params(job.params),
-                                                conditions=conditions)
+                params = await _claim_local_job(session, job, None, 0, _normalize_job_params(job.params))
                 await session.commit()
                 if params is None:
                     continue
@@ -3262,11 +3198,7 @@ class GPUOrchestrator:
                 # The writer lock covers the reservation read, placement and Job CAS,
                 # never a stagger, launcher or worker. No speculative budget ledger.
                 await session.execute(text("BEGIN IMMEDIATE"))
-                eligible = job_infos
-                if any(info.model_type == 'msa_batch' for info in eligible):
-                    if await session.scalar(msa_count_query) >= msa_concurrency_limit:
-                        eligible = [info for info in eligible if info.model_type != 'msa_batch']
-                assignments = await self._pack_local_gpu_jobs(session, eligible, config, target_fill)
+                assignments = await self._pack_local_gpu_jobs(session, job_infos, config, target_fill)
                 if not assignments:
                     break
                 job_info, gpu_id = assignments[0]

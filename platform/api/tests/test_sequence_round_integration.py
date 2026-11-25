@@ -58,13 +58,12 @@ async def test_project_destination_uses_existing_bound_job_owner(selected, setup
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('generator', ['rfd3', 'disco', 'laproteina'])
+@pytest.mark.parametrize('generator', ['disco', 'laproteina'])
 async def test_create_resubmit_retains_envelope_outside_generator_science(selected, generator):
     from fastapi import Request, Response
     session = selected[1]
-    params = ({'generator': generator, 'min_length': 90, 'max_length': 90, 'num_designs': 1}
-              if generator == 'rfd3' else {'generator': generator, 'backend': generator,
-                  'design_task': 'unconditional', 'num_designs': 1, 'target_lengths': '90'})
+    params = {'generator': generator, 'backend': generator,
+              'design_task': 'unconditional', 'num_designs': 1, 'target_lengths': '90'}
     request = JobCreate(name='general-sequence', model_id='protein_modification_experimental',
         mode='de_novo_design', params=params, sequence_design=envelope('fampnn', enabled=False))
     plain = request.model_copy(update={'sequence_design': None}, deep=True)

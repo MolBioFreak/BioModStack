@@ -57,7 +57,7 @@ def test_project_redesign_uses_native_request_not_superseded_count_descriptor():
     from jsonschema import validate
     from services.protein_project_capabilities import protein_setup_parameter_schema
 
-    schema = protein_setup_parameter_schema('protein.de_novo.rfd3')
+    schema = protein_setup_parameter_schema('protein.native.protein_modification_experimental.region_redesign')
     assert schema['x-bms-native-editor-draft'] is True
     assert 'num_designs' not in schema['properties']
     request = {'model_id': 'protein_modification_experimental', 'mode': 'region_redesign', 'params': {'num_designs': 1001}}

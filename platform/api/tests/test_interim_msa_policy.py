@@ -95,7 +95,6 @@ def test_api_failure_propagates_without_local_or_empty_fallback(tmp_path, monkey
     def fail(**kwargs):
         raise failure
     monkeypatch.setattr(msa_preparation, 'prepare_model_msa', fail)
-    monkeypatch.setattr(prep, 'prepare_with_local_msa', lambda **kwargs: pytest.fail('local fallback'))
     with pytest.raises(type(failure), match=str(failure)):
         msa_preparation.prepare_protenix_inputs(None, source, tmp_path / 'prepared', {})
     assert not output.exists()
@@ -118,7 +117,6 @@ def test_existing_alignment_reused_without_search(tmp_path, monkeypatch):
         backend='auto', input_json=str(source), output_json=str(output),
         out_dir=str(tmp_path / 'work'), cache_dir=None, report_json=None))
     monkeypatch.setattr(prep, 'prepare_with_colabfold_api', lambda **kwargs: pytest.fail('search'))
-    monkeypatch.setattr(prep, 'prepare_with_local_msa', lambda **kwargs: pytest.fail('local search'))
     prep.main()
     assert json.loads(output.read_text()) == payload
     assert alignment.read_text() == '>query\nAAAA\n>homolog\nAAAA\n'

@@ -149,8 +149,8 @@ def test_unit_schema_rejects_wrong_native_metric_units():
     assert result['disposition'] == 'invalid_evidence'
 
 
-def test_filter_transport_publishes_rf3_rfd3_dispositions():
-    for name in ('rf3', 'rfd3'):
+def test_filter_transport_publishes_rf3_dispositions():
+    for name in ('rf3',):
         source = (SCRIPTS.parent/f'modules/{name}.nf').read_text()
         assert '--core-protein-scientific-contract' in source
         assert f'pattern: "{name}_data_*.jsonl"' in source

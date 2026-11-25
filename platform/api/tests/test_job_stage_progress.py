@@ -19,7 +19,6 @@ MODELS = [
     ('ppiflow', 'binder_denovo', 'RunPPIFlowGeneration'),
     ('boltzgen', 'binder_denovo', 'RunBoltzGen'),
     ('bindcraft2', 'binder_denovo', 'RunBindCraft2'),
-    ('rfd3', 'monomer_denovo', 'RunRFD3'),
     ('rfantibody', 'antibody_denovo', 'RunRFAntibody'),
     ('antibody', 'antibody_pipeline', 'rfantibody'),
     ('proteinmpnn', 'sequence_design', 'proteinmpnn'),

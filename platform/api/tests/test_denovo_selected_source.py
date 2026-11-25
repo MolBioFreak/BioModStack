@@ -21,9 +21,8 @@ from test_project_setup_job_preparation import isolate_applied_local_policy
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('native', [False])
 async def test_selected_source_into_different_project_real_insertion(
-    setup_store, isolated_core, isolate_applied_local_policy, tmp_path, monkeypatch, native,
+    setup_store, isolated_core, isolate_applied_local_policy, tmp_path, monkeypatch,
 ):
     """Real two-store owners; no release/resource or scientific-plan doubles.
 
@@ -47,7 +46,7 @@ async def test_selected_source_into_different_project_real_insertion(
         source_context = await destination(exp)
         dest = await destination(exp)
         assert source_context['project_id'] != dest['project_id']
-        original, selection = await source_rows(core, root, native)
+        original, selection = await source_rows(core, root)
         source = await core.get(Job, 'source')
         source.provenance = {'launch_context_id': source_context['launch_context_id'],
                              'source_evidence': 'inert completed result fixture'}
@@ -113,7 +112,7 @@ async def test_selected_source_into_different_project_real_insertion(
         assert (await job_submission._prepare_selected_structure(reopened, core))['owner_job_id'] == 'source'
 
 
-async def source_rows(session, root, native):
+async def source_rows(session, root):
     output = root / 'results/source'
     output.mkdir(parents=True, exist_ok=True)
     raw = gzip.compress(cif(models=(3, 7)).encode())
@@ -129,37 +128,18 @@ async def source_rows(session, root, native):
         provenance={'artifacts': [{'role': 'candidate_structure', 'relative_path': path.name,
                                   'sha256': digest, 'bytes': len(raw)}]}))
     selection = dict(job_id=job.id, design_id='design')
-    if not native:
-        # Populate the real persisted generation read-model contract. This is
-        # one generated, not accepted, source specimen; no inference is claimed.
-        job.params = {'rfd3_generation_request': {}, 'rfd3_generation_result_manifest_sha256': '4' * 64,
-                      'rfd3_generation_aggregate': {'requested': 1, 'generated': 1, 'accepted': 0,
-                          'length': job_results._rfd3_generation_range([1.0]),
-                          'radius_of_gyration': job_results._rfd3_generation_range([0.0])}}
-        design = next(row for row in session.new if isinstance(row, Design))
-        design.provenance = {**design.provenance, 'accepted': False,
-                             'metrics': {'residue_count': 1, 'radius_of_gyration': 0.0,
-                                         'helix_count': 0, 'strand_count': 0}}
     await session.commit()
     return path, dict(selection, output_format='pdb', model_number=7)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('native', [False])
-async def test_exact_source_conversion_offline_and_wrong_owner(source_api, native):
+async def test_exact_source_conversion_offline_and_wrong_owner(source_api):
     client, session, _, root = source_api
-    path, selection = await source_rows(session, root, native)
-    readback = await job_results.get_rfd3_generation_result('source', session)
-    row = readback['candidates'][0]
-    assert row['source_structure'] == {**{k: v for k, v in selection.items() if k != 'model_number'},
-                                       'output_format': 'native'}
-    if not native:
-        assert row['design_id'] == 'design'
-    else:
-        for field, value in [('request_id', 'foreign'), ('candidate_id', 'foreign'),
-                             ('document', {'artifact_id': 'foreign'})]:
-            rejected = await client.post('/api/files/materialize-structure', json={**selection, field: value})
-            assert rejected.status_code == 422, rejected.text
+    path, selection = await source_rows(session, root)
+    for field, value in [('request_id', 'foreign'), ('candidate_id', 'foreign'),
+                         ('document', {'artifact_id': 'foreign'})]:
+        rejected = await client.post('/api/files/materialize-structure', json={**selection, field: value})
+        assert rejected.status_code == 422, rejected.text
     response = await client.post('/api/files/materialize-structure', json=selection)
     assert response.status_code == 200, response.text
     prepared = response.json()
@@ -234,7 +214,7 @@ async def test_preview_approved_insert_offline_independent_lineage(admission, se
     monkeypatch.setattr(job_readback, 'get_data_root', lambda: tmp_path)
     monkeypatch.setattr(nextflow, 'get_work_dir', lambda: tmp_path / 'work')
     async with factory() as session:
-        original, selection = await source_rows(session, tmp_path, False)
+        original, selection = await source_rows(session, tmp_path)
     if destination == 'proteinmpnn':
         from tests.test_generic_sequence_launch_closeout import request as sequence_request
         payload = sequence_request('proteinmpnn', 'design', tmp_path).model_dump(mode='json')

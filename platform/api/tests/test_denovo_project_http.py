@@ -24,12 +24,9 @@ from test_project_workflow_setups import _project
 
 
 def request_for(case, tmp_path):
-    if case in ('rfd3', 'laproteina', 'disco'):
+    if case in ('laproteina', 'disco'):
         params = {'generator': case, 'num_designs': 2, 'seed': 0}
-        if case == 'rfd3':
-            params.update(min_length=100, max_length=100, dump_trajectories=False)
-        else:
-            params.update(backend=case, design_task='unconditional', target_lengths='100')
+        params.update(backend=case, design_task='unconditional', target_lengths='100')
         model, mode, capability = 'protein_modification_experimental', 'de_novo_design', f'protein.de_novo.{case}'
     elif case == 'validated_local':
         source = tmp_path / 'source.pdb'
@@ -62,7 +59,7 @@ def request_for(case, tmp_path):
         'pinned_gpu': 0}
 
 
-CASES = ['rfd3', 'laproteina', 'disco', 'validated_local'] + [f'{model}:{mode}'
+CASES = ['laproteina', 'disco', 'validated_local'] + [f'{model}:{mode}'
     for model in ('rfd4_proteina', 'complexa') for mode in ('generate', 'evaluate')]
 
 

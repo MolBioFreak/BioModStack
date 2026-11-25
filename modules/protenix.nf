@@ -13,20 +13,6 @@
  * Output: mmCIF structures + confidence.json (13+ metrics)
  */
 
-def normalizeGpuCsvValue(raw) {
-    if (raw == null) {
-        return ''
-    }
-    if (raw instanceof Collection) {
-        return raw.collect { value -> value?.toString()?.trim() }.findAll { value -> value }.join(',')
-    }
-    def text = raw.toString().trim()
-    if (text.startsWith('[') && text.endsWith(']') && text.length() >= 2) {
-        text = text.substring(1, text.length() - 1)
-    }
-    return text
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // PROTENIX PREDICT — Single-chain protein structure prediction
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,12 +47,7 @@ process ProtenixPredict {
     def enable_cache = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null)
     def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
     def msa_backend = params.protenix_msa_backend ?: 'auto'
-    def msa_allow_cpu_fallback = (params.protenix_allow_cpu_msa_fallback == true || params.protenix_allow_cpu_msa_fallback == 'true')
-    def msa_preferred_gpu_csv = normalizeGpuCsvValue(params.msa_preferred_gpus)
-    def msa_excluded_gpu_csv = normalizeGpuCsvValue(params.msa_excluded_gpus)
-    def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
     def msa_cache_only_flag = (params.msa_cache_only == true || params.msa_cache_only == 'true') ? '--cache-only' : ''
-    def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''
 
     // V2 is an invariant even when MSA is disabled; do not silently downgrade.
     def producerMetadataBase64 = groovy.json.JsonOutput.toJson(producer_meta).getBytes('UTF-8').encodeBase64().toString()
@@ -151,21 +132,8 @@ PY
             --report_json msa_prepared/msa_report.json \\
             --backend "${msa_backend}" \\
             --colabfold-api-host "${params.colabfold_api_host ?: 'https://api.colabfold.com'}" \\
-            --db-path "${params.msa_local_db}" \\
             --cache-dir "\$PROTENIX_MSA_CACHE_DIR" \\
-            --threads ${params.msa_threads ?: task.cpus} \\
-            --preset "${params.msa_preset ?: 'fast'}" \\
-            ${msa_cpu_only_flag} \\
-            --gpu-mode "${params.msa_gpu_mode ?: 'auto'}" \\
-            --gpu-threshold ${params.msa_gpu_threshold ?: 80} \\
-            ${msa_preferred_gpu_csv ? '--preferred-gpus "' + msa_preferred_gpu_csv + '"' : ''} \\
-            ${msa_excluded_gpu_csv ? '--excluded-gpus "' + msa_excluded_gpu_csv + '"' : ''} \\
-            --gpu-server-mode "${params.msa_gpu_server_mode ?: 'persistent'}" \\
-            --gpu-server-wait-timeout ${params.msa_gpu_server_wait_timeout ?: 120} \\
-            --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 2} \\
-            --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 5.0} \\
             ${msa_cache_only_flag} \\
-            ${msa_allow_cpu_fallback_flag} \\
             2>&1 | tee protenix_msa_prep.log
         PROTENIX_INPUT_JSON="prepared_input.json"
     fi
@@ -313,12 +281,7 @@ process ProtenixFromComplex {
     def enable_cache = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null)
     def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
     def msa_backend = params.protenix_msa_backend ?: 'auto'
-    def msa_allow_cpu_fallback = (params.protenix_allow_cpu_msa_fallback == true || params.protenix_allow_cpu_msa_fallback == 'true')
-    def msa_preferred_gpu_csv = normalizeGpuCsvValue(params.msa_preferred_gpus)
-    def msa_excluded_gpu_csv = normalizeGpuCsvValue(params.msa_excluded_gpus)
-    def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
     def msa_cache_only_flag = (params.msa_cache_only == true || params.msa_cache_only == 'true') ? '--cache-only' : ''
-    def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''
     def binderChainCsv = params.binder_chains ?: ''
     def epitopeResiduesCsv = params.epitope_residues ?: params.hotspot_residues ?: ''
     def producerSampleBase64 = input_sample.toString().getBytes('UTF-8').encodeBase64().toString()
@@ -453,21 +416,8 @@ process ProtenixFromComplex {
             --binder-max-unpaired-msa-rows ${params.protenix_binder_max_unpaired_msa_rows ?: 256} \\
             --binder-min-residue-coverage ${params.protenix_binder_min_residue_coverage ?: 0.5} \\
             --colabfold-api-host "${params.colabfold_api_host ?: 'https://api.colabfold.com'}" \\
-            --db-path "${params.msa_local_db}" \\
             --cache-dir "\$PROTENIX_MSA_CACHE_DIR" \\
-            --threads ${params.msa_threads ?: task.cpus} \\
-            --preset "${params.msa_preset ?: 'fast'}" \\
-            ${msa_cpu_only_flag} \\
-            --gpu-mode "${params.msa_gpu_mode ?: 'auto'}" \\
-            --gpu-threshold ${params.msa_gpu_threshold ?: 80} \\
-            ${msa_preferred_gpu_csv ? '--preferred-gpus "' + msa_preferred_gpu_csv + '"' : ''} \\
-            ${msa_excluded_gpu_csv ? '--excluded-gpus "' + msa_excluded_gpu_csv + '"' : ''} \\
-            --gpu-server-mode "${params.msa_gpu_server_mode ?: 'persistent'}" \\
-            --gpu-server-wait-timeout ${params.msa_gpu_server_wait_timeout ?: 120} \\
-            --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 2} \\
-            --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 5.0} \\
             ${msa_cache_only_flag} \\
-            ${msa_allow_cpu_fallback_flag} \\
             2>&1 | tee protenix_msa_prep.log
         PROTENIX_INPUT_JSON="prepared_input.json"
     fi

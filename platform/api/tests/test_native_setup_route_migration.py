@@ -22,7 +22,7 @@ async def test_v22_preserves_v21_rows_and_immutable_contract(tmp_path, monkeypat
             created = await workflow_setups.create_workflow_setup(session, project_id=project.id,
                 relationship_kind='primary', global_experiment_id=None, experiment_name='Retained',
                 experiment_objective='Upgrade without rewriting', domain_kind='protein_in_silico',
-                capability_id='protein.de_novo.rfd3', idempotency_key='create')
+                capability_id='protein.de_novo.laproteina', idempotency_key='create')
             await workflow_setups.save_workflow_setup_draft(session, project_id=project.id,
                 setup_context_id=created['setup_context_id'], expected_generation=0, idempotency_key='save',
                 draft={'editor_state': {'zero': 0, 'false': False, 'null': None, 'empty': ''}})

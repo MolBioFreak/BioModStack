@@ -45,7 +45,7 @@ def publish(tmp_path, monkeypatch, *, role='selected_publication', empty=False, 
         'producer_output_key': 'rf3_terminal/a.pdb', 'producer_artifact_sha256': hashlib.sha256(PDB.encode()).hexdigest()}))
     if role == 'selected_publication' and not empty and not compute_failure:
         (tmp_path / 'results/best_designs/a.pdb').rename(tmp_path / 'results/best_designs/candidate_terminal-a.pdb')
-    for stage in ('rf3_prediction_filter', 'rfd3_backbone_filter'):
+    for stage in ('rf3_prediction_filter',):
         selected = stage == 'rf3_prediction_filter'
         monkeypatch.setattr(sys, 'argv', ['collect', '--job-id', 'filter-test', '--owner', 'protein_design',
             '--stage-id', stage, '--role', role if selected else 'skipped',
@@ -57,8 +57,8 @@ def publish(tmp_path, monkeypatch, *, role='selected_publication', empty=False, 
 
 
 def job(root):
-    owner = Job(id='filter-test', name='filter', model_id='protein_modification_experimental',
-               mode='de_novo_design', params={'generator': 'rfd3', 'rf3_min_ptm': .5, 'pred_method': 'rf3', 'skip_rfd': True, 'run_rfd_only': False}, status='running', queue_status='running',
+    owner = Job(id='filter-test', name='filter', model_id='antibody_denovo',
+               mode='nanobody_binder', params={ 'rf3_min_ptm': .5, 'pred_method': 'rf3', 'skip_rfd': True, 'run_rfd_only': False}, status='running', queue_status='running',
                output_dir=str(root), provenance={'core_protein_scientific_contract': 1})
     from services.rf_filter_task_roster import begin, observe, finish
     begin(owner, owner.params)
@@ -86,8 +86,6 @@ async def test_stage_metadata_persists_and_serializes_without_replacing_owner(tm
             async def stronger_owner(*args, **kwargs):
                 return 17  # Later owner has its own, deliberately different domain.
             monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', stronger_owner)
-            # Primary publication now runs before the optional component; this Job's primary owner is RFD3.
-            monkeypatch.setattr('services.rfd3_generation_results._ingest_rfd3_generation_manifest', stronger_owner)
             assert await result_ingester.ingest_job_results(owner.id, str(tmp_path), db, commit=False) == 17
             await db.commit(); await db.refresh(owner)
             assert owner.provenance[KEY]['rf3_prediction_filter']['counts']['input_count'] == 4
@@ -97,7 +95,6 @@ async def test_stage_metadata_persists_and_serializes_without_replacing_owner(tm
             assert len(rows) == 4
             assert {row['disposition'] for row in rows} == {'passed', 'rejected_threshold', 'unevaluable_missing', 'invalid_evidence'}
             assert wire['result_summary']['generated_count'] is None
-            assert wire['provenance'][KEY]['rfd3_backbone_filter']['state'] == 'skipped'
     finally:
         await engine.dispose()
 

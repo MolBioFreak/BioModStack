@@ -16,17 +16,16 @@ def test_resource_config_preserves_native_setup_and_static_authority(tmp_path):
     root = Path(__file__).resolve().parents[3]
     components = [{'authority': f'modules/{source}.nf:{name}',
                    'selection_json': {}, 'resources_json': __import__('json').loads(native_resource_policy({}))}
-                  for source, name in [('rfd3', 'RunRFD3'), ('rf3', 'RunRF3'),
+                  for source, name in [('rf3', 'RunRF3'),
                                        ('conformational_mapping_protenix', 'CanonicalProtenixEnsemble')]]
     plan = {'metadata': {'static_components': components,
                         'dynamic_templates': [{'selection_json': {'native_process': 'WAIT'}}]}}
     config = native_resource_config(plan, {'required': {'cpus': 8, 'memory_bytes': 4096}},
                                     str(tmp_path / 'compute.lock'), root)
     assert "executor.cpus = 8" in config and "executor.memory = '4096 B'" in config
-    assert 'mkdir -p rfd3_results rfd3_trajectories' in config
     assert 'mkdir -p rf3_results' in config
     assert '--executing-image "${runtime_image}" >/dev/null || exit 1' in config
-    assert config.count('flock -x 198') == 3
+    assert config.count('flock -x 198') == 2
     assert 'WAIT' not in config
 
 

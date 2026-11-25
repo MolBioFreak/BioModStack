@@ -95,7 +95,6 @@ function getDisplayBatchName(batchName?: string | null): string | null {
 function getModelBadge(modelId: string): string {
     const key = modelId.toLowerCase();
     if (key === 'md' || key === 'molecular_dynamics') return 'MD';
-    if (key === 'msa_batch') return 'MSA';
     if (key.includes('nanopore')) return 'NGS';
     if (key.includes('boltzgen')) return 'BG';
     if (key.includes('boltz')) return 'B2';
@@ -104,10 +103,6 @@ function getModelBadge(modelId: string): string {
     if (key.includes('diff')) return 'RD';
     if (key.includes('dock')) return 'DD';
     return 'JB';
-}
-
-function isMsaJob(modelId: string): boolean {
-    return modelId.toLowerCase() === 'msa_batch';
 }
 
 
@@ -791,7 +786,7 @@ function JobRow({
         <div className="bg-slate-700/30 rounded-lg p-3 hover:bg-slate-700/50 transition-colors">
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <span className={`px-1.5 py-0.5 rounded text-xs font-mono ${isMsaJob(job.model_id) ? 'bg-violet-600 text-white' : 'bg-slate-600 text-slate-300'}`}>{getModelBadge(job.model_id)}</span>
+                    <span className="px-1.5 py-0.5 rounded text-xs font-mono bg-slate-600 text-slate-300">{getModelBadge(job.model_id)}</span>
                     <div className="min-w-0">
                         <div className="flex items-center gap-2">
                             <span className="font-medium text-white truncate" title={job.name}>{displayName}</span>

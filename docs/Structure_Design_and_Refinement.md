@@ -174,27 +174,12 @@ Surface includes:
 - nanobody/VHH campaigns
 - scaffolded or target-conditioned all-atom generation
 
-### Oligo Designer / RFDpoly
-
-Primary workflow:
-
-- [workflows/oligo_design.nf](../workflows/oligo_design.nf)
-
-Primary registry entry:
-
-- [platform/api/config/models/oligo_design.yaml](../platform/api/config/models/oligo_design.yaml)
-
-Purpose:
-
-- multi-polymer design across DNA, RNA, protein, and mixed assemblies
-
 ## Model groups
 
 ### Backbone or generative design
 
 - RFantibody
 - BoltzGen
-- Oligo Designer / RFDpoly
 - La-Proteina
 - DISCO
 - Caliby Experimental

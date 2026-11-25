@@ -130,7 +130,7 @@ def test_local_msa_package_exposes_runtime_and_protenix_modules() -> None:
 
     assert callable(runtime.inspect_mmseqs_runtime)
     assert callable(runtime.parse_gpu_csv)
-    assert callable(protenix.prepare_with_local_msa)
+    assert not hasattr(protenix, "prepare_with_local_msa")
     assert callable(protenix.choose_backend)
 
 

@@ -96,12 +96,12 @@ def test_setup_context_persistence_authority_is_registered() -> None:
 
 
 def _de_novo_capabilities() -> tuple[dict, Path]:
-    rfd3_mode = next(
+    native_mode = next(
         record
         for record in protein_project_capabilities._CAPABILITIES
-        if record["capability_id"] == "protein.de_novo.rfd3"
+        if record["capability_id"] == "protein.de_novo.laproteina"
     )
-    return rfd3_mode, Path(__file__).resolve().parents[1] / "config" / "templates"
+    return native_mode, Path(__file__).resolve().parents[1] / "config" / "templates"
 
 
 async def _project_capability_api() -> dict:
@@ -145,12 +145,12 @@ def _configure_legacy_protein_cad_catalog(
 async def test_native_project_picker_is_independent_of_legacy_cad_publication(
     monkeypatch, tmp_path: Path
 ) -> None:
-    rfd3_mode, templates_dir = _de_novo_capabilities()
-    assert rfd3_mode["exposure_state"] == "accepted"
-    assert rfd3_mode["availability"]["state"] == "operational"
-    assert rfd3_mode["workflow_adapter_id"].startswith("bms.core-job.")
-    assert rfd3_mode["allowed_model_modes"]
-    assert rfd3_mode["project_setup_destination"] == "/submit?template=protein_modification_experimental"
+    native_mode, templates_dir = _de_novo_capabilities()
+    assert native_mode["exposure_state"] == "accepted"
+    assert native_mode["availability"]["state"] == "operational"
+    assert native_mode["workflow_adapter_id"].startswith("bms.core-job.")
+    assert native_mode["allowed_model_modes"]
+    assert native_mode["project_setup_destination"] == "/submit?template=protein_modification_experimental"
     assert all(
         record["capability_id"] != "protein.de_novo.local_redesign"
         for record in protein_project_capabilities._CAPABILITIES
@@ -164,7 +164,7 @@ async def test_native_project_picker_is_independent_of_legacy_cad_publication(
         item["capability_id"]
         for item in existing_inventory["capabilities"]
     }
-    assert "protein.de_novo.rfd3" in existing_ids
+    assert "protein.de_novo.laproteina" in existing_ids
     assert "protein.de_novo.local_redesign" not in existing_ids
     _configure_legacy_protein_cad_catalog(monkeypatch, tmp_path)
 

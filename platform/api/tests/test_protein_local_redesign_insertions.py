@@ -121,8 +121,8 @@ def test_interface_shell_does_not_expand_number_aliases(tmp_path):
     assert residue_keys_from_indices(residues,indices)=={ResidueKey('A',12,'B')}
 
 
-def test_legacy_integer_request_seed_and_manifest_bytes_unchanged(tmp_path):
-    """Compare actual current writer with pinned historical script, not a mock."""
+def test_legacy_integer_request_keeps_seed_and_surviving_manifest_fields(tmp_path):
+    """Keep the historical seed and every field except the retired generator tag."""
     source=tmp_path/'plain.pdb'
     source.write_text(''.join(f'ATOM  {i:5d}   CA GLY A{i:4d}    {float(i):8.3f}{0:8.3f}{0:8.3f}{1:6.2f}{20:6.2f}           C\n' for i in (1,2,5))+'END\n')
     baseline=tmp_path/'baseline.py'
@@ -131,9 +131,12 @@ def test_legacy_integer_request_seed_and_manifest_bytes_unchanged(tmp_path):
     args=['--input_pdb',str(source),'--design_chains','A','--redesign_ranges','A1-2',
           '--sequence_redesign_ranges','A2','--output_seed_pdb',str(seed),'--output_manifest',str(manifest)]
     subprocess.run([sys.executable,str(baseline),*args],check=True)
-    expected=(seed.read_bytes(),manifest.read_bytes())
+    expected_seed = seed.read_bytes()
+    expected_manifest = json.loads(manifest.read_bytes())
+    assert expected_manifest.pop('rfd3_mode') == 'monomer_motifscaff'
     subprocess.run([sys.executable,str(ROOT/'scripts/resolve_redesign_regions.py'),*args],check=True)
-    assert (seed.read_bytes(),manifest.read_bytes())==expected
+    assert seed.read_bytes() == expected_seed
+    assert json.loads(manifest.read_bytes()) == expected_manifest
 
 
 def test_actual_receiving_policy_keeps_author_siblings_separate(tmp_path):

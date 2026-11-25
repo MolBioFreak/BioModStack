@@ -208,49 +208,8 @@ def test_real_cad_preparer_receives_cold_portable_inputs(roots, tmp_path, monkey
             assert Path(jobs[0]['sequences'][0]['ligand']['ligand'][5:]).read_bytes() == b'opaque SDF transport body\r\n'
 
 
-@pytest.mark.parametrize('with_source', [False, True])
-def test_rfd3_canonical_request_typed_source_portability(roots, tmp_path, monkeypatch, with_source):
-    from services.rfd3_generation import normalize_generation_params, materialize_generation_request
-    from services.nextflow import compile_nextflow_invocation
-    from component_runtime import SourceIdentity
-    import paths
-    monkeypatch.setattr(paths, 'get_allowed_roots', lambda: {'inputs': roots['inputs'], 'bms_results': roots['results']})
-    params = {'generator': 'rfd3', 'min_length': 40, 'max_length': 40,
-              'num_designs': 1, 'seed': 0, 'dump_trajectories': False,
-              'conditioning': {'contig': None}}
-    raw = cif(models=(7,)).encode()
-    source = roots['inputs'] / 'annotated.cif'
-    if with_source:
-        source.write_bytes(raw)
-        params.update(input_structure=str(source), source_mapping='bms.rfd3.source-map.v1', source_model=7)
-    normalized, _, _ = normalize_generation_params(params, job_name='cold-rfd3')
-    output = roots['inputs'] / 'job'
-    output.mkdir()
-    bound, document = materialize_generation_request(normalized, output_dir=output, job_id='cold-rfd3')
-    invocation = compile_nextflow_invocation('protein_modification_experimental', 'de_novo_design', bound,
-        str(output), job_id='cold-rfd3', source_identity=SourceIdentity('a' * 40, 'b' * 40))
-    for item in invocation.generated_inputs:
-        item.materialize(output)
-    expected = document.read_bytes()
-    # Use the ordinary bundle owner, not a caller-authored placement envelope.
-    refs, assets = _input_inventory(tmp_path, monkeypatch, roots['inputs'], bound,
-        invocation.model_id, invocation.mode)
-    assert {r['source_path'] for r in refs} == {str(document), *([str(source)] if with_source else [])}
-    _place_and_hide(tmp_path, monkeypatch, roots['inputs'], refs, assets)
-    received = portable.resolve_input_path(document)
-    assert received.read_bytes() == expected
-    retained = json.loads(received.read_bytes())
-    assert retained['execution']['seed'] == 0 and retained['execution']['dump_trajectories'] is False
-    assert retained['conditioning']['contig'] is None
-    if with_source:
-        assert retained['source_model'] == 7
-        assert retained['source_mapping'] == 'bms.rfd3.source-map.v1'
-        assert portable.resolve_input_path(retained['source']['path']).read_bytes() == raw
-        assert retained['source']['sha256'] == sha(raw)
-
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize('engine', ['rfd4_proteina', 'rfd3', 'complexa', 'disco', 'laproteina'])
+@pytest.mark.parametrize('engine', ['rfd4_proteina', 'complexa', 'disco', 'laproteina'])
 async def test_selected_existing_runtime_cold_warm_cache_not_family_pack(roots, tmp_path, monkeypatch, local_transport, engine):
     import uuid
     from types import SimpleNamespace
@@ -275,17 +234,12 @@ async def test_selected_existing_runtime_cold_warm_cache_not_family_pack(roots, 
             'task': 'AME', 'task_name': 'selected', 'reward': None, 'seed': 0}}
     else:
         model, mode = 'protein_modification_experimental', 'de_novo_design'
-        params = {'generator': engine, 'backend': engine, 'min_length': 40, 'max_length': 40,
-                  'num_designs': 1, 'seed': 0, 'dump_trajectories': False}
-        if engine != 'rfd3':
-            params = {'generator': engine, 'backend': engine, 'target_lengths': '40', 'num_designs': 1}
-        else:
-            params.pop('backend')
+        params = {'generator': engine, 'backend': engine, 'target_lengths': '40', 'num_designs': 1}
     invocation = compile_nextflow_invocation(model, mode, params, str(roots['results'] / 'runtime-job'),
         job_id='selected-runtime', source_identity=SourceIdentity('a' * 40, 'b' * 40))
     deps = [dep for dep in invocation.execution_plan.dependencies if dep.kind in {'image', 'weights', 'runtime_data'}]
     expected_images = {'rfd4_proteina': {'rfd4_proteina.sif'}, 'complexa': {'complexa.sif'},
-        'rfd3': {'foundry.sif', 'pyrosetta_tools.sif'}, 'disco': {'disco.sif'}, 'laproteina': {'laproteina.sif'}}
+        'disco': {'disco.sif'}, 'laproteina': {'laproteina.sif'}}
     assert {d.relative_path for d in deps if d.kind == 'image'} == expected_images[engine]
     # Create inert bytes for exactly the compiler-selected declarations only.
     for dep in deps:

@@ -185,8 +185,7 @@ async def test_unknown_vram_is_estimated_and_pinned_while_explicit_zero_stays_cp
     (20000, [2], 'example', 1),
     (4096, [2], 'example', 2),
     (20000, [2, 3], 'example', 2),
-    (4096, [2, 3], 'msa_batch', 1),
-    (0, [], 'msa_batch', 1),
+    (0, [], 'example', 2),
 ])
 async def test_overlapping_local_cycles(tmp_path, monkeypatch, mb, devices, model, expected):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'overlap.db'}")
@@ -194,7 +193,7 @@ async def test_overlapping_local_cycles(tmp_path, monkeypatch, mb, devices, mode
         await connection.run_sync(Base.metadata.create_all)
     factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     monkeypatch.setattr(gpu_module, 'read_scheduler_config', lambda: {'global': {
-        'max_launches_per_cycle': 1, 'target_vram_fill': .9, 'msa_concurrency_limit': 1}})
+        'max_launches_per_cycle': 1, 'target_vram_fill': .9}})
     gpus = [SimpleNamespace(index=i, name='gpu', memory_used_mb=0, memory_total_mb=32607,
                             utilization=0, temperature=30) for i in devices]
     async def seed(key, priority):

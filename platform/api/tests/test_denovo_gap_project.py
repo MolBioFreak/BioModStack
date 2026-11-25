@@ -25,11 +25,7 @@ def authored(case, tmp, monkeypatch):
     request={'name':case,'model_id':'protein_modification_experimental','mode':'de_novo_design',
         'execution_target_id':None,'execution_policy':{'remote_result_policy':'manual'},'params':{}}
     capability='protein.de_novo.'+case
-    if case=='rfd3':
-        request['params']={'generator':'rfd3','min_length':40,'max_length':40,'seed':0,
-            'generation_mode':'unconditional_monomer','skip_existing':False,
-            'conditioning':{'symmetry':{'id':'C2','is_symmetric_motif':False,'is_unsym_motif':False}}}
-    elif case in ('la-override','la-named'):
+    if case in ('la-override','la-named'):
         capability='protein.de_novo.laproteina'
         request['params']={'generator':'laproteina','backend':'laproteina','design_task':'motif_scaffolding',
             'num_designs':1,'seed':0,'laproteina_preset':'motif_idx_aa',
@@ -66,7 +62,7 @@ def authored(case, tmp, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('case',['rfd3','la-override','la-named','disco','rfd4-edited','rfd4-retained','la-evaluate'])
+@pytest.mark.parametrize('case',['la-override','la-named','disco','rfd4-edited','rfd4-retained','la-evaluate'])
 async def test_gap_http_save_twice_cold_prepare_and_bound_dispatch(case,tmp_path,monkeypatch,isolated_core,setup_store,isolate_applied_local_policy):
     if case.startswith('rfd4') and not os.environ.get('BMS_GAP_LANE_EVIDENCE'):
         pytest.skip('Requires actual mounted lane envelopes')
@@ -133,16 +129,3 @@ async def test_gap_http_save_twice_cold_prepare_and_bound_dispatch(case,tmp_path
             assert job.params['native_sources']['resume']['expected_sha256']==draft['native_job_request']['params']['native_sources']['resume']['expected_sha256']
             from paths import resolve_allowed_path
             assert Path(resolve_allowed_path(job.params['native_sources']['resume']['path'])).read_bytes()==b'INERT retained state B; never unpickled'
-        if case=='rfd3':
-            assert job.params['rfd3_generation_request']['execution']['skip_existing'] is False
-            assert job.params['rfd3_generation_request']['conditioning']==draft['native_job_request']['params']['conditioning']
-            from services.global_experiments.launch_contexts import LaunchContextError
-            original=copy.deepcopy(job.params)
-            for field,value in [('job_id','wrong-job'),('conditioning',{}),('seed',99)]:
-                changed=copy.deepcopy(original)
-                changed['rfd3_generation_request'][field]=value
-                job.params=changed
-                with pytest.raises(LaunchContextError,match='Job does not match'):
-                    await validate_bound_job(exp,context,job)
-                job.params=copy.deepcopy(original)
-            await validate_bound_job(exp,context,job)

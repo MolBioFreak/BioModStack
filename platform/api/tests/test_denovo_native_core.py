@@ -29,7 +29,7 @@ async def test_actual_job_http_insertion(isolated_core, setup_store, isolate_app
     app.dependency_overrides[get_experiment_session] = project_session
     async with AsyncClient(transport=ASGITransport(app), base_url='http://fixture') as client:
         payload = dict(name='native-ingress', model_id='protein_modification_experimental', mode='de_novo_design',
-                       execution_target_id=None, params={'generator': 'rfd3', 'num_designs': count})
+                       execution_target_id=None, params={'generator': 'laproteina', 'num_designs': count})
         response = await client.post('/jobs', json=payload)
         assert response.status_code == 201, response.text
         async with isolated_core() as session:
@@ -67,7 +67,7 @@ async def test_actual_discovery_routes():
         parent = await client.get('/models/protein_modification_experimental/generation-settings?mode=de_novo_design&generator=rfd4_proteina&task=evaluate')
         assert parent.status_code == 200, parent.text
         assert parent.json()['mode'] == 'evaluate'
-        for generator in ('rfd3', 'laproteina', 'disco'):
+        for generator in ('laproteina', 'disco'):
             response = await client.get('/models/protein_modification_experimental/generation-settings',
                 params={'mode': 'de_novo_design', 'generator': generator})
             assert response.status_code == 200, response.text
@@ -108,7 +108,7 @@ def test_named_pack_separate_from_exact_request():
 @pytest.mark.parametrize('model', ['rfd4_proteina', 'complexa'])
 def test_unknown_native_mode_never_falls_through(model):
     with pytest.raises(ValueError):
-        resolve_nextflow_entrypoint(effective_profile='rfd3', model_id=model, mode='unknown')
+        resolve_nextflow_entrypoint(effective_profile='rfd4_proteina', model_id=model, mode='unknown')
 
 
 def test_registry_uses_native_owner_errors():
