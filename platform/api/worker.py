@@ -14,8 +14,15 @@ import fcntl
 import logging
 import os
 import signal
+import sys
 from pathlib import Path
 from typing import Optional
+
+_API_ROOT = Path(__file__).resolve().parent
+_REPO_ROOT = _API_ROOT.parent.parent
+for _p in (str(_REPO_ROOT), str(_API_ROOT)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from biomodstack_runtime_profile import install_feature_enabled
 from database import async_session, init_db

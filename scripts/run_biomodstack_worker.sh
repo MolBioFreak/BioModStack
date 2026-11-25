@@ -63,6 +63,7 @@ if [ -z "$BMS_MANAGED_PYTHON" ] && ! command -v uv >/dev/null 2>&1; then
 fi
 
 cd "$PROJECT_DIR/platform/api"
+export PYTHONPATH="$PROJECT_DIR:$PROJECT_DIR/platform/api${PYTHONPATH:+:$PYTHONPATH}"
 
 if [ -n "$BMS_MANAGED_PYTHON" ]; then
     "$BMS_MANAGED_PYTHON" run_migrations.py
