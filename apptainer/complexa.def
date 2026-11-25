@@ -31,10 +31,32 @@ From: nvidia/cuda@sha256:61f6c08f2b59036cb935e56d1e31a6b64e3ae2c7ddb86d33fa0b044
     printf '%s  %s\n' d62f065830aa3739cc031156b9690805c7b2e811b4a178c8b4acd8725d561c94 /opt/evaluator-tools/foldseek/LICENSE.md adc3ea1f2f5096d2464460495e12a65a94f466edb9ccca50d1f25844ca83792a /opt/evaluator-tools/mmseqs/LICENSE.md | sha256sum -c -
     ln -sf /opt/evaluator-tools/foldseek/bin/foldseek /usr/local/bin/foldseek
     ln -sf /opt/evaluator-tools/mmseqs/bin/mmseqs /usr/local/bin/mmseqs
-    curl -fL https://github.com/astral-sh/uv/releases/download/0.11.26/uv-x86_64-unknown-linux-gnu.tar.gz -o /opt/build-tmp/uv.tar.gz
-    printf '%s  %s\n' 6426a73c3837e6e2483ee344cbc00f36394d179afcba6183cb77437e67db4af0 /opt/build-tmp/uv.tar.gz | sha256sum -c -
-    tar -xzf /opt/build-tmp/uv.tar.gz -C /opt/build-tmp
-    install /opt/build-tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv
+    # Install pinned uv 0.13.10 with SHA256 verification
+    UV_VERSION="0.13.10"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    curl -fsSL --retry 3 --retry-delay 2 \
+        "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
+        -o "${UV_TMP}/uv.tar.gz"
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
+    uv --version
     export UV_PYTHON_INSTALL_DIR=/opt/uv-python UV_CACHE_DIR=/opt/build-tmp/uv-cache
     uv python install 3.12.13
     git lfs install --system

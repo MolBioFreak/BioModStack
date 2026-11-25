@@ -32,10 +32,10 @@ RUN rm -f /etc/apt/sources.list.d/debian.sources \
     && apt-get install -y --no-install-recommends "ca-certificates=${CA_CERTIFICATES_VERSION}" "curl=${CURL_VERSION}" \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 RUN set -eux; \
-    UV_VERSION="0.13.9"; \
+    UV_VERSION="0.13.10"; \
     case "$(uname -m)" in \
-        x86_64|amd64) UV_TARGET="x86_64-unknown-linux-gnu"; UV_SHA256="a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5" ;; \
-        aarch64|arm64) UV_TARGET="aarch64-unknown-linux-gnu"; UV_SHA256="0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d" ;; \
+        x86_64|amd64) UV_TARGET="x86_64-unknown-linux-gnu"; UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c" ;; \
+        aarch64|arm64) UV_TARGET="aarch64-unknown-linux-gnu"; UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2" ;; \
         *) echo "Unsupported architecture for uv: $(uname -m)" >&2; exit 1 ;; \
     esac; \
     UV_TMP="$(mktemp -d)"; \

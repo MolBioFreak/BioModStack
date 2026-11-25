@@ -17,10 +17,36 @@ From: ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cff
 
 %post
     set -eu
-    export DEBIAN_FRONTEND=noninteractive PIP_BREAK_SYSTEM_PACKAGES=1 PIP_NO_CACHE_DIR=1
+    export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y --no-install-recommends python3 python3-pip python3-dev build-essential ca-certificates git
+    apt-get install -y --no-install-recommends python3 python3-dev build-essential ca-certificates curl git
     rm -rf /var/lib/apt/lists/*
+    # Install pinned uv 0.13.10 with SHA256 verification
+    UV_VERSION="0.13.10"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    curl -fsSL --retry 3 --retry-delay 2 \
+        "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
+        -o "${UV_TMP}/uv.tar.gz"
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
+    uv --version
     git clone https://github.com/PacesaLab/BindCraft2.git /opt/bindcraft
     cd /opt/bindcraft
     git checkout --detach d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f
@@ -32,10 +58,10 @@ From: ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cff
     python3 -m py_compile bindcraft/af2.py bindcraft/campaign.py bindcraft/protein_preparation.py bindcraft/proteinmpnn.py bindcraft/sequence_optimization.py
     # The native cuda12 extra exists at this exact scientific pin. All wheels,
     # including non-accelerator packages, are pinned by version and PyPI SHA256.
-    python3 -m pip install --only-binary=:all: --require-hashes -r /opt/bindcraft2-cuda12-requirements.lock
-    python3 -m pip install --no-deps --no-build-isolation -e '/opt/bindcraft[cuda12]'
-    python3 -m pip check
-    python3 -m pip freeze > /opt/bindcraft/requirements.lock
+    uv pip install --system --break-system-packages --python /usr/bin/python3 --no-cache --only-binary=:all: --require-hashes -r /opt/bindcraft2-cuda12-requirements.lock
+    uv pip install --system --break-system-packages --python /usr/bin/python3 --no-cache --no-deps --no-build-isolation -e '/opt/bindcraft[cuda12]'
+    uv pip check --system --python /usr/bin/python3
+    uv pip freeze --system --python /usr/bin/python3 > /opt/bindcraft/requirements.lock
     dpkg-query -W > /opt/bindcraft/system-packages.lock
     python3 -c "import nvidia,pathlib; print('\\n'.join(sorted(str(path) for root in nvidia.__path__ for path in pathlib.Path(root).glob('*/lib'))))" > /etc/ld.so.conf.d/bindcraft-cuda.conf
     ldconfig
@@ -54,7 +80,7 @@ From: ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cff
     test "$(git -C /opt/bindcraft rev-parse HEAD)" = d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f
     git -C /opt/bindcraft apply --reverse --check /opt/bindcraft2-aa-bias.patch
     git -C /opt/bindcraft apply --reverse --check /opt/bindcraft2-producer.patch
-    python3 -m pip check
+    uv pip check --system --python /usr/bin/python3
     python3 -m bindcraft.selfcheck cuda12 --shipped-only
 
 %help

@@ -8,27 +8,53 @@ From: mambaorg/micromamba:1.5.8
         unzip \
         git \
         curl \
+        ca-certificates \
         procps \
         coreutils \
         grep \
         pigz \
         sed
 
+    # uv-hardening-exception: pyrosetta_installer.install_pyrosetta() invokes pip internally to install the GrayLab PyRosetta wheel
     micromamba create -n pyrosetta -c conda-forge python=3.9 pip pyyaml -y
     eval "$(micromamba shell hook --shell bash)"
     micromamba activate pyrosetta
 
-    # Install UV package manager (10-100x faster than pip)
-    pip install --compile uv
+    # Install pinned uv 0.13.10 with SHA256 verification
+    UV_VERSION="0.13.10"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    curl -fsSL --retry 3 --retry-delay 2 \
+        "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
+        -o "${UV_TMP}/uv.tar.gz"
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
+    uv --version
     
-    uv pip install --compile pyrosetta-installer
+    uv pip install --python /opt/conda/envs/pyrosetta/bin/python --no-cache --compile pyrosetta-installer
     python -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
 
     # Install PyTorch 2.4.1 with CUDA 12.1
     # WARNING: RTX 5090 (sm_120) not officially supported but DOES work (tested)
-    uv pip install --compile torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    uv pip install --python /opt/conda/envs/pyrosetta/bin/python --no-cache --compile torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-    uv pip install --compile biopython pandas matplotlib
+    uv pip install --python /opt/conda/envs/pyrosetta/bin/python --no-cache --compile biopython pandas matplotlib
 
     apt-get autoremove -y
     apt-get clean

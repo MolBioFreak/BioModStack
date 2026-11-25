@@ -21,7 +21,36 @@ From: python@sha256:65a93d69fa75478d554f4ad27c85c1e69fa184956261b4301ebaf6dbb0a3
     apt-get install -y --no-install-recommends build-essential
     rm -rf /var/lib/apt/lists/*
     dpkg-query -W > /opt/installed-system-packages.txt
-    python -m venv /opt/venv
+    # Install pinned uv 0.13.10 with SHA256 verification
+    UV_VERSION="0.13.10"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 3 --retry-delay 2 "${UV_URL}" -o "${UV_TMP}/uv.tar.gz"
+    else
+        python -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "${UV_URL}" "${UV_TMP}/uv.tar.gz"
+    fi
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
+    uv --version
+    uv venv /opt/venv --python python
     export PATH=/opt/venv/bin:$PATH
     python - <<'PY'
 import hashlib, io, tarfile, urllib.request
@@ -41,11 +70,10 @@ with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
 PY
     python /opt/bms/laproteina_contract.py --apply-runtime-patches /opt/laproteina
     cat > /opt/bootstrap.lock <<'LOCK'
-pip==25.2 --hash=sha256:6d67a2b4e7f14d8b31b8b52648866fa717f45a1eb70e83002f4331d07e953717
 setuptools==80.9.0 --hash=sha256:062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922
 wheel==0.45.1 --hash=sha256:708e7481cc80179af0e556bbf0cc00b8444c7321e2700b8d8580231d13017248
 LOCK
-    python -m pip install --require-hashes --no-deps -r /opt/bootstrap.lock
+    uv pip install --python /opt/venv/bin/python --no-cache --require-hashes --no-deps -r /opt/bootstrap.lock
     python - <<'PY'
 from pathlib import Path
 import re
@@ -53,16 +81,18 @@ lock = Path('/opt/runtime.lock').read_text()
 blocks = re.split(r'(?m)^(?=[A-Za-z0-9][A-Za-z0-9_.-]*==)', lock)
 Path('/opt/build-prerequisites.lock').write_text(''.join(b for b in blocks if b.startswith(('numpy==', 'cython=='))))
 PY
-    python -m pip install --require-hashes --no-deps -r /opt/build-prerequisites.lock
-    python -m pip install --require-hashes --no-build-isolation --no-deps --report /opt/installed-artifacts.json \
+    uv pip install --python /opt/venv/bin/python --no-cache --require-hashes --no-deps -r /opt/build-prerequisites.lock
+    uv pip install --python /opt/venv/bin/python --no-cache --require-hashes --no-build-isolation --no-deps \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
-        --find-links https://data.pyg.org/whl/torch-2.7.0+cu128.html -r /opt/runtime.lock
+        --find-links https://data.pyg.org/whl/torch-2.7.0+cu128.html \
+        --index-strategy unsafe-best-match -r /opt/runtime.lock
+    uv pip list --python /opt/venv/bin/python --format json > /opt/installed-artifacts.json
     # Official README installs graphein without dependencies. Its optional
     # evaluation/training closure is deliberately not an acquisition dependency.
-    python -m pip install --no-deps 'https://files.pythonhosted.org/packages/70/5a/23be3e8d1bfbcb9dec698cfd18e208acc2f4864ff9f3b6ffb257c53eaf24/graphein-1.7.7-py3-none-any.whl#sha256=a1683cd4f5d6b4b5a00391c7b90494f4b58ea2aee556679fb57512b424e4ed90'
+    uv pip install --python /opt/venv/bin/python --no-cache --no-deps 'https://files.pythonhosted.org/packages/70/5a/23be3e8d1bfbcb9dec698cfd18e208acc2f4864ff9f3b6ffb257c53eaf24/graphein-1.7.7-py3-none-any.whl#sha256=a1683cd4f5d6b4b5a00391c7b90494f4b58ea2aee556679fb57512b424e4ed90'
     mkdir -p /weights/laproteina /cache
-    python -m pip freeze > /opt/installed-packages.txt
-    rm -rf /root/.cache/pip
+    uv pip freeze --python /opt/venv/bin/python > /opt/installed-packages.txt
+    rm -rf /root/.cache/uv
 
 %environment
     export PATH=/opt/venv/bin:$PATH

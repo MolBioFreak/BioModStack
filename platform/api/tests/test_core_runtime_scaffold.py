@@ -394,7 +394,7 @@ def test_api_dockerfile_uses_prebuilt_venv_at_runtime() -> None:
     assert "FROM scratch AS api-runtime" in dockerfile
     assert "UV_COMPILE_BYTECODE=0" in dockerfile
     assert "UV_CACHE_DIR=/tmp/uv-cache" in dockerfile
-    assert 'UV_VERSION="0.13.9"' in dockerfile
+    assert 'UV_VERSION="0.13.10"' in dockerfile
     assert "sha256sum -c -" in dockerfile
     assert "pip install" not in dockerfile
     assert 'venv.rglob("__pycache__")' in dockerfile

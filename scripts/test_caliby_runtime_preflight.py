@@ -94,7 +94,9 @@ def test_recipe_pins_installed_native_runtime_and_existing_bind_transport() -> N
     root = SCRIPTS_ROOT.parent
     recipe = (root / "apptainer/caliby.def").read_text()
     assert "git checkout --detach ddb368cbe239ddc2bd731a963f10ffe81452bb1f" in recipe
-    assert "uv/0.11.7/install.sh" in recipe
+    assert 'UV_VERSION="0.13.10"' in recipe
+    assert "sha256sum -c -" in recipe
+    assert "astral.sh/uv/" not in recipe
     lock = recipe.split("<<'CALIBY_RUNTIME_LOCK'\n", 1)[1].split("\nCALIBY_RUNTIME_LOCK", 1)[0]
     assert "torch==2.8.0+cu128" in lock
     assert "gemmi==0.7.5" in lock
@@ -102,7 +104,7 @@ def test_recipe_pins_installed_native_runtime_and_existing_bind_transport() -> N
     assert "protpardelle-1c.git@7962da091a335251fa8e5ddef5d2c937fbd9d9ae" in lock
     assert all("==" in line or " @ git+" in line or line == "-e file:///opt/caliby"
                for line in lock.splitlines())
-    assert "uv pip install --no-deps -r /opt/caliby/runtime.lock" in recipe
+    assert "uv pip install --python /opt/caliby/.venv/bin/python --no-cache --no-deps -r /opt/caliby/runtime.lock" in recipe
     config = (root / "nextflow.config").read_text().split("withLabel: Caliby {", 1)[1].split("withLabel:", 1)[0]
     assert '--env MODEL_PARAMS_DIR=/weights/caliby/model_params' in config
     assert '--bind ${params.cache_root}:/cache' in config

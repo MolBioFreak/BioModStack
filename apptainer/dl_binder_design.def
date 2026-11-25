@@ -10,8 +10,34 @@ From: mambaorg/micromamba@sha256:69197a394b85ad1e7ce2398cdaffa75c12e5cd9dcc85296
 %post -c /bin/bash
     set -euo pipefail
     apt-get -q update
-    apt-get install --no-install-recommends -y wget unzip git build-essential cmake procps coreutils grep sed ca-certificates
+    apt-get install --no-install-recommends -y wget curl unzip git build-essential cmake procps coreutils grep sed ca-certificates
     apt-get clean
+    # Install pinned uv 0.13.10 with SHA256 verification
+    UV_VERSION="0.13.10"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    curl -fsSL --retry 3 --retry-delay 2 \
+        "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
+        -o "${UV_TMP}/uv.tar.gz"
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
+    uv --version
     git clone https://github.com/PapenfussLab/dl_binder_design.git /dl_binder_design
     git -C /dl_binder_design checkout --detach 1c336346332172658097c32de04040732728341e
     micromamba create -n mpnn -f /opt/bms-mpnn/dl_binder_design-mpnn.conda.lock -y
@@ -19,8 +45,8 @@ From: mambaorg/micromamba@sha256:69197a394b85ad1e7ce2398cdaffa75c12e5cd9dcc85296
     git -C /dl_binder_design/mpnn_fr/ProteinMPNN checkout --detach 8907e6671bfbfc92303b5f79c4b5e6ce47cdef57
     set -euo pipefail
     PYTHON=/opt/conda/envs/mpnn/bin/python
-    "$PYTHON" -m pip install --no-cache-dir --disable-pip-version-check --require-hashes --only-binary=:all: --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple -r /opt/bms-mpnn/dl_binder_design-cu128.requirements.lock
-    "$PYTHON" -m pip check
+    uv pip install --python "$PYTHON" --no-cache --require-hashes --only-binary=:all: --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match -r /opt/bms-mpnn/dl_binder_design-cu128.requirements.lock
+    uv pip check --python "$PYTHON"
     "$PYTHON" -c 'import torch; assert torch.__version__ == "2.7.1+cu128"; assert torch.version.cuda == "12.8"; assert "sm_120" in torch._C._cuda_getArchFlags().split()'
     echo 'c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd  /dl_binder_design/mpnn_fr/ProteinMPNN/vanilla_model_weights/v_48_020.pt' | sha256sum -c -
     micromamba clean --all --yes

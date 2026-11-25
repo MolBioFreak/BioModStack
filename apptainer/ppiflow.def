@@ -10,14 +10,37 @@ From: nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
     export DEBIAN_FRONTEND=noninteractive
     apt-get update && apt-get install -y \
         git wget curl \
-        python3.10 python3.10-venv python3-pip \
+        python3.10 python3.10-venv \
         build-essential cmake \
         libhdf5-dev libnetcdf-dev \
         && rm -rf /var/lib/apt/lists/*
     
-    # Install UV (10-100x faster than pip)
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="/root/.local/bin:$PATH"
+    # Install pinned uv 0.13.10 with SHA256 verification
+    UV_VERSION="0.13.10"
+    case "$(uname -m)" in
+        x86_64|amd64)
+            UV_TARGET="x86_64-unknown-linux-gnu"
+            UV_SHA256="bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+            ;;
+        aarch64|arm64)
+            UV_TARGET="aarch64-unknown-linux-gnu"
+            UV_SHA256="14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2"
+            ;;
+        *)
+            echo "Unsupported architecture for uv: $(uname -m)" >&2
+            exit 1
+            ;;
+    esac
+    UV_TMP="$(mktemp -d)"
+    curl -fsSL --retry 3 --retry-delay 2 \
+        "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
+        -o "${UV_TMP}/uv.tar.gz"
+    printf '%s  %s\n' "${UV_SHA256}" "${UV_TMP}/uv.tar.gz" | sha256sum -c -
+    tar -xzf "${UV_TMP}/uv.tar.gz" -C "${UV_TMP}"
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uv" /usr/local/bin/uv
+    install -D -m 0755 "${UV_TMP}/uv-${UV_TARGET}/uvx" /usr/local/bin/uvx
+    rm -rf "${UV_TMP}"
+    uv --version
     
     # Create virtualenv with UV
     uv venv /opt/venv
@@ -25,29 +48,29 @@ From: nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
     export PATH="/opt/venv/bin:$PATH"
     
     # Install a Blackwell-capable PyTorch stack.
-    uv pip install --compile torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 \
+    uv pip install --python /opt/venv/bin/python --no-cache --compile torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 \
         --index-url https://download.pytorch.org/whl/cu128
     
     # Install PyG dependencies
-    uv pip install --compile pyg-lib torch-cluster torch-scatter torch-sparse torch-spline-conv \
+    uv pip install --python /opt/venv/bin/python --no-cache --compile pyg-lib torch-cluster torch-scatter torch-sparse torch-spline-conv \
         -f https://data.pyg.org/whl/torch-2.7.1+cu128.html
-    uv pip install --compile torch-geometric==2.7.0
+    uv pip install --python /opt/venv/bin/python --no-cache --compile torch-geometric==2.7.0
     
     # Install core scientific dependencies
-    uv pip install --compile numpy==1.26.3 scipy==1.15.2 pandas==2.2.3
-    uv pip install --compile biopython==1.83 biotite==1.0.1
-    uv pip install --compile einops==0.8.1 e3nn==0.5.6
-    uv pip install --compile hydra-core==1.3.2 omegaconf==2.3.0
-    uv pip install --compile pytorch-lightning==2.5.0.post0 lightning==2.5.0.post0
-    uv pip install --compile wandb==0.19.8
-    uv pip install --compile mdtraj==1.10.3
+    uv pip install --python /opt/venv/bin/python --no-cache --compile numpy==1.26.3 scipy==1.15.2 pandas==2.2.3
+    uv pip install --python /opt/venv/bin/python --no-cache --compile biopython==1.83 biotite==1.0.1
+    uv pip install --python /opt/venv/bin/python --no-cache --compile einops==0.8.1 e3nn==0.5.6
+    uv pip install --python /opt/venv/bin/python --no-cache --compile hydra-core==1.3.2 omegaconf==2.3.0
+    uv pip install --python /opt/venv/bin/python --no-cache --compile pytorch-lightning==2.5.0.post0 lightning==2.5.0.post0
+    uv pip install --python /opt/venv/bin/python --no-cache --compile wandb==0.19.8
+    uv pip install --python /opt/venv/bin/python --no-cache --compile mdtraj==1.10.3
     # Native binder metrics imports, pinned by the upstream environment.yml.
-    uv pip install --compile tmtools==0.2.0 freesasa==2.2.1
-    uv pip install --compile fair-esm==2.0.0
-    uv pip install --compile rdkit==2023.3.1
-    uv pip install --compile scikit-learn==1.2.2
+    uv pip install --python /opt/venv/bin/python --no-cache --compile tmtools==0.2.0 freesasa==2.2.1
+    uv pip install --python /opt/venv/bin/python --no-cache --compile fair-esm==2.0.0
+    uv pip install --python /opt/venv/bin/python --no-cache --compile rdkit==2023.3.1
+    uv pip install --python /opt/venv/bin/python --no-cache --compile scikit-learn==1.2.2
     # Match the upstream antibody partial-flow runtime imports.
-    uv pip install --compile deepspeed==0.16.4 dm-tree==0.1.6 optree==0.14.1 GPUtil==1.4.0 gpustat==1.1.1
+    uv pip install --python /opt/venv/bin/python --no-cache --compile deepspeed==0.16.4 dm-tree==0.1.6 optree==0.14.1 GPUtil==1.4.0 gpustat==1.1.1
     
     # Clone PPIFlow
     mkdir -p /app
@@ -59,7 +82,7 @@ From: nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
     
     # Install PPIFlow (if setup.py exists)
     if [ -f "setup.py" ]; then
-        uv pip install --compile -e .
+        uv pip install --python /opt/venv/bin/python --no-cache --compile -e .
     fi
 
     # The upstream fused layer-norm extension hardcodes pre-Blackwell CUDA arch
@@ -119,7 +142,7 @@ print("PPIFlow initial binder and partial-flow runtime imports OK")
 PY
     
     # Generate lockfile for reproducibility
-    uv pip freeze > /opt/venv/requirements.lock
+    uv pip freeze --python /opt/venv/bin/python > /opt/venv/requirements.lock
     
     # Create checkpoint directory
     mkdir -p /opt/ppiflow/ckpt
