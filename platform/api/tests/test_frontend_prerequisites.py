@@ -90,11 +90,78 @@ class FrontendPrerequisitesTests(unittest.TestCase):
             run.assert_not_called()
 
     def test_manifest_workspace_patch_identity(self):
-        for name in ["pnpm-lock.yaml", "pnpm-workspace.yaml", "packages/shared/package.json", "patches/example.patch"]:
+        for name in ["pnpm-lock.yaml", "pnpm-workspace.yaml", "patches/example.patch"]:
             before = frontend.identity(self.source)
             p = self.source / name
             p.write_text(p.read_text() + "\nchanged")
             self.assertNotEqual(before, frontend.identity(self.source))
+        before = frontend.identity(self.source)
+        shared_pkg = self.source / "packages/shared/package.json"
+        shared_pkg.write_text(json.dumps({"name": "shared", "dependencies": {"react": "^19.0.0"}}))
+        self.assertNotEqual(before, frontend.identity(self.source))
+
+    def test_narrowed_identity_ignores_scripts_and_unrelated_dockerfile_edits(self):
+        pkg = self.source / "platform/frontend/package.json"
+        pkg.write_text(json.dumps({
+            "name": "frontend",
+            "description": "BMS UI",
+            "scripts": {"dev": "vite", "build:share": "vite build"},
+            "dependencies": {"vite": "7.3.1"},
+        }))
+        dockerfile = self.source / "docker/web.Dockerfile"
+        dockerfile.write_text("FROM node:22-slim\nRUN npm install -g pnpm@10.11.0\nCOPY . .\n")
+        before = frontend.identity(self.source)
+
+        # Script-only and metadata-only edits must not invalidate the frontend receipt.
+        pkg.write_text(json.dumps({
+            "name": "frontend",
+            "description": "Updated description",
+            "scripts": {"dev": "vite"},
+            "dependencies": {"vite": "7.3.1"},
+        }))
+        dockerfile.write_text("FROM node:22-slim\n# unrelated comment\nRUN npm install -g pnpm@10.11.0\nCOPY platform /app/platform\n")
+        self.assertEqual(before, frontend.identity(self.source))
+
+        # Dependency and pnpm-pin changes must invalidate the identity.
+        pkg.write_text(json.dumps({
+            "name": "frontend",
+            "scripts": {"dev": "vite"},
+            "dependencies": {"vite": "7.3.2"},
+        }))
+        self.assertNotEqual(before, frontend.identity(self.source))
+
+        pkg.write_text(json.dumps({
+            "name": "frontend",
+            "scripts": {"dev": "vite"},
+            "dependencies": {"vite": "7.3.1"},
+        }))
+        dockerfile.write_text("FROM node:22-slim\nRUN npm install -g pnpm@10.12.0\n")
+        self.assertNotEqual(before, frontend.identity(self.source))
+
+    def test_identity_rejects_invalid_package_json_and_missing_referenced_patch(self):
+        (self.source / "packages/shared/package.json").write_text("{invalid json")
+        with self.assertRaises(frontend.PrerequisiteError) as exc:
+            frontend.identity(self.source)
+        self.assertEqual(exc.exception.code, "manifest_invalid")
+
+        (self.source / "packages/shared/package.json").write_text('{"name":"shared"}')
+        (self.source / "pnpm-lock.yaml").write_text(
+            "lockfileVersion: '9.0'\npatchedDependencies:\n  foo@1.0.0:\n    hash: abc\n    path: patches/missing.patch\n"
+        )
+        with self.assertRaises(frontend.PrerequisiteError) as exc:
+            frontend.identity(self.source)
+        self.assertEqual(exc.exception.code, "manifest_missing")
+
+    def test_identity_from_tree_matches_identity(self):
+        relpaths = [
+            str(p.relative_to(self.source).as_posix())
+            for p in self.source.rglob("*")
+            if p.is_file()
+        ]
+        self.assertEqual(
+            frontend.identity(self.source),
+            frontend.identity_from_tree(self.source, relpaths, lambda rel: (self.source / rel).read_bytes()),
+        )
 
     def test_changed_identity_no_fallback(self):
         self.state()

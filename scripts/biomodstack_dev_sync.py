@@ -12,6 +12,7 @@ import argparse
 import base64
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -54,6 +55,10 @@ SyncDecision = Literal[
 
 class RuntimeAuthorityError(RuntimeError):
     """Candidate authority failed before source mutation."""
+
+
+class FrontendPrerequisiteError(RuntimeError):
+    """Candidate revision requires frontend prerequisite reconciliation before restart."""
 
 
 class DeploymentRolledBackError(RuntimeError):
@@ -678,11 +683,177 @@ def bootstrap_successor_sync(root: Path, state_dir: Path, revision: str) -> dict
 def _deployment_failure_state(error: BaseException) -> str:
     if isinstance(error, RuntimeAuthorityError):
         return "blocked-runtime-authority"
+    if isinstance(error, FrontendPrerequisiteError):
+        return "blocked-frontend-prerequisites"
     if isinstance(error, DeploymentRolledBackError):
         return "blocked-deployment-rolled-back"
     if isinstance(error, DeploymentRollbackFailedError):
         return "blocked-deployment-rollback-failed"
     return "blocked-deployment-unknown"
+
+
+_FRONTEND_IDENTITY_PATHSPECS = (
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "package.json",
+    ".npmrc",
+    ".pnpmfile.cjs",
+    "docker/web.Dockerfile",
+    "platform/frontend/package.json",
+    "platform/desktop-electron/package.json",
+    "packages",
+    "platform/frontend/alignment-viewers",
+    "patches",
+)
+
+
+def _git_tree_paths(root: Path, revision: str, *pathspecs: str) -> list[str]:
+    args = ["ls-tree", "-r", "--name-only", revision]
+    if pathspecs:
+        args.extend(["--", *pathspecs])
+    output = _git(root, *args)
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
+
+def _load_root_module(root: Path, module_name: str, filename: str):
+    module_path = root / filename
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    root_str = str(root.resolve())
+    added = root_str not in sys.path
+    if added:
+        sys.path.insert(0, root_str)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if added:
+            try:
+                sys.path.remove(root_str)
+            except ValueError:
+                pass
+    return module
+
+
+def _load_module_from_bytes(root: Path, module_name: str, source_bytes: bytes, virtual_path: Path):
+    import types
+
+    module = types.ModuleType(module_name)
+    module.__file__ = str(virtual_path)
+    root_str = str(root.resolve())
+    added = root_str not in sys.path
+    if added:
+        sys.path.insert(0, root_str)
+    try:
+        exec(compile(source_bytes.decode("utf-8"), str(virtual_path), "exec"), module.__dict__)
+    finally:
+        if added:
+            try:
+                sys.path.remove(root_str)
+            except ValueError:
+                pass
+    return module
+
+
+def _load_frontend_prerequisites_module(root: Path, decision: SyncDecision, candidate_revision: str):
+    resolved_root = root.resolve()
+    if decision == "fast-forward-deploy":
+        try:
+            candidate_bytes = _git_blob(resolved_root, candidate_revision, "biomodstack_frontend_prerequisites.py")
+        except (OSError, subprocess.SubprocessError):
+            candidate_bytes = b""
+        if candidate_bytes:
+            return _load_module_from_bytes(
+                resolved_root,
+                "_bms_dev_sync_frontend_prerequisites",
+                candidate_bytes,
+                resolved_root / "biomodstack_frontend_prerequisites.py",
+            )
+    return _load_root_module(
+        resolved_root,
+        "_bms_dev_sync_frontend_prerequisites",
+        "biomodstack_frontend_prerequisites.py",
+    )
+
+
+def _preflight_frontend_prerequisites(
+    root: Path,
+    decision: SyncDecision,
+    candidate_revision: str,
+) -> None:
+    """Verify frontend prerequisites offline before mutating Git or stopping services."""
+    resolved_root = root.resolve()
+    if not (resolved_root / "biomodstack_frontend_prerequisites.py").is_file() or not (
+        resolved_root / "platform" / "frontend" / "package.json"
+    ).is_file():
+        return
+
+    frontend = _load_frontend_prerequisites_module(resolved_root, decision, candidate_revision)
+    selectors: dict[str, str] = {}
+    if (resolved_root / "biomodstack_runtime_profile.py").is_file():
+        runtime_profile = _load_root_module(
+            resolved_root,
+            "_bms_dev_sync_runtime_profile",
+            "biomodstack_runtime_profile.py",
+        )
+        selectors = runtime_profile.load_host_selectors()
+
+    saved_env: dict[str, str | None] = {}
+    for key in ("BMS_FRONTEND_ROOT", "BMS_FRONTEND_NODE"):
+        saved_env[key] = os.environ.get(key)
+        if not str(saved_env[key] or "").strip() and str(selectors.get(key, "")).strip():
+            os.environ[key] = str(selectors[key]).strip()
+
+    try:
+        frontend_root = frontend.location(resolved_root)
+        state = None
+        if frontend_root.exists():
+            if decision == "fast-forward-deploy" and hasattr(frontend, "identity_from_tree"):
+                candidate_paths = _git_tree_paths(resolved_root, candidate_revision, *_FRONTEND_IDENTITY_PATHSPECS)
+                candidate_identity = frontend.identity_from_tree(
+                    resolved_root,
+                    candidate_paths,
+                    lambda rel: _git_blob(resolved_root, candidate_revision, rel),
+                )
+            else:
+                candidate_identity = frontend.identity(resolved_root)
+            state = frontend.read_state(frontend_root, candidate_identity)
+
+        if state is None:
+            vite = resolved_root / "platform" / "frontend" / "node_modules" / "vite" / "bin" / "vite.js"
+            if not vite.is_file():
+                raise FrontendPrerequisiteError(
+                    "Candidate revision "
+                    f"{candidate_revision} blocked by frontend prerequisites (environment_missing): "
+                    "Vite missing at platform/frontend/node_modules/vite/bin/vite.js; "
+                    "run ./start_ui.sh frontend-bootstrap before deploying"
+                )
+            return
+        if state.get("status") != "complete":
+            raise FrontendPrerequisiteError(
+                f"Candidate revision {candidate_revision} blocked by frontend prerequisites "
+                "(bootstrap_incomplete): Run explicit frontend-bootstrap before deploying"
+            )
+        resolved = frontend.check_environment(resolved_root, frontend_root)
+        if resolved["inventory_sha256"] != state.get("inventory_sha256"):
+            raise FrontendPrerequisiteError(
+                f"Candidate revision {candidate_revision} blocked by frontend prerequisites "
+                "(environment_changed): Installed lock changed; run explicit frontend-bootstrap before deploying"
+            )
+    except FrontendPrerequisiteError:
+        raise
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        code = getattr(exc, "code", "prerequisite_failed")
+        raise FrontendPrerequisiteError(
+            f"Candidate revision {candidate_revision} blocked by frontend prerequisites ({code}): {exc}"
+        ) from exc
+    finally:
+        for key, prior in saved_env.items():
+            if prior is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prior
 
 
 def _deploy_candidate(
@@ -703,6 +874,7 @@ def _deploy_candidate(
     )
     marker = _read_sync_refresh_required(state_dir)
     if marker is None:
+        _preflight_frontend_prerequisites(root, decision, remote_revision)
         installed_before = DEFAULT_INSTALLED_SYNC.read_bytes() if DEFAULT_INSTALLED_SYNC.is_file() else None
         marker = _new_sync_refresh_marker(
             remote_revision,
@@ -738,6 +910,7 @@ def _deploy_candidate(
         actual_sha = hashlib.sha256(installed_now).hexdigest() if installed_now is not None else None
         if actual_sha != installed_sha:
             raise RuntimeError("Development sync refresh installed baseline mismatch")
+        _preflight_frontend_prerequisites(root, decision, remote_revision)
 
     manager = root / "scripts" / "manage_desktop_services.py"
     try:
@@ -958,6 +1131,7 @@ def _specific_failure_receipt_matches(state_dir: Path, error: BaseException) -> 
         and payload.get("decision")
         in {
             "blocked-runtime-authority",
+            "blocked-frontend-prerequisites",
             "blocked-deployment-rolled-back",
             "blocked-deployment-rollback-failed",
         }

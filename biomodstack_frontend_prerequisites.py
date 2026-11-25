@@ -10,7 +10,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
+from typing import Callable, Iterable
 import shutil
 import stat
 import subprocess
@@ -21,8 +23,31 @@ from biomodstack_python_prerequisites import PrerequisiteError, save
 
 PNPM_VERSION = "10.11.0"  # docker/web.Dockerfile authority; existing workspace lock format
 SCHEMA = "bms.frontend-prerequisites.v1"
+POLICY = "frontend-filter-frozen-ignore-scripts-v2"
 ACTIONS = {"frontend-plan", "frontend-bootstrap", "frontend-verify"}
 NODE_REQUIREMENT = "^20.19.0 || >=22.12.0 (Node 22 recommended)"
+_PACKAGE_MANIFEST_FIELDS = (
+    "name",
+    "version",
+    "dependencies",
+    "devDependencies",
+    "optionalDependencies",
+    "peerDependencies",
+    "peerDependenciesMeta",
+    "dependenciesMeta",
+    "bundledDependencies",
+    "bundleDependencies",
+    "overrides",
+    "resolutions",
+    "pnpm",
+    "packageManager",
+    "engines",
+    "os",
+    "cpu",
+    "workspaces",
+    "bin",
+)
+_PNPM_PIN_RE = re.compile(r"pnpm@[0-9A-Za-z._+-]+")
 
 
 def location(project_root: Path) -> Path:
@@ -53,14 +78,177 @@ def node_runtime(expected: str | None = None) -> str:
     return str(Path(node).resolve())
 
 
+def _package_json_digest(raw: bytes, relpath: str) -> str:
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PrerequisiteError("manifest_invalid", f"Invalid JSON in {relpath}") from exc
+    if not isinstance(data, dict):
+        raise PrerequisiteError("manifest_invalid", f"Expected JSON object in {relpath}")
+    subset = {key: data[key] for key in _PACKAGE_MANIFEST_FIELDS if key in data}
+    canonical = json.dumps(subset, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _dockerfile_pnpm_pins(raw: bytes) -> list[str]:
+    return sorted(set(_PNPM_PIN_RE.findall(raw.decode("utf-8", errors="replace"))))
+
+
+def _normalize_patch_relpath(raw_value: str) -> str | None:
+    value = raw_value.strip()
+    if not value:
+        return None
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1].strip()
+    else:
+        value = value.split(" #", 1)[0].strip()
+    if not value or value.startswith("/"):
+        return None
+    normalized = posixpath.normpath(value)
+    if normalized in {".", ".."} or normalized.startswith("../"):
+        return None
+    return normalized
+
+
+def _yaml_patched_dependency_paths(text: str) -> set[str]:
+    paths: set[str] = set()
+    in_block = False
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        if indent == 0:
+            in_block = stripped == "patchedDependencies:"
+            continue
+        if not in_block:
+            continue
+        if ":" not in stripped:
+            continue
+        key, value = stripped.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if not value:
+            continue
+        if indent <= 2 or key == "path":
+            normalized = _normalize_patch_relpath(value)
+            if normalized:
+                paths.add(normalized)
+    return paths
+
+
+def _referenced_patch_paths(
+    lock_bytes: bytes,
+    workspace_bytes: bytes,
+    root_pkg_bytes: bytes | None,
+) -> set[str]:
+    paths = _yaml_patched_dependency_paths(lock_bytes.decode("utf-8", errors="replace"))
+    paths |= _yaml_patched_dependency_paths(workspace_bytes.decode("utf-8", errors="replace"))
+    if root_pkg_bytes is not None:
+        try:
+            root_pkg = json.loads(root_pkg_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            root_pkg = None
+        if isinstance(root_pkg, dict):
+            pnpm_cfg = root_pkg.get("pnpm")
+            patched = pnpm_cfg.get("patchedDependencies") if isinstance(pnpm_cfg, dict) else None
+            if isinstance(patched, dict):
+                for val in patched.values():
+                    if isinstance(val, str):
+                        normalized = _normalize_patch_relpath(val)
+                        if normalized:
+                            paths.add(normalized)
+    return paths
+
+
+def _is_workspace_package_json(relpath: str) -> bool:
+    if relpath in {"package.json", "platform/frontend/package.json", "platform/desktop-electron/package.json"}:
+        return True
+    parts = relpath.split("/")
+    if len(parts) == 3 and parts[0] == "packages" and parts[2] == "package.json":
+        return True
+    if (
+        len(parts) == 5
+        and parts[0] == "platform"
+        and parts[1] == "frontend"
+        and parts[2] == "alignment-viewers"
+        and parts[4] == "package.json"
+    ):
+        return True
+    return False
+
+
+def identity_from_tree(
+    source_root: Path,
+    relpaths: Iterable[str],
+    read_bytes: Callable[[str], bytes],
+) -> dict:
+    source = source_root.resolve()
+    available = {posixpath.normpath(p) for p in relpaths}
+    lock_bytes = read_bytes("pnpm-lock.yaml")
+    workspace_bytes = read_bytes("pnpm-workspace.yaml")
+    dockerfile_pins = _dockerfile_pnpm_pins(read_bytes("docker/web.Dockerfile"))
+    root_pkg_bytes = read_bytes("package.json") if "package.json" in available else None
+
+    manifests: dict[str, str] = {
+        "pnpm-lock.yaml": hashlib.sha256(lock_bytes).hexdigest(),
+        "pnpm-workspace.yaml": hashlib.sha256(workspace_bytes).hexdigest(),
+    }
+    for optional_raw in (".npmrc", ".pnpmfile.cjs"):
+        if optional_raw in available:
+            manifests[optional_raw] = hashlib.sha256(read_bytes(optional_raw)).hexdigest()
+
+    patch_paths = {p for p in available if p.startswith("patches/")}
+    patch_paths |= _referenced_patch_paths(lock_bytes, workspace_bytes, root_pkg_bytes)
+    for patch_rel in sorted(patch_paths):
+        if patch_rel in available:
+            raw_patch = read_bytes(patch_rel)
+        else:
+            try:
+                raw_patch = read_bytes(patch_rel)
+            except (FileNotFoundError, OSError, subprocess.SubprocessError) as exc:
+                raise PrerequisiteError("manifest_missing", f"Referenced pnpm patch missing: {patch_rel}") from exc
+        manifests[patch_rel] = hashlib.sha256(raw_patch).hexdigest()
+
+    pkg_paths = {p for p in available if _is_workspace_package_json(p)}
+    pkg_paths.add("platform/frontend/package.json")
+    for pkg_rel in sorted(pkg_paths):
+        raw = root_pkg_bytes if (pkg_rel == "package.json" and root_pkg_bytes is not None) else read_bytes(pkg_rel)
+        manifests[pkg_rel] = _package_json_digest(raw, pkg_rel)
+
+    return {
+        "source_root": str(source),
+        "manifests": dict(sorted(manifests.items())),
+        "dockerfile_pnpm_pins": dockerfile_pins,
+        "pnpm_version": PNPM_VERSION,
+        "policy": POLICY,
+    }
+
+
 def identity(project_root: Path) -> dict:
     source = project_root.resolve()
-    paths = [source / name for name in ("pnpm-lock.yaml", "pnpm-workspace.yaml", "platform/frontend/package.json", "docker/web.Dockerfile")]
-    paths += list(source.glob("packages/*/package.json")) + list(source.glob("platform/desktop-electron/package.json"))
-    paths += list(source.glob("platform/frontend/alignment-viewers/*/package.json"))
-    paths += [p for p in (source / "patches").rglob("*") if p.is_file()]
-    paths += [source / name for name in ("package.json", ".npmrc", ".pnpmfile.cjs") if (source / name).exists()]
-    return {"source_root": str(source), "manifests": {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(paths)}, "pnpm_version": PNPM_VERSION, "policy": "frontend-filter-frozen-ignore-scripts-v1"}
+    relpaths: set[str] = {
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "platform/frontend/package.json",
+        "docker/web.Dockerfile",
+    }
+    for pattern in (
+        "packages/*/package.json",
+        "platform/desktop-electron/package.json",
+        "platform/frontend/alignment-viewers/*/package.json",
+    ):
+        for p in source.glob(pattern):
+            if p.is_file():
+                relpaths.add(p.relative_to(source).as_posix())
+    if (source / "patches").is_dir():
+        for p in (source / "patches").rglob("*"):
+            if p.is_file():
+                relpaths.add(p.relative_to(source).as_posix())
+    for name in ("package.json", ".npmrc", ".pnpmfile.cjs"):
+        if (source / name).is_file():
+            relpaths.add(name)
+    return identity_from_tree(source, relpaths, lambda rel: (source / rel).read_bytes())
 
 
 def validate_lock_compatibility(source: Path) -> None:

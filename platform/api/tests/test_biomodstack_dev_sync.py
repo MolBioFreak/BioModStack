@@ -193,6 +193,7 @@ def test_deployment_fence_blocks_api_mutation_admission(tmp_path: Path, monkeypa
     ("error", "expected"),
     [
         ("authority", "blocked-runtime-authority"),
+        ("frontend", "blocked-frontend-prerequisites"),
         ("rolled_back", "blocked-deployment-rolled-back"),
         ("rollback_failed", "blocked-deployment-rollback-failed"),
     ],
@@ -201,6 +202,7 @@ def test_deployment_failure_receipt_states_are_truthful(error: str, expected: st
     sync = load_module()
     exception = {
         "authority": sync.RuntimeAuthorityError("invalid authority"),
+        "frontend": sync.FrontendPrerequisiteError("frontend mismatch"),
         "rolled_back": sync.DeploymentRolledBackError("rolled back"),
         "rollback_failed": sync.DeploymentRollbackFailedError("rollback failed"),
     }[error]
@@ -698,3 +700,203 @@ def test_rolling_back_marker_recovers_before_unavailable_health_planning(tmp_pat
     assert "deployment_error" in receipt
     assert installed.read_bytes() == b"old sync\n"
     assert ("reset", "--hard", rollback) in calls
+
+
+def _init_frontend_sync_repo(tmp_path: Path) -> tuple[Path, str]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    repo_root = Path(__file__).resolve().parents[3]
+    for name in ("biomodstack_frontend_prerequisites.py", "biomodstack_python_prerequisites.py"):
+        (repo / name).write_bytes((repo_root / name).read_bytes())
+    (repo / "scripts").mkdir()
+    (repo / "scripts/biomodstack_dev_sync.py").write_bytes((repo_root / "scripts/biomodstack_dev_sync.py").read_bytes())
+    files = {
+        "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+        "pnpm-workspace.yaml": "packages:\n  - packages/*\n  - platform/frontend\n",
+        "platform/frontend/package.json": json.dumps({
+            "name": "frontend",
+            "scripts": {"dev": "vite", "build:share": "vite build"},
+            "dependencies": {"vite": "7.3.1"},
+        }),
+        "packages/shared/package.json": json.dumps({"name": "shared"}),
+        "docker/web.Dockerfile": "FROM node:22-slim\nRUN npm install -g pnpm@10.11.0\n",
+    }
+    for rel, content in files.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+    }
+    subprocess.run(["git", "init", "-q"], cwd=repo, env=env, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, env=env, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, env=env, check=True)
+    base_rev = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    return repo, base_rev
+
+
+def _commit_candidate_branch(repo: Path, base_rev: str, updates: dict[str, str]) -> str:
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+    }
+    subprocess.run(["git", "checkout", "-q", "-B", "candidate", base_rev], cwd=repo, env=env, check=True)
+    for rel, content in updates.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, env=env, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "candidate"], cwd=repo, env=env, check=True)
+    cand_rev = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    subprocess.run(["git", "checkout", "-q", "--detach", base_rev], cwd=repo, env=env, check=True)
+    return cand_rev
+
+
+def test_frontend_preflight_blocks_lockfile_change_before_git_or_service_mutation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    sync = load_module()
+    repo, base_rev = _init_frontend_sync_repo(tmp_path)
+    cand_rev = _commit_candidate_branch(
+        repo,
+        base_rev,
+        {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n# dependency bump\n"},
+    )
+    frontend_root = tmp_path / "managed-frontend"
+    frontend_root.mkdir()
+    monkeypatch.setenv("BMS_FRONTEND_ROOT", str(frontend_root))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+
+    frontend = sync._load_root_module(repo, "_test_fp_base", "biomodstack_frontend_prerequisites.py")
+    (frontend_root / "state.json").write_text(
+        json.dumps({
+            "schema_version": frontend.SCHEMA,
+            "identity": frontend.identity(repo),
+            "status": "complete",
+            "inventory_sha256": "inv-1",
+        }),
+        encoding="utf-8",
+    )
+
+    run_calls: list[list[str]] = []
+    real_run = sync._run
+
+    def tracking_run(cwd, *command, **kwargs):
+        run_calls.append(list(command))
+        return real_run(cwd, *command, **kwargs)
+
+    monkeypatch.setattr(sync, "_run", tracking_run)
+    installed = tmp_path / "libexec" / "biomodstack_dev_sync.py"
+    installed.parent.mkdir()
+    installed.write_bytes((repo / "scripts/biomodstack_dev_sync.py").read_bytes())
+    monkeypatch.setattr(sync, "DEFAULT_INSTALLED_SYNC", installed)
+
+    with pytest.raises(sync.FrontendPrerequisiteError, match="identity_mismatch"):
+        sync._deploy_candidate(repo, tmp_path / "state", "fast-forward-deploy", base_rev, cand_rev, base_rev)
+
+    assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip() == base_rev
+    assert run_calls
+    assert all(cmd[0] == "git" and any(op in cmd for op in ("ls-tree", "show")) for cmd in run_calls), run_calls
+
+
+def test_frontend_preflight_allows_script_only_and_dockerfile_comment_edits(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    sync = load_module()
+    repo, base_rev = _init_frontend_sync_repo(tmp_path)
+    cand_rev = _commit_candidate_branch(
+        repo,
+        base_rev,
+        {
+            "platform/frontend/package.json": json.dumps({
+                "name": "frontend",
+                "scripts": {"dev": "vite"},
+                "dependencies": {"vite": "7.3.1"},
+            }),
+            "docker/web.Dockerfile": "FROM node:22-slim\n# harmless comment\nRUN npm install -g pnpm@10.11.0\n",
+        },
+    )
+    frontend_root = tmp_path / "managed-frontend"
+    frontend_root.mkdir()
+    monkeypatch.setenv("BMS_FRONTEND_ROOT", str(frontend_root))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+
+    frontend = sync._load_root_module(repo, "_test_fp_ok", "biomodstack_frontend_prerequisites.py")
+    (frontend_root / "state.json").write_text(
+        json.dumps({
+            "schema_version": frontend.SCHEMA,
+            "identity": frontend.identity(repo),
+            "status": "complete",
+            "inventory_sha256": "inv-1",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(frontend, "check_environment", lambda _s, _r: {"inventory_sha256": "inv-1"})
+    monkeypatch.setattr(sync, "_load_frontend_prerequisites_module", lambda *_a, **_kw: frontend)
+
+    sync._preflight_frontend_prerequisites(repo, "fast-forward-deploy", cand_rev)
+
+
+def test_frontend_preflight_blocks_unmanaged_host_only_when_vite_missing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    sync = load_module()
+    repo, base_rev = _init_frontend_sync_repo(tmp_path)
+    monkeypatch.setenv("BMS_FRONTEND_ROOT", str(tmp_path / "absent-managed-root"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+
+    with pytest.raises(sync.FrontendPrerequisiteError, match="environment_missing"):
+        sync._preflight_frontend_prerequisites(repo, "reconcile-live-deploy", base_rev)
+
+    vite = repo / "platform/frontend/node_modules/vite/bin/vite.js"
+    vite.parent.mkdir(parents=True, exist_ok=True)
+    vite.write_text("console.log('vite')\n", encoding="utf-8")
+    sync._preflight_frontend_prerequisites(repo, "reconcile-live-deploy", base_rev)
+
+
+def test_frontend_preflight_blocks_candidate_policy_bump_before_deploy(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    sync = load_module()
+    repo, base_rev = _init_frontend_sync_repo(tmp_path)
+    fp_src = (repo / "biomodstack_frontend_prerequisites.py").read_text(encoding="utf-8")
+    bumped_src = fp_src.replace(
+        'POLICY = "frontend-filter-frozen-ignore-scripts-v2"',
+        'POLICY = "frontend-filter-frozen-ignore-scripts-v3"',
+        1,
+    )
+    assert bumped_src != fp_src
+    cand_rev = _commit_candidate_branch(
+        repo,
+        base_rev,
+        {"biomodstack_frontend_prerequisites.py": bumped_src},
+    )
+    frontend_root = tmp_path / "managed-frontend"
+    frontend_root.mkdir()
+    monkeypatch.setenv("BMS_FRONTEND_ROOT", str(frontend_root))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+
+    frontend = sync._load_root_module(repo, "_test_fp_policy", "biomodstack_frontend_prerequisites.py")
+    (frontend_root / "state.json").write_text(
+        json.dumps({
+            "schema_version": frontend.SCHEMA,
+            "identity": frontend.identity(repo),
+            "status": "complete",
+            "inventory_sha256": "inv-1",
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(sync.FrontendPrerequisiteError, match="identity_mismatch"):
+        sync._preflight_frontend_prerequisites(repo, "fast-forward-deploy", cand_rev)
