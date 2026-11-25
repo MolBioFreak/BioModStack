@@ -99,8 +99,14 @@ async def pooled_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from services import job_result_roots
     monkeypatch.setattr(job_result_roots, "get_results_dir", lambda: results_root)
     monkeypatch.setattr(molbio_ngs_receipts, "get_inputs_dir", lambda: inputs_root)
+    from services import ont_submission
     monkeypatch.setattr(
         ont_runs,
+        "get_allowed_roots",
+        lambda: {"inputs": inputs_root, "results": results_root},
+    )
+    monkeypatch.setattr(
+        ont_submission,
         "get_allowed_roots",
         lambda: {"inputs": inputs_root, "results": results_root},
     )
@@ -488,8 +494,10 @@ async def test_submit_accepts_a_fastq_under_any_root_ordinary_launch_allows(
     vendor = downloads / "vendor.fastq"
     vendor.write_bytes(context.fastq.read_bytes())
     from routers import ont_runs
+    from services import ont_submission
     roots = dict(ont_runs.get_allowed_roots())
     monkeypatch.setattr(ont_runs, "get_allowed_roots", lambda: {**roots, "downloads": downloads})
+    monkeypatch.setattr(ont_submission, "get_allowed_roots", lambda: {**roots, "downloads": downloads})
     request = _submit_request(context, key="downloads").model_copy(update={"fastq_path": str(vendor)})
     assert ont_runs._confine_submitted_path(str(vendor), "fastq_path", directory=False) == str(vendor)
     await _submit(context, request)

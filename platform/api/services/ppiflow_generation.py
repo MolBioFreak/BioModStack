@@ -527,7 +527,10 @@ async def _generation_custody(job, session, *, output=None, publish=False):
                 raise ValueError("PPIFlow persisted candidate lineage changed")
     else:
         for fields in expected_designs:
-            session.add(Design(**fields))
+            from services.scientific_artifacts import externalize_design_fields
+            design = Design(**fields)
+            await externalize_design_fields(session, design)
+            session.add(design)
         job.provenance = {**(job.provenance or {}), PUBLICATION_KEY: publication}
         await session.flush()
     return result, publication

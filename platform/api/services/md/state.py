@@ -636,3 +636,97 @@ async def finalize_cancel(session: AsyncSession, *, job_id: str, expected_versio
         session, job_id=job_id, idempotency_key=idempotency_key, event_type="cancel_completed",
         expected_version=expected_version, next_phase="cancelled", block_controls=True,
     )
+
+
+async def apply_remote_md_analysis_retrying(
+    session: AsyncSession,
+    parent: Job,
+    *,
+    aggregate_manifest_sha256: str,
+    replica_manifest_set_sha256: str,
+) -> bool:
+    """Publish remote MD analysis retrying metadata via remote transition CAS."""
+    from services.remote_execution.executor import _publish_remote_transition
+
+    provenance = dict(parent.provenance or {})
+    md = dict(provenance.get("md") or {})
+    md.update(
+        schema="bms.md.lifecycle.v1",
+        dynamics_state="completed",
+        analysis_state="retrying",
+        result_state="partial",
+        aggregate_manifest_sha256=aggregate_manifest_sha256,
+        replica_manifest_set_sha256=replica_manifest_set_sha256,
+    )
+    provenance["md"] = md
+    return await _publish_remote_transition(session, parent, {"provenance": provenance}, require_lease=False)
+
+
+async def mark_md_analysis_retrying(
+    session: AsyncSession,
+    parent: Job,
+    *,
+    aggregate_manifest_sha256: str,
+    replica_manifest_set_sha256: str,
+) -> None:
+    """Transition a parent MD job into local analysis-retry state."""
+    provenance = dict(parent.provenance or {})
+    md = dict(provenance.get("md") or {})
+    md.update(
+        {
+            "schema": "bms.md.lifecycle.v1",
+            "dynamics_state": "completed",
+            "analysis_state": "retrying",
+            "result_state": "partial",
+            "aggregate_manifest_sha256": aggregate_manifest_sha256,
+            "replica_manifest_set_sha256": replica_manifest_set_sha256,
+        }
+    )
+    provenance["md"] = md
+    parent.provenance = provenance
+    parent.status = "running"
+    parent.queue_status = "running"
+    parent.completed_at = None
+    parent.error_message = None
+    await session.commit()
+
+
+async def mark_md_analysis_retry_child_cancelled(session: AsyncSession, child_job_id: str) -> None:
+    """Fallback cancellation state for a partially admitted MD analysis retry child."""
+    partial_child = await session.get(Job, child_job_id)
+    if partial_child is not None:
+        partial_child.status = "cancelled"
+        partial_child.queue_status = "cancelled"
+        partial_child.error_message = "MD_ANALYSIS_RETRY_ADMISSION_ROLLED_BACK"
+        await session.commit()
+
+
+async def mark_md_analysis_retry_failed(
+    session: AsyncSession,
+    parent: Job,
+    *,
+    aggregate_manifest_sha256: str,
+    replica_manifest_set_sha256: str,
+    created_child_ids: list[str],
+) -> None:
+    """Record failed MD analysis retry scheduling state on the parent job."""
+    failed_provenance = dict(parent.provenance or {})
+    failed_md = dict(failed_provenance.get("md") or {})
+    failed_md.update(
+        {
+            "schema": "bms.md.lifecycle.v1",
+            "dynamics_state": "completed",
+            "analysis_state": "failed",
+            "result_state": "partial",
+            "aggregate_manifest_sha256": aggregate_manifest_sha256,
+            "replica_manifest_set_sha256": replica_manifest_set_sha256,
+            "analysis_child_ids": created_child_ids,
+        }
+    )
+    failed_provenance["md"] = failed_md
+    parent.provenance = failed_provenance
+    parent.status = "failed"
+    parent.queue_status = "failed"
+    parent.current_stage = "MD Analysis Retry Scheduling Failed"
+    parent.error_message = "MD_ANALYSIS_RETRY_SCHEDULING_FAILED"
+    await session.commit()

@@ -793,3 +793,155 @@ async def normalize_cm_provision_request(
         entrypoint="workflows/conformational_mapping.nf",
         input_bindings=bindings,
     )
+
+
+CM_VRAM_ESTIMATE_MB = {
+    "external_import": 12_000,
+    "confornets": 16_000,
+    "protenix_v2_ensemble": 24_000,
+}
+
+RETRY_REQUIRED_SIDECARS = frozenset({
+    "cm_runtime_registry_v1.json",
+    "cm_complex_snapshots_v1.json",
+})
+RETRY_OPTIONAL_SIDECARS = frozenset({"cm_resampling_pair_request_v1.json"})
+RETRY_REGISTERED_DIRECTORIES = frozenset({
+    "registered_snapshot",
+    "registered",
+    "registered_import",
+})
+
+
+def cm_job_admission(backend: str, request_payload: Mapping[str, Any]) -> dict[str, int]:
+    sequence_length = 0
+    for target in request_payload["targets"]:
+        direct_sequence = str(target.get("sequence") or "")
+        if direct_sequence:
+            sequence_length += len(direct_sequence)
+            continue
+        sequence_length += sum(
+            len(str(entity.get("sequence") or ""))
+            for entity in target.get("entities", [])
+            if entity.get("entity_type") == "protein"
+        )
+    from native_components import cm_gpu_requirements
+    requirements = cm_gpu_requirements(dict(request_payload))
+    return {
+        "vram_estimate_mb": requirements.get("gpu_memory_mb") or CM_VRAM_ESTIMATE_MB[backend],
+        "sequence_length": sequence_length or 300,
+    }
+
+
+def runtime_registry(backend: str) -> dict[str, Any]:
+    from services.frustrampnn import runtime as frustrampnn_runtime
+    try:
+        analysis_runtime = frustrampnn_runtime.cm_analysis_runtime_registry_v1(
+            get_container_dir()
+        )
+    except frustrampnn_runtime.RuntimeValidationError as exc:
+        raise HTTPException(
+            status_code=503, detail="registered FrustraMPNN runtime is unavailable"
+        ) from exc
+    if backend == "confornets":
+        return {
+            "schema_name": "cm_runtime_registry", "schema_version": 1,
+            "analysis_runtime": analysis_runtime, **_server_confornets_identity(),
+        }
+    if backend == "protenix_v2_ensemble":
+        digest = _registered_image_digest("BMS_PROTENIX_CONTAINER_PATH")
+        checkpoint = get_weights_root() / "protenix" / "checkpoint" / "protenix-v2.pt"
+        if not checkpoint.is_file() or checkpoint.is_symlink():
+            raise HTTPException(status_code=503, detail="registered Protenix runtime is unavailable")
+        return {
+            "schema_name": "cm_runtime_registry", "schema_version": 1,
+            "backend_version": "protenix-v2", "backend_commit": "c3bfc365b3e1341a11935eddfe7bfdc308092147",
+            "runtime_identity": "installed-protenix-v2", "model_id": "protenix-v2",
+            "container_digest": f"sha256:{digest}",
+            "checkpoint_sha256": _sha256_path(checkpoint),
+            "checkpoint_relative_path": "checkpoint/protenix-v2.pt",
+            "analysis_runtime": analysis_runtime,
+        }
+    return {
+        "schema_name": "cm_runtime_registry", "schema_version": 1,
+        "backend_version": "1", "backend_commit": "biomodstack-import-v1",
+        "runtime_identity": "descriptor-safe-import-v1", "model_id": "external-import",
+        "container_digest": "sha256:" + "0" * 64, "checkpoint_sha256": "0" * 64,
+        "analysis_runtime": analysis_runtime,
+    }
+
+
+def stable_file_identity(path: Path) -> tuple[str, int]:
+    """Hash one no-follow regular file while proving its opened identity stayed stable."""
+
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise OSError("retry authority entry is not a regular file")
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns
+        ) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        ) or size != before.st_size:
+            raise OSError("retry authority entry changed while hashing")
+        return digest.hexdigest(), size
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def retry_authority_paths(root: Path) -> dict[str, Path]:
+    """Enumerate only pre-launch sidecars and registered source bytes."""
+
+    paths: dict[str, Path] = {}
+    for name in sorted(RETRY_REQUIRED_SIDECARS | RETRY_OPTIONAL_SIDECARS):
+        path = root / name
+        if path.exists() or path.is_symlink():
+            if path.is_symlink() or not path.is_file():
+                raise OSError(f"unsafe retry authority sidecar: {name}")
+            paths[name] = path
+    if not RETRY_REQUIRED_SIDECARS.issubset(paths):
+        raise OSError("required retry authority sidecars are unavailable")
+    for name in sorted(RETRY_REGISTERED_DIRECTORIES):
+        directory = root / name
+        if not directory.exists() and not directory.is_symlink():
+            continue
+        if directory.is_symlink() or not directory.is_dir():
+            raise OSError(f"unsafe retry authority directory: {name}")
+        for path in sorted(directory.rglob("*")):
+            if path.is_symlink():
+                raise OSError(f"unsafe retry authority path: {path}")
+            if path.is_dir():
+                continue
+            if not path.is_file():
+                raise OSError(f"retry authority path is not a regular file: {path}")
+            relative_path = path.relative_to(root).as_posix()
+            paths[relative_path] = path
+    return paths
+
+
+def build_retry_authority(root: Path) -> dict[str, Any]:
+    """Seal every retry-copied sidecar/source byte before the first launch."""
+
+    try:
+        files = {
+            relative_path: {"sha256": digest, "size_bytes": size}
+            for relative_path, path in retry_authority_paths(root).items()
+            for digest, size in [stable_file_identity(path)]
+        }
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail="persisted CM retry authority could not be sealed") from exc
+    unsigned = {
+        "schema_name": "cm_retry_authority",
+        "schema_version": 1,
+        "files": files,
+    }
+    return {**unsigned, "authority_sha256": canonical_sha256(unsigned)}

@@ -210,9 +210,9 @@ def _in_reviewed_final_dir(owner: Job, resolved: Path) -> bool:
     against ``child_output_dir`` alone rejects real finals. Accept a path inside the job's own
     ``plr_final_candidate_dir`` only when that folder is itself inside the job's result root.
     """
-    from services.result_ingester import _parse_job_params
+    from services.result_ingester import parse_job_params
 
-    raw = str(_parse_job_params(owner.params).get("plr_final_candidate_dir") or "").strip()
+    raw = str(parse_job_params(owner.params).get("plr_final_candidate_dir") or "").strip()
     if not raw or not owner.output_dir:
         return False
     final_dir = Path(raw).expanduser().resolve()
@@ -457,9 +457,9 @@ async def finalize_successful_job(
             # The public ingester's commit=False contract includes the optional
             # attachment in the caller's transaction. Run its same primary owner
             # first, so no optional failure can decide primary publication.
-            from services.result_ingester import _publish_primary_results
+            from services.result_ingester import publish_primary_results
 
-            ingested_count = await _publish_primary_results(
+            ingested_count = await publish_primary_results(
                 job_id, job, output_dir, session, epitope_residues, antibody_closeout,
             )
         else:
@@ -516,8 +516,6 @@ async def finalize_successful_job(
             # Native/canonical owners prevalidate their own stronger contracts.
             native_owner = False
             if strict_revision == 1:
-                from services.result_ingester import _parse_job_params
-
                 native_owner = str(job.model_id or "").strip().lower() in {
                     "protein_local_redesign", "conformational_mapping",
                 } or (
@@ -634,7 +632,7 @@ async def finalize_successful_job(
         return FinalizationResult(False, count, "no_candidates" if no_candidates else "ingestion_failed")
 
     if optional_attachment:
-        from services.result_ingester import _ingest_explicit_frustrampnn_results
+        from services.result_ingester import ingest_explicit_frustrampnn_results
         from paths import resolve_runtime_data_path, get_data_root
 
         root = Path(output_dir)
@@ -643,7 +641,7 @@ async def finalize_successful_job(
             # A savepoint contains partial component writes. Primary rows remain
             # pending until the terminal failure CAS succeeds in the same commit.
             async with session.begin_nested():
-                await _ingest_explicit_frustrampnn_results(job, root, session, commit=False)
+                await ingest_explicit_frustrampnn_results(job, root, session, commit=False)
         except Exception as exc:
             session.info.setdefault('component_projection_verified', {}).pop(job_id, None)
             session.info.setdefault('protein_design_primary_prevalidated', set()).discard(job_id)

@@ -18,7 +18,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from routers.jobs import _resume_defaults_from_awaiting_payload
-from routers.job_stages import _dedupe_child_attempts, _reconcile_child_jobs_from_history
+from routers.job_stages import _dedupe_child_attempts
 from services.job_submission import _ensure_job_resume_identity
 from services.binder_continuation import _awaiting_stage_to_resume_hint, _should_spawn_antibody_refinement_on_resume
 from services.job_control import _normalize_output_dir_reference, _plan_output_dir_cleanup
@@ -380,52 +380,6 @@ def test_plan_output_dir_cleanup_preserves_shared_child_directory_once() -> None
             ],
         }
     ]
-
-
-def test_reconcile_child_jobs_ignores_stale_err_for_previous_attempt() -> None:
-    old_job_id = "11111111-1111-1111-1111-111111111111"
-    current_job_id = "22222222-2222-2222-2222-222222222222"
-
-    with TemporaryDirectory() as tmpdir:
-        history_dir = Path(tmpdir) / ".nextflow"
-        history_dir.mkdir(parents=True, exist_ok=True)
-        history_path = history_dir / "history"
-        history_path.write_text(
-            "\n".join(
-                [
-                    (
-                        "2026-03-15 11:56:34\t2m 52s\told_retry\tERR\tdeadbeef\tdeadbeef\t"
-                        f"nextflow run main.nf --job_id {old_job_id}"
-                    ),
-                    (
-                        "2026-03-15 12:08:31\t-\tcurrent_retry\t-\tdeadbeef\tdeadbeef\t"
-                        f"nextflow run main.nf --job_id {current_job_id}"
-                    ),
-                ]
-            )
-        )
-
-        child = DummyChild(
-            id=current_job_id,
-            name="RBX1_beta_large - RFA 1/10",
-            child_stage="rfantibody",
-            parent_job_id="parent-123",
-            batch_name="antibody_batch_root",
-            created_at=datetime(2026, 3, 15, 12, 8, 31),
-            status="running",
-            queue_status="running",
-            output_dir=tmpdir,
-            child_output_dir=tmpdir,
-            current_stage="rfantibody",
-            awaiting_payload={},
-        )
-
-        updated = _reconcile_child_jobs_from_history([child])
-
-        assert updated == 0
-        assert child.status == "running"
-        assert child.queue_status == "running"
-        assert child.completed_at is None
 
 
 def test_rfantibody_cdr_refresh_required_when_pdb_labels_exist() -> None:

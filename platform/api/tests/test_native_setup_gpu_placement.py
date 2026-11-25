@@ -15,12 +15,12 @@ from test_project_workflow_setups import setup_store, _project
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pinned_gpu", [0, 2, None])
 async def test_native_protenix_gpu_survives_real_reservation(setup_store, monkeypatch, pinned_gpu):
-    from routers import gpu
+    from services import gpu_metadata
     from biomodstack_local_resources import applied_local_policy
     applied_local_policy.cache_clear()
     from services import gpu_config
     monkeypatch.setattr(gpu_config, "read_scheduler_config", lambda: {"global": {"cpu_threads_per_job": 2}})
-    monkeypatch.setattr(gpu, "_query_smi_gpu_map", lambda: {
+    monkeypatch.setattr(gpu_metadata, "query_smi_gpu_map", lambda: {
         0: {"uuid": "GPU-fixture-zero"}, 2: {"uuid": "GPU-fixture-two"},
     })
     request = JobCreate(name="Protenix GPU fixture", model_id="protenix", mode="complex",

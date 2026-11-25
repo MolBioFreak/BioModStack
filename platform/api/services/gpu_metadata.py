@@ -9,8 +9,9 @@ dicts so they can be tuned without touching nvidia-smi output.
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -153,3 +154,53 @@ HARDWARE_LIMITS: Dict[int, Dict[str, Any]] = {
     }
     for idx, meta in GPU_METADATA.items()
 }
+
+
+def normalize_pci_bus_id(raw_bus_id: Optional[str]) -> Optional[str]:
+    value = str(raw_bus_id or "").strip()
+    if not value:
+        return None
+    match = re.match(r"^([0-9A-Fa-f]{1,8}):([0-9A-Fa-f]{1,2}):([0-9A-Fa-f]{1,2})\.([0-7])$", value)
+    if not match:
+        return value.upper()
+    return (
+        f"{int(match.group(1), 16):08X}:"
+        f"{int(match.group(2), 16):02X}:"
+        f"{int(match.group(3), 16):02X}."
+        f"{match.group(4)}"
+    )
+
+
+def query_smi_gpu_map() -> Dict[int, Dict[str, Any]]:
+    # Match the native telemetry owner: only complete absence skips driver I/O.
+    # Unknown/container inventories still probe; this is not mutation admission.
+    from services.nvidia_inventory import nvidia_gpu_present
+    if nvidia_gpu_present() is False:
+        return {}
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,uuid,name,pci.bus_id", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return {}
+    if result.returncode != 0:
+        return {}
+    out: Dict[int, Dict[str, Any]] = {}
+    for line in result.stdout.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 4:
+            continue
+        try:
+            idx = int(parts[0])
+        except ValueError:
+            continue
+        out[idx] = {
+            "uuid": parts[1],
+            "name": ", ".join(parts[2:-1]).strip(),
+            "pci_bus_id": normalize_pci_bus_id(parts[-1]),
+        }
+    return out
+

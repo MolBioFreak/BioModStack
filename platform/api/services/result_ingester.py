@@ -1953,21 +1953,25 @@ async def ingest_esmfold2_results(
             "mpnn_score": None,
             "fampnn_psce": None,
         }
+        from services.scientific_artifacts import externalize_design_fields
         existing_design = existing_by_name.get(design_name)
         if existing_design is not None:
             for field_name, field_value in design_fields.items():
                 setattr(existing_design, field_name, field_value)
+            await externalize_design_fields(session, existing_design)
             flag_modified(existing_design, "provenance")
             flag_modified(existing_design, "confidence_metrics")
         else:
-            session.add(Design(
+            design = Design(
                 id=str(uuid.uuid4()),
                 job_id=job_id,
                 name=design_name,
                 **design_fields,
                 is_favorite=False,
                 created_at=datetime.utcnow(),
-            ))
+            )
+            await externalize_design_fields(session, design)
+            session.add(design)
         created += 1
 
     if strict:
@@ -2852,8 +2856,10 @@ async def _ingest_explicit_frustrampnn_results(
             _assert_protein_design_metadata_replay(design, metadata_row)
 
     created = 0
+    from services.scientific_artifacts import externalize_design_fields
     for candidate_id, row in protein_metadata.items():
         _enrich_protein_design_from_metadata(primary_designs[candidate_id], row)
+        await externalize_design_fields(session, primary_designs[candidate_id])
     for root, terminal, bundle in validated_candidates:
         invocation_id = bundle.manifest["invocation_id"]
         await ingest_frustrampnn_result_bundle(
@@ -3013,8 +3019,10 @@ async def _ingest_protenix_primary_publications(
         raise RuntimeError("Protenix native publication inventory replay conflicts")
     for design, candidate, artifacts in prepared.values():
         design.producer_model_id = candidate["producer_method"]
+        from services.scientific_artifacts import externalize_design_fields
         design.provenance = {**(design.provenance or {}), "native_producer": candidate}
         design.confidence_metrics = {**(design.confidence_metrics or {}), "core_protein_candidate_artifacts": artifacts}
+        await externalize_design_fields(session, design)
     job.provenance = {**(job.provenance or {}), "protenix_primary_publication": inventory,
                       "core_protein_candidate_publication": {
                           "summary": summary, "manifest": inventory[0]["publication"],
@@ -3360,7 +3368,8 @@ async def _ingest_public_sequence_results(job: Job, output_path: Path, session: 
                                        'selected': index['selected_count']},
             'structure_path': str(structure),
         }
-        session.add(Design(
+        from services.scientific_artifacts import externalize_design_fields
+        design = Design(
             id=str(uuid.uuid5(uuid.NAMESPACE_URL, f'bms:sequence-design:{job.id}:{name}')),
             job_id=job.id, name=name, pdb_path=str(structure), json_path=str(metrics),
             stage_family=job.model_id, stage_mode=job.mode, producer_model_id=job.model_id, **fields,
@@ -3368,7 +3377,9 @@ async def _ingest_public_sequence_results(job: Job, output_path: Path, session: 
             mpnn_score=safe_float(native_metrics.get('score')) if job.model_id == 'proteinmpnn' else None,
             fampnn_psce=safe_float(native_metrics.get('fampnn_avg_psce')) if job.model_id == 'fampnn' else None,
             is_favorite=False, created_at=datetime.utcnow(),
-        ))
+        )
+        await externalize_design_fields(session, design)
+        session.add(design)
         created += 1
     return created
 
@@ -4055,6 +4066,8 @@ async def _ingest_job_results(
                         _enrich_protein_design_from_metadata(design, canonical_row)
                         _assert_protein_design_metadata_replay(design, canonical_row)
                     
+                    from services.scientific_artifacts import externalize_design_fields
+                    await externalize_design_fields(session, design)
                     session.add(design)
                     designs_created += 1
             
@@ -4992,6 +5005,8 @@ async def ingest_maturation_data(
         design.stage_mode = design.stage_mode or job_context.get("stage_mode") or "maturation"
         design.selected_loop_scope = design.selected_loop_scope or job_context.get("selected_loop_scope")
         design.provenance = provenance
+        from services.scientific_artifacts import externalize_design_fields
+        await externalize_design_fields(session, design)
         flag_modified(design, "provenance")
         
         updated_count += 1
@@ -5105,7 +5120,8 @@ async def ingest_published_maturation_structures(
             ppiflow_provenance["fampnn"] = fampnn_record
             confidence_metrics["fampnn"] = fampnn_record
 
-        session.add(Design(
+        from services.scientific_artifacts import externalize_design_fields
+        design = Design(
             id=str(uuid.uuid4()),
             job_id=job_id,
             name=design_name,
@@ -5136,7 +5152,9 @@ async def ingest_published_maturation_structures(
             cdr_l3_length=structure_cdr_lengths.get("L3"),
             is_favorite=False,
             created_at=datetime.utcnow(),
-        ))
+        )
+        await externalize_design_fields(session, design)
+        session.add(design)
         existing_documents.add(str(structure_path.resolve()))
         created += 1
 
@@ -5263,7 +5281,8 @@ async def ingest_collected_ppiflow_structures(
             ppiflow_provenance["fampnn"] = fampnn_record
             confidence_metrics["fampnn"] = fampnn_record
 
-        session.add(Design(
+        from services.scientific_artifacts import externalize_design_fields
+        design = Design(
             id=str(uuid.uuid4()),
             job_id=job_id,
             name=design_name,
@@ -5301,7 +5320,9 @@ async def ingest_collected_ppiflow_structures(
             cdr_l3_length=structure_cdr_lengths.get("L3"),
             is_favorite=False,
             created_at=datetime.utcnow(),
-        ))
+        )
+        await externalize_design_fields(session, design)
+        session.add(design)
         existing_documents.add(str(structure_path.resolve()))
         created += 1
 
@@ -5425,7 +5446,8 @@ async def ingest_loose_files(
                     else "backbone_complex" if producer == "ppiflow" else None)
             )
             fields["artifact_schema_version"] = 1 if fields["artifact_class"] else None
-            session.add(Design(
+            from services.scientific_artifacts import externalize_design_fields
+            design = Design(
                 id=str(uuid.uuid4()), job_id=job_id, name=structure_path.stem,
                 pdb_path=str(structure_path), json_path=str(json_path),
                 producer_model_id=producer,
@@ -5446,7 +5468,9 @@ async def ingest_loose_files(
                 confidence_metrics={str(producer or current_model_id): payload},
                 plddt_overall=None, residue_plddt=None,
                 is_favorite=False, created_at=datetime.utcnow(),
-            ))
+            )
+            await externalize_design_fields(session, design)
+            session.add(design)
             existing_documents.add(str(structure_path.resolve()))
             created += 1
         if created and commit:
@@ -5846,8 +5870,12 @@ async def ingest_loose_files(
                         **(existing_fold_cp.confidence_metrics or {}), **(design.confidence_metrics or {})
                     }
                     existing_fold_cp.provenance = {**fam_provenance, **(existing_fold_cp.provenance or {})}
+                    from services.scientific_artifacts import externalize_design_fields
+                    await externalize_design_fields(session, existing_fold_cp)
                     designs_enriched += 1
                 else:
+                    from services.scientific_artifacts import externalize_design_fields
+                    await externalize_design_fields(session, design)
                     session.add(design)
                     designs_created += 1
                     if is_fold_cp:
@@ -5981,6 +6009,8 @@ async def ingest_loose_files(
                     created_at=datetime.utcnow()
                 )
                 
+                from services.scientific_artifacts import externalize_design_fields
+                await externalize_design_fields(session, design)
                 session.add(design)
                 designs_created += 1
                 ingested_names.add(design_name)
@@ -6204,6 +6234,8 @@ async def ingest_loose_files(
                 if has_clash:
                     design.notes = 'steric_clash_detected'
 
+                from services.scientific_artifacts import externalize_design_fields
+                await externalize_design_fields(session, design)
                 session.add(design)
                 designs_created += 1
                 ingested_names.add(design_name)
@@ -6408,6 +6440,8 @@ async def ingest_loose_files(
                     for score_root in score_roots:
                         if apply_validator_scores(design, score_root, design_name, job_params.get("structure_validators") or ()):
                             break
+                from services.scientific_artifacts import externalize_design_fields
+                await externalize_design_fields(session, design)
                 session.add(design)
                 designs_created += 1
                 ingested_names.add(design_name)
@@ -6655,3 +6689,16 @@ async def get_job_summary_metrics(output_dir: str) -> dict:
     except Exception as e:
         print(f"[Ingester] Error reading metrics: {e}")
         return {}
+
+
+# Public service-layer exports (R32) for helpers consumed by result_state_integrity and stage_review.
+parse_job_params = _parse_job_params
+publish_primary_results = _publish_primary_results
+ingest_explicit_frustrampnn_results = _ingest_explicit_frustrampnn_results
+apply_ppiflow_filter_fields = _apply_ppiflow_filter_fields
+apply_ppiflow_score_fields = _apply_ppiflow_score_fields
+design_lineage_fields = _design_lineage_fields
+inherit_source_design_metrics = _inherit_source_design_metrics
+parse_hlt_cdr_lengths = _parse_hlt_cdr_lengths
+resolve_parent_design_lineage = _resolve_parent_design_lineage
+job_stage_context = _job_stage_context

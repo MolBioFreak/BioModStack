@@ -280,7 +280,7 @@ def _authorized_fastq(value: Any, label: str) -> Path:
     Uploads, Downloads and the configured data roots are accepted exactly as they
     are for every other ONT workflow; this owner adds no path rule of its own.
     """
-    from routers.ont_runs import _confine_submitted_path  # noqa: PLC0415
+    from services.ont_submission import confine_submitted_path as _confine_submitted_path  # noqa: PLC0415
 
     try:
         resolved = Path(_confine_submitted_path(value, label, directory=False))
@@ -1689,7 +1689,10 @@ async def _create_release_child(
             source_ont_job_id=source.get("source_ont_job_id"),
             source_barcode_unit=source.get("source_barcode_unit"),
         )
-    from routers.ont_runs import OntNgsSubmitRequest, _job_create_for_ont_submit  # noqa: PLC0415
+    from services.ont_submission import (  # noqa: PLC0415
+        OntNgsSubmitRequest,
+        job_create_for_ont_submit as _job_create_for_ont_submit,
+    )
 
     submit = OntNgsSubmitRequest(
         name=_safe_child_name(

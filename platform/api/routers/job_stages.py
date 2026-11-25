@@ -119,63 +119,6 @@ def _dedupe_child_attempts(children: List[Job]) -> List[Job]:
     return list(latest_by_key.values())
 
 
-def _reconcile_child_jobs_from_history(children: List[Job]) -> int:
-    """
-    Opportunistically reconcile stale child-job statuses from Nextflow history.
-
-    Spawn/wait parent tasks poll this endpoint live. If child jobs have already
-    exited `OK`/`ERR` but their DB status is still `running`, the parent can hang
-    indefinitely. On read, upgrade those stale child records to terminal state.
-    """
-    if not children:
-        return 0
-
-    stale = [
-        child for child in children
-        if child.status in {
-            JobStatus.RUNNING.value,
-            JobStatus.AWAITING_INPUT.value,
-        }
-    ]
-    if not stale:
-        return 0
-
-    updated = 0
-    for child in stale:
-        run_dir = resolve_nextflow_run_dir(child.child_output_dir or child.output_dir)
-        if not run_dir:
-            continue
-        status_token = nextflow_history_status_for_run_dir(run_dir, str(child.id))
-        if status_token == "OK":
-            child.status = JobStatus.COMPLETED.value
-            child.queue_status = "completed"
-            child.awaiting_input = False
-            child.awaiting_stage = None
-            child.awaiting_payload = {}
-            resolved_output_dir = str(run_dir)
-            if child.child_output_dir != resolved_output_dir:
-                child.child_output_dir = resolved_output_dir
-            if not child.completed_at:
-                child.completed_at = datetime.utcnow()
-            child.current_stage = "Complete"
-            updated += 1
-        elif status_token == "ERR":
-            child.status = JobStatus.FAILED.value
-            child.queue_status = "failed"
-            child.awaiting_input = False
-            child.awaiting_stage = None
-            child.awaiting_payload = {}
-            resolved_output_dir = str(run_dir)
-            if child.child_output_dir != resolved_output_dir:
-                child.child_output_dir = resolved_output_dir
-            if not child.completed_at:
-                child.completed_at = datetime.utcnow()
-            if not child.error_message:
-                child.error_message = "Reconciled from .nextflow/history (ERR)"
-            updated += 1
-    return updated
-
-
 class OpenStageGateRequest(BaseModel):
     """Internal workflow request to mark a job as awaiting user input."""
     payload: Dict[str, Any] = Field(default_factory=dict)

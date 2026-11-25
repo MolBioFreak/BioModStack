@@ -214,7 +214,7 @@ def _validate_resource_gpu_authority(
         raise HTTPException(status_code=409, detail="Job.pinned_gpu differs from scheduler assignment")
     try:
         if inventory is None:
-            from routers.gpu import _query_smi_gpu_map
+            from services.gpu_metadata import query_smi_gpu_map as _query_smi_gpu_map
 
             inventory = _query_smi_gpu_map()
         match = inventory.get(assigned_gpu)

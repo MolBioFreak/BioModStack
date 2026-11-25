@@ -963,9 +963,9 @@ async def pause_md_production(session: AsyncSession, job: Job, *, operation_id: 
             raise RemoteExecutionError('MD pause remains unresolved: ' + str(observed.get('state')))
         await asyncio.sleep(0.1)
     if runtime is not None:
-        from services.nextflow import _project_local_components
+        from services.nextflow import project_local_components
         runtime.publish_projection()
-        await _project_local_components(job, session, local_path)
+        await project_local_components(job, session, local_path)
     else:
         status = await remote_status(session, job, include_activity=False)
         if status.state != 'paused' or not status.quiescent:

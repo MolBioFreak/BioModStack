@@ -527,9 +527,9 @@ def _resource_request(scheduler: Mapping[str, Any]) -> dict[str, Any]:
     gpu_uuid = None
     if gpu is not None:
         try:
-            from routers.gpu import _query_smi_gpu_map
+            from services.gpu_metadata import query_smi_gpu_map
 
-            inventory = _query_smi_gpu_map()
+            inventory = query_smi_gpu_map()
             match = inventory.get(gpu)
         except Exception as exc:
             raise ResourceAdmissionDenied("gpu_inventory_degraded", "live GPU inventory is unavailable; GPU admission fails closed", []) from exc

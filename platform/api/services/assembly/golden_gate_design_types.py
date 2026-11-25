@@ -11,7 +11,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
-from routers.molbio_ops import PrimerTmSettings, PrimerTmResult
+from services.molbio_primers import PrimerTmSettings, PrimerTmResult
 from services.primer_qc import PrimerQcMetrics, PrimerPairQcMetrics
 from services.assembly.feature_types import Closed, Feature, Mapping, Material, Region
 from services.assembly.types import AssemblyJunction, FragmentEnd

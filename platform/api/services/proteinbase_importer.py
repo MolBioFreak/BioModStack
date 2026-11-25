@@ -418,6 +418,8 @@ async def import_proteinbase_bundle(
             ipsae=normalized.get("ipsae"),
             created_at=imported_at,
         )
+        from services.scientific_artifacts import externalize_design_fields
+        await externalize_design_fields(session, design)
         session.add(design)
         created_designs.append(design)
 

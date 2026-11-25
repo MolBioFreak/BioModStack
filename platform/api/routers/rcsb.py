@@ -17,63 +17,18 @@ import time
 logger = logging.getLogger(__name__)
 
 from paths import get_analysis_cache_dir, to_allowed_relative
+from services.rcsb_cache import (
+    RCSB_BASE_URL,
+    RCSB_CACHE_DIR,
+    RCSB_SEARCH_URL,
+    get_cache_timestamps as _get_cache_timestamps,
+    isoformat_timestamp as _isoformat_timestamp,
+    metadata_path as _metadata_path,
+    touch_last_used as _touch_last_used,
+    write_cache_metadata as _write_cache_metadata,
+)
 
 router = APIRouter()
-
-# Cache directory for RCSB downloads
-RCSB_CACHE_DIR = get_analysis_cache_dir() / "rcsb"
-
-RCSB_BASE_URL = "https://files.rcsb.org/download"
-RCSB_SEARCH_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
-
-
-def _isoformat_timestamp(timestamp: float) -> str:
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
-
-
-def _touch_last_used(cache_path: Path) -> None:
-    try:
-        cached_at, _ = _get_cache_timestamps(cache_path)
-        _write_cache_metadata(
-            cache_path,
-            cached_at=cached_at,
-            last_used_at=_isoformat_timestamp(time.time()),
-        )
-    except Exception as exc:
-        logger.warning(f"[RCSB] Failed to update last-used timestamp for {cache_path}: {exc}")
-
-
-def _metadata_path(cache_path: Path) -> Path:
-    return cache_path.with_suffix(f"{cache_path.suffix}.meta.json")
-
-
-def _get_cache_timestamps(cache_path: Path) -> tuple[str, Optional[str]]:
-    stat = cache_path.stat()
-    cached_at = _isoformat_timestamp(stat.st_mtime)
-    last_used_at: Optional[str] = None
-    metadata_path = _metadata_path(cache_path)
-    if metadata_path.exists():
-        try:
-            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-            cached_at = payload.get("cached_at") or cached_at
-            last_used_at = payload.get("last_used_at") or None
-        except Exception as exc:
-            logger.warning(f"[RCSB] Failed to read cache metadata for {cache_path}: {exc}")
-    return cached_at, last_used_at
-
-
-def _write_cache_metadata(cache_path: Path, *, cached_at: str, last_used_at: Optional[str]) -> None:
-    metadata_path = _metadata_path(cache_path)
-    metadata_path.write_text(
-        json.dumps(
-            {
-                "cached_at": cached_at,
-                "last_used_at": last_used_at,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
 
 
 def _cached_entry(cache_path: Path, pdb_id: str) -> dict:

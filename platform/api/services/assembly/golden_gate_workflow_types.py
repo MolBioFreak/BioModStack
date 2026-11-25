@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 from pydantic import Field, TypeAdapter, create_model, JsonValue, field_validator
-from routers.molbio_ops import PrimerDesignRequest, SequenceInput
+from services.molbio_primers import PrimerDesignRequest, SequenceInput
 from services.assembly.golden_gate_design_types import (
     Closed, GoldenGateDesignRequest, GoldenGateDesignResult, EnzymeBinding,
     Material, Source, Tail, Thermodynamics,

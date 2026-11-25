@@ -48,6 +48,8 @@ def test_present_or_unknown_keeps_full_identity_and_native_power_parser(monkeypa
         text = "2, GPU-two, NVIDIA Two, 00000000:01:00.0\n7, GPU-seven, NVIDIA Seven, with comma, 00000000:02:00.0\n" if "uuid" in argv[1] else "2, 245.6\n7, 900\n99, 150\ninvalid\n"
         return SimpleNamespace(returncode=0, stdout=text)
     monkeypatch.setattr(gpu.subprocess, "run", run)
+    from services import gpu_metadata
+    monkeypatch.setattr(gpu_metadata.subprocess, "run", run)
     assert gpu._query_smi_gpu_map() == {
         2: {"uuid": "GPU-two", "name": "NVIDIA Two", "pci_bus_id": "00000000:01:00.0"},
         7: {"uuid": "GPU-seven", "name": "NVIDIA Seven, with comma", "pci_bus_id": "00000000:02:00.0"},
@@ -69,6 +71,8 @@ def test_inventory_is_rechecked_without_new_absence_cache(monkeypatch, reader):
         calls.append(argv)
         return SimpleNamespace(returncode=0, stdout="7, GPU-seven, NVIDIA Seven, 00000000:02:00.0\n" if "uuid" in argv[1] else "7, 180\n")
     monkeypatch.setattr(gpu.subprocess, "run", run)
+    from services import gpu_metadata
+    monkeypatch.setattr(gpu_metadata.subprocess, "run", run)
     monkeypatch.setattr(gpu, "HARDWARE_LIMITS", {7: {"min": 100, "max": 300, "default": 250}})
     read = getattr(gpu, reader)
     assert read() == {}
@@ -87,6 +91,8 @@ def test_unknown_inventory_preserves_driver_failure_behavior(monkeypatch, reader
             raise OSError("driver unavailable")
         return SimpleNamespace(returncode=1, stdout="not success")
     monkeypatch.setattr(gpu.subprocess, "run", run)
+    from services import gpu_metadata
+    monkeypatch.setattr(gpu_metadata.subprocess, "run", run)
     assert getattr(gpu, reader)() == {}
 
 
@@ -160,6 +166,8 @@ def test_power_mutation_retains_immediate_driver_readback_and_admission(monkeypa
         live[0] = watts
         return True
     monkeypatch.setattr(gpu.subprocess, "run", run)
+    from services import gpu_metadata
+    monkeypatch.setattr(gpu_metadata.subprocess, "run", run)
     monkeypatch.setattr(gpu, "set_gpu_power_limit", write)
     assert gpu._get_power_control_payload()["limits"] == {7: 250}
     response = gpu._set_power_control_sync(gpu.PowerControlRequest(gpu_index=7, limit_watts=190))

@@ -1153,12 +1153,12 @@ async def fetch_rcsb_entry(accession: str) -> Path:
     normalized = accession.strip().upper()
     if re.fullmatch(r"[A-Z0-9]{4}", normalized) is None:
         raise _error("MD_RCSB_ACCESSION_INVALID", "RCSB accession must be four letters or digits.")
-    from routers import rcsb
+    from services import rcsb_cache
 
-    cache_path = rcsb.RCSB_CACHE_DIR / f"{normalized.lower()}.pdb"
+    cache_path = rcsb_cache.RCSB_CACHE_DIR / f"{normalized.lower()}.pdb"
     if cache_path.is_file() and not cache_path.is_symlink():
         read_structure_file(cache_path)
-        rcsb._touch_last_used(cache_path)
+        rcsb_cache.touch_last_used(cache_path)
         return cache_path
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -1169,7 +1169,7 @@ async def fetch_rcsb_entry(accession: str) -> Path:
         size = 0
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
             async with client.stream(
-                "GET", f"{rcsb.RCSB_BASE_URL}/{normalized}.pdb"
+                "GET", f"{rcsb_cache.RCSB_BASE_URL}/{normalized}.pdb"
             ) as response:
                 if response.status_code == 404:
                     raise _error("MD_RCSB_NOT_FOUND", "The requested RCSB entry was not found.", 404)
@@ -1201,8 +1201,8 @@ async def fetch_rcsb_entry(accession: str) -> Path:
             os.link(temporary, cache_path, follow_symlinks=False)
         except FileExistsError:
             pass
-        now_iso = rcsb._isoformat_timestamp(time.time())
-        rcsb._write_cache_metadata(cache_path, cached_at=now_iso, last_used_at=now_iso)
+        now_iso = rcsb_cache.isoformat_timestamp(time.time())
+        rcsb_cache.write_cache_metadata(cache_path, cached_at=now_iso, last_used_at=now_iso)
         return cache_path
     except (httpx.HTTPError, ValueError) as exc:
         if isinstance(exc, StartingStructureError):

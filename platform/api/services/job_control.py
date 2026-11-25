@@ -545,9 +545,9 @@ async def cancel_job_lineage(
                 and str(job.id) in stopped_run_ids):
             # The existing cancellation owner has proved the local writer stopped
             # and won terminal publication. Observe bytes without success handling.
-            from services.nextflow import _observe_local_terminal_binder_results
+            from services.nextflow import observe_local_terminal_binder_results
 
-            await _observe_local_terminal_binder_results(session, str(job.id), job.output_dir)
+            await observe_local_terminal_binder_results(session, str(job.id), job.output_dir)
 
     if before_terminal_commit is not None:
         await before_terminal_commit()
@@ -830,13 +830,13 @@ async def resume_workflow_job(job_id, session, request, from_stage, background_t
                 return await request_remote_checkpoint_resume(session, job, checkpoint, request.checkpoint_decision)
             except RemoteExecutionError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
-        from services.nextflow import _local_checkpoint_resume
+        from services.nextflow import local_checkpoint_resume
         provenance = dict(job.provenance or {})
         pending = dict(checkpoint_id=request.checkpoint_id, checkpoint_sha256=request.checkpoint_sha256,
                        decision=request.checkpoint_decision, attempt_id=checkpoint.get("attempt_id"))
         job.provenance = {**provenance, "component_checkpoint_resume": pending}
         try:
-            retained = _local_checkpoint_resume(job)
+            retained = local_checkpoint_resume(job)
             _, context, runtime, trusted_checkpoint, _ = retained
             state = runtime.root_state()
             if (not state or state['state'] != 'paused' or not state.get('quiescent')

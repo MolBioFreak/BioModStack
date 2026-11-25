@@ -10,7 +10,7 @@ from collections import Counter
 from hashlib import sha256
 from typing import Callable, Literal, Sequence
 
-from routers.molbio_ops import calculate_primer_tm_result
+from services.molbio_primers import calculate_primer_tm_result
 from services.molbio_ops import pcr_product, reverse_complement
 from services.primer_qc import evaluate_primer_pair_qc, evaluate_primer_qc
 from services.restriction_analysis import analyze_sequence

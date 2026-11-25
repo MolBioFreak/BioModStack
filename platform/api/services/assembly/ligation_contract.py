@@ -31,7 +31,7 @@ def _end_dict(end: FragmentEnd | None) -> dict[str, Any] | None:
 
 async def materialize_ligation_request(session: AsyncSession, parameters: Mapping[str, Any]):
     """Return a native ``LigationAssemblyRequest`` for registered ligation parameters."""
-    from routers.molbio_ops import LigationAssemblyRequest
+    from services.assembly.ligation_schemas import LigationAssemblyRequest
 
     revision_ids = list(parameters["fragment_revision_ids"])
     orientations = list(parameters["orientations"])

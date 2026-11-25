@@ -236,7 +236,9 @@ def canonical_job_spy(monkeypatch: pytest.MonkeyPatch):
             raise RuntimeError("forced child flush failure")
         return SimpleNamespace(id=_preallocated_job_id)
 
+    from services import ont_submission
     monkeypatch.setattr(ont_runs, "_job_create_for_ont_submit", build_job)
+    monkeypatch.setattr(ont_submission, "job_create_for_ont_submit", build_job)
     monkeypatch.setattr(job_submission, "submit_job", create_job)
     def _set_fail_at(value: int | None) -> None:
         nonlocal fail_at
@@ -530,7 +532,9 @@ def _pooled_roots(context: SimpleNamespace, monkeypatch: pytest.MonkeyPatch):
     results_root.mkdir(exist_ok=True)
     monkeypatch.setattr(pooled, "get_inputs_dir", lambda: context.inputs_root)
     monkeypatch.setattr(pooled, "get_results_dir", lambda: results_root)
+    from services import ont_submission
     monkeypatch.setattr(ont_runs, "get_allowed_roots", lambda: {"inputs": context.inputs_root, "results": results_root})
+    monkeypatch.setattr(ont_submission, "get_allowed_roots", lambda: {"inputs": context.inputs_root, "results": results_root})
     return pooled
 
 
@@ -580,7 +584,9 @@ async def test_a_skipped_barcode_does_not_stop_one_holding_several_sequences(bat
 @pytest.mark.asyncio
 async def test_full_assembly_optional_reference_and_replay(batch_context, canonical_job_spy, monkeypatch):
     context = batch_context
+    from services import ont_submission
     monkeypatch.setattr(ont_runs, "get_allowed_roots", lambda: {"results": context.source_root, "inputs": context.inputs_root})
+    monkeypatch.setattr(ont_submission, "get_allowed_roots", lambda: {"results": context.source_root, "inputs": context.inputs_root})
     request = batches.BarcodeBatchRequest(idempotency_key="assembly-batch", target_workflow="wf_clone_validation",
         mappings=[{"unit_id": "barcode01", "sample_alias": "solo"},
                   {"unit_id": "barcode02", "molbio_ngs_receipt_id": context.receipt_ids[1]}])

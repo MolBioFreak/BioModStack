@@ -366,6 +366,8 @@ async def process_external_import(
                 },
             )
             design.review_artifact_manifest = build_review_artifact_manifest(design)
+            from services.scientific_artifacts import externalize_design_fields
+            await externalize_design_fields(session, design)
             session.add(design)
 
         record.bms_job_id = job_id

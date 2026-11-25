@@ -124,7 +124,7 @@ def _assemble(request: AssembleTask, resolver):
     parts = list(core.parts)
     source_map = {s.id: s for s in sources}
     for selection in request.automatic_primers:
-        from routers.molbio_ops import PrimerDesignRequest, design_primer_pairs_for_request
+        from services.molbio_primers import PrimerDesignRequest, design_primer_pairs_for_request
         index = next((i for i, p in enumerate(parts) if p.id == selection.part_id), None)
         if index is None or not isinstance(parts[index].preparation, PCRPreparation):
             raise AssemblyError('Automatic primer selection requires a PCR part')

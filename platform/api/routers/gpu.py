@@ -37,7 +37,11 @@ from services.gpu_config import (
     MANDATORY_CONCURRENCY_CAPS,
     PROTECTED_CONCURRENCY_LIMITS,
 )
-from services.gpu_metadata import HARDWARE_LIMITS
+from services.gpu_metadata import (
+    HARDWARE_LIMITS,
+    normalize_pci_bus_id as _normalize_pci_bus_id,
+    query_smi_gpu_map as _query_smi_gpu_map,
+)
 from services.job_control import force_launch_job as force_launch_job_service, reject_generic_md_lifecycle_control
 from services.workflow_adapter import WorkflowAdapterRequestError, request_via_workflow_adapter
 
@@ -927,21 +931,6 @@ def _coolercontrol_login_cookie(force_refresh: bool = False) -> tuple[Optional[s
     return _coolercontrol_cookie_cache, ""
 
 
-def _normalize_pci_bus_id(raw_bus_id: Optional[str]) -> Optional[str]:
-    value = str(raw_bus_id or "").strip()
-    if not value:
-        return None
-    match = re.match(r"^([0-9A-Fa-f]{1,8}):([0-9A-Fa-f]{1,2}):([0-9A-Fa-f]{1,2})\.([0-7])$", value)
-    if not match:
-        return value.upper()
-    return (
-        f"{int(match.group(1), 16):08X}:"
-        f"{int(match.group(2), 16):02X}:"
-        f"{int(match.group(3), 16):02X}."
-        f"{match.group(4)}"
-    )
-
-
 def _coolercontrol_device_fan_channels(device: Dict[str, Any]) -> List[str]:
     channels_obj = device.get("info", {}).get("channels", {}) if isinstance(device, dict) else {}
     if not isinstance(channels_obj, dict):
@@ -1345,40 +1334,6 @@ def _save_fan_state() -> None:
         os.replace(tmp_path, GPU_FAN_STATE_PATH)
     except Exception as exc:
         print(f"[GPU] Failed writing fan state file {GPU_FAN_STATE_PATH}: {exc}")
-
-
-def _query_smi_gpu_map() -> Dict[int, Dict[str, Any]]:
-    # Match the native telemetry owner: only complete absence skips driver I/O.
-    # Unknown/container inventories still probe; this is not mutation admission.
-    from services.nvidia_inventory import nvidia_gpu_present
-    if nvidia_gpu_present() is False:
-        return {}
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,uuid,name,pci.bus_id", "--format=csv,noheader"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except Exception:
-        return {}
-    if result.returncode != 0:
-        return {}
-    out: Dict[int, Dict[str, Any]] = {}
-    for line in result.stdout.splitlines():
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) < 4:
-            continue
-        try:
-            idx = int(parts[0])
-        except ValueError:
-            continue
-        out[idx] = {
-            "uuid": parts[1],
-            "name": ", ".join(parts[2:-1]).strip(),
-            "pci_bus_id": _normalize_pci_bus_id(parts[-1]),
-        }
-    return out
 
 
 def _extract_target_ids(output: str, target_type: str) -> List[int]:

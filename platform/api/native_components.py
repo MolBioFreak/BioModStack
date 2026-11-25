@@ -295,11 +295,11 @@ def job_gpu_capacity_requirements(model_id, params):
     """
     if model_id != 'conformational_mapping':
         return {'minimum_gpu_memory_mb': 0}
-    from services.nextflow import _native_plan_metadata_settings
+    from services.nextflow import native_plan_metadata_settings
     if isinstance(params, dict) and 'backend' in params:
         request = params
     else:
-        request = _native_plan_metadata_settings(model_id, params).get('cm_request')
+        request = native_plan_metadata_settings(model_id, params).get('cm_request')
     if not isinstance(request, dict):
         raise ValueError('CM resource admission requires its canonical request')
     requirements = cm_gpu_requirements(request)

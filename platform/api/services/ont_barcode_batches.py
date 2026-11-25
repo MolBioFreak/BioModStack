@@ -707,7 +707,10 @@ async def _create_one_child(
     prefix = request.name_prefix or str(source["name"]).strip() or f"ONT {request.target_workflow}"
     from services.job_submission import submit_job  # noqa: PLC0415
 
-    from routers.ont_runs import OntNgsSubmitRequest, _job_create_for_ont_submit  # noqa: PLC0415
+    from services.ont_submission import (  # noqa: PLC0415
+        OntNgsSubmitRequest,
+        job_create_for_ont_submit as _job_create_for_ont_submit,
+    )
 
     submit = OntNgsSubmitRequest(
         name=_safe_child_name(prefix, str(mapping["unit_id"])),

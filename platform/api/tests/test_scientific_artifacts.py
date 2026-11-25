@@ -21,6 +21,8 @@ from services.scientific_artifacts import (
     artifact_row_reference,
     canonical_json_bytes,
     envelope_rows,
+    externalize_design_fields,
+    externalize_design_fields_sync,
     install_parquet_rows,
     publish_table_rows,
     query_json_envelope_page,
@@ -78,15 +80,15 @@ def test_small_design_scientific_array_is_externalized_before_flush(
     engine = create_engine(f"sqlite:///{tmp_path / 'design.db'}")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
-        session.add(
-            Design(
-                id="design-small-dense",
-                job_id="job-small-dense",
-                name="small dense",
-                pdb_path="small.pdb",
-                residue_plddt=[0.5],
-            )
+        design = Design(
+            id="design-small-dense",
+            job_id="job-small-dense",
+            name="small dense",
+            pdb_path="small.pdb",
+            residue_plddt=[0.5],
         )
+        externalize_design_fields_sync(session, design)
+        session.add(design)
         session.commit()
     with engine.connect() as connection:
         raw = connection.execute(
@@ -118,15 +120,15 @@ def test_unrelated_design_update_keeps_existing_dense_artifact_receipt(
     engine = create_engine(f"sqlite:///{tmp_path / 'design-update.db'}")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
-        session.add(
-            Design(
-                id="design-update",
-                job_id="job-update",
-                name="before",
-                pdb_path="update.pdb",
-                residue_plddt=[0.5],
-            )
+        design = Design(
+            id="design-update",
+            job_id="job-update",
+            name="before",
+            pdb_path="update.pdb",
+            residue_plddt=[0.5],
         )
+        externalize_design_fields_sync(session, design)
+        session.add(design)
         session.commit()
         design = session.get(Design, "design-update")
         assert design is not None
@@ -141,6 +143,70 @@ def test_unrelated_design_update_keeps_existing_dense_artifact_receipt(
             )
         ).scalar_one()
     assert receipt_count == 1
+
+
+@pytest.mark.asyncio
+async def test_externalize_design_fields_cleans_up_root_and_nested_rollbacks(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    artifact_root = tmp_path / "artifacts"
+    monkeypatch.setenv("BMS_SCIENTIFIC_ARTIFACT_ROOT", str(artifact_root))
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'design-rollback.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as session:
+            rolled_back = Design(
+                id="design-root-rb",
+                job_id="job-rb",
+                name="root-rb",
+                pdb_path="rb.pdb",
+                residue_plddt=[0.25, 0.75],
+            )
+            await externalize_design_fields(session, rolled_back)
+            session.add(rolled_back)
+            await session.flush()
+            await session.rollback()
+        assert list(artifact_root.rglob("*.parquet")) == []
+
+        async with sessions() as session:
+            committed = Design(
+                id="design-committed",
+                job_id="job-ok",
+                name="committed",
+                pdb_path="ok.pdb",
+                residue_plddt=[0.9, 0.8],
+            )
+            await externalize_design_fields(session, committed)
+            session.add(committed)
+            await session.flush()
+            try:
+                async with session.begin_nested():
+                    nested_rb = Design(
+                        id="design-nested-rb",
+                        job_id="job-ok",
+                        name="nested-rb",
+                        pdb_path="nested.pdb",
+                        residue_plddt=[0.1, 0.2],
+                    )
+                    await externalize_design_fields(session, nested_rb)
+                    session.add(nested_rb)
+                    await session.flush()
+                    raise RuntimeError("abort savepoint")
+            except RuntimeError:
+                pass
+            await session.commit()
+
+        parquet_files = list(artifact_root.rglob("*.parquet"))
+        assert len(parquet_files) == 1
+        async with sessions() as session:
+            reopened = await session.get(Design, "design-committed")
+            assert reopened is not None
+            assert reopened.residue_plddt == [0.9, 0.8]
+            assert await session.get(Design, "design-nested-rb") is None
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

@@ -382,7 +382,10 @@ async def publish_native_results(job: Job, root: Path, session, *, commit: bool 
         if len(ids) != len(set(ids)):
             raise PublicationError("BC2 candidate producer identities collide")
         for binding in receipt["candidates"]:
-            session.add(Design(**_design_fields(job, binding, root)))
+            from services.scientific_artifacts import externalize_design_fields
+            design = Design(**_design_fields(job, binding, root))
+            await externalize_design_fields(session, design)
+            session.add(design)
     job.provenance = {**(job.provenance or {}), "bindcraft2_native_publication": receipt}
     if commit:
         await session.commit()

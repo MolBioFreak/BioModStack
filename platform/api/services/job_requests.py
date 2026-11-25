@@ -616,9 +616,9 @@ def _normalize_boltz_cp_params_for_validation(
     )
     requested_cp = normalized.get("size_cp", normalized.get("bcp_size_cp"))
     if requested_cp not in (None, "") or cp_topology == "1d":
-        from services.nextflow import _derive_boltz_cp_gpu_launch_settings
+        from services.nextflow import derive_boltz_cp_gpu_launch_settings
         try:
-            gpu_ids, size_cp = _derive_boltz_cp_gpu_launch_settings(
+            gpu_ids, size_cp = derive_boltz_cp_gpu_launch_settings(
                 pinned_gpus=normalized.get("pinned_gpus"),
                 requested_size_cp=requested_cp,
                 fallback_gpu_ids=gpu_ids,

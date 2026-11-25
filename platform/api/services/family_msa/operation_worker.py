@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 async def compute(work, job_id, session_factory):
     from services.family_msa.operations import ManagedOperation
     from services.family_msa.publication import retain_artifact
-    from routers.family_msa_results import project_result_data, comparison_roster
+    from services.family_msa.results import project_result_data, comparison_roster
     from experiment_models import ExperimentAggregateHead, ExperimentRevision
     from bms_alignment import compare, ensemble_support
     from bms_alignment.bundle import make_bundle

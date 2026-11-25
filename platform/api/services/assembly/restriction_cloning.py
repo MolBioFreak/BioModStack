@@ -425,7 +425,7 @@ def _primer_choices(body: dict[str, Any], tails: dict[str, str]) -> tuple[list[d
     Forward anneals to payload[0:L]; reverse to rc(payload[-L:]); 5' tails are exactly the prepared tails.
     A shortfall (Tm spread, GC clamp, GC range) is reported as a note, never as an empty result.
     """
-    from routers import molbio_ops as ops
+    from services import molbio_primers as ops
     sequence = normalize_dna(body["insert_sequence"])
     start, end = _payload_interval(body, sequence)
     payload = sequence[start:end]

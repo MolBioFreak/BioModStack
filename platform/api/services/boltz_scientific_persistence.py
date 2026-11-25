@@ -315,7 +315,8 @@ async def ingest_verified_boltz(job, root, session, *, commit):
     await session.execute(delete(Design).where(Design.job_id == job.id, Design.source_stage.is_not(None)))
     for document, candidate in prepared.items():
         artifacts = candidate['artifacts']
-        session.add(Design(id=candidate['id'], job_id=job.id, name=document, producer_model_id='boltz2',
+        from services.scientific_artifacts import externalize_design_fields
+        design = Design(id=candidate['id'], job_id=job.id, name=document, producer_model_id='boltz2',
             pdb_path=artifacts['structure']['path'], json_path=artifacts['metrics']['path'],
             # Existing review/analysis admission needs the actual artifact, not
             # a copied readiness claim. Scientific reads still reverify native
@@ -326,7 +327,9 @@ async def ingest_verified_boltz(job, root, session, *, commit):
             aligned_error_key=candidate['native']['aligned_error']['matrix_key'],
             stage_family='boltz', stage_mode=job.mode, artifact_group='boltz', artifact_class='structure_prediction',
             confidence_metrics={'core_protein_scientific_contract':1, 'core_protein_candidate_artifacts':artifacts,
-                                'core_protein_scientific':candidate['block']}))
+                                'core_protein_scientific':candidate['block']})
+        await externalize_design_fields(session, design)
+        session.add(design)
     job.provenance = {**(job.provenance or {}), 'core_protein_candidate_publication':receipt}
     if commit:
         await session.commit()

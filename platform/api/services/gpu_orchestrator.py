@@ -30,7 +30,6 @@ from dataclasses import dataclass, replace
 
 # Will be imported when integrated with FastAPI
 # from database import Job, async_session
-# from routers.gpu import get_gpu_stats
 # from services.nextflow import launch_nextflow_job
 
 logger = logging.getLogger(__name__)
@@ -930,10 +929,10 @@ async def _finalize_recovered_success(
     if stamp:
         pass
     elif md_finalizer:
-        from services.nextflow import _finalize_local_md_job
+        from services.nextflow import finalize_local_md_job
 
         try:
-            await _finalize_local_md_job(job, session, result_output_dir)
+            await finalize_local_md_job(job, session, result_output_dir)
         except Exception as exc:
             if not snapshot_history:
                 raise
@@ -1172,9 +1171,9 @@ def md_root_vram_estimate(params, estimate, *, selected_plan=None):
     """
     if selected_plan is None:
         from model_registry import selected_execution_metadata
-        from services.nextflow import _native_plan_metadata_settings, MODEL_MODE_WORKFLOW_ENTRYPOINTS
+        from services.nextflow import native_plan_metadata_settings, MODEL_MODE_WORKFLOW_ENTRYPOINTS
         metadata = selected_execution_metadata('molecular_dynamics', 'simulate',
-            _native_plan_metadata_settings('molecular_dynamics', params),
+            native_plan_metadata_settings('molecular_dynamics', params),
             MODEL_MODE_WORKFLOW_ENTRYPOINTS[('molecular_dynamics', 'simulate')])
         declarations = [json.loads(row.resources_json) for row in
                         (*metadata.static_components, *metadata.dynamic_templates)]
@@ -1441,9 +1440,9 @@ def _normalize_job_params(raw_params: Any) -> Dict[str, Any]:
 def _scheduler_gpu_uuid(gpu_id: int) -> str | None:
     """Resolve scheduler index to the current physical GPU UUID."""
 
-    from routers.gpu import _query_smi_gpu_map
+    from services.gpu_metadata import query_smi_gpu_map
 
-    metadata = _query_smi_gpu_map().get(int(gpu_id))
+    metadata = query_smi_gpu_map().get(int(gpu_id))
     if not isinstance(metadata, dict):
         return None
     gpu_uuid = metadata.get("uuid")
@@ -3037,9 +3036,9 @@ class GPUOrchestrator:
                         requested_remote_gpus = [int(job.pinned_gpu)]
                     requested_remote_gpus = sorted(set(requested_remote_gpus or []))
                     if job.model_id == "boltz_cp_experimental":
-                        from services.nextflow import _derive_boltz_cp_gpu_launch_settings
+                        from services.nextflow import derive_boltz_cp_gpu_launch_settings
                         try:
-                            _derive_boltz_cp_gpu_launch_settings(
+                            derive_boltz_cp_gpu_launch_settings(
                                 pinned_gpus=requested_remote_gpus,
                                 requested_size_cp=job_params.get("bcp_size_cp", job_params.get("size_cp")),
                                 cp_topology=job_params.get("bcp_cp_topology", job_params.get("cp_topology", "2d")),

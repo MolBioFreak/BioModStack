@@ -16,7 +16,7 @@ def __getattr__(name):
     # Descriptor-only readers (NGS/MD) must not load Parquet/SQL dependencies.
     from importlib import import_module
 
-    if name in {"publish_json_payload", "publish_table_rows"}:
+    if name in {"externalize_design_fields", "externalize_design_fields_sync", "publish_json_payload", "publish_table_rows"}:
         module = "persistence"
     elif name in {"count_rows", "query_rows", "query_rows_by_values"}:
         module = "query"
@@ -49,6 +49,8 @@ __all__ = [
     "canonical_sha256",
     "count_rows",
     "envelope_rows",
+    "externalize_design_fields",
+    "externalize_design_fields_sync",
     "install_parquet_rows",
     "is_artifact_reference",
     "publish_json_payload",

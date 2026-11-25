@@ -28,13 +28,13 @@ from antibody_pipeline_contract import (
 from database import Design, Job
 from paths import get_data_root, resolve_allowed_path, to_allowed_relative
 from services.result_ingester import (
-    _apply_ppiflow_filter_fields,
-    _apply_ppiflow_score_fields,
-    _design_lineage_fields,
-    _inherit_source_design_metrics,
-    _parse_hlt_cdr_lengths,
-    _resolve_parent_design_lineage,
-    _job_stage_context,
+    apply_ppiflow_filter_fields,
+    apply_ppiflow_score_fields,
+    design_lineage_fields,
+    inherit_source_design_metrics,
+    parse_hlt_cdr_lengths,
+    resolve_parent_design_lineage,
+    job_stage_context,
     extract_plddt_from_pdb,
     parse_backbone_id,
     safe_float,
@@ -926,7 +926,7 @@ def _rfantibody_cdr_refresh_required(sample_pdb_path: str | None) -> bool:
         return False
 
     try:
-        return bool(_parse_hlt_cdr_lengths(Path(sample_pdb_path)))
+        return bool(parse_hlt_cdr_lengths(Path(sample_pdb_path)))
     except Exception:
         return False
 
@@ -1337,7 +1337,7 @@ async def _ensure_stage_review_rows_owned(session: AsyncSession, job: Job, force
         return 0
 
     review_stage_family, review_stage_mode = _review_stage_identity(stage, job, repaired_payload)
-    job_context = _job_stage_context(job)
+    job_context = job_stage_context(job)
     lineage_cache: dict[str, Optional[Design]] = {}
     rows: list[Design] = []
     score_root = _resequence_gate_score_root(job, stage, repaired_payload)
@@ -1345,9 +1345,9 @@ async def _ensure_stage_review_rows_owned(session: AsyncSession, job: Job, force
     for artifact_group, structure_path in expected_files:
         design_name = structure_path.stem
         backbone_id = parse_backbone_id(design_name)
-        structure_cdr_lengths = _parse_hlt_cdr_lengths(structure_path)
+        structure_cdr_lengths = parse_hlt_cdr_lengths(structure_path)
         binder_length, antibody_type = _infer_binder_metrics(structure_path)
-        lineage = await _resolve_parent_design_lineage(
+        lineage = await resolve_parent_design_lineage(
             session,
             job_context,
             design_name,
@@ -1509,19 +1509,21 @@ async def _ensure_stage_review_rows_owned(session: AsyncSession, job: Job, force
                 created_at=datetime.utcnow(),
         )
         if stage == "post_ppiflow_generator":
-            _apply_ppiflow_score_fields(review_row, ppiflow_metrics.get("score_data") or {})
-            _apply_ppiflow_filter_fields(review_row, ppiflow_metrics.get("filter_payload") or {})
+            apply_ppiflow_score_fields(review_row, ppiflow_metrics.get("score_data") or {})
+            apply_ppiflow_filter_fields(review_row, ppiflow_metrics.get("filter_payload") or {})
 
         rows.append(review_row)
-        for field_name, field_value in _design_lineage_fields(job_context, lineage).items():
+        for field_name, field_value in design_lineage_fields(job_context, lineage).items():
             if getattr(review_row, field_name, None) in (None, "", [], {}, ()):
                 setattr(review_row, field_name, field_value)
-        _inherit_source_design_metrics(
+        inherit_source_design_metrics(
             review_row,
             lineage.get("source_design"),
             structure_path=structure_path,
         )
         _apply_resequence_gate_scores(review_row, job, score_root)
+        from services.scientific_artifacts import externalize_design_fields
+        await externalize_design_fields(session, review_row)
 
     session.add_all(rows)
     await session.flush()

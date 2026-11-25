@@ -20,7 +20,7 @@ from routers.designs import (
     _should_force_review_stage_listing,
 )
 from routers.job_stages import _iter_saved_review_filter_sets
-from routers.job_results import _merge_preserved_gate_payload, _repair_job_for_response
+from routers.job_results import _merge_preserved_gate_payload
 from services.job_submission import _child_job_has_reusable_outputs
 from services.binder_continuation import _build_antibody_iteration_job, _build_selection_manifest_item, _derive_job_stage_tags, _derive_source_stage_payload, _looks_like_antibody_job, _prune_iteration_params
 from services.job_readback import SavedReviewFilterSet
@@ -272,112 +272,6 @@ def test_load_caliby_review_metrics_canonicalizes_self_consistency_fields(tmp_pa
 
     assert loaded["confidence_metrics"]["caliby_sc_plddt"] == 88.4
     assert loaded["confidence_metrics"]["caliby_sc_rmsd"] == 0.91
-
-
-def test_repair_job_for_response_marks_ok_history_job_completed_without_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("routers.job_results.nextflow_history_status", lambda job: "OK")
-    monkeypatch.setattr("routers.job_results.load_review_gate_snapshot", lambda *_args, **_kwargs: (None, {}))
-    monkeypatch.setattr("routers.job_results.has_stage_gate", lambda job: False)
-
-    job = SimpleNamespace(
-        execution_target_id=None,
-        output_dir=str(tmp_path),
-        awaiting_stage=None,
-        awaiting_payload={},
-        awaiting_input=False,
-        error_message="stale",
-        status="awaiting_input",
-        queue_status="paused",
-        current_stage="waitforchildren",
-        stage_progress="1/1",
-        completed_at=None,
-        parent_job_id=None,
-        child_stage=None,
-    )
-
-    changed = _repair_job_for_response(job)
-
-    assert changed is True
-    assert job.status == "completed"
-    assert job.queue_status == "completed"
-    assert job.current_stage == "Complete"
-    assert job.stage_progress is None
-    assert job.error_message is None
-    assert job.completed_at is not None
-
-
-def test_repair_job_for_response_marks_err_history_job_failed_without_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("routers.job_results.nextflow_history_status", lambda job: "ERR")
-    monkeypatch.setattr("routers.job_results.load_review_gate_snapshot", lambda *_args, **_kwargs: (None, {}))
-    monkeypatch.setattr("routers.job_results.has_stage_gate", lambda job: False)
-
-    job = SimpleNamespace(
-        execution_target_id=None,
-        output_dir=str(tmp_path),
-        awaiting_stage=None,
-        awaiting_payload={},
-        awaiting_input=False,
-        error_message=(
-            "Reconciled as failed: no active process and no terminal .nextflow/history status "
-            "(expected OK/ERR)"
-        ),
-        status="running",
-        queue_status="running",
-        current_stage="boltz2",
-        stage_progress="1/1",
-        completed_at=None,
-        parent_job_id=None,
-        child_stage=None,
-    )
-
-    changed = _repair_job_for_response(job)
-
-    assert changed is True
-    assert job.status == "failed"
-    assert job.queue_status == "failed"
-    assert job.current_stage == "boltz2"
-    assert job.stage_progress == "1/1"
-    assert job.error_message == "Reconciled as failed: terminal .nextflow/history status ERR"
-    assert job.completed_at is not None
-
-
-def test_repair_job_for_response_preserves_terminal_closeout_completion_on_err_history(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("routers.job_results.nextflow_history_status", lambda job: "ERR")
-    monkeypatch.setattr("routers.job_results.load_review_gate_snapshot", lambda *_args, **_kwargs: (None, {}))
-    monkeypatch.setattr("routers.job_results.has_stage_gate", lambda job: False)
-
-    (tmp_path / "terminal_closeout_report.json").write_text(
-        '{"status":"complete","total_terminal_designs":50}',
-        encoding="utf-8",
-    )
-    (tmp_path / "final_designs.txt").write_text("\n".join(f"design_{idx}.pdb" for idx in range(50)), encoding="utf-8")
-
-    job = SimpleNamespace(
-        execution_target_id=None,
-        output_dir=str(tmp_path),
-        awaiting_stage=None,
-        awaiting_payload={},
-        awaiting_input=False,
-        error_message="Reconciled as failed: terminal .nextflow/history status ERR",
-        status="failed",
-        queue_status="failed",
-        current_stage="Complete",
-        stage_progress=None,
-        completed_at="already-completed",
-        parent_job_id=None,
-        child_stage=None,
-    )
-
-    changed = _repair_job_for_response(job)
-
-    assert changed is True
-    assert job.status == "completed"
-    assert job.queue_status == "completed"
-    assert job.current_stage == "Complete"
-    assert job.error_message is None
 
 
 def test_looks_like_antibody_job_accepts_boltzgen_nanobody_runs() -> None:

@@ -380,15 +380,13 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
         if parent.status == "cancelled" or parent.awaiting_input:
             return {"schema": "bms.md.analysis-retry.v1", "status": "cancelled",
                 "created_child_ids": []}
-        provenance = dict(parent.provenance or {})
-        md = dict(provenance.get("md") or {})
-        md.update(schema="bms.md.lifecycle.v1", dynamics_state="completed",
-            analysis_state="retrying", result_state="partial",
+        from services.md.state import apply_remote_md_analysis_retrying
+        if not await apply_remote_md_analysis_retrying(
+            session,
+            parent,
             aggregate_manifest_sha256=current_aggregate_sha256,
-            replica_manifest_set_sha256=manifest_set_sha256)
-        provenance["md"] = md
-        from services.remote_execution.executor import _publish_remote_transition
-        if not await _publish_remote_transition(session, parent, {"provenance": provenance}, require_lease=False):
+            replica_manifest_set_sha256=manifest_set_sha256,
+        ):
             await session.refresh(parent)
             return {"schema": "bms.md.analysis-retry.v1", "status": "cancelled" if parent.status == "cancelled" else "ownership_changed",
                 "created_child_ids": []}
@@ -399,25 +397,17 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
             "scheduled_replica_indices": [selected_index],
             "remaining_replica_indices": [index for index in retry_indices if index != selected_index]}
 
-    provenance = dict(parent.provenance or {})
-    md = dict(provenance.get("md") or {})
-    md.update(
-        {
-            "schema": "bms.md.lifecycle.v1",
-            "dynamics_state": "completed",
-            "analysis_state": "retrying",
-            "result_state": "partial",
-            "aggregate_manifest_sha256": current_aggregate_sha256,
-            "replica_manifest_set_sha256": manifest_set_sha256,
-        }
+    from services.md.state import (
+        mark_md_analysis_retry_child_cancelled,
+        mark_md_analysis_retry_failed,
+        mark_md_analysis_retrying,
     )
-    provenance["md"] = md
-    parent.provenance = provenance
-    parent.status = "running"
-    parent.queue_status = "running"
-    parent.completed_at = None
-    parent.error_message = None
-    await session.commit()
+    await mark_md_analysis_retrying(
+        session,
+        parent,
+        aggregate_manifest_sha256=current_aggregate_sha256,
+        replica_manifest_set_sha256=manifest_set_sha256,
+    )
 
     from services.job_submission import submit_job
 
@@ -471,33 +461,15 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
                 )
             except Exception:
                 await session.rollback()
-                partial_child = await session.get(Job, created_id)
-                if partial_child is not None:
-                    partial_child.status = "cancelled"
-                    partial_child.queue_status = "cancelled"
-                    partial_child.error_message = "MD_ANALYSIS_RETRY_ADMISSION_ROLLED_BACK"
-                    await session.commit()
+                await mark_md_analysis_retry_child_cancelled(session, created_id)
         failed_parent = await _job(job_id, session)
-        failed_provenance = dict(failed_parent.provenance or {})
-        failed_md = dict(failed_provenance.get("md") or {})
-        failed_md.update(
-            {
-                "schema": "bms.md.lifecycle.v1",
-                "dynamics_state": "completed",
-                "analysis_state": "failed",
-                "result_state": "partial",
-                "aggregate_manifest_sha256": current_aggregate_sha256,
-                "replica_manifest_set_sha256": manifest_set_sha256,
-                "analysis_child_ids": created_ids,
-            }
+        await mark_md_analysis_retry_failed(
+            session,
+            failed_parent,
+            aggregate_manifest_sha256=current_aggregate_sha256,
+            replica_manifest_set_sha256=manifest_set_sha256,
+            created_child_ids=created_ids,
         )
-        failed_provenance["md"] = failed_md
-        failed_parent.provenance = failed_provenance
-        failed_parent.status = "failed"
-        failed_parent.queue_status = "failed"
-        failed_parent.current_stage = "MD Analysis Retry Scheduling Failed"
-        failed_parent.error_message = "MD_ANALYSIS_RETRY_SCHEDULING_FAILED"
-        await session.commit()
         raise HTTPException(
             status_code=500,
             detail={

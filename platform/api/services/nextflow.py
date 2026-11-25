@@ -2573,6 +2573,429 @@ async def _finalize_local_md_job(job, session, output_dir, *, projection_ingeste
         raise
 
 
+
+def _map_nextflow_process_to_stage(raw_stage: str) -> str:
+    """Map raw Nextflow process name to frontend stage ID."""
+    stage_clean = raw_stage.split(':')[-1].lower()
+
+    # Map to frontend stage IDs
+    stage = stage_clean
+    if 'fampnn' in stage_clean:
+        stage = 'fampnn'
+    elif 'rfantibody' in stage_clean:
+        stage = 'rfantibody'
+    elif 'boltz' in stage_clean:
+        stage = 'boltz2' # Frontend uses boltz2
+    elif 'rf3' in stage_clean:
+        stage = 'rf3'
+    # ──────────────────────────────────────────────────────────────
+    # MPNN VARIANTS - Check specific variants BEFORE generic 'mpnn'
+    # Order matters: most specific first, generic last
+    # ──────────────────────────────────────────────────────────────
+    elif 'frustra' in stage_clean:
+        stage = 'frustrampnn'  # FrustraMPNN (frustration analysis)
+    elif 'ligandmpnn' in stage_clean or 'ligand_mpnn' in stage_clean:
+        stage = 'ligandmpnn'   # LigandMPNN (ligand-aware design)
+    elif 'proteinmpnn' in stage_clean or ('mpnn' in stage_clean and 'fa' not in stage_clean):
+        stage = 'proteinmpnn'  # ProteinMPNN (vanilla)
+    elif 'protenix' in stage_clean:
+        stage = 'protenix'  # Protenix structure prediction
+    elif 'doradobasecall' in stage_clean:
+        stage = 'dorado_basecall'
+    elif 'doradoalign' in stage_clean:
+        stage = 'dorado_align'
+    elif (
+        'bamprepare' in stage_clean
+        or 'bam_prepare' in stage_clean
+        or 'preparebamforanalysis' in stage_clean
+        or 'bammappedcheck' in stage_clean
+        or 'bam_mapped_check' in stage_clean
+        or 'referenceprepareforigv' in stage_clean
+        or 'reference_prepare' in stage_clean
+    ):
+        stage = 'bam_prepare'
+    elif 'fastqalign' in stage_clean or 'fastq_align' in stage_clean:
+        stage = 'fastq_align'
+    elif (
+        'fastqplasmidqc' in stage_clean
+        or 'fastq_qc' in stage_clean
+        or 'fastqqc' in stage_clean
+    ):
+        stage = 'fastq_qc'
+    elif 'modkit' in stage_clean:
+        stage = 'modkit'
+    elif 'multimer' in stage_clean:
+        stage = 'multimer_qc'
+    elif 'fastqdimeranalysis' in stage_clean or 'dimeranalysis' in stage_clean:
+        stage = 'dimer_analysis'
+    elif (
+        'runclonevalidation' in stage_clean
+        or 'clonevalidation' in stage_clean
+        or 'clone-validation' in stage_clean
+        or 'wf_clone' in stage_clean
+        or 'wf-clone' in stage_clean
+    ):
+        stage = 'wf_clone_validation'
+    return stage
+
+
+async def _publish_nextflow_terminal_outcome(
+    *,
+    session,
+    job_id: str,
+    md_attempt,
+    exit_code,
+    full_log: str,
+    last_oom_line: Optional[str],
+    last_resume_lock_line: Optional[str],
+    output_dir: str,
+    env: Dict[str, str],
+    terminal_resource_receipt_factory,
+) -> None:
+    """Persist final Nextflow attempt status, ingest outputs, and publish terminal state."""
+    from sqlalchemy import inspect, select
+    from database import Job
+    from schemas import JobStatus
+
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+
+    if job:
+        # Refresh status to see if it was cancelled by API while we waited
+        await session.refresh(job)
+        if (job.model_id == "molecular_dynamics" and job.mode == "simulate"
+                and (job.nextflow_run_id, job.remote_attempt_id) != md_attempt):
+            return
+        terminal_snapshot = capture_terminal_job_publication_snapshot(job)
+        # Failed/cancelled executions also need real child control facts
+        # before MD retry reconciliation; never infer science from exit.
+        await _project_local_components(job, session, env.get('BMS_COMPONENT_CONTEXT'))
+
+        if job.status == JobStatus.CANCELLED.value:
+            logger.info(f"Job {job_id} was cancelled, keeping CANCELLED status")
+            job.queue_status = 'cancelled'
+
+        else:
+            checkpoints = await asyncio.to_thread(_local_component_checkpoints,
+                env.get('BMS_COMPONENT_CONTEXT'))
+            if _receive_local_md_production_pause(job, env.get('BMS_COMPONENT_CONTEXT')):
+                pass  # API checkpoint owner commits native segments and pause event.
+            elif checkpoints:
+                job.awaiting_payload = {**dict(job.awaiting_payload or {}),
+                    'component_checkpoint': checkpoints[0], 'component_checkpoints': checkpoints}
+                job.awaiting_stage = checkpoints[0]['stage']
+                job.awaiting_input = True
+                job.status = JobStatus.AWAITING_INPUT.value
+                job.queue_status = 'completed'
+                job.paused = False
+                job.assigned_gpu = None
+                job.current_stage = job.awaiting_stage
+                job.error_message = None
+            elif exit_code == 0:
+                if job.awaiting_input:
+                    job.status = JobStatus.AWAITING_INPUT.value
+                    job.queue_status = 'completed'
+                    job.paused = False
+                    job.assigned_gpu = None
+                    job.current_stage = job.awaiting_stage or job.current_stage or "Awaiting Input"
+                    job.error_message = None
+                else:
+                    # Keep the job non-terminal until output ingestion, validation,
+                    # and their database commit have succeeded.
+                    # Extract epitope residues from job params for contact calculation
+                    epitope_residues = None
+                    if job.params:
+                        # hotspot_residues format: "A111,A112,..." or already list
+                        hotspots = job.params.get('hotspot_residues') or job.params.get('epitope_residues')
+                        if hotspots:
+                            if isinstance(hotspots, str):
+                                epitope_residues = [r.strip() for r in hotspots.split(',')]
+                            elif isinstance(hotspots, list):
+                                epitope_residues = hotspots
+
+                    result_output_dir = job.child_output_dir or output_dir
+                    is_md_parent = (
+                        job.model_id == "molecular_dynamics" and job.mode == "simulate"
+                    )
+                    from services.ont_ngs_completion import (
+                        is_ont_fastq_qc_job,
+                        is_ont_signal_alignment_job,
+                        ont_fastq_qc_stage_selected,
+                        validate_and_prepare_ont_signal_alignment_completion,
+                    )
+
+                    if is_md_parent:
+                        await _finalize_local_md_job(
+                            job, session, result_output_dir, projection_ingested=True, expected_attempt=md_attempt)
+                        logger.info("Validated the immutable MD completion generation for job %s", job_id)
+                    elif is_ont_fastq_qc_job(job) and ont_fastq_qc_stage_selected(job.params):
+                        integrity = await _validate_ont_fastq_qc_terminal_completion(
+                            job,
+                            terminal_resource_receipt_factory,
+                        )
+                        logger.info(
+                            "Validated ONT FASTQ-QC result package for job %s (%s declared artifacts)",
+                            job_id,
+                            integrity["declared_artifact_count"],
+                        )
+                    elif is_ont_signal_alignment_job(job):
+                        integrity = await validate_and_prepare_ont_signal_alignment_completion(
+                            job,
+                            resource_usage_receipt=_optional_terminal_resource_receipt(
+                                terminal_resource_receipt_factory
+                            ),
+                        )
+                        logger.info(
+                            "Validated external ONT signal-alignment result package for job %s "
+                            "(%s declared artifacts)",
+                            job_id,
+                            integrity["declared_artifact_count"],
+                        )
+                    else:
+                        from services.result_state_integrity import finalize_successful_job
+
+                        finalization = await finalize_successful_job(
+                            job,
+                            result_output_dir,
+                            session,
+                            epitope_residues=epitope_residues,
+                        )
+                        if finalization.completed:
+                            logger.info(
+                                f"Ingested and validated {finalization.design_count} designs for job {job_id}"
+                            )
+                            from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+
+                            schedule_viewer_minimum_analyses_for_job(str(job.id))
+                            await maybe_trigger_mutation_seed_refinement(job, session)
+                        else:
+                            logger.warning(
+                                f"Result ingestion failed integrity validation for job {job_id}; "
+                                f"preserving explicit {finalization.integrity_state} state"
+                            )
+
+
+            # Exit codes never grant cancellation authority. The
+            # operator cancellation path must first publish CANCELLED
+            # after systemd proves an inactive, empty cgroup.
+            elif exit_code in (-15, -9, 143, 137):
+                job.status = JobStatus.FAILED.value
+                job.queue_status = 'failed'
+                job.error_message = (
+                    "TERMINATED_WITHOUT_CANCELLATION_RECEIPT: "
+                    f"owned unit exited with code {exit_code}"
+                )
+                logger.error(
+                    "Job %s terminated with exit code %s without an authoritative cancellation receipt",
+                    job_id,
+                    exit_code,
+                )
+
+            else:
+                if job.status == JobStatus.COMPLETED.value or (job.current_stage or "").lower() == "complete":
+                    logger.warning(
+                        f"Nextflow process for job {job_id} exited with code {exit_code} after job was already finalized; preserving completed status"
+                    )
+                else:
+                    job.status = JobStatus.FAILED.value
+                    job.queue_status = 'failed'
+                resume_lock_line = last_resume_lock_line
+                oom_line = last_oom_line
+                # Check for zero-yield (HQ filter culled all designs)
+                zero_yield_report = Path(output_dir) / "zero_yield_report.json"
+                if zero_yield_report.exists():
+                    import json as _json
+                    try:
+                        report_data = _json.loads(zero_yield_report.read_text())
+                        reason = report_data.get("reason", "unknown")
+                        recommendation = report_data.get("recommendation", "")
+                        # FAIL LOUD: zero-yield is a real failure, not a silent completion
+                        job.error_message = (
+                            f"ZERO YIELD: {reason}. "
+                            f"{recommendation}"
+                        )
+                        logger.warning(
+                            f"Job {job_id} FAILED zero-yield: {reason}"
+                        )
+                    except Exception:
+                        job.error_message = "ZERO YIELD: 0 validated designs (see zero_yield_report.json)"
+                elif resume_lock_line:
+                    job.error_message = (
+                        f"Nextflow resume lock contention after retries: {resume_lock_line}"
+                    )
+                elif oom_line:
+                    stage = job.current_stage or "unknown-stage"
+                    job.error_message = (
+                        f"Nextflow {stage} failed with CUDA OOM: {oom_line[:400]}"
+                    )
+                else:
+                    failure_summary = _nextflow_failure_summary(full_log)
+                    job.error_message = (
+                        f"Nextflow exited with code {exit_code}: {failure_summary}"
+                        if failure_summary else f"Nextflow exited with code {exit_code}"
+                    )
+                if job.status == JobStatus.FAILED.value:
+                    logger.error(f"Nextflow failed for job {job_id} with code {exit_code}")
+                else:
+                    job.error_message = None
+                    logger.warning(
+                        f"Nextflow exited with code {exit_code} for already-completed job {job_id}; status preserved"
+                    )
+
+                # Log last few lines
+                if job.status == JobStatus.FAILED.value:
+                    logger.error(f"Tail of log:\n{''.join(full_log.tail(20))}")
+        md_analysis_parent_id = (
+            str(job.parent_job_id)
+            if job.model_id == "molecular_dynamics" and job.mode == "analyze" and job.parent_job_id
+            else None
+        )
+        terminalizing_cm_failure = job.status == JobStatus.FAILED.value
+        if str(getattr(job, "status", "") or "").lower() in {
+            JobStatus.COMPLETED.value,
+            JobStatus.FAILED.value,
+            JobStatus.CANCELLED.value,
+            JobStatus.AWAITING_INPUT.value,
+        } or str(getattr(job, "queue_status", "") or "").lower() in {
+            "completed",
+            "failed",
+            "cancelled",
+        }:
+            job.params = release_scheduler_gpu_assignment(job.params)
+            job.assigned_gpu = None
+        job.completed_at = datetime.utcnow()
+        changes = {
+            attribute.key: attribute.value
+            for attribute in inspect(job).attrs
+            if attribute.history.has_changes()
+        }
+        if changes:
+            # A detached worker may hold a stale ORM snapshot while an
+            # operator cancels or gates the job.  Expunge it before any
+            # SQL, then conditionally publish only to an active row so
+            # autoflush/direct commit cannot resurrect operator state.
+            session.expunge(job)
+            published_rowcount = await publish_terminal_job_changes(
+                session,
+                job_id=job_id,
+                snapshot=terminal_snapshot,
+                changes=changes,
+            )
+            if published_rowcount and terminalizing_cm_failure:
+                from services.conformational_mapping.persistence import (
+                    terminalize_failed_request_for_job,
+                )
+
+                await terminalize_failed_request_for_job(session, job_id=job_id)
+            if published_rowcount:
+                await _observe_local_terminal_binder_results(session, job_id, output_dir)
+            await session.commit()
+            if not published_rowcount:
+                logger.info("Skipped stale Nextflow terminal publication for job %s", job_id)
+            if md_analysis_parent_id:
+                # Reconcile only after the guarded child publication.  The
+                # worker ORM snapshot has been expunged, so an operator's
+                # concurrent cancellation remains authoritative even when
+                # the terminal CAS loses its race.
+                session.expire_all()
+                await reconcile_md_analysis_parent_if_current(md_analysis_parent_id, session, child=job)
+                await session.commit()
+        try:
+            await _publish_local_review_rows(session, job_id)
+        except Exception:
+            logger.exception("Job %s: review rows for its local gate were not published; the gate stays open", job_id)
+            await session.rollback()
+        _running_units.pop(job_id, None)
+
+
+async def _handle_launch_nextflow_exception(
+    *,
+    session,
+    job_id: str,
+    e: Exception,
+    md_attempt,
+    remote_launch_authority,
+    publish_guarded_job_failure,
+) -> None:
+    """Handle an unhandled exception raised during Nextflow job launch."""
+    from sqlalchemy import inspect, select
+    from database import Job
+    from schemas import JobStatus
+
+    if isinstance(e, DuplicateUnitError):
+        # The existing deterministic unit remains the sole owner. Do
+        # not let a losing launcher publish a failure over its state.
+        await session.rollback()
+        logger.error(
+            "Rejected duplicate deterministic workflow unit for job %s: %s",
+            job_id,
+            e,
+        )
+        return
+    logger.exception(f"Error running job {job_id}")
+    _running_units.pop(job_id, None)
+    await session.rollback()
+
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if job and remote_launch_authority is not None:
+        current_authority = (
+            job.execution_target_id, job.remote_attempt_id, job.nextflow_run_id,
+            dict((job.provenance or {}).get("remote_execution_assignment") or {}),
+        )
+        if current_authority == remote_launch_authority:
+            from services.remote_execution.executor import fail_remote_prestart
+
+            await fail_remote_prestart(session, job, str(e))
+        return
+    if job:
+        # Don't overwrite if already cancelled
+        await session.refresh(job)
+        if (job.model_id == "molecular_dynamics" and job.mode == "simulate" and md_attempt is not None
+                and (job.nextflow_run_id, job.remote_attempt_id) != md_attempt):
+            return
+        if job.status == JobStatus.COMPLETED.value or (job.current_stage or "").lower() == "complete":
+            logger.warning(
+                f"Detached runner caught exception for already-completed job {job_id}; preserving completed status"
+            )
+        elif job.status != JobStatus.CANCELLED.value:
+            job.status = JobStatus.FAILED.value
+            job.queue_status = 'failed'  # Update queue_status so job leaves the queue UI
+            job.error_message = str(e)
+            if (
+                job.model_id == "molecular_dynamics"
+                and job.mode == "replica"
+                and not job.nextflow_run_id
+            ):
+                provenance = dict(job.provenance or {})
+                provenance["failure_receipt"] = {
+                    "code": "spawn_rejected",
+                    "message": str(e)[:2000],
+                    "source": "scheduler_launch",
+                }
+                job.provenance = provenance
+            job.completed_at = datetime.utcnow()
+            changes = {
+                attribute.key: attribute.value
+                for attribute in inspect(job).attrs
+                if attribute.history.has_changes()
+            }
+            if changes:
+                is_md_analysis = (
+                    job.model_id == "molecular_dynamics"
+                    and job.mode == "analyze"
+                    and job.parent_job_id
+                )
+                published = await publish_guarded_job_failure(
+                    session,
+                    job,
+                    stale_log_message="Skipped stale Nextflow exception publication for job %s",
+                )
+                if published and is_md_analysis:
+                    await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session, child=job)
+                    await session.commit()
+
+
 async def launch_nextflow_job(
     job_id: str,
     model_id: str,
@@ -3142,66 +3565,7 @@ async def launch_nextflow_job(
                         # Extract stage name (e.g. "NF_CORE:FAMPNN" or "FAMPNN")
                         raw_stage = match.group(1).strip()
                         # Clean up: Remove workflow prefix if present
-                        stage_clean = raw_stage.split(':')[-1].lower()
-
-                        # Map to frontend stage IDs
-                        stage = stage_clean
-                        if 'fampnn' in stage_clean:
-                            stage = 'fampnn'
-                        elif 'rfantibody' in stage_clean:
-                            stage = 'rfantibody'
-                        elif 'boltz' in stage_clean:
-                            stage = 'boltz2' # Frontend uses boltz2
-                        elif 'rf3' in stage_clean:
-                            stage = 'rf3'
-                        # ──────────────────────────────────────────────────────────────
-                        # MPNN VARIANTS - Check specific variants BEFORE generic 'mpnn'
-                        # Order matters: most specific first, generic last
-                        # ──────────────────────────────────────────────────────────────
-                        elif 'frustra' in stage_clean:
-                            stage = 'frustrampnn'  # FrustraMPNN (frustration analysis)
-                        elif 'ligandmpnn' in stage_clean or 'ligand_mpnn' in stage_clean:
-                            stage = 'ligandmpnn'   # LigandMPNN (ligand-aware design)
-                        elif 'proteinmpnn' in stage_clean or ('mpnn' in stage_clean and 'fa' not in stage_clean):
-                            stage = 'proteinmpnn'  # ProteinMPNN (vanilla)
-                        elif 'protenix' in stage_clean:
-                            stage = 'protenix'  # Protenix structure prediction
-                        elif 'doradobasecall' in stage_clean:
-                            stage = 'dorado_basecall'
-                        elif 'doradoalign' in stage_clean:
-                            stage = 'dorado_align'
-                        elif (
-                            'bamprepare' in stage_clean
-                            or 'bam_prepare' in stage_clean
-                            or 'preparebamforanalysis' in stage_clean
-                            or 'bammappedcheck' in stage_clean
-                            or 'bam_mapped_check' in stage_clean
-                            or 'referenceprepareforigv' in stage_clean
-                            or 'reference_prepare' in stage_clean
-                        ):
-                            stage = 'bam_prepare'
-                        elif 'fastqalign' in stage_clean or 'fastq_align' in stage_clean:
-                            stage = 'fastq_align'
-                        elif (
-                            'fastqplasmidqc' in stage_clean
-                            or 'fastq_qc' in stage_clean
-                            or 'fastqqc' in stage_clean
-                        ):
-                            stage = 'fastq_qc'
-                        elif 'modkit' in stage_clean:
-                            stage = 'modkit'
-                        elif 'multimer' in stage_clean:
-                            stage = 'multimer_qc'
-                        elif 'fastqdimeranalysis' in stage_clean or 'dimeranalysis' in stage_clean:
-                            stage = 'dimer_analysis'
-                        elif (
-                            'runclonevalidation' in stage_clean
-                            or 'clonevalidation' in stage_clean
-                            or 'clone-validation' in stage_clean
-                            or 'wf_clone' in stage_clean
-                            or 'wf-clone' in stage_clean
-                        ):
-                            stage = 'wf_clone_validation'
+                        stage = _map_nextflow_process_to_stage(raw_stage)
 
                         if stage != last_stage:
                             logger.info(f"[JOB {job_id}] Entering stage: {stage} (raw: {raw_stage})")
@@ -3430,329 +3794,28 @@ async def launch_nextflow_job(
             # above; never rewrite/truncate the durable log from in-memory state.
             
             # Update final status
-            result = await session.execute(select(Job).where(Job.id == job_id))
-            job = result.scalar_one_or_none()
-            
-            if job:
-                # Refresh status to see if it was cancelled by API while we waited
-                await session.refresh(job)
-                if (job.model_id == "molecular_dynamics" and job.mode == "simulate"
-                        and (job.nextflow_run_id, job.remote_attempt_id) != md_attempt):
-                    return
-                terminal_snapshot = capture_terminal_job_publication_snapshot(job)
-                # Failed/cancelled executions also need real child control facts
-                # before MD retry reconciliation; never infer science from exit.
-                await _project_local_components(job, session, env.get('BMS_COMPONENT_CONTEXT'))
-                
-                if job.status == JobStatus.CANCELLED.value:
-                    logger.info(f"Job {job_id} was cancelled, keeping CANCELLED status")
-                    job.queue_status = 'cancelled'
-                    
-                else:
-                    checkpoints = await asyncio.to_thread(_local_component_checkpoints,
-                        env.get('BMS_COMPONENT_CONTEXT'))
-                    if _receive_local_md_production_pause(job, env.get('BMS_COMPONENT_CONTEXT')):
-                        pass  # API checkpoint owner commits native segments and pause event.
-                    elif checkpoints:
-                        job.awaiting_payload = {**dict(job.awaiting_payload or {}),
-                            'component_checkpoint': checkpoints[0], 'component_checkpoints': checkpoints}
-                        job.awaiting_stage = checkpoints[0]['stage']
-                        job.awaiting_input = True
-                        job.status = JobStatus.AWAITING_INPUT.value
-                        job.queue_status = 'completed'
-                        job.paused = False
-                        job.assigned_gpu = None
-                        job.current_stage = job.awaiting_stage
-                        job.error_message = None
-                    elif exit_code == 0:
-                        if job.awaiting_input:
-                            job.status = JobStatus.AWAITING_INPUT.value
-                            job.queue_status = 'completed'
-                            job.paused = False
-                            job.assigned_gpu = None
-                            job.current_stage = job.awaiting_stage or job.current_stage or "Awaiting Input"
-                            job.error_message = None
-                        else:
-                            # Keep the job non-terminal until output ingestion, validation,
-                            # and their database commit have succeeded.
-                            # Extract epitope residues from job params for contact calculation
-                            epitope_residues = None
-                            if job.params:
-                                # hotspot_residues format: "A111,A112,..." or already list
-                                hotspots = job.params.get('hotspot_residues') or job.params.get('epitope_residues')
-                                if hotspots:
-                                    if isinstance(hotspots, str):
-                                        epitope_residues = [r.strip() for r in hotspots.split(',')]
-                                    elif isinstance(hotspots, list):
-                                        epitope_residues = hotspots
-
-                            result_output_dir = job.child_output_dir or output_dir
-                            is_md_parent = (
-                                job.model_id == "molecular_dynamics" and job.mode == "simulate"
-                            )
-                            from services.ont_ngs_completion import (
-                                is_ont_fastq_qc_job,
-                                is_ont_signal_alignment_job,
-                                ont_fastq_qc_stage_selected,
-                                validate_and_prepare_ont_signal_alignment_completion,
-                            )
-
-                            if is_md_parent:
-                                await _finalize_local_md_job(
-                                    job, session, result_output_dir, projection_ingested=True, expected_attempt=md_attempt)
-                                logger.info("Validated the immutable MD completion generation for job %s", job_id)
-                            elif is_ont_fastq_qc_job(job) and ont_fastq_qc_stage_selected(job.params):
-                                integrity = await _validate_ont_fastq_qc_terminal_completion(
-                                    job,
-                                    terminal_resource_receipt_factory,
-                                )
-                                logger.info(
-                                    "Validated ONT FASTQ-QC result package for job %s (%s declared artifacts)",
-                                    job_id,
-                                    integrity["declared_artifact_count"],
-                                )
-                            elif is_ont_signal_alignment_job(job):
-                                integrity = await validate_and_prepare_ont_signal_alignment_completion(
-                                    job,
-                                    resource_usage_receipt=_optional_terminal_resource_receipt(
-                                        terminal_resource_receipt_factory
-                                    ),
-                                )
-                                logger.info(
-                                    "Validated external ONT signal-alignment result package for job %s "
-                                    "(%s declared artifacts)",
-                                    job_id,
-                                    integrity["declared_artifact_count"],
-                                )
-                            else:
-                                from services.result_state_integrity import finalize_successful_job
-
-                                finalization = await finalize_successful_job(
-                                    job,
-                                    result_output_dir,
-                                    session,
-                                    epitope_residues=epitope_residues,
-                                )
-                                if finalization.completed:
-                                    logger.info(
-                                        f"Ingested and validated {finalization.design_count} designs for job {job_id}"
-                                    )
-                                    from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
-
-                                    schedule_viewer_minimum_analyses_for_job(str(job.id))
-                                    await maybe_trigger_mutation_seed_refinement(job, session)
-                                else:
-                                    logger.warning(
-                                        f"Result ingestion failed integrity validation for job {job_id}; "
-                                        f"preserving explicit {finalization.integrity_state} state"
-                                    )
-
-                            
-                    # Exit codes never grant cancellation authority. The
-                    # operator cancellation path must first publish CANCELLED
-                    # after systemd proves an inactive, empty cgroup.
-                    elif exit_code in (-15, -9, 143, 137):
-                        job.status = JobStatus.FAILED.value
-                        job.queue_status = 'failed'
-                        job.error_message = (
-                            "TERMINATED_WITHOUT_CANCELLATION_RECEIPT: "
-                            f"owned unit exited with code {exit_code}"
-                        )
-                        logger.error(
-                            "Job %s terminated with exit code %s without an authoritative cancellation receipt",
-                            job_id,
-                            exit_code,
-                        )
-                        
-                    else:
-                        if job.status == JobStatus.COMPLETED.value or (job.current_stage or "").lower() == "complete":
-                            logger.warning(
-                                f"Nextflow process for job {job_id} exited with code {exit_code} after job was already finalized; preserving completed status"
-                            )
-                        else:
-                            job.status = JobStatus.FAILED.value
-                            job.queue_status = 'failed'
-                        resume_lock_line = last_resume_lock_line
-                        oom_line = last_oom_line
-                        # Check for zero-yield (HQ filter culled all designs)
-                        zero_yield_report = Path(output_dir) / "zero_yield_report.json"
-                        if zero_yield_report.exists():
-                            import json as _json
-                            try:
-                                report_data = _json.loads(zero_yield_report.read_text())
-                                reason = report_data.get("reason", "unknown")
-                                recommendation = report_data.get("recommendation", "")
-                                # FAIL LOUD: zero-yield is a real failure, not a silent completion
-                                job.error_message = (
-                                    f"ZERO YIELD: {reason}. "
-                                    f"{recommendation}"
-                                )
-                                logger.warning(
-                                    f"Job {job_id} FAILED zero-yield: {reason}"
-                                )
-                            except Exception:
-                                job.error_message = "ZERO YIELD: 0 validated designs (see zero_yield_report.json)"
-                        elif resume_lock_line:
-                            job.error_message = (
-                                f"Nextflow resume lock contention after retries: {resume_lock_line}"
-                            )
-                        elif oom_line:
-                            stage = job.current_stage or "unknown-stage"
-                            job.error_message = (
-                                f"Nextflow {stage} failed with CUDA OOM: {oom_line[:400]}"
-                            )
-                        else:
-                            failure_summary = _nextflow_failure_summary(full_log)
-                            job.error_message = (
-                                f"Nextflow exited with code {exit_code}: {failure_summary}"
-                                if failure_summary else f"Nextflow exited with code {exit_code}"
-                            )
-                        if job.status == JobStatus.FAILED.value:
-                            logger.error(f"Nextflow failed for job {job_id} with code {exit_code}")
-                        else:
-                            job.error_message = None
-                            logger.warning(
-                                f"Nextflow exited with code {exit_code} for already-completed job {job_id}; status preserved"
-                            )
-                        
-                        # Log last few lines
-                        if job.status == JobStatus.FAILED.value:
-                            logger.error(f"Tail of log:\n{''.join(full_log.tail(20))}")
-                md_analysis_parent_id = (
-                    str(job.parent_job_id)
-                    if job.model_id == "molecular_dynamics" and job.mode == "analyze" and job.parent_job_id
-                    else None
-                )
-                terminalizing_cm_failure = job.status == JobStatus.FAILED.value
-                if str(getattr(job, "status", "") or "").lower() in {
-                    JobStatus.COMPLETED.value,
-                    JobStatus.FAILED.value,
-                    JobStatus.CANCELLED.value,
-                    JobStatus.AWAITING_INPUT.value,
-                } or str(getattr(job, "queue_status", "") or "").lower() in {
-                    "completed",
-                    "failed",
-                    "cancelled",
-                }:
-                    job.params = release_scheduler_gpu_assignment(job.params)
-                    job.assigned_gpu = None
-                job.completed_at = datetime.utcnow()
-                changes = {
-                    attribute.key: attribute.value
-                    for attribute in inspect(job).attrs
-                    if attribute.history.has_changes()
-                }
-                if changes:
-                    # A detached worker may hold a stale ORM snapshot while an
-                    # operator cancels or gates the job.  Expunge it before any
-                    # SQL, then conditionally publish only to an active row so
-                    # autoflush/direct commit cannot resurrect operator state.
-                    session.expunge(job)
-                    published_rowcount = await publish_terminal_job_changes(
-                        session,
-                        job_id=job_id,
-                        snapshot=terminal_snapshot,
-                        changes=changes,
-                    )
-                    if published_rowcount and terminalizing_cm_failure:
-                        from services.conformational_mapping.persistence import (
-                            terminalize_failed_request_for_job,
-                        )
-
-                        await terminalize_failed_request_for_job(session, job_id=job_id)
-                    if published_rowcount:
-                        await _observe_local_terminal_binder_results(session, job_id, output_dir)
-                    await session.commit()
-                    if not published_rowcount:
-                        logger.info("Skipped stale Nextflow terminal publication for job %s", job_id)
-                    if md_analysis_parent_id:
-                        # Reconcile only after the guarded child publication.  The
-                        # worker ORM snapshot has been expunged, so an operator's
-                        # concurrent cancellation remains authoritative even when
-                        # the terminal CAS loses its race.
-                        session.expire_all()
-                        await reconcile_md_analysis_parent_if_current(md_analysis_parent_id, session, child=job)
-                        await session.commit()
-                try:
-                    await _publish_local_review_rows(session, job_id)
-                except Exception:
-                    logger.exception("Job %s: review rows for its local gate were not published; the gate stays open", job_id)
-                    await session.rollback()
-                _running_units.pop(job_id, None)
+            await _publish_nextflow_terminal_outcome(
+                session=session,
+                job_id=job_id,
+                md_attempt=md_attempt,
+                exit_code=exit_code,
+                full_log=full_log,
+                last_oom_line=last_oom_line,
+                last_resume_lock_line=last_resume_lock_line,
+                output_dir=output_dir,
+                env=env,
+                terminal_resource_receipt_factory=terminal_resource_receipt_factory,
+            )
                 
         except Exception as e:
-            if isinstance(e, DuplicateUnitError):
-                # The existing deterministic unit remains the sole owner. Do
-                # not let a losing launcher publish a failure over its state.
-                await session.rollback()
-                logger.error(
-                    "Rejected duplicate deterministic workflow unit for job %s: %s",
-                    job_id,
-                    e,
-                )
-                return
-            logger.exception(f"Error running job {job_id}")
-            _running_units.pop(job_id, None)
-            await session.rollback()
-            
-            result = await session.execute(select(Job).where(Job.id == job_id))
-            job = result.scalar_one_or_none()
-            if job and remote_launch_authority is not None:
-                current_authority = (
-                    job.execution_target_id, job.remote_attempt_id, job.nextflow_run_id,
-                    dict((job.provenance or {}).get("remote_execution_assignment") or {}),
-                )
-                if current_authority == remote_launch_authority:
-                    from services.remote_execution.executor import fail_remote_prestart
-
-                    await fail_remote_prestart(session, job, str(e))
-                return
-            if job:
-                # Don't overwrite if already cancelled
-                await session.refresh(job)
-                if (job.model_id == "molecular_dynamics" and job.mode == "simulate" and md_attempt is not None
-                        and (job.nextflow_run_id, job.remote_attempt_id) != md_attempt):
-                    return
-                if job.status == JobStatus.COMPLETED.value or (job.current_stage or "").lower() == "complete":
-                    logger.warning(
-                        f"Detached runner caught exception for already-completed job {job_id}; preserving completed status"
-                    )
-                elif job.status != JobStatus.CANCELLED.value:
-                    job.status = JobStatus.FAILED.value
-                    job.queue_status = 'failed'  # Update queue_status so job leaves the queue UI
-                    job.error_message = str(e)
-                    if (
-                        job.model_id == "molecular_dynamics"
-                        and job.mode == "replica"
-                        and not job.nextflow_run_id
-                    ):
-                        provenance = dict(job.provenance or {})
-                        provenance["failure_receipt"] = {
-                            "code": "spawn_rejected",
-                            "message": str(e)[:2000],
-                            "source": "scheduler_launch",
-                        }
-                        job.provenance = provenance
-                    job.completed_at = datetime.utcnow()
-                    changes = {
-                        attribute.key: attribute.value
-                        for attribute in inspect(job).attrs
-                        if attribute.history.has_changes()
-                    }
-                    if changes:
-                        is_md_analysis = (
-                            job.model_id == "molecular_dynamics"
-                            and job.mode == "analyze"
-                            and job.parent_job_id
-                        )
-                        published = await publish_guarded_job_failure(
-                            session,
-                            job,
-                            stale_log_message="Skipped stale Nextflow exception publication for job %s",
-                        )
-                        if published and is_md_analysis:
-                            await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session, child=job)
-                            await session.commit()
+            await _handle_launch_nextflow_exception(
+                session=session,
+                job_id=job_id,
+                e=e,
+                md_attempt=md_attempt,
+                remote_launch_authority=remote_launch_authority,
+                publish_guarded_job_failure=publish_guarded_job_failure,
+            )
 
 
 async def reconcile_md_analysis_parent_if_current(parent_job_id, session, *, child=None):
@@ -4961,762 +5024,272 @@ def compile_component_checkpoint_continuation(context, checkpoint, decision):
     return replace(invocation, generated_inputs=tuple(inputs) + generated)
 
 
-@overload
-def compile_nextflow_invocation(
-    model_id: str, mode: str, params: Dict[str, Any], output_dir: str,
-    job_id: Optional[str] = None, *, requested_params: dict[str, Any] | None = None,
-    source_identity=None, requested_identity_json: bytes | None = None,
-    execution_context: None = None, _preview_only: Literal[True],
-) -> 'NativeInvocationPreview': ...
 
-
-@overload
-def compile_nextflow_invocation(
-    model_id: str, mode: str, params: Dict[str, Any], output_dir: str,
-    job_id: Optional[str] = None, *, requested_params: dict[str, Any] | None = None,
-    source_identity=None, requested_identity_json: bytes | None = None,
-    execution_context: NativeCompilerExecutionContext | None = None, _preview_only: Literal[False] = False,
-) -> 'NativeInvocation': ...
-
-
-def compile_nextflow_invocation(
+def _compile_frustrampnn_invocation(
+    *,
     model_id: str,
     mode: str,
     params: Dict[str, Any],
     output_dir: str,
-    job_id: Optional[str] = None,
-    *,
-    requested_params: Optional[Dict[str, Any]] = None,
-    source_identity=None,
-    requested_identity_json: bytes | None = None,
-    execution_context: NativeCompilerExecutionContext | None = None,
-    _preview_only: bool = False,
+    job_id: Optional[str],
+    native_parameters: Dict[str, Any],
+    finish_command,
+    _preview_only: bool,
 ):
-    """The existing native compiler, returning immutable values and argv together.
-
-    This is shared by preview, local/remote launch and saved-job prewarming;
-    transport adapters must not reconstruct its settings from rendered argv.
-    """
-    from component_runtime import NativeInvocation, NativeInvocationPreview, GeneratedInput
-    from copy import deepcopy
-    if type(_preview_only) is not bool or (_preview_only and execution_context is not None):
-        raise ValueError('native preview cannot carry an execution reservation')
-    if _preview_only and any(params.get(key) not in (None, [], ())
-            for key in ('gpu_id', 'gpu_ids', 'frustrampnn_physical_gpu_id')):
-        raise ValueError('native preview cannot carry physical GPU bindings')
-    requested_snapshot = deepcopy(params if requested_params is None else requested_params)
-    params = deepcopy(params)
-    if (model_id, mode) == ('template_structure_prediction', 'structure_prediction'):
-        from services.job_requests import structure_template_target
-        model_id, mode, params = structure_template_target(params)
-    if execution_context is not None:
-        if not isinstance(execution_context, NativeCompilerExecutionContext):
-            raise ValueError('native compiler requires typed execution context')
-        if params.get('gpu_id') not in (None, execution_context.gpu_id):
-            raise ValueError('native compiler GPU conflicts with reservation')
-        if execution_context.gpu_id is not None:
-            params['gpu_id'] = execution_context.gpu_id
-        params['anarcii_execution_mode'] = execution_context.anarcii_execution_mode
-        params.pop('anarcii_gpu_id', None)
-        if execution_context.anarcii_gpu_id is not None:
-            params['anarcii_gpu_id'] = execution_context.anarcii_gpu_id
-    native_parameters: Dict[str, Any] = {}
-    generated_inputs = []
-
-    def plan_input(path: Path, payload: bytes) -> None:
-        relative = path.absolute().relative_to(Path(output_dir).absolute()).as_posix()
-        generated_inputs.append(GeneratedInput(relative, payload))
-
-    selected_generator = ((params.get('generator') or 'rfd4_proteina')
-        if model_id == 'protein_modification_experimental' and mode == 'de_novo_design' else model_id)
-    if selected_generator in {'rfd4_proteina', 'complexa'}:
-        native_mode = mode if selected_generator == model_id else 'generate'
-        if selected_generator == 'rfd4_proteina':
-            from services.rfd4_proteina import bind_for_job
-        else:
-            from services.complexa import bind_for_job
-        params, native_inputs = bind_for_job(native_mode, params, output_dir)
-        generated_inputs.extend(native_inputs)
-        request_key = 'rfd4_request' if selected_generator == 'rfd4_proteina' else 'complexa_request'
-        native_parameters[request_key] = deepcopy(params[request_key])
-
-    if model_id == 'laproteina' and mode == 'evaluate':
-        from services.laproteina_evaluation import bind_for_job, REQUEST_FIELD
-        params, native_inputs = bind_for_job(mode, params, output_dir)
-        generated_inputs.extend(native_inputs)
-        native_parameters[REQUEST_FIELD] = deepcopy(params[REQUEST_FIELD])
-
-    def bind_fampnn_declaration(command, value) -> None:
-        # The same existing producer-owned biological declaration transport is
-        # used by public and selected-parent callers; never inline large JSON.
-        declaration_bytes = json.dumps(value, allow_nan=False, sort_keys=True).encode('utf-8')
-        declaration_path = Path(output_dir) / '.fampnn-analysis-declaration.json'
-        plan_input(declaration_path, declaration_bytes)
-        declaration_sha = hashlib.sha256(declaration_bytes).hexdigest()
-        command.extend(['--fampnn_analysis_declaration_path', str(declaration_path),
-                        '--fampnn_analysis_declaration_sha256', declaration_sha])
-        native_parameters['fampnn_analysis_declaration_path'] = str(declaration_path)
-        native_parameters['fampnn_analysis_declaration_sha256'] = declaration_sha
-
-    def finish_command(command):
-        from dataclasses import replace
-        from component_runtime import SelectedExecutionPlan, SourceIdentity
-        from model_registry import selected_execution_metadata
-        from paths import get_code_root
-
-        fields: dict[str, Any] = dict(model_id=model_id, mode=mode, requested=requested_snapshot,
-                      effective=params, native_parameters=native_parameters,
-                      entrypoint=workflow_entrypoint, generated_inputs=generated_inputs)
-        if _preview_only:
-            # Do not expose partially bound argv as an executable invocation.
-            invocation = NativeInvocationPreview.capture(**fields)
-        else:
-            invocation = NativeInvocation.capture(**fields,
-                command=[os.fspath(value) if isinstance(value, os.PathLike) else value for value in command])
-        # The Job owner already captures and subsequently rechecks its source.
-        # Reuse that immutable origin; never add a third Git probe or feed the
-        # metadata-only request identity into scientific legacy flags.
-        source = source_identity or SourceIdentity.from_checkout(get_code_root())
-        if requested_identity_json is not None:
-            invocation = replace(invocation, requested_json=requested_identity_json)
-        metadata_settings = _native_plan_metadata_settings(model_id, params)
-        plan = build_selected_execution_plan(model_id=model_id, mode=mode,
-            entrypoint=workflow_entrypoint, requested=invocation.requested_json,
-            effective=invocation.effective_json, native_parameters=invocation.native_parameters_json,
-            source_identity=source, metadata_settings=metadata_settings,
-            profiles=tuple(command[command.index('-profile') + 1].split(','))
-                if '-profile' in command else ())
-        return replace(invocation, source_identity=source, execution_plan=plan)
-
-    from services.msa_policy import apply_msa_policy
-    params = apply_msa_policy(model_id, params)
-    # Controller execution metadata is not a scientific Nextflow parameter.
-    params.pop("remote_result_policy", None)
-    params.pop("execution_policy", None)
-    # Only the persisted launch owner may add this transport after compilation.
-    params.pop('protenix_prepared_msa_dir', None)
-    params.pop('protenix_prepared_msa_sha256', None)
-    params.pop('boltz_launch_authority_base64', None)
-    params.pop('boltz_launch_authority_path', None)
-    params.pop('boltz_launch_authority_sha256', None)
-    if model_id == 'boltz2':
-        params.pop('protein_science_contract_revision', None)
-    # Internal transport, never an operator parameter. The pending trusted Job
-    # provenance join must supply the original pre-registry request separately;
-    # normalized launch params cannot establish which values were requested.
-    params.pop('esmf_requested_settings_json', None)
-    if 'core_protein_scientific_contract' in params and requested_params is not None:
-        if not isinstance(requested_params, dict):
-            raise ValueError('request provenance must be an object')
-        params['esmf_requested_settings_json'] = json.dumps(requested_params, allow_nan=False, sort_keys=True)
-
+    """Compile Nextflow invocation for FrustraMPNN analysis jobs."""
+    if str(mode or "").strip() != "analyze":
+        raise ValueError("frustrampnn supports only mode=analyze")
+    unknown = sorted(set(params) - {
+        "frustrampnn_batch_manifest_path", "_frustrampnn_child_v1", "gpu_id",
+        "workflow_adapter", "_global_resource_admission", "_global_dispatch_authority",
+    })
+    if unknown:
+        raise ValueError(
+            "scheduler-owned FrustraMPNN launch parameters fail closed: "
+            + ", ".join(unknown)
+        )
+    batch_manifest_path = str(params.get("frustrampnn_batch_manifest_path") or "").strip()
+    if not batch_manifest_path:
+        raise ValueError("frustrampnn_batch_manifest_path is required")
+    if not job_id:
+        raise ValueError("FrustraMPNN scheduler launch requires job_id")
+    output_root = Path(os.path.abspath(str(output_dir)))
+    expected_manifest = output_root / "inputs" / "frustrampnn_scheduler_batch_v3.json"
+    manifest_path = Path(os.path.abspath(batch_manifest_path))
+    if manifest_path != expected_manifest or manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ValueError("FrustraMPNN batch manifest is not the job-owned immutable authority")
+    envelope = params.get("_frustrampnn_child_v1")
+    if not isinstance(envelope, dict) or envelope.get("schema_name") != "bms.frustrampnn.scheduler-child.v1":
+        raise ValueError("FrustraMPNN scheduler-child envelope is required")
+    if envelope.get("execution_owner_job_id") != str(job_id):
+        raise ValueError("FrustraMPNN execution owner does not match job_id")
+    if envelope.get("batch_manifest_relative_path") != "inputs/frustrampnn_scheduler_batch_v3.json":
+        raise ValueError("FrustraMPNN manifest relative authority is invalid")
+    manifest_payload = manifest_path.read_bytes()
+    if len(manifest_payload) != envelope.get("batch_manifest_size_bytes"):
+        raise ValueError("FrustraMPNN batch manifest size binding is invalid")
+    if hashlib.sha256(manifest_payload).hexdigest() != envelope.get("batch_manifest_sha256"):
+        raise ValueError("FrustraMPNN batch manifest digest binding is invalid")
+    try:
+        batch = json.loads(manifest_payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("FrustraMPNN batch manifest is invalid JSON") from exc
+    records = batch.get("records") if isinstance(batch, dict) else None
+    batching_enabled = batch.get("batching_enabled") if isinstance(batch, dict) else None
+    structures_per_job = batch.get("structures_per_job") if isinstance(batch, dict) else None
     if (
-        str(model_id or "").strip().lower() == "protein_modification_experimental"
-        and str(mode or "").strip().lower() == "region_redesign"
-    ):
-        params = normalize_plr_structure_validators(params)
-
-    if str(model_id or "").strip() == "frustrampnn":
-        if str(mode or "").strip() != "analyze":
-            raise ValueError("frustrampnn supports only mode=analyze")
-        unknown = sorted(set(params) - {
-            "frustrampnn_batch_manifest_path", "_frustrampnn_child_v1", "gpu_id",
-            "workflow_adapter", "_global_resource_admission", "_global_dispatch_authority",
-        })
-        if unknown:
-            raise ValueError(
-                "scheduler-owned FrustraMPNN launch parameters fail closed: "
-                + ", ".join(unknown)
-            )
-        batch_manifest_path = str(params.get("frustrampnn_batch_manifest_path") or "").strip()
-        if not batch_manifest_path:
-            raise ValueError("frustrampnn_batch_manifest_path is required")
-        if not job_id:
-            raise ValueError("FrustraMPNN scheduler launch requires job_id")
-        output_root = Path(os.path.abspath(str(output_dir)))
-        expected_manifest = output_root / "inputs" / "frustrampnn_scheduler_batch_v3.json"
-        manifest_path = Path(os.path.abspath(batch_manifest_path))
-        if manifest_path != expected_manifest or manifest_path.is_symlink() or not manifest_path.is_file():
-            raise ValueError("FrustraMPNN batch manifest is not the job-owned immutable authority")
-        envelope = params.get("_frustrampnn_child_v1")
-        if not isinstance(envelope, dict) or envelope.get("schema_name") != "bms.frustrampnn.scheduler-child.v1":
-            raise ValueError("FrustraMPNN scheduler-child envelope is required")
-        if envelope.get("execution_owner_job_id") != str(job_id):
-            raise ValueError("FrustraMPNN execution owner does not match job_id")
-        if envelope.get("batch_manifest_relative_path") != "inputs/frustrampnn_scheduler_batch_v3.json":
-            raise ValueError("FrustraMPNN manifest relative authority is invalid")
-        manifest_payload = manifest_path.read_bytes()
-        if len(manifest_payload) != envelope.get("batch_manifest_size_bytes"):
-            raise ValueError("FrustraMPNN batch manifest size binding is invalid")
-        if hashlib.sha256(manifest_payload).hexdigest() != envelope.get("batch_manifest_sha256"):
-            raise ValueError("FrustraMPNN batch manifest digest binding is invalid")
-        try:
-            batch = json.loads(manifest_payload)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("FrustraMPNN batch manifest is invalid JSON") from exc
-        records = batch.get("records") if isinstance(batch, dict) else None
-        batching_enabled = batch.get("batching_enabled") if isinstance(batch, dict) else None
-        structures_per_job = batch.get("structures_per_job") if isinstance(batch, dict) else None
-        if (
-            not isinstance(batch, dict)
-            or set(batch) != {
-                "schema_name",
-                "schema_version",
-                "execution_owner_job_id",
-                "batching_enabled",
-                "structures_per_job",
-                "settings_sha256",
-                "expected_cardinality",
-                "records",
-            }
-            or batch.get("schema_name") != "bms_frustrampnn_scheduler_batch"
-            or batch.get("schema_version") != 3
-            or batch.get("execution_owner_job_id") != str(job_id)
-            or not isinstance(batching_enabled, bool)
-            or isinstance(structures_per_job, bool)
-            or not isinstance(structures_per_job, int)
-            or not 1 <= structures_per_job <= 250
-            or batch.get("settings_sha256") != envelope.get("settings_sha256")
-            or not isinstance(records, list)
-            or not records
-            or batch.get("expected_cardinality") != len(records)
-            or len(records) > structures_per_job
-            or (not batching_enabled and len(records) != 1)
-            or len(records) != len(envelope.get("component_invocation_ids") or [])
-        ):
-            raise ValueError("FrustraMPNN batch manifest authority is invalid")
-        for record in records:
-            if not isinstance(record, dict):
-                raise ValueError("FrustraMPNN batch record is invalid")
-            for kind, expected_prefix in (("request", ("inputs", "requests")), ("source", ("inputs", "sources"))):
-                relative = record.get(f"{kind}_relative_path")
-                relative_path = Path(str(relative or ""))
-                if (
-                    not relative
-                    or relative_path.is_absolute()
-                    or ".." in relative_path.parts
-                    or relative_path.parts[:2] != expected_prefix
-                ):
-                    raise ValueError(f"FrustraMPNN {kind} path authority is invalid")
-                artifact = output_root / relative_path
-                if artifact.is_symlink() or not artifact.is_file():
-                    raise ValueError(f"FrustraMPNN {kind} snapshot is missing or unsafe")
-                payload = artifact.read_bytes()
-                if len(payload) != record.get(f"{kind}_size_bytes"):
-                    raise ValueError(f"FrustraMPNN {kind} size binding is invalid")
-                if hashlib.sha256(payload).hexdigest() != record.get(f"{kind}_sha256"):
-                    raise ValueError(f"FrustraMPNN {kind} digest binding is invalid")
-        gpu_id = params.get("gpu_id")
-        if not _preview_only and (isinstance(gpu_id, bool) or not isinstance(gpu_id, int) or gpu_id < 0):
-            raise ValueError("FrustraMPNN requires a non-negative scheduler-assigned gpu_id")
-        workflow_entrypoint = resolve_nextflow_entrypoint(
-            effective_profile="frustrampnn",
-            model_id="frustrampnn",
-            mode="analyze",
-            params=params,
-        )
-        command = [
-            resolve_nextflow_executable(),
-            "run",
-            workflow_entrypoint,
-            "-profile",
-            "workstation_ryzen7960x",
-            "-w",
-            str(get_work_dir()),
-            "--out_dir",
-            str(output_dir),
-            "--frustrampnn_batch_manifest_path",
-            batch_manifest_path,
-        ]
-        if not _preview_only:
-            command.extend(["--frustrampnn_physical_gpu_id", str(gpu_id)])
-            native_parameters['frustrampnn_physical_gpu_id'] = gpu_id
-        if job_id:
-            command.extend(["--job_id", str(job_id)])
-        native_parameters.update(out_dir=str(output_dir), job_id=str(job_id),
-            frustrampnn_batch_manifest_path=batch_manifest_path)
-        return finish_command(command)
-
-    if str(model_id or "").strip() == "conformational_mapping":
-        if str(mode or "").strip() != "map":
-            raise ValueError("conformational_mapping supports only mode=map")
-        from services.conformational_mapping.request_builder import canonical_msa_params
-        cm_request = _native_plan_metadata_settings(model_id, params).get('cm_request')
-        if not cm_request:
-            raise ValueError("cm_request_path is required")
-        msa_params = canonical_msa_params(cm_request)
-        unknown = sorted(set(params) - {
-            "cm_request_path", "gpu_id", "resume_work_dir", "run_frustrampnn",
-            *msa_params,
-        })
-        if unknown:
-            raise ValueError(
-                "canonical conformational-mapping launch parameters fail closed: "
-                + ", ".join(unknown)
-            )
-        for key, value in msa_params.items():
-            if key in params and params[key] != value:
-                raise ValueError("CM hosted MSA launch conflicts with immutable feature_policy: " + key)
-        params.update(msa_params)
-        native_parameters.update(msa_params)
-        request_path = str(params.get("cm_request_path") or "").strip()
-        if not request_path:
-            raise ValueError("cm_request_path is required")
-        if params.get("run_frustrampnn") is not True:
-            raise ValueError("conformational_mapping requires canonical FrustraMPNN")
-        canonical_work_dir = Path(get_work_dir()).resolve()
-        resume_work_dir = params.get("resume_work_dir")
-        if resume_work_dir not in (None, ""):
-            requested_resume_work_dir = Path(str(resume_work_dir)).expanduser().resolve()
-            if requested_resume_work_dir != canonical_work_dir:
-                raise ValueError(
-                    "conformational_mapping resume_work_dir must equal the authoritative work directory"
-                )
-        gpu_id = params.get("gpu_id")
-        if _preview_only and gpu_id is None:
-            normalized_gpu_id = None
-        elif isinstance(gpu_id, int) and not isinstance(gpu_id, bool):
-            normalized_gpu_id = gpu_id
-        elif isinstance(gpu_id, str) and gpu_id.isascii() and gpu_id.isdecimal():
-            normalized_gpu_id = int(gpu_id)
-        else:
-            raise ValueError("conformational_mapping gpu_id must be a non-negative integer")
-        if normalized_gpu_id is not None and normalized_gpu_id < 0:
-            raise ValueError("conformational_mapping gpu_id must be a non-negative integer")
-        workflow_entrypoint = resolve_nextflow_entrypoint(
-            effective_profile="conformational_mapping",
-            model_id="conformational_mapping",
-            mode="map",
-            params=params,
-        )
-        command = [
-            resolve_nextflow_executable(),
-            "run",
-            workflow_entrypoint,
-            "-profile",
-            "conformational_mapping,workstation_ryzen7960x",
-            "-w",
-            str(canonical_work_dir),
-        ]
-        if resume_work_dir not in (None, ""):
-            command.append("-resume")
-        command.extend([
-            "--out_dir",
-            str(output_dir),
-        ])
-        if job_id:
-            command.extend(["--job_id", str(job_id)])
-        command.extend(["--cm_request_path", request_path])
-        for key, value in msa_params.items():
-            command.extend(['--' + key, str(value).lower() if isinstance(value, bool) else str(value)])
-        command.extend(["--run_frustrampnn", "true"])
-        native_parameters.update(out_dir=str(output_dir), cm_request_path=request_path,
-            run_frustrampnn=True)
-        if not _preview_only:
-            command.extend(["--gpu_id", str(normalized_gpu_id),
-                "--frustrampnn_physical_gpu_id", str(normalized_gpu_id)])
-            native_parameters.update(gpu_id=normalized_gpu_id,
-                frustrampnn_physical_gpu_id=normalized_gpu_id)
-        if cm_request.get('backend') == 'protenix_v2_ensemble':
-            weights = Path(os.environ.get('BMS_PROTENIX_WEIGHTS') or get_weights_root() / 'protenix')
-            # Pin an installed generation, not a mutable activation alias beneath
-            # the preflight and native consumer. Missing runtime stays with the
-            # existing acquisition/preflight owner, not a new compiler gate.
-            if weights.is_dir():
-                native_parameters['protenix_weights'] = str(weights.resolve(strict=True))
-                command.extend(['--protenix_weights', native_parameters['protenix_weights']])
-        envelope = cm_portable_bindings(params)
-        if envelope is not None:
-            binding_path = Path(output_dir) / '.cm-portable-input-bindings.json'
-            plan_input(binding_path, json.dumps(envelope, sort_keys=True, separators=(',', ':')).encode())
-            selected_checkpoint = envelope['bindings'][0]['path']
-            native_parameters.update(cm_portable_input_bindings=str(binding_path),
-                                     cn_checkpoint_path=selected_checkpoint)
-            command.extend(['--cm_portable_input_bindings', str(binding_path),
-                            '--cn_checkpoint_path', selected_checkpoint])
-        if job_id:
-            native_parameters['job_id'] = str(job_id)
-        return finish_command(command)
-
-    normalized_model_id = str(model_id or "").strip().lower()
-    normalized_mode = str(mode or "").strip().lower()
-    if normalized_model_id == "molecular_dynamics" and normalized_mode == "analyze":
-        if params.get("gpu_id") not in (None, "") or params.get("pinned_gpus") not in (None, "", []):
-            raise ValueError("Molecular-dynamics analysis is CPU-only and rejects GPU assignment")
-    if normalized_model_id == "bind" + "craft":
-        raise ValueError("This retired workflow has been permanently removed")
-    if normalized_model_id == "caliby_experimental" and normalized_mode not in CALIBY_NATIVE_MODES:
-        raise ValueError("Historical Caliby design mode remains retired")
-    if normalized_model_id == "protein_modification_experimental" and normalized_mode == "iterative_binder_design":
-        raise ValueError("Unsupported protein modification mode: iterative_binder_design")
-
-    is_generic_sequence_command = (model_id, mode) in PUBLIC_SEQUENCE_MODES
-    definition = None
-    if model_id in {'binder_refinement', 'caliby_binder'}:
-        from model_registry import get_registry
-        definition = get_registry().get_internal_model_definition(model_id)
-        if definition is not None:
-            # Selected wrappers must not inherit the legacy parent profile's
-            # active stages or defaults. Use their one model-owned definition.
-            for field in definition.params:
-                if field.default is not None:
-                    protein = params.get('ppiflow_task') == 'protein_binder_partial'
-                    if field.name.startswith('ppiflow_protein_') and not protein:
-                        continue
-                    if protein and (field.name in {'framework_type', 'cdr_positions_by_loop', 'manual_cdr_definitions'} or field.name.startswith(('ppiflow_region', 'ppiflow_selected', 'ppiflow_retry'))):
-                        continue
-                    params.setdefault(field.name, deepcopy(field.default))
-            if model_id == 'binder_refinement':
-                from services.ppiflow_partial import apply_partial_defaults
-                apply_partial_defaults(params)
-    if model_id in {'fampnn', 'proteinmpnn'} and not is_generic_sequence_command:
-        raise ValueError('Unsupported public sequence-design model/mode')
-    if is_generic_sequence_command:
-        from model_registry import get_registry
-        # A replay may contain the preceding materialized settings path. This
-        # is compiler-owned transport, rebound below, never operator science.
-        params.pop('sequence_design_settings_path', None)
-        definition = get_registry().get_model(model_id)
-        if definition is None or not definition.enabled:
-            raise ValueError('Public sequence-design model is unavailable')
-        for key, value in (('sequence_design_engine', model_id), ('sequence_design_mode', mode)):
-            if key in params and params[key] != value:
-                raise ValueError('Sequence-design selection conflicts with its model/mode')
-            params[key] = value
-        for field in definition.params:
-            if field.default is not None:
-                params.setdefault(field.name, deepcopy(field.default))
-        if not params.get('input_pdb'):
-            raise ValueError('Public sequence design requires input_pdb')
-
-    # DEBUG: Log all params to trace complex_components
-    logger.info(f"build_nextflow_command received params keys: {list(params.keys())}")
-    if 'complex_components' in params:
-        logger.info(f"complex_components found with {len(params['complex_components'])} items")
-    else:
-        logger.debug("complex_components not present; treating launch as sequence-only unless model-specific preprocessing adds complex inputs")
-
-    def resolve_structure_prediction_profile(pred_method: object) -> str:
-        normalized = str(pred_method or 'boltz').strip().lower()
-        if normalized == 'protenix':
-            return 'protenix'
-        if normalized == 'rf3':
-            return 'rf3'
-        if normalized == 'esmfold2':
-            return 'esmfold2'
-        return 'boltz'
-
-    structure_prediction_profile = resolve_structure_prediction_profile(params.get('pred_method'))
-
-    # Mode to profile mapping for modes that need translation
-    mode_to_profile = {
-        # structure_validation and structure_prediction use pred_method
-        'structure_validation': structure_prediction_profile,
-        'structure_prediction': structure_prediction_profile,
-        # DNA polymerase template
-        'dna_polymerase': 'fampnn_predict',
-    }
-
-    # Model + mode to profile mapping (for API-driven jobs)
-    model_mode_to_profile = {
-        ('protonpottsmpnn', 'redesign'): 'protonpottsmpnn_design',
-        **{pair: 'protein_sequence_design' for pair in PUBLIC_SEQUENCE_MODES},
-        ('boltz2', 'predict'): 'boltz',
-        ('boltz2', 'complex'): 'boltz',
-        ('rf3', 'predict'): 'rf3',
-
-        # Mutagenesis batch workflow - routes to boltz for structure prediction
-        ('mutagenesis', 'batch_predict'): 'boltz',
-        # De Novo Nanobody workflow uses Boltz-2 as its structure predictor.
-        ('antibody_denovo', ANTIBODY_DENOVO_PIPELINE): 'boltz',
-        ('antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE): 'boltz',
-        ('antibody_denovo', 'default'): 'boltz',
-        ('template_antibody_denovo', ANTIBODY_DENOVO_PIPELINE): 'boltz',
-        ('template_antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE): 'boltz',
-        ('template_antibody_denovo', 'default'): 'boltz',
-        # Batch antibody validation jobs.
-        ('antibody_child', 'validation_batch'): 'boltz',
-        # FAMPNN child jobs (sequence design - spawned by orchestrator)
-        ('fampnn_child', 'sequence_design'): 'fampnn_predict',
-        ('protein_modification_experimental', 'de_novo_design'): 'workstation_ryzen7960x',
-        ('protein_modification_experimental', 'region_redesign'): 'workstation_ryzen7960x',
-
-        ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',
-        ('molecular_dynamics', 'simulate'): 'molecular_dynamics_coordinator',
-        ('molecular_dynamics', 'replica'): 'molecular_dynamics',
-        ('molecular_dynamics', 'analyze'): 'molecular_dynamics_analysis',
-        **{('bindcraft2', native_mode): 'bindcraft2'
-           for native_mode in ('campaign', *BC2_NATIVE_ACTIONS)},
-        ('binder_refinement', 'refine'): 'maturation_child',
-        ('caliby_binder', 'design'): 'protein_sequence_design',
-        **{('caliby_experimental', native_mode): 'protein_sequence_design'
-           for native_mode in CALIBY_NATIVE_MODES},
-        **{('boltzgen', generation_mode): 'boltzgen'
-           for generation_mode in ('protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking')},
-        **{('ppiflow', generation_mode): 'workstation_ryzen7960x'
-           for generation_mode in ('protein_binder', 'antibody_binder', 'nanobody_binder')},
-        ('ligandmpnn', 'interface_context'): 'ligandmpnn_interface_context',
-        ('esmfold2', 'blind_pose'): 'esmfold2',
-        ('esmfold2', 'predict'): 'esmfold2',
-        ('esmfold2', 'complex'): 'esmfold2',
-        # Nanopore/ONT product workflows: live device control is outside Nextflow;
-        # these modes analyze existing POD5/FAST5/FASTQ/BAM outputs.
-        ('nanopore', 'basecall_dna'): 'ont_basecall_dna',
-        ('nanopore', 'basecall_rna'): 'ont_basecall_rna',
-        ('nanopore', 'plasmid_qc'): 'ont_plasmid_qc',
-        ('nanopore', 'construct_screening'): 'ont_construct_screening',
-        ('nanopore', 'methylation_analysis'): 'ont_methylation_analysis',
-        ('nanopore', 'fastq_qc'): 'ont_fastq_qc',
-        ('nanopore', 'wf_clone_validation'): 'wf_clone_validation',
-        ('nanopore', 'clone_validation'): 'wf_clone_validation',
-        # Protenix structure prediction
-        ('protenix', 'predict'): 'protenix',
-        ('protenix', 'complex'): 'protenix',
-        # Existing native generators, admitted through the antibody parent.
-        ('antibody_denovo', 'nanobody_binder'): 'boltzgen',
-        ('antibody_denovo', 'generator_backbone_refine'): 'boltz',
-    }
-
-    def resolve_antibody_validation_profile(default_profile: str) -> str:
-        antibody_modes = {
-            ('antibody_denovo', ANTIBODY_DENOVO_PIPELINE),
-            ('antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE),
-            ('antibody_denovo', 'default'),
-            ('template_antibody_denovo', ANTIBODY_DENOVO_PIPELINE),
-            ('template_antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE),
-            ('template_antibody_denovo', 'default'),
-            ('antibody_child', 'validation_batch'),
+        not isinstance(batch, dict)
+        or set(batch) != {
+            "schema_name",
+            "schema_version",
+            "execution_owner_job_id",
+            "batching_enabled",
+            "structures_per_job",
+            "settings_sha256",
+            "expected_cardinality",
+            "records",
         }
-        if (model_id, mode) not in antibody_modes:
-            return default_profile
-
-        validator = str(
-            params.get('structure_validator')
-            or params.get('validation_predictor')
-            or params.get('pred_method')
-            or 'boltz2'
-        ).strip().lower()
-        if validator == 'boltz':
-            validator = 'boltz2'
-        if validator == 'protenix':
-            return 'protenix'
-        if validator == 'esmfold2':
-            return 'esmfold2'
-        return 'boltz'
-    
-    # Determine profile based on model and mode
-    if (model_id, mode) in model_mode_to_profile:
-        effective_profile = model_mode_to_profile[(model_id, mode)]
-    elif mode in mode_to_profile:
-        effective_profile = mode_to_profile[mode]
-    else:
-        effective_profile = mode
-
-    if (
-        model_id == 'protein_modification_experimental'
-        and mode == 'de_novo_design'
-        and str(params.get('generator') or 'rfd4_proteina').strip().lower()
-        in {'disco', 'laproteina'}
+        or batch.get("schema_name") != "bms_frustrampnn_scheduler_batch"
+        or batch.get("schema_version") != 3
+        or batch.get("execution_owner_job_id") != str(job_id)
+        or not isinstance(batching_enabled, bool)
+        or isinstance(structures_per_job, bool)
+        or not isinstance(structures_per_job, int)
+        or not 1 <= structures_per_job <= 250
+        or batch.get("settings_sha256") != envelope.get("settings_sha256")
+        or not isinstance(records, list)
+        or not records
+        or batch.get("expected_cardinality") != len(records)
+        or len(records) > structures_per_job
+        or (not batching_enabled and len(records) != 1)
+        or len(records) != len(envelope.get("component_invocation_ids") or [])
     ):
-        effective_profile = 'workstation_ryzen7960x'
-
-    selected_generator = ((params.get('generator') or 'rfd4_proteina')
-        if model_id == 'protein_modification_experimental' and mode == 'de_novo_design' else model_id)
-    if selected_generator in {'rfd4_proteina', 'complexa'}:
-        effective_profile = 'workstation_ryzen7960x'
-        from paths import default_weight_location
-        if selected_generator == 'rfd4_proteina':
-            params.setdefault('rfd4_proteina_bundle', str(default_weight_location('rfd4-proteina', params.get('weights_root'))))
-        else:
-            params.setdefault('complexa_weights_dir', str(default_weight_location('complexa', params.get('weights_root'))))
-
-    effective_profile = resolve_antibody_validation_profile(effective_profile)
-
-    uses_protenix = (
-        model_id == 'protenix'
-        or effective_profile == 'protenix'
-        or str(params.get('pred_method') or '').strip().lower() in {'protenix', 'boltz_protenix'}
-        or str(params.get('structure_validator') or '').strip().lower() == 'protenix'
-        or str(params.get('predictor') or '').strip().lower() == 'protenix'
-    )
-    if uses_protenix:
-        selected_protenix_model = str(params.get('protenix_model_weights') or 'protenix-v2').strip()
-        if selected_protenix_model != 'protenix-v2':
-            raise ValueError(
-                'Protenix is pinned to V2 weights; protenix_model_weights must be protenix-v2'
-            )
-        params['protenix_model_weights'] = 'protenix-v2'
-        if model_id in {'boltz2', 'protenix'} and mode in {'predict', 'complex'}:
-            params.setdefault('pred_method', 'protenix')
-        elif params.get('pred_method') != 'boltz_protenix':
-            params['pred_method'] = 'protenix'
-
-    if model_id == 'nanopore' or str(effective_profile).startswith('ont_') or effective_profile == 'nanopore_methylation':
-        effective_profile = resolve_ont_workflow_alias(effective_profile)
-        params = normalize_ont_launch_params(effective_profile, params)
-        params['workflow_id'] = effective_profile
-        # Server-generated from the selected publication/owned POD5 version.
-        params.pop('dorado_input_binding_json', None)
-        if (params.get('pod5_dir') and
-                (params.get('ont_input_mode') or params.get('input_mode') or 'pod5') == 'pod5'):
-            from services.ont_submission_trust import dorado_preflight_parameters
-            params.update(dorado_preflight_parameters(params))
-        if (effective_profile == 'wf_clone_validation' or
-                (effective_profile == 'ont_construct_screening' and params.get('run_assembly') is True)):
-            from scripts.validate_wf_clone_runtime import resolve_nextflow_home
-            # Carry the installed engine selection into the plan and argv. The
-            # task must not invent a different cache after inventory selected it.
-            params['wf_clone_nxf_home'] = str(resolve_nextflow_home(params.get('wf_clone_nxf_home')))
-    is_fastq_only_ont_command = (
-        effective_profile == 'ont_fastq_qc'
-        and str(params.get('ont_input_mode') or params.get('input_mode') or '').strip() == 'fastq'
-    )
-
-    if model_id == 'molecular_dynamics' and mode == 'simulate':
-        from paths import get_md_preparation_runtime_lock
-        from scripts.bms_md.chemistry.prepare import preparation_owner
-        cfg = _native_plan_metadata_settings(model_id, params)['md_config']
-        owner = preparation_owner(cfg)
-        params['md_preparation_owner'] = owner or 'prepared'
-        if owner == 'amber':
-            params['md_preparation_runtime_lock'] = str(get_md_preparation_runtime_lock())
-
-    if model_id == 'molecular_dynamics' and params.get('md_job_config'):
-        params = dict(params)
-        params.setdefault(
-            'md_input_root',
-            str(Path(str(params['md_job_config'])).expanduser().resolve().parent),
-        )
-        if mode == 'simulate' and params.get('gpu_id') is not None:
-            # Bind execution, not the saved requested science. The preparation
-            # task passes this physical identity into shared replica expansion;
-            # each engine's existing singleton namespace still runs logical 0.
-            bound = _native_plan_metadata_settings(model_id, params)['md_config']
-            bound['execution'] = {**bound.get('execution', {}),
-                                  'gpu_id': str(params['gpu_id'])}
-            execution_path = Path(output_dir) / 'inputs' / 'md_execution_config.json'
-            plan_input(execution_path, (json.dumps(bound, sort_keys=True) + '\n').encode('utf-8'))
-            params['md_job_config'] = str(execution_path)
-            # Metadata consumes the compiler-owned bytes before materialization,
-            # including fresh production continuation collector generations.
-            params['md_config'] = bound
-    
-    # Handle GPU priority forcing
-    gpu_priority = params.get('gpu_priority', 'auto')
-    
-    profile = (effective_profile if effective_profile == 'workstation_ryzen7960x'
-               else f"{effective_profile},workstation_ryzen7960x")
-
-    if model_id == 'molecular_dynamics':
-        profile = {
-            "simulate": "molecular_dynamics_coordinator,workstation_ryzen7960x",
-            "analyze": "molecular_dynamics_analysis,workstation_ryzen7960x",
-        }.get(mode, "molecular_dynamics_experimental,workstation_ryzen7960x")
-    
-
+        raise ValueError("FrustraMPNN batch manifest authority is invalid")
+    for record in records:
+        if not isinstance(record, dict):
+            raise ValueError("FrustraMPNN batch record is invalid")
+        for kind, expected_prefix in (("request", ("inputs", "requests")), ("source", ("inputs", "sources"))):
+            relative = record.get(f"{kind}_relative_path")
+            relative_path = Path(str(relative or ""))
+            if (
+                not relative
+                or relative_path.is_absolute()
+                or ".." in relative_path.parts
+                or relative_path.parts[:2] != expected_prefix
+            ):
+                raise ValueError(f"FrustraMPNN {kind} path authority is invalid")
+            artifact = output_root / relative_path
+            if artifact.is_symlink() or not artifact.is_file():
+                raise ValueError(f"FrustraMPNN {kind} snapshot is missing or unsafe")
+            payload = artifact.read_bytes()
+            if len(payload) != record.get(f"{kind}_size_bytes"):
+                raise ValueError(f"FrustraMPNN {kind} size binding is invalid")
+            if hashlib.sha256(payload).hexdigest() != record.get(f"{kind}_sha256"):
+                raise ValueError(f"FrustraMPNN {kind} digest binding is invalid")
+    gpu_id = params.get("gpu_id")
+    if not _preview_only and (isinstance(gpu_id, bool) or not isinstance(gpu_id, int) or gpu_id < 0):
+        raise ValueError("FrustraMPNN requires a non-negative scheduler-assigned gpu_id")
     workflow_entrypoint = resolve_nextflow_entrypoint(
-        effective_profile=effective_profile,
-        model_id=model_id,
-        mode=mode,
+        effective_profile="frustrampnn",
+        model_id="frustrampnn",
+        mode="analyze",
         params=params,
     )
-
-    explicit_data_root = params.get("data_root")
-    if not explicit_data_root:
-        env_data_root = os.getenv("BMS_DATA")
-        if env_data_root:
-            explicit_data_root = env_data_root
-        else:
-            out_path = Path(output_dir).expanduser()
-            for candidate in [out_path] + list(out_path.parents):
-                if candidate.name == "bms_results":
-                    explicit_data_root = str(candidate.parent)
-                    break
-    if not explicit_data_root:
-        explicit_data_root = str(get_data_root())
-
-    explicit_code_root = params.get("code_root") or os.getenv("BMS_HOME") or str(get_code_root())
-
-    explicit_weights_root = params.get("weights_root") or os.getenv("BMS_WEIGHTS") or str(get_weights_root())
-    explicit_msa_db = None if is_fastq_only_ont_command else (params.get("msa_local_db") or os.getenv("BMS_COLABFOLD_DB") or str(get_colabfold_db()))
-    explicit_msa_cache = None if is_fastq_only_ont_command else (params.get("msa_cache_dir") or os.getenv("BMS_MSA_CACHE") or str(get_msa_cache_dir()))
-    explicit_work_dir = params.get("work_dir") or os.getenv("BMS_WORK") or str(get_work_dir())
-    explicit_container_dir = (
-        params.get("container_dir")
-        or os.getenv("BMS_CONTAINER_DIR")
-        or str(Path(explicit_data_root) / "apptainer")
-    )
-    explicit_rfd_models = params.get("rfd_models") or os.getenv("BMS_RFD_MODELS") or str(get_rfd_models_dir())
-    explicit_boltz_models = params.get("boltz_models") or os.getenv("BMS_BOLTZ_MODELS") or str(Path(explicit_weights_root) / "boltz")
-    explicit_alphafold_params = params.get("alphafold_params") or str(Path(explicit_weights_root) / "alphafold" / "params")
-
-    
-    # Base command
-    # Base command logic with Resumption support
-    nextflow_executable = resolve_nextflow_executable()
-    resume_work_dir = params.get('resume_work_dir')
-    if resume_work_dir:
-        logger.info(f"Resuming job using work dir: {resume_work_dir}")
-        cmd = [
-            nextflow_executable, "run", workflow_entrypoint,
-            "-profile", profile,
-            "-w", resume_work_dir,
-            "-resume",
-            "--out_dir", output_dir,
-        ]
-        # Log the resume_source_dir if set (for NXF_CACHE_DIR tracing)
-        if params.get('resume_source_dir'):
-            logger.info(f"Resume cache source: {params['resume_source_dir']}")
-    else:
-        cmd = [
-            nextflow_executable, "run", workflow_entrypoint,
-            "-profile", profile,
-            "-w", str(explicit_work_dir),
-            "--out_dir", output_dir,
-        ]
-    
-    # Native workflows under workflows/ use the common source-root Groovy
-    # library, not workflows/lib. Carry it in the real shared invocation.
-    cmd.extend(['-lib', str(Path(explicit_code_root) / 'lib')])
-
-    # Add job_id for spawn-wait-collect tracking
+    command = [
+        resolve_nextflow_executable(),
+        "run",
+        workflow_entrypoint,
+        "-profile",
+        "workstation_ryzen7960x",
+        "-w",
+        str(get_work_dir()),
+        "--out_dir",
+        str(output_dir),
+        "--frustrampnn_batch_manifest_path",
+        batch_manifest_path,
+    ]
+    if not _preview_only:
+        command.extend(["--frustrampnn_physical_gpu_id", str(gpu_id)])
+        native_parameters['frustrampnn_physical_gpu_id'] = gpu_id
     if job_id:
-        cmd.extend(["--job_id", job_id])
-        native_parameters['job_id'] = job_id
-    native_parameters['out_dir'] = output_dir
+        command.extend(["--job_id", str(job_id)])
+    native_parameters.update(out_dir=str(output_dir), job_id=str(job_id),
+        frustrampnn_batch_manifest_path=batch_manifest_path)
+    return finish_command(command, entrypoint=workflow_entrypoint)
 
-    # Force core path params so moved data/model drives are always honored.
-    # Only apply defaults when caller didn't explicitly provide a value.
-    explicit_path_defaults = {
-        "code_root": explicit_code_root,
-        "data_root": explicit_data_root,
-        "weights_root": explicit_weights_root,
-        "container_dir": explicit_container_dir,
-        "runtime_image_store": os.getenv("BMS_RUNTIME_IMAGE_STORE") or str(Path(explicit_container_dir) / ".image-store"),
-        "rfd_models": explicit_rfd_models,
-        "boltz_models": explicit_boltz_models,
-        "alphafold_params": explicit_alphafold_params,
-    }
-    if (is_generic_sequence_command or model_id in {'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen', 'protonpottsmpnn'}
-            or model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES):
-        # No diffusion, prediction or hosted/local MSA stage is selected by the
-        # sequence-only wrapper. Do not demand their unselected input stores.
-        for key in ('rfd_models', 'boltz_models', 'alphafold_params'):
-            explicit_path_defaults.pop(key, None)
-    if (not is_fastq_only_ont_command and not is_generic_sequence_command
-            and model_id not in {'bindcraft2', 'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen', 'protonpottsmpnn'}
-            and not (model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES)
-            and (model_id, mode) not in {('ligandmpnn', 'interface_context'),
-                                         ('esmfold2', 'blind_pose')}):
-        explicit_path_defaults.update({
-            "msa_local_db": explicit_msa_db,
-            "msa_cache_dir": explicit_msa_cache,
-        })
-    for key, value in explicit_path_defaults.items():
-        if params.get(key) in (None, ""):
-            cmd.extend([f"--{key}", str(value)])
-            native_parameters[key] = str(value)
 
+def _compile_conformational_mapping_invocation(
+    *,
+    model_id: str,
+    mode: str,
+    params: Dict[str, Any],
+    output_dir: str,
+    job_id: Optional[str],
+    native_parameters: Dict[str, Any],
+    plan_input,
+    finish_command,
+    _preview_only: bool,
+):
+    """Compile Nextflow invocation for Conformational Mapping jobs."""
+    if str(mode or "").strip() != "map":
+        raise ValueError("conformational_mapping supports only mode=map")
+    from services.conformational_mapping.request_builder import canonical_msa_params
+    cm_request = _native_plan_metadata_settings(model_id, params).get('cm_request')
+    if not cm_request:
+        raise ValueError("cm_request_path is required")
+    msa_params = canonical_msa_params(cm_request)
+    unknown = sorted(set(params) - {
+        "cm_request_path", "gpu_id", "resume_work_dir", "run_frustrampnn",
+        *msa_params,
+    })
+    if unknown:
+        raise ValueError(
+            "canonical conformational-mapping launch parameters fail closed: "
+            + ", ".join(unknown)
+        )
+    for key, value in msa_params.items():
+        if key in params and params[key] != value:
+            raise ValueError("CM hosted MSA launch conflicts with immutable feature_policy: " + key)
+    params.update(msa_params)
+    native_parameters.update(msa_params)
+    request_path = str(params.get("cm_request_path") or "").strip()
+    if not request_path:
+        raise ValueError("cm_request_path is required")
+    if params.get("run_frustrampnn") is not True:
+        raise ValueError("conformational_mapping requires canonical FrustraMPNN")
+    canonical_work_dir = Path(get_work_dir()).resolve()
+    resume_work_dir = params.get("resume_work_dir")
+    if resume_work_dir not in (None, ""):
+        requested_resume_work_dir = Path(str(resume_work_dir)).expanduser().resolve()
+        if requested_resume_work_dir != canonical_work_dir:
+            raise ValueError(
+                "conformational_mapping resume_work_dir must equal the authoritative work directory"
+            )
+    gpu_id = params.get("gpu_id")
+    if _preview_only and gpu_id is None:
+        normalized_gpu_id = None
+    elif isinstance(gpu_id, int) and not isinstance(gpu_id, bool):
+        normalized_gpu_id = gpu_id
+    elif isinstance(gpu_id, str) and gpu_id.isascii() and gpu_id.isdecimal():
+        normalized_gpu_id = int(gpu_id)
+    else:
+        raise ValueError("conformational_mapping gpu_id must be a non-negative integer")
+    if normalized_gpu_id is not None and normalized_gpu_id < 0:
+        raise ValueError("conformational_mapping gpu_id must be a non-negative integer")
+    workflow_entrypoint = resolve_nextflow_entrypoint(
+        effective_profile="conformational_mapping",
+        model_id="conformational_mapping",
+        mode="map",
+        params=params,
+    )
+    command = [
+        resolve_nextflow_executable(),
+        "run",
+        workflow_entrypoint,
+        "-profile",
+        "conformational_mapping,workstation_ryzen7960x",
+        "-w",
+        str(canonical_work_dir),
+    ]
+    if resume_work_dir not in (None, ""):
+        command.append("-resume")
+    command.extend([
+        "--out_dir",
+        str(output_dir),
+    ])
+    if job_id:
+        command.extend(["--job_id", str(job_id)])
+    command.extend(["--cm_request_path", request_path])
+    for key, value in msa_params.items():
+        command.extend(['--' + key, str(value).lower() if isinstance(value, bool) else str(value)])
+    command.extend(["--run_frustrampnn", "true"])
+    native_parameters.update(out_dir=str(output_dir), cm_request_path=request_path,
+        run_frustrampnn=True)
+    if not _preview_only:
+        command.extend(["--gpu_id", str(normalized_gpu_id),
+            "--frustrampnn_physical_gpu_id", str(normalized_gpu_id)])
+        native_parameters.update(gpu_id=normalized_gpu_id,
+            frustrampnn_physical_gpu_id=normalized_gpu_id)
+    if cm_request.get('backend') == 'protenix_v2_ensemble':
+        weights = Path(os.environ.get('BMS_PROTENIX_WEIGHTS') or get_weights_root() / 'protenix')
+        # Pin an installed generation, not a mutable activation alias beneath
+        # the preflight and native consumer. Missing runtime stays with the
+        # existing acquisition/preflight owner, not a new compiler gate.
+        if weights.is_dir():
+            native_parameters['protenix_weights'] = str(weights.resolve(strict=True))
+            command.extend(['--protenix_weights', native_parameters['protenix_weights']])
+    envelope = cm_portable_bindings(params)
+    if envelope is not None:
+        binding_path = Path(output_dir) / '.cm-portable-input-bindings.json'
+        plan_input(binding_path, json.dumps(envelope, sort_keys=True, separators=(',', ':')).encode())
+        selected_checkpoint = envelope['bindings'][0]['path']
+        native_parameters.update(cm_portable_input_bindings=str(binding_path),
+                                 cn_checkpoint_path=selected_checkpoint)
+        command.extend(['--cm_portable_input_bindings', str(binding_path),
+                        '--cn_checkpoint_path', selected_checkpoint])
+    if job_id:
+        native_parameters['job_id'] = str(job_id)
+    return finish_command(command, entrypoint=workflow_entrypoint)
+
+
+def _compile_native_model_overrides(
+    *,
+    model_id: str,
+    mode: str,
+    params: Dict[str, Any],
+    output_dir: str,
+    cmd: List[str],
+    native_parameters: Dict[str, Any],
+    plan_input,
+    finish_command,
+    bind_fampnn_declaration,
+    explicit_container_dir: Optional[str],
+    explicit_weights_root: Optional[str],
+    explicit_path_defaults: Dict[str, Any],
+    is_generic_sequence_command: bool,
+    _preview_only: bool,
+):
+    """Compile native-transport model overrides; returns invocation if handled, else None."""
     if model_id == 'protonpottsmpnn' and mode == 'redesign':
         from services.protonpottsmpnn_design import science_params, prepare_design_request, read_prepared_request, execution_device
         science = science_params(mode, params)
@@ -5966,239 +5539,23 @@ def compile_nextflow_invocation(
             cmd.extend(['--' + key, str(value).lower() if isinstance(value, bool) else str(value)])
             native_parameters[key] = value
         return finish_command(cmd)
+    return None
 
-    # Inject MSA GPU policy defaults when caller did not explicitly specify them.
-    # Precedence:
-    # 1) job params
-    # 2) scheduler global MSA preference list
-    try:
-        if execution_context is not None:
-            scheduler_cfg, global_cfg, overrides_cfg = {}, {}, {}
-        elif is_fastq_only_ont_command:
-            scheduler_cfg = {}
-            global_cfg = {}
-            overrides_cfg = {}
-            params.pop("msa_preferred_gpus", None)
-            params.pop("msa_excluded_gpus", None)
-        else:
-            from services.gpu_config import read_scheduler_config
-            scheduler_cfg = read_scheduler_config() or {}
-            global_cfg = scheduler_cfg.get("global", {}) if isinstance(scheduler_cfg, dict) else {}
-            overrides_cfg = scheduler_cfg.get("overrides", {}) if isinstance(scheduler_cfg, dict) else {}
 
-        if params.get("msa_preferred_gpus") in (None, ""):
-            preferred_ids = []
-            preferred_source = None
-            if not preferred_ids:
-                raw_preferred = global_cfg.get("msa_preferred_gpu_ids")
-                seen_preferred = set()
-                if isinstance(raw_preferred, list):
-                    for gpu_id in raw_preferred:
-                        try:
-                            normalized_id = int(gpu_id)
-                        except (TypeError, ValueError):
-                            continue
-                        if normalized_id in seen_preferred:
-                            continue
-                        seen_preferred.add(normalized_id)
-                        preferred_ids.append(normalized_id)
-                if preferred_ids:
-                    preferred_source = "scheduler config"
-            if preferred_ids:
-                params["msa_preferred_gpus"] = preferred_ids
-                logger.info(f"[MSA] Injected preferred GPUs from {preferred_source}: {params['msa_preferred_gpus']}")
-
-        if params.get("msa_excluded_gpus") in (None, ""):
-            excluded_ids = []
-            if isinstance(overrides_cfg, dict):
-                for gpu_key, override in overrides_cfg.items():
-                    if not isinstance(override, dict) or not override.get("disabled", False):
-                        continue
-                    try:
-                        excluded_ids.append(int(gpu_key))
-                    except (TypeError, ValueError):
-                        continue
-            if excluded_ids:
-                params["msa_excluded_gpus"] = sorted(set(excluded_ids))
-                logger.info(f"[MSA] Injected excluded GPUs from scheduler config: {params['msa_excluded_gpus']}")
-
-        preferred_ids = params.get("msa_preferred_gpus")
-        excluded_ids = params.get("msa_excluded_gpus")
-        if preferred_ids not in (None, "") and excluded_ids not in (None, ""):
-            preferred_set = {
-                int(gpu_id)
-                for gpu_id in (preferred_ids if isinstance(preferred_ids, list) else str(preferred_ids).split(","))
-                if str(gpu_id).strip()
-            }
-            excluded_set = {
-                int(gpu_id)
-                for gpu_id in (excluded_ids if isinstance(excluded_ids, list) else str(excluded_ids).split(","))
-                if str(gpu_id).strip()
-            }
-            overlap = preferred_set & excluded_set
-            if overlap:
-                preferred_set -= overlap
-                if preferred_set:
-                    params["msa_preferred_gpus"] = sorted(preferred_set)
-                else:
-                    params.pop("msa_preferred_gpus", None)
-                logger.info(
-                    f"[MSA] Removed overlapping preferred/excluded GPU IDs {sorted(overlap)}; "
-                    f"preferred now {params.get('msa_preferred_gpus')}"
-                )
-    except Exception as exc:
-        logger.warning(f"[MSA] Could not load scheduler GPU policy defaults: {exc}")
-
-    if is_fastq_only_ont_command:
-        params.pop("anarcii_execution_mode", None)
-        params.pop("anarcii_gpu_id", None)
-    elif execution_context is None:
-        try:
-            from services.anarcii_runtime import (
-                get_default_anarcii_mode,
-                resolve_anarcii_runtime,
-            )
-
-            requested_anarcii_mode = params.get("anarcii_execution_mode") or get_default_anarcii_mode()
-            anarcii_runtime = resolve_anarcii_runtime(
-                requested_mode=requested_anarcii_mode,
-                preferred_gpu=params.get("anarcii_gpu_id"),
-                excluded_gpu_ids=params.get("msa_excluded_gpus"),
-            )
-            params["anarcii_execution_mode"] = anarcii_runtime.mode
-            if anarcii_runtime.gpu_id is None:
-                params.pop("anarcii_gpu_id", None)
-            else:
-                params["anarcii_gpu_id"] = anarcii_runtime.gpu_id
-            logger.info(
-                "[ANARCII] Launch runtime=%s gpu=%s (%s)",
-                anarcii_runtime.mode,
-                anarcii_runtime.gpu_id,
-                anarcii_runtime.reason,
-            )
-        except Exception as exc:
-            logger.warning(f"[ANARCII] Could not resolve runtime defaults: {exc}")
-    
-    # Map model-specific params to Nextflow params
-    param_mapping = {
-        # NOTE: BoltzGen-specific mappings (target_pdb, ligand_description, etc.)
-        # are applied conditionally below for model_id == 'boltzgen' only.
-        # They were previously here and broke other workflows!
-        # Boltz-2 structure prediction params
-        'boltz_recycling_steps': 'boltz_recycling_steps',
-        'boltz_sampling_steps': 'boltz_sampling_steps',
-        'boltz_num_samples': 'boltz_num_samples',
-        'boltz_diffusion_samples': 'boltz_diffusion_samples',  # Alias for boltz_num_samples
-        'boltz_max_parallel_samples': 'boltz_max_parallel_samples',
-        'boltz_use_msa': 'boltz_use_msa',
-        'boltz_method': 'boltz_method',
-        'boltz_use_potentials': 'boltz_use_potentials',
-        'boltz_step_scale': 'boltz_step_scale',
-        'boltz_anchor_target': 'boltz_anchor_target',
-        'boltz_anchor_strict': 'boltz_anchor_strict',
-        'boltz_target_geometry_mode': 'boltz_target_geometry_mode',
-        # Boltz-2 affinity prediction (quality feature)
-        'boltz_predict_affinity': 'boltz_predict_affinity',
-        'boltz_sampling_steps_affinity': 'boltz_sampling_steps_affinity',
-        'boltz_diffusion_samples_affinity': 'boltz_diffusion_samples_affinity',
-        'boltz_affinity_mw_correction': 'boltz_affinity_mw_correction',
-        # RF3 structure prediction params
-        'rf3_num_recycles': 'rf3_num_recycles',
-        'rf3_num_samples': 'rf3_num_samples',
-        'rf3_early_stopping_plddt': 'rf3_early_stopping_plddt',
-        # Protenix structure prediction params
-        'protenix_model_weights': 'protenix_model_weights',
-        'protenix_seeds': 'protenix_seeds',
-        'protenix_n_sample': 'protenix_n_sample',
-        'protenix_n_step': 'protenix_n_step',
-        'protenix_n_cycle': 'protenix_n_cycle',
-        'protenix_use_msa': 'protenix_use_msa',
-        'protenix_msa_backend': 'protenix_msa_backend',
-        'protenix_use_template': 'protenix_use_template',
-        'protenix_anchor_target': 'protenix_anchor_target',
-        'protenix_anchor_strict': 'protenix_anchor_strict',
-        'protenix_target_geometry_mode': 'protenix_target_geometry_mode',
-        'protenix_enable_cache': 'protenix_enable_cache',
-        'protenix_enable_fusion': 'protenix_enable_fusion',
-        'protenix_auto_oom_retry': 'protenix_auto_oom_retry',
-        'protenix_oom_retry_attempts': 'protenix_oom_retry_attempts',
-        # Sequence input
-        'sequence': 'sequence_input',
-        'sequence_name': 'sequence_name',
-        # Parallelization
-        'num_parallel_jobs': 'num_parallel_jobs',
-        # Target complex prediction (optional upstream for antibody design)
-        'target_protein_seq': 'target_protein_seq',
-        'target_dna_seq': 'target_dna_seq',
-        # MSA Quality Parameters (passed through to BoltzFromComplex/GenerateLocalMSA)
-        'msa_preset': 'msa_preset',
-        'msa_taxon_list': 'msa_taxon_list',
-        'msa_evalue': 'msa_evalue',
-        'msa_min_seq_id': 'msa_min_seq_id',
-        'msa_min_coverage': 'msa_min_coverage',
-        'msa_min_depth_warning': 'msa_min_depth_warning',
-        'msa_min_depth_fail': 'msa_min_depth_fail',
-        'msa_allow_empty_fallback': 'msa_allow_empty_fallback',
-        'msa_force_refresh': 'msa_force_refresh',
-        'msa_cache_only': 'msa_cache_only',
-        'msa_provider': 'msa_provider',
-        'msa_use_gpu': 'msa_use_gpu',
-        'msa_local_db': 'msa_local_db',
-        'msa_cache_dir': 'msa_cache_dir',
-        'msa_threads': 'msa_threads',
-        'colabfold_api_host': 'colabfold_api_host',
-        'colabfold_api_min_interval': 'colabfold_api_min_interval',
-        'colabfold_api_poll_interval': 'colabfold_api_poll_interval',
-        'msa_gpu_mode': 'msa_gpu_mode',
-        'msa_gpu_threshold': 'msa_gpu_threshold',
-        'msa_preferred_gpus': 'msa_preferred_gpus',
-        'msa_excluded_gpus': 'msa_excluded_gpus',
-        'msa_gpu_server_mode': 'msa_gpu_server_mode',
-        'msa_gpu_server_wait_timeout': 'msa_gpu_server_wait_timeout',
-        'msa_gpu_server_db_load_mode': 'msa_gpu_server_db_load_mode',
-        'msa_gpu_server_startup_wait': 'msa_gpu_server_startup_wait',
-        'lock_target_chains': 'lock_target_chains',
-        'lock_antibody_framework': 'lock_antibody_framework',
-        'target_geometry_mode': 'target_geometry_mode',
-        'target_template_threshold_angstrom': 'target_template_threshold_angstrom',
-        'strict_target_rmsd': 'strict_target_rmsd',
-    }
-    
-    # Validation remains native-model-owned; ensemble transport must not apply
-    # Protenix's PTM dialect to Boltz records. Preserve the shared document and
-    # stage managed FILE selections when Protenix is an actual consumer.
-    if model_id == 'protenix':
-        from scripts.protenix_chemistry import validate_chemistry
-        validate_chemistry(params)
-    if model_id == 'protenix' or params.get('pred_method') == 'boltz_protenix':
-        from services.protenix_chemistry import stage_component_files
-        params = stage_component_files(params, output_dir=output_dir, write_input=plan_input)
-    task_chemistry = {}
-    if model_id == 'esmfold2' and isinstance(params.get('complex_components'), dict):
-        document = params['complex_components']
-        params['complex_components'] = document.get('components', document.get('sequences', []))
-        for key in ('covalent_bonds', 'distogram_conditioning'):
-            if key in document:
-                params.setdefault(key, document[key])
-    if model_id == 'protenix' or params.get('complex_components'):
-        task_chemistry = {key: params.pop(key) for key in ('covalent_bonds', 'constraint', 'constraints') if key in params}
-    if model_id == 'boltz2' or params.get('pred_method') in {'boltz', 'boltz_protenix'}:
-        task_chemistry.update({key: params.pop(key) for key in ('constraints', 'templates', 'properties') if key in params})
-    if model_id == 'esmfold2':
-        # Keep the ESM-native numeric atom/index dialect at its own compiler.
-        for key in ('covalent_bonds', 'distogram_conditioning'):
-            if key in params or 'esmf_' + key in params:
-                task_chemistry[key] = params.pop(key, params.pop('esmf_' + key, None))
-    # Handle complex_components specially - write JSON file for BoltzFromComplex process
-    complex_components = params.pop('complex_components', None)
-    sequence_batch_json_path, complex_batch_dir, complex_components = _write_sequence_batch_payloads(
-        output_dir=output_dir,
-        params=params,
-        complex_components=complex_components,
-        write_input=plan_input,
-        task_chemistry=task_chemistry,
-    )
-    
+def _apply_model_specific_nextflow_params(
+    *,
+    model_id: str,
+    mode: str,
+    params: Dict[str, Any],
+    output_dir: str,
+    complex_components,
+    sequence_batch_json_path,
+    task_chemistry: Dict[str, Any],
+    explicit_container_dir: Optional[str],
+    generated_inputs,
+    plan_input,
+):
+    """Apply model-specific parameter normalization and generated input wiring."""
     if model_id in {'boltzgen', 'boltzgen_child'} or (model_id == 'antibody_denovo' and mode == 'nanobody_binder'):
         params.setdefault('diffusion_method', 'boltzgen')
         if model_id == 'antibody_denovo':
@@ -6686,30 +6043,22 @@ def compile_nextflow_invocation(
     elif model_id in {'antibody_denovo', 'template_antibody_denovo'}:
         if is_antibody_pipeline_mode(mode) and not params.get('rfd_mode'):
             params['rfd_mode'] = mode
-    if complex_components:
-        complex_json_path = Path(output_dir) / "complex_definition.json"
-        plan_input(complex_json_path,
-            json.dumps({"components": complex_components, **task_chemistry}, indent=2).encode('utf-8'))
-        logger.info(f"Compiled complex definition for {complex_json_path}")
-        cmd.extend(["--complex_json_path", str(complex_json_path)])
-        native_parameters['complex_json_path'] = str(complex_json_path)
+    return params, complex_components
 
-    if sequence_batch_json_path:
-        cmd.extend(["--sequence_batch_json_path", str(sequence_batch_json_path)])
-        native_parameters['sequence_batch_json_path'] = str(sequence_batch_json_path)
-    if complex_batch_dir:
-        cmd.extend(["--complex_batch_dir", str(complex_batch_dir)])
-        native_parameters['complex_batch_dir'] = str(complex_batch_dir)
-    
-    # Dynamic parameter passing
-    if params.get('diffusion_method') == 'boltzgen' and model_id != 'boltzgen_child':
-        # Complete parent settings, including empty/null values that legacy argv
-        # cannot encode. Spawn consumes this compiler-owned native projection.
-        params['boltzgen_child_settings_json'] = json.dumps({key: value for key, value in params.items()
-            if key.startswith('boltzgen_') and not key.endswith(('_path', '_dir')) and key not in
-            {'boltzgen_child_settings_json', 'boltzgen_extra_params', 'boltzgen_yaml_config',
-             'boltzgen_input_pdb', 'boltzgen_ligand_pdb', 'boltzgen_dna_structure'}},
-            sort_keys=True, separators=(',', ':'))
+
+def _append_nextflow_cli_parameters(
+    *,
+    model_id: str,
+    mode: str,
+    params: Dict[str, Any],
+    param_mapping: Dict[str, str],
+    cmd: List[str],
+    native_parameters: Dict[str, Any],
+    bind_fampnn_declaration,
+) -> None:
+    """Append normalized parameters to the Nextflow CLI argv and native projection."""
+    from copy import deepcopy
+
     for key, value in params.items():
         if key in {'laproteina_evaluation_request', 'rfd4_request', 'complexa_request', 'md_source_provenance', 'md_job_spec', 'native_sources'}:
             # Scientific objects remain typed in the native projection. The MD
@@ -6735,14 +6084,14 @@ def compile_nextflow_invocation(
             # Skip empty strings - they would become valueless flags interpreted as boolean true
             if value == '':
                 continue
-                
+
             # Use mapped param name if available
             nf_key = param_mapping.get(key, key)
-            
+
             # Sanitize filename-sensitive parameters
             if key in ('sequence_name', 'job_name', 'name'):
                 value = sanitize_filename(str(value))
-            
+
             if ((model_id, mode) == ('binder_refinement', 'refine')
                     and key in {'cdr_positions_by_loop', 'manual_cdr_definitions'}):
                 # The selected wrapper decodes these existing native mask
@@ -6817,6 +6166,864 @@ def compile_nextflow_invocation(
             else:
                 cmd.extend([f"--{nf_key}", str(value)])
                 native_parameters[nf_key] = value
+
+
+@overload
+def compile_nextflow_invocation(
+    model_id: str, mode: str, params: Dict[str, Any], output_dir: str,
+    job_id: Optional[str] = None, *, requested_params: dict[str, Any] | None = None,
+    source_identity=None, requested_identity_json: bytes | None = None,
+    execution_context: None = None, _preview_only: Literal[True],
+) -> 'NativeInvocationPreview': ...
+
+
+@overload
+def compile_nextflow_invocation(
+    model_id: str, mode: str, params: Dict[str, Any], output_dir: str,
+    job_id: Optional[str] = None, *, requested_params: dict[str, Any] | None = None,
+    source_identity=None, requested_identity_json: bytes | None = None,
+    execution_context: NativeCompilerExecutionContext | None = None, _preview_only: Literal[False] = False,
+) -> 'NativeInvocation': ...
+
+
+def compile_nextflow_invocation(
+    model_id: str,
+    mode: str,
+    params: Dict[str, Any],
+    output_dir: str,
+    job_id: Optional[str] = None,
+    *,
+    requested_params: Optional[Dict[str, Any]] = None,
+    source_identity=None,
+    requested_identity_json: bytes | None = None,
+    execution_context: NativeCompilerExecutionContext | None = None,
+    _preview_only: bool = False,
+):
+    """The existing native compiler, returning immutable values and argv together.
+
+    This is shared by preview, local/remote launch and saved-job prewarming;
+    transport adapters must not reconstruct its settings from rendered argv.
+    """
+    from component_runtime import NativeInvocation, NativeInvocationPreview, GeneratedInput
+    from copy import deepcopy
+    if type(_preview_only) is not bool or (_preview_only and execution_context is not None):
+        raise ValueError('native preview cannot carry an execution reservation')
+    if _preview_only and any(params.get(key) not in (None, [], ())
+            for key in ('gpu_id', 'gpu_ids', 'frustrampnn_physical_gpu_id')):
+        raise ValueError('native preview cannot carry physical GPU bindings')
+    requested_snapshot = deepcopy(params if requested_params is None else requested_params)
+    params = deepcopy(params)
+    if (model_id, mode) == ('template_structure_prediction', 'structure_prediction'):
+        from services.job_requests import structure_template_target
+        model_id, mode, params = structure_template_target(params)
+    if execution_context is not None:
+        if not isinstance(execution_context, NativeCompilerExecutionContext):
+            raise ValueError('native compiler requires typed execution context')
+        if params.get('gpu_id') not in (None, execution_context.gpu_id):
+            raise ValueError('native compiler GPU conflicts with reservation')
+        if execution_context.gpu_id is not None:
+            params['gpu_id'] = execution_context.gpu_id
+        params['anarcii_execution_mode'] = execution_context.anarcii_execution_mode
+        params.pop('anarcii_gpu_id', None)
+        if execution_context.anarcii_gpu_id is not None:
+            params['anarcii_gpu_id'] = execution_context.anarcii_gpu_id
+    native_parameters: Dict[str, Any] = {}
+    generated_inputs = []
+
+    def plan_input(path: Path, payload: bytes) -> None:
+        relative = path.absolute().relative_to(Path(output_dir).absolute()).as_posix()
+        generated_inputs.append(GeneratedInput(relative, payload))
+
+    selected_generator = ((params.get('generator') or 'rfd4_proteina')
+        if model_id == 'protein_modification_experimental' and mode == 'de_novo_design' else model_id)
+    if selected_generator in {'rfd4_proteina', 'complexa'}:
+        native_mode = mode if selected_generator == model_id else 'generate'
+        if selected_generator == 'rfd4_proteina':
+            from services.rfd4_proteina import bind_for_job
+        else:
+            from services.complexa import bind_for_job
+        params, native_inputs = bind_for_job(native_mode, params, output_dir)
+        generated_inputs.extend(native_inputs)
+        request_key = 'rfd4_request' if selected_generator == 'rfd4_proteina' else 'complexa_request'
+        native_parameters[request_key] = deepcopy(params[request_key])
+
+    if model_id == 'laproteina' and mode == 'evaluate':
+        from services.laproteina_evaluation import bind_for_job, REQUEST_FIELD
+        params, native_inputs = bind_for_job(mode, params, output_dir)
+        generated_inputs.extend(native_inputs)
+        native_parameters[REQUEST_FIELD] = deepcopy(params[REQUEST_FIELD])
+
+    def bind_fampnn_declaration(command, value) -> None:
+        # The same existing producer-owned biological declaration transport is
+        # used by public and selected-parent callers; never inline large JSON.
+        declaration_bytes = json.dumps(value, allow_nan=False, sort_keys=True).encode('utf-8')
+        declaration_path = Path(output_dir) / '.fampnn-analysis-declaration.json'
+        plan_input(declaration_path, declaration_bytes)
+        declaration_sha = hashlib.sha256(declaration_bytes).hexdigest()
+        command.extend(['--fampnn_analysis_declaration_path', str(declaration_path),
+                        '--fampnn_analysis_declaration_sha256', declaration_sha])
+        native_parameters['fampnn_analysis_declaration_path'] = str(declaration_path)
+        native_parameters['fampnn_analysis_declaration_sha256'] = declaration_sha
+
+    def finish_command(command, entrypoint: Optional[str] = None):
+        from dataclasses import replace
+        from component_runtime import SelectedExecutionPlan, SourceIdentity
+        from model_registry import selected_execution_metadata
+        from paths import get_code_root
+
+        resolved_entrypoint = entrypoint if entrypoint is not None else workflow_entrypoint
+        fields: dict[str, Any] = dict(model_id=model_id, mode=mode, requested=requested_snapshot,
+                      effective=params, native_parameters=native_parameters,
+                      entrypoint=resolved_entrypoint, generated_inputs=generated_inputs)
+        if _preview_only:
+            # Do not expose partially bound argv as an executable invocation.
+            invocation = NativeInvocationPreview.capture(**fields)
+        else:
+            invocation = NativeInvocation.capture(**fields,
+                command=[os.fspath(value) if isinstance(value, os.PathLike) else value for value in command])
+        # The Job owner already captures and subsequently rechecks its source.
+        # Reuse that immutable origin; never add a third Git probe or feed the
+        # metadata-only request identity into scientific legacy flags.
+        source = source_identity or SourceIdentity.from_checkout(get_code_root())
+        if requested_identity_json is not None:
+            invocation = replace(invocation, requested_json=requested_identity_json)
+        metadata_settings = _native_plan_metadata_settings(model_id, params)
+        plan = build_selected_execution_plan(model_id=model_id, mode=mode,
+            entrypoint=resolved_entrypoint, requested=invocation.requested_json,
+            effective=invocation.effective_json, native_parameters=invocation.native_parameters_json,
+            source_identity=source, metadata_settings=metadata_settings,
+            profiles=tuple(command[command.index('-profile') + 1].split(','))
+                if '-profile' in command else ())
+        return replace(invocation, source_identity=source, execution_plan=plan)
+
+    from services.msa_policy import apply_msa_policy
+    params = apply_msa_policy(model_id, params)
+    # Controller execution metadata is not a scientific Nextflow parameter.
+    params.pop("remote_result_policy", None)
+    params.pop("execution_policy", None)
+    # Only the persisted launch owner may add this transport after compilation.
+    params.pop('protenix_prepared_msa_dir', None)
+    params.pop('protenix_prepared_msa_sha256', None)
+    params.pop('boltz_launch_authority_base64', None)
+    params.pop('boltz_launch_authority_path', None)
+    params.pop('boltz_launch_authority_sha256', None)
+    if model_id == 'boltz2':
+        params.pop('protein_science_contract_revision', None)
+    # Internal transport, never an operator parameter. The pending trusted Job
+    # provenance join must supply the original pre-registry request separately;
+    # normalized launch params cannot establish which values were requested.
+    params.pop('esmf_requested_settings_json', None)
+    if 'core_protein_scientific_contract' in params and requested_params is not None:
+        if not isinstance(requested_params, dict):
+            raise ValueError('request provenance must be an object')
+        params['esmf_requested_settings_json'] = json.dumps(requested_params, allow_nan=False, sort_keys=True)
+
+    if (
+        str(model_id or "").strip().lower() == "protein_modification_experimental"
+        and str(mode or "").strip().lower() == "region_redesign"
+    ):
+        params = normalize_plr_structure_validators(params)
+
+    if str(model_id or "").strip() == "frustrampnn":
+        return _compile_frustrampnn_invocation(
+            model_id=model_id,
+            mode=mode,
+            params=params,
+            output_dir=output_dir,
+            job_id=job_id,
+            native_parameters=native_parameters,
+            finish_command=finish_command,
+            _preview_only=_preview_only,
+        )
+
+    if str(model_id or "").strip() == "conformational_mapping":
+        return _compile_conformational_mapping_invocation(
+            model_id=model_id,
+            mode=mode,
+            params=params,
+            output_dir=output_dir,
+            job_id=job_id,
+            native_parameters=native_parameters,
+            plan_input=plan_input,
+            finish_command=finish_command,
+            _preview_only=_preview_only,
+        )
+
+    normalized_model_id = str(model_id or "").strip().lower()
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_model_id == "molecular_dynamics" and normalized_mode == "analyze":
+        if params.get("gpu_id") not in (None, "") or params.get("pinned_gpus") not in (None, "", []):
+            raise ValueError("Molecular-dynamics analysis is CPU-only and rejects GPU assignment")
+    if normalized_model_id == "bind" + "craft":
+        raise ValueError("This retired workflow has been permanently removed")
+    if normalized_model_id == "caliby_experimental" and normalized_mode not in CALIBY_NATIVE_MODES:
+        raise ValueError("Historical Caliby design mode remains retired")
+    if normalized_model_id == "protein_modification_experimental" and normalized_mode == "iterative_binder_design":
+        raise ValueError("Unsupported protein modification mode: iterative_binder_design")
+
+    is_generic_sequence_command = (model_id, mode) in PUBLIC_SEQUENCE_MODES
+    definition = None
+    if model_id in {'binder_refinement', 'caliby_binder'}:
+        from model_registry import get_registry
+        definition = get_registry().get_internal_model_definition(model_id)
+        if definition is not None:
+            # Selected wrappers must not inherit the legacy parent profile's
+            # active stages or defaults. Use their one model-owned definition.
+            for field in definition.params:
+                if field.default is not None:
+                    protein = params.get('ppiflow_task') == 'protein_binder_partial'
+                    if field.name.startswith('ppiflow_protein_') and not protein:
+                        continue
+                    if protein and (field.name in {'framework_type', 'cdr_positions_by_loop', 'manual_cdr_definitions'} or field.name.startswith(('ppiflow_region', 'ppiflow_selected', 'ppiflow_retry'))):
+                        continue
+                    params.setdefault(field.name, deepcopy(field.default))
+            if model_id == 'binder_refinement':
+                from services.ppiflow_partial import apply_partial_defaults
+                apply_partial_defaults(params)
+    if model_id in {'fampnn', 'proteinmpnn'} and not is_generic_sequence_command:
+        raise ValueError('Unsupported public sequence-design model/mode')
+    if is_generic_sequence_command:
+        from model_registry import get_registry
+        # A replay may contain the preceding materialized settings path. This
+        # is compiler-owned transport, rebound below, never operator science.
+        params.pop('sequence_design_settings_path', None)
+        definition = get_registry().get_model(model_id)
+        if definition is None or not definition.enabled:
+            raise ValueError('Public sequence-design model is unavailable')
+        for key, value in (('sequence_design_engine', model_id), ('sequence_design_mode', mode)):
+            if key in params and params[key] != value:
+                raise ValueError('Sequence-design selection conflicts with its model/mode')
+            params[key] = value
+        for field in definition.params:
+            if field.default is not None:
+                params.setdefault(field.name, deepcopy(field.default))
+        if not params.get('input_pdb'):
+            raise ValueError('Public sequence design requires input_pdb')
+
+    # DEBUG: Log all params to trace complex_components
+    logger.info(f"build_nextflow_command received params keys: {list(params.keys())}")
+    if 'complex_components' in params:
+        logger.info(f"complex_components found with {len(params['complex_components'])} items")
+    else:
+        logger.debug("complex_components not present; treating launch as sequence-only unless model-specific preprocessing adds complex inputs")
+
+    def resolve_structure_prediction_profile(pred_method: object) -> str:
+        normalized = str(pred_method or 'boltz').strip().lower()
+        if normalized == 'protenix':
+            return 'protenix'
+        if normalized == 'rf3':
+            return 'rf3'
+        if normalized == 'esmfold2':
+            return 'esmfold2'
+        return 'boltz'
+
+    structure_prediction_profile = resolve_structure_prediction_profile(params.get('pred_method'))
+
+    # Mode to profile mapping for modes that need translation
+    mode_to_profile = {
+        # structure_validation and structure_prediction use pred_method
+        'structure_validation': structure_prediction_profile,
+        'structure_prediction': structure_prediction_profile,
+        # DNA polymerase template
+        'dna_polymerase': 'fampnn_predict',
+    }
+
+    # Model + mode to profile mapping (for API-driven jobs)
+    model_mode_to_profile = {
+        ('protonpottsmpnn', 'redesign'): 'protonpottsmpnn_design',
+        **{pair: 'protein_sequence_design' for pair in PUBLIC_SEQUENCE_MODES},
+        ('boltz2', 'predict'): 'boltz',
+        ('boltz2', 'complex'): 'boltz',
+        ('rf3', 'predict'): 'rf3',
+
+        # Mutagenesis batch workflow - routes to boltz for structure prediction
+        ('mutagenesis', 'batch_predict'): 'boltz',
+        # De Novo Nanobody workflow uses Boltz-2 as its structure predictor.
+        ('antibody_denovo', ANTIBODY_DENOVO_PIPELINE): 'boltz',
+        ('antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE): 'boltz',
+        ('antibody_denovo', 'default'): 'boltz',
+        ('template_antibody_denovo', ANTIBODY_DENOVO_PIPELINE): 'boltz',
+        ('template_antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE): 'boltz',
+        ('template_antibody_denovo', 'default'): 'boltz',
+        # Batch antibody validation jobs.
+        ('antibody_child', 'validation_batch'): 'boltz',
+        # FAMPNN child jobs (sequence design - spawned by orchestrator)
+        ('fampnn_child', 'sequence_design'): 'fampnn_predict',
+        ('protein_modification_experimental', 'de_novo_design'): 'workstation_ryzen7960x',
+        ('protein_modification_experimental', 'region_redesign'): 'workstation_ryzen7960x',
+
+        ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',
+        ('molecular_dynamics', 'simulate'): 'molecular_dynamics_coordinator',
+        ('molecular_dynamics', 'replica'): 'molecular_dynamics',
+        ('molecular_dynamics', 'analyze'): 'molecular_dynamics_analysis',
+        **{('bindcraft2', native_mode): 'bindcraft2'
+           for native_mode in ('campaign', *BC2_NATIVE_ACTIONS)},
+        ('binder_refinement', 'refine'): 'maturation_child',
+        ('caliby_binder', 'design'): 'protein_sequence_design',
+        **{('caliby_experimental', native_mode): 'protein_sequence_design'
+           for native_mode in CALIBY_NATIVE_MODES},
+        **{('boltzgen', generation_mode): 'boltzgen'
+           for generation_mode in ('protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking')},
+        **{('ppiflow', generation_mode): 'workstation_ryzen7960x'
+           for generation_mode in ('protein_binder', 'antibody_binder', 'nanobody_binder')},
+        ('ligandmpnn', 'interface_context'): 'ligandmpnn_interface_context',
+        ('esmfold2', 'blind_pose'): 'esmfold2',
+        ('esmfold2', 'predict'): 'esmfold2',
+        ('esmfold2', 'complex'): 'esmfold2',
+        # Nanopore/ONT product workflows: live device control is outside Nextflow;
+        # these modes analyze existing POD5/FAST5/FASTQ/BAM outputs.
+        ('nanopore', 'basecall_dna'): 'ont_basecall_dna',
+        ('nanopore', 'basecall_rna'): 'ont_basecall_rna',
+        ('nanopore', 'plasmid_qc'): 'ont_plasmid_qc',
+        ('nanopore', 'construct_screening'): 'ont_construct_screening',
+        ('nanopore', 'methylation_analysis'): 'ont_methylation_analysis',
+        ('nanopore', 'fastq_qc'): 'ont_fastq_qc',
+        ('nanopore', 'wf_clone_validation'): 'wf_clone_validation',
+        ('nanopore', 'clone_validation'): 'wf_clone_validation',
+        # Protenix structure prediction
+        ('protenix', 'predict'): 'protenix',
+        ('protenix', 'complex'): 'protenix',
+        # Existing native generators, admitted through the antibody parent.
+        ('antibody_denovo', 'nanobody_binder'): 'boltzgen',
+        ('antibody_denovo', 'generator_backbone_refine'): 'boltz',
+    }
+
+    def resolve_antibody_validation_profile(default_profile: str) -> str:
+        antibody_modes = {
+            ('antibody_denovo', ANTIBODY_DENOVO_PIPELINE),
+            ('antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE),
+            ('antibody_denovo', 'default'),
+            ('template_antibody_denovo', ANTIBODY_DENOVO_PIPELINE),
+            ('template_antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE),
+            ('template_antibody_denovo', 'default'),
+            ('antibody_child', 'validation_batch'),
+        }
+        if (model_id, mode) not in antibody_modes:
+            return default_profile
+
+        validator = str(
+            params.get('structure_validator')
+            or params.get('validation_predictor')
+            or params.get('pred_method')
+            or 'boltz2'
+        ).strip().lower()
+        if validator == 'boltz':
+            validator = 'boltz2'
+        if validator == 'protenix':
+            return 'protenix'
+        if validator == 'esmfold2':
+            return 'esmfold2'
+        return 'boltz'
+    
+    # Determine profile based on model and mode
+    if (model_id, mode) in model_mode_to_profile:
+        effective_profile = model_mode_to_profile[(model_id, mode)]
+    elif mode in mode_to_profile:
+        effective_profile = mode_to_profile[mode]
+    else:
+        effective_profile = mode
+
+    if (
+        model_id == 'protein_modification_experimental'
+        and mode == 'de_novo_design'
+        and str(params.get('generator') or 'rfd4_proteina').strip().lower()
+        in {'disco', 'laproteina'}
+    ):
+        effective_profile = 'workstation_ryzen7960x'
+
+    selected_generator = ((params.get('generator') or 'rfd4_proteina')
+        if model_id == 'protein_modification_experimental' and mode == 'de_novo_design' else model_id)
+    if selected_generator in {'rfd4_proteina', 'complexa'}:
+        effective_profile = 'workstation_ryzen7960x'
+        from paths import default_weight_location
+        if selected_generator == 'rfd4_proteina':
+            params.setdefault('rfd4_proteina_bundle', str(default_weight_location('rfd4-proteina', params.get('weights_root'))))
+        else:
+            params.setdefault('complexa_weights_dir', str(default_weight_location('complexa', params.get('weights_root'))))
+
+    effective_profile = resolve_antibody_validation_profile(effective_profile)
+
+    uses_protenix = (
+        model_id == 'protenix'
+        or effective_profile == 'protenix'
+        or str(params.get('pred_method') or '').strip().lower() in {'protenix', 'boltz_protenix'}
+        or str(params.get('structure_validator') or '').strip().lower() == 'protenix'
+        or str(params.get('predictor') or '').strip().lower() == 'protenix'
+    )
+    if uses_protenix:
+        selected_protenix_model = str(params.get('protenix_model_weights') or 'protenix-v2').strip()
+        if selected_protenix_model != 'protenix-v2':
+            raise ValueError(
+                'Protenix is pinned to V2 weights; protenix_model_weights must be protenix-v2'
+            )
+        params['protenix_model_weights'] = 'protenix-v2'
+        if model_id in {'boltz2', 'protenix'} and mode in {'predict', 'complex'}:
+            params.setdefault('pred_method', 'protenix')
+        elif params.get('pred_method') != 'boltz_protenix':
+            params['pred_method'] = 'protenix'
+
+    if model_id == 'nanopore' or str(effective_profile).startswith('ont_') or effective_profile == 'nanopore_methylation':
+        effective_profile = resolve_ont_workflow_alias(effective_profile)
+        params = normalize_ont_launch_params(effective_profile, params)
+        params['workflow_id'] = effective_profile
+        # Server-generated from the selected publication/owned POD5 version.
+        params.pop('dorado_input_binding_json', None)
+        if (params.get('pod5_dir') and
+                (params.get('ont_input_mode') or params.get('input_mode') or 'pod5') == 'pod5'):
+            from services.ont_submission_trust import dorado_preflight_parameters
+            params.update(dorado_preflight_parameters(params))
+        if (effective_profile == 'wf_clone_validation' or
+                (effective_profile == 'ont_construct_screening' and params.get('run_assembly') is True)):
+            from scripts.validate_wf_clone_runtime import resolve_nextflow_home
+            # Carry the installed engine selection into the plan and argv. The
+            # task must not invent a different cache after inventory selected it.
+            params['wf_clone_nxf_home'] = str(resolve_nextflow_home(params.get('wf_clone_nxf_home')))
+    is_fastq_only_ont_command = (
+        effective_profile == 'ont_fastq_qc'
+        and str(params.get('ont_input_mode') or params.get('input_mode') or '').strip() == 'fastq'
+    )
+
+    if model_id == 'molecular_dynamics' and mode == 'simulate':
+        from paths import get_md_preparation_runtime_lock
+        from scripts.bms_md.chemistry.prepare import preparation_owner
+        cfg = _native_plan_metadata_settings(model_id, params)['md_config']
+        owner = preparation_owner(cfg)
+        params['md_preparation_owner'] = owner or 'prepared'
+        if owner == 'amber':
+            params['md_preparation_runtime_lock'] = str(get_md_preparation_runtime_lock())
+
+    if model_id == 'molecular_dynamics' and params.get('md_job_config'):
+        params = dict(params)
+        params.setdefault(
+            'md_input_root',
+            str(Path(str(params['md_job_config'])).expanduser().resolve().parent),
+        )
+        if mode == 'simulate' and params.get('gpu_id') is not None:
+            # Bind execution, not the saved requested science. The preparation
+            # task passes this physical identity into shared replica expansion;
+            # each engine's existing singleton namespace still runs logical 0.
+            bound = _native_plan_metadata_settings(model_id, params)['md_config']
+            bound['execution'] = {**bound.get('execution', {}),
+                                  'gpu_id': str(params['gpu_id'])}
+            execution_path = Path(output_dir) / 'inputs' / 'md_execution_config.json'
+            plan_input(execution_path, (json.dumps(bound, sort_keys=True) + '\n').encode('utf-8'))
+            params['md_job_config'] = str(execution_path)
+            # Metadata consumes the compiler-owned bytes before materialization,
+            # including fresh production continuation collector generations.
+            params['md_config'] = bound
+    
+    # Handle GPU priority forcing
+    gpu_priority = params.get('gpu_priority', 'auto')
+    
+    profile = (effective_profile if effective_profile == 'workstation_ryzen7960x'
+               else f"{effective_profile},workstation_ryzen7960x")
+
+    if model_id == 'molecular_dynamics':
+        profile = {
+            "simulate": "molecular_dynamics_coordinator,workstation_ryzen7960x",
+            "analyze": "molecular_dynamics_analysis,workstation_ryzen7960x",
+        }.get(mode, "molecular_dynamics_experimental,workstation_ryzen7960x")
+    
+
+    workflow_entrypoint = resolve_nextflow_entrypoint(
+        effective_profile=effective_profile,
+        model_id=model_id,
+        mode=mode,
+        params=params,
+    )
+
+    explicit_data_root = params.get("data_root")
+    if not explicit_data_root:
+        env_data_root = os.getenv("BMS_DATA")
+        if env_data_root:
+            explicit_data_root = env_data_root
+        else:
+            out_path = Path(output_dir).expanduser()
+            for candidate in [out_path] + list(out_path.parents):
+                if candidate.name == "bms_results":
+                    explicit_data_root = str(candidate.parent)
+                    break
+    if not explicit_data_root:
+        explicit_data_root = str(get_data_root())
+
+    explicit_code_root = params.get("code_root") or os.getenv("BMS_HOME") or str(get_code_root())
+
+    explicit_weights_root = params.get("weights_root") or os.getenv("BMS_WEIGHTS") or str(get_weights_root())
+    explicit_msa_db = None if is_fastq_only_ont_command else (params.get("msa_local_db") or os.getenv("BMS_COLABFOLD_DB") or str(get_colabfold_db()))
+    explicit_msa_cache = None if is_fastq_only_ont_command else (params.get("msa_cache_dir") or os.getenv("BMS_MSA_CACHE") or str(get_msa_cache_dir()))
+    explicit_work_dir = params.get("work_dir") or os.getenv("BMS_WORK") or str(get_work_dir())
+    explicit_container_dir = (
+        params.get("container_dir")
+        or os.getenv("BMS_CONTAINER_DIR")
+        or str(Path(explicit_data_root) / "apptainer")
+    )
+    explicit_rfd_models = params.get("rfd_models") or os.getenv("BMS_RFD_MODELS") or str(get_rfd_models_dir())
+    explicit_boltz_models = params.get("boltz_models") or os.getenv("BMS_BOLTZ_MODELS") or str(Path(explicit_weights_root) / "boltz")
+    explicit_alphafold_params = params.get("alphafold_params") or str(Path(explicit_weights_root) / "alphafold" / "params")
+
+    
+    # Base command
+    # Base command logic with Resumption support
+    nextflow_executable = resolve_nextflow_executable()
+    resume_work_dir = params.get('resume_work_dir')
+    if resume_work_dir:
+        logger.info(f"Resuming job using work dir: {resume_work_dir}")
+        cmd = [
+            nextflow_executable, "run", workflow_entrypoint,
+            "-profile", profile,
+            "-w", resume_work_dir,
+            "-resume",
+            "--out_dir", output_dir,
+        ]
+        # Log the resume_source_dir if set (for NXF_CACHE_DIR tracing)
+        if params.get('resume_source_dir'):
+            logger.info(f"Resume cache source: {params['resume_source_dir']}")
+    else:
+        cmd = [
+            nextflow_executable, "run", workflow_entrypoint,
+            "-profile", profile,
+            "-w", str(explicit_work_dir),
+            "--out_dir", output_dir,
+        ]
+    
+    # Native workflows under workflows/ use the common source-root Groovy
+    # library, not workflows/lib. Carry it in the real shared invocation.
+    cmd.extend(['-lib', str(Path(explicit_code_root) / 'lib')])
+
+    # Add job_id for spawn-wait-collect tracking
+    if job_id:
+        cmd.extend(["--job_id", job_id])
+        native_parameters['job_id'] = job_id
+    native_parameters['out_dir'] = output_dir
+
+    # Force core path params so moved data/model drives are always honored.
+    # Only apply defaults when caller didn't explicitly provide a value.
+    explicit_path_defaults = {
+        "code_root": explicit_code_root,
+        "data_root": explicit_data_root,
+        "weights_root": explicit_weights_root,
+        "container_dir": explicit_container_dir,
+        "runtime_image_store": os.getenv("BMS_RUNTIME_IMAGE_STORE") or str(Path(explicit_container_dir) / ".image-store"),
+        "rfd_models": explicit_rfd_models,
+        "boltz_models": explicit_boltz_models,
+        "alphafold_params": explicit_alphafold_params,
+    }
+    if (is_generic_sequence_command or model_id in {'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen', 'protonpottsmpnn'}
+            or model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES):
+        # No diffusion, prediction or hosted/local MSA stage is selected by the
+        # sequence-only wrapper. Do not demand their unselected input stores.
+        for key in ('rfd_models', 'boltz_models', 'alphafold_params'):
+            explicit_path_defaults.pop(key, None)
+    if (not is_fastq_only_ont_command and not is_generic_sequence_command
+            and model_id not in {'bindcraft2', 'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen', 'protonpottsmpnn'}
+            and not (model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES)
+            and (model_id, mode) not in {('ligandmpnn', 'interface_context'),
+                                         ('esmfold2', 'blind_pose')}):
+        explicit_path_defaults.update({
+            "msa_local_db": explicit_msa_db,
+            "msa_cache_dir": explicit_msa_cache,
+        })
+    for key, value in explicit_path_defaults.items():
+        if params.get(key) in (None, ""):
+            cmd.extend([f"--{key}", str(value)])
+            native_parameters[key] = str(value)
+
+    native_override_result = _compile_native_model_overrides(
+        model_id=model_id,
+        mode=mode,
+        params=params,
+        output_dir=output_dir,
+        cmd=cmd,
+        native_parameters=native_parameters,
+        plan_input=plan_input,
+        finish_command=finish_command,
+        bind_fampnn_declaration=bind_fampnn_declaration,
+        explicit_container_dir=explicit_container_dir,
+        explicit_weights_root=explicit_weights_root,
+        explicit_path_defaults=explicit_path_defaults,
+        is_generic_sequence_command=is_generic_sequence_command,
+        _preview_only=_preview_only,
+    )
+    if native_override_result is not None:
+        return native_override_result
+
+    # Inject MSA GPU policy defaults when caller did not explicitly specify them.
+    # Precedence:
+    # 1) job params
+    # 2) scheduler global MSA preference list
+    try:
+        if execution_context is not None:
+            scheduler_cfg, global_cfg, overrides_cfg = {}, {}, {}
+        elif is_fastq_only_ont_command:
+            scheduler_cfg = {}
+            global_cfg = {}
+            overrides_cfg = {}
+            params.pop("msa_preferred_gpus", None)
+            params.pop("msa_excluded_gpus", None)
+        else:
+            from services.gpu_config import read_scheduler_config
+            scheduler_cfg = read_scheduler_config() or {}
+            global_cfg = scheduler_cfg.get("global", {}) if isinstance(scheduler_cfg, dict) else {}
+            overrides_cfg = scheduler_cfg.get("overrides", {}) if isinstance(scheduler_cfg, dict) else {}
+
+        if params.get("msa_preferred_gpus") in (None, ""):
+            preferred_ids = []
+            preferred_source = None
+            if not preferred_ids:
+                raw_preferred = global_cfg.get("msa_preferred_gpu_ids")
+                seen_preferred = set()
+                if isinstance(raw_preferred, list):
+                    for gpu_id in raw_preferred:
+                        try:
+                            normalized_id = int(gpu_id)
+                        except (TypeError, ValueError):
+                            continue
+                        if normalized_id in seen_preferred:
+                            continue
+                        seen_preferred.add(normalized_id)
+                        preferred_ids.append(normalized_id)
+                if preferred_ids:
+                    preferred_source = "scheduler config"
+            if preferred_ids:
+                params["msa_preferred_gpus"] = preferred_ids
+                logger.info(f"[MSA] Injected preferred GPUs from {preferred_source}: {params['msa_preferred_gpus']}")
+
+        if params.get("msa_excluded_gpus") in (None, ""):
+            excluded_ids = []
+            if isinstance(overrides_cfg, dict):
+                for gpu_key, override in overrides_cfg.items():
+                    if not isinstance(override, dict) or not override.get("disabled", False):
+                        continue
+                    try:
+                        excluded_ids.append(int(gpu_key))
+                    except (TypeError, ValueError):
+                        continue
+            if excluded_ids:
+                params["msa_excluded_gpus"] = sorted(set(excluded_ids))
+                logger.info(f"[MSA] Injected excluded GPUs from scheduler config: {params['msa_excluded_gpus']}")
+
+        preferred_ids = params.get("msa_preferred_gpus")
+        excluded_ids = params.get("msa_excluded_gpus")
+        if preferred_ids not in (None, "") and excluded_ids not in (None, ""):
+            preferred_set = {
+                int(gpu_id)
+                for gpu_id in (preferred_ids if isinstance(preferred_ids, list) else str(preferred_ids).split(","))
+                if str(gpu_id).strip()
+            }
+            excluded_set = {
+                int(gpu_id)
+                for gpu_id in (excluded_ids if isinstance(excluded_ids, list) else str(excluded_ids).split(","))
+                if str(gpu_id).strip()
+            }
+            overlap = preferred_set & excluded_set
+            if overlap:
+                preferred_set -= overlap
+                if preferred_set:
+                    params["msa_preferred_gpus"] = sorted(preferred_set)
+                else:
+                    params.pop("msa_preferred_gpus", None)
+                logger.info(
+                    f"[MSA] Removed overlapping preferred/excluded GPU IDs {sorted(overlap)}; "
+                    f"preferred now {params.get('msa_preferred_gpus')}"
+                )
+    except Exception as exc:
+        logger.warning(f"[MSA] Could not load scheduler GPU policy defaults: {exc}")
+
+    if is_fastq_only_ont_command:
+        params.pop("anarcii_execution_mode", None)
+        params.pop("anarcii_gpu_id", None)
+    elif execution_context is None:
+        try:
+            from services.anarcii_runtime import (
+                get_default_anarcii_mode,
+                resolve_anarcii_runtime,
+            )
+
+            requested_anarcii_mode = params.get("anarcii_execution_mode") or get_default_anarcii_mode()
+            anarcii_runtime = resolve_anarcii_runtime(
+                requested_mode=requested_anarcii_mode,
+                preferred_gpu=params.get("anarcii_gpu_id"),
+                excluded_gpu_ids=params.get("msa_excluded_gpus"),
+            )
+            params["anarcii_execution_mode"] = anarcii_runtime.mode
+            if anarcii_runtime.gpu_id is None:
+                params.pop("anarcii_gpu_id", None)
+            else:
+                params["anarcii_gpu_id"] = anarcii_runtime.gpu_id
+            logger.info(
+                "[ANARCII] Launch runtime=%s gpu=%s (%s)",
+                anarcii_runtime.mode,
+                anarcii_runtime.gpu_id,
+                anarcii_runtime.reason,
+            )
+        except Exception as exc:
+            logger.warning(f"[ANARCII] Could not resolve runtime defaults: {exc}")
+    
+    # Map model-specific params to Nextflow params
+    param_mapping = {
+        # NOTE: BoltzGen-specific mappings (target_pdb, ligand_description, etc.)
+        # are applied conditionally below for model_id == 'boltzgen' only.
+        # They were previously here and broke other workflows!
+        # Boltz-2 structure prediction params
+        'boltz_recycling_steps': 'boltz_recycling_steps',
+        'boltz_sampling_steps': 'boltz_sampling_steps',
+        'boltz_num_samples': 'boltz_num_samples',
+        'boltz_diffusion_samples': 'boltz_diffusion_samples',  # Alias for boltz_num_samples
+        'boltz_max_parallel_samples': 'boltz_max_parallel_samples',
+        'boltz_use_msa': 'boltz_use_msa',
+        'boltz_method': 'boltz_method',
+        'boltz_use_potentials': 'boltz_use_potentials',
+        'boltz_step_scale': 'boltz_step_scale',
+        'boltz_anchor_target': 'boltz_anchor_target',
+        'boltz_anchor_strict': 'boltz_anchor_strict',
+        'boltz_target_geometry_mode': 'boltz_target_geometry_mode',
+        # Boltz-2 affinity prediction (quality feature)
+        'boltz_predict_affinity': 'boltz_predict_affinity',
+        'boltz_sampling_steps_affinity': 'boltz_sampling_steps_affinity',
+        'boltz_diffusion_samples_affinity': 'boltz_diffusion_samples_affinity',
+        'boltz_affinity_mw_correction': 'boltz_affinity_mw_correction',
+        # RF3 structure prediction params
+        'rf3_num_recycles': 'rf3_num_recycles',
+        'rf3_num_samples': 'rf3_num_samples',
+        'rf3_early_stopping_plddt': 'rf3_early_stopping_plddt',
+        # Protenix structure prediction params
+        'protenix_model_weights': 'protenix_model_weights',
+        'protenix_seeds': 'protenix_seeds',
+        'protenix_n_sample': 'protenix_n_sample',
+        'protenix_n_step': 'protenix_n_step',
+        'protenix_n_cycle': 'protenix_n_cycle',
+        'protenix_use_msa': 'protenix_use_msa',
+        'protenix_msa_backend': 'protenix_msa_backend',
+        'protenix_use_template': 'protenix_use_template',
+        'protenix_anchor_target': 'protenix_anchor_target',
+        'protenix_anchor_strict': 'protenix_anchor_strict',
+        'protenix_target_geometry_mode': 'protenix_target_geometry_mode',
+        'protenix_enable_cache': 'protenix_enable_cache',
+        'protenix_enable_fusion': 'protenix_enable_fusion',
+        'protenix_auto_oom_retry': 'protenix_auto_oom_retry',
+        'protenix_oom_retry_attempts': 'protenix_oom_retry_attempts',
+        # Sequence input
+        'sequence': 'sequence_input',
+        'sequence_name': 'sequence_name',
+        # Parallelization
+        'num_parallel_jobs': 'num_parallel_jobs',
+        # Target complex prediction (optional upstream for antibody design)
+        'target_protein_seq': 'target_protein_seq',
+        'target_dna_seq': 'target_dna_seq',
+        # MSA Quality Parameters (passed through to BoltzFromComplex/GenerateLocalMSA)
+        'msa_preset': 'msa_preset',
+        'msa_taxon_list': 'msa_taxon_list',
+        'msa_evalue': 'msa_evalue',
+        'msa_min_seq_id': 'msa_min_seq_id',
+        'msa_min_coverage': 'msa_min_coverage',
+        'msa_min_depth_warning': 'msa_min_depth_warning',
+        'msa_min_depth_fail': 'msa_min_depth_fail',
+        'msa_allow_empty_fallback': 'msa_allow_empty_fallback',
+        'msa_force_refresh': 'msa_force_refresh',
+        'msa_cache_only': 'msa_cache_only',
+        'msa_provider': 'msa_provider',
+        'msa_use_gpu': 'msa_use_gpu',
+        'msa_local_db': 'msa_local_db',
+        'msa_cache_dir': 'msa_cache_dir',
+        'msa_threads': 'msa_threads',
+        'colabfold_api_host': 'colabfold_api_host',
+        'colabfold_api_min_interval': 'colabfold_api_min_interval',
+        'colabfold_api_poll_interval': 'colabfold_api_poll_interval',
+        'msa_gpu_mode': 'msa_gpu_mode',
+        'msa_gpu_threshold': 'msa_gpu_threshold',
+        'msa_preferred_gpus': 'msa_preferred_gpus',
+        'msa_excluded_gpus': 'msa_excluded_gpus',
+        'msa_gpu_server_mode': 'msa_gpu_server_mode',
+        'msa_gpu_server_wait_timeout': 'msa_gpu_server_wait_timeout',
+        'msa_gpu_server_db_load_mode': 'msa_gpu_server_db_load_mode',
+        'msa_gpu_server_startup_wait': 'msa_gpu_server_startup_wait',
+        'lock_target_chains': 'lock_target_chains',
+        'lock_antibody_framework': 'lock_antibody_framework',
+        'target_geometry_mode': 'target_geometry_mode',
+        'target_template_threshold_angstrom': 'target_template_threshold_angstrom',
+        'strict_target_rmsd': 'strict_target_rmsd',
+    }
+    
+    # Validation remains native-model-owned; ensemble transport must not apply
+    # Protenix's PTM dialect to Boltz records. Preserve the shared document and
+    # stage managed FILE selections when Protenix is an actual consumer.
+    if model_id == 'protenix':
+        from scripts.protenix_chemistry import validate_chemistry
+        validate_chemistry(params)
+    if model_id == 'protenix' or params.get('pred_method') == 'boltz_protenix':
+        from services.protenix_chemistry import stage_component_files
+        params = stage_component_files(params, output_dir=output_dir, write_input=plan_input)
+    task_chemistry = {}
+    if model_id == 'esmfold2' and isinstance(params.get('complex_components'), dict):
+        document = params['complex_components']
+        params['complex_components'] = document.get('components', document.get('sequences', []))
+        for key in ('covalent_bonds', 'distogram_conditioning'):
+            if key in document:
+                params.setdefault(key, document[key])
+    if model_id == 'protenix' or params.get('complex_components'):
+        task_chemistry = {key: params.pop(key) for key in ('covalent_bonds', 'constraint', 'constraints') if key in params}
+    if model_id == 'boltz2' or params.get('pred_method') in {'boltz', 'boltz_protenix'}:
+        task_chemistry.update({key: params.pop(key) for key in ('constraints', 'templates', 'properties') if key in params})
+    if model_id == 'esmfold2':
+        # Keep the ESM-native numeric atom/index dialect at its own compiler.
+        for key in ('covalent_bonds', 'distogram_conditioning'):
+            if key in params or 'esmf_' + key in params:
+                task_chemistry[key] = params.pop(key, params.pop('esmf_' + key, None))
+    # Handle complex_components specially - write JSON file for BoltzFromComplex process
+    complex_components = params.pop('complex_components', None)
+    sequence_batch_json_path, complex_batch_dir, complex_components = _write_sequence_batch_payloads(
+        output_dir=output_dir,
+        params=params,
+        complex_components=complex_components,
+        write_input=plan_input,
+        task_chemistry=task_chemistry,
+    )
+    
+    params, complex_components = _apply_model_specific_nextflow_params(
+        model_id=model_id,
+        mode=mode,
+        params=params,
+        output_dir=output_dir,
+        complex_components=complex_components,
+        sequence_batch_json_path=sequence_batch_json_path,
+        task_chemistry=task_chemistry,
+        explicit_container_dir=explicit_container_dir,
+        generated_inputs=generated_inputs,
+        plan_input=plan_input,
+    )
+    if complex_components:
+        complex_json_path = Path(output_dir) / "complex_definition.json"
+        plan_input(complex_json_path,
+            json.dumps({"components": complex_components, **task_chemistry}, indent=2).encode('utf-8'))
+        logger.info(f"Compiled complex definition for {complex_json_path}")
+        cmd.extend(["--complex_json_path", str(complex_json_path)])
+        native_parameters['complex_json_path'] = str(complex_json_path)
+
+    if sequence_batch_json_path:
+        cmd.extend(["--sequence_batch_json_path", str(sequence_batch_json_path)])
+        native_parameters['sequence_batch_json_path'] = str(sequence_batch_json_path)
+    if complex_batch_dir:
+        cmd.extend(["--complex_batch_dir", str(complex_batch_dir)])
+        native_parameters['complex_batch_dir'] = str(complex_batch_dir)
+    
+    # Dynamic parameter passing
+    if params.get('diffusion_method') == 'boltzgen' and model_id != 'boltzgen_child':
+        # Complete parent settings, including empty/null values that legacy argv
+        # cannot encode. Spawn consumes this compiler-owned native projection.
+        params['boltzgen_child_settings_json'] = json.dumps({key: value for key, value in params.items()
+            if key.startswith('boltzgen_') and not key.endswith(('_path', '_dir')) and key not in
+            {'boltzgen_child_settings_json', 'boltzgen_extra_params', 'boltzgen_yaml_config',
+             'boltzgen_input_pdb', 'boltzgen_ligand_pdb', 'boltzgen_dna_structure'}},
+            sort_keys=True, separators=(',', ':'))
+    _append_nextflow_cli_parameters(
+        model_id=model_id,
+        mode=mode,
+        params=params,
+        param_mapping=param_mapping,
+        cmd=cmd,
+        native_parameters=native_parameters,
+        bind_fampnn_declaration=bind_fampnn_declaration,
+    )
 
     if params.get("run_frustrampnn") is True and not _preview_only:
         component_gpu = params.get("gpu_id")
@@ -7040,3 +7247,12 @@ def get_running_jobs() -> Dict[str, int | str]:
     # unit names and properties. In particular, do not supplement this result
     # with /proc or PID liveness checks.
     return discover_active_workflow_units(lane)
+
+
+# Public service-layer exports (R32) for helpers consumed by other services.
+derive_boltz_cp_gpu_launch_settings = _derive_boltz_cp_gpu_launch_settings
+local_checkpoint_resume = _local_checkpoint_resume
+project_local_components = _project_local_components
+observe_local_terminal_binder_results = _observe_local_terminal_binder_results
+finalize_local_md_job = _finalize_local_md_job
+native_plan_metadata_settings = _native_plan_metadata_settings

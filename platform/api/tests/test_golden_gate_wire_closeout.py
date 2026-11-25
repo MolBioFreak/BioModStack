@@ -133,6 +133,7 @@ async def test_historical_export_import_preserves_unknown_tm_provenance(tmp_path
     def forbidden(*args, **kwargs):
         raise AssertionError('Historical receiving must not recompute science')
     monkeypatch.setattr('routers.molbio_ops.calculate_primer_tm_result', forbidden)
+    monkeypatch.setattr('services.molbio_primers.calculate_primer_tm_result', forbidden)
     monkeypatch.setattr('routers.molbio_golden_gate_design.run_workflow', forbidden)
     monkeypatch.setattr('services.assembly.golden_gate_workflow_persistence.run_workflow', forbidden)
     async with native_store(tmp_path / 'legacy.db', initialize=True) as (client, _):

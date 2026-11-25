@@ -112,7 +112,7 @@ def test_scheduler_dispatch_must_match_explicit_admission_gpu_constraint() -> No
 
 def test_scheduler_resolves_live_gpu_uuid(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "routers.gpu._query_smi_gpu_map",
+        "services.gpu_metadata.query_smi_gpu_map",
         lambda: {2: {"uuid": "GPU-2222"}},
     )
 
@@ -1244,7 +1244,7 @@ async def test_adapter_receiver_hash_inputs(gpu, fault, native_core_store, produ
                    output_dir=output, assigned_gpu=2 if gpu else None))
         await db.commit()
     monkeypatch.setattr(database, "async_session", native_core_store)
-    monkeypatch.setattr("routers.gpu._query_smi_gpu_map",
+    monkeypatch.setattr("services.gpu_metadata.query_smi_gpu_map",
                         lambda: {2: {"uuid": "other" if fault == "inventory" else "GPU-2"}})
     monkeypatch.setattr(workflow_adapter, "workflow_nvidia_device_allow_paths", lambda i: (f"/dev/nvidia{i}",))
     unit = ownership.deterministic_unit_name("production", "job-1", 1)
