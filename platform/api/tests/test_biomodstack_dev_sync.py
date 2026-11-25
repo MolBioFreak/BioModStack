@@ -706,7 +706,7 @@ def _init_frontend_sync_repo(tmp_path: Path) -> tuple[Path, str]:
     repo = tmp_path / "repo"
     repo.mkdir()
     repo_root = Path(__file__).resolve().parents[3]
-    for name in ("biomodstack_frontend_prerequisites.py", "biomodstack_python_prerequisites.py"):
+    for name in ("biomodstack_frontend_prerequisites.py", "biomodstack_python_prerequisites.py", "biomodstack_runtime_profile.py"):
         (repo / name).write_bytes((repo_root / name).read_bytes())
     (repo / "scripts").mkdir()
     (repo / "scripts/biomodstack_dev_sync.py").write_bytes((repo_root / "scripts/biomodstack_dev_sync.py").read_bytes())
@@ -759,6 +759,15 @@ def _commit_candidate_branch(repo: Path, base_rev: str, updates: dict[str, str])
     return cand_rev
 
 
+def _write_host_selectors(tmp_path: Path, monkeypatch, **selectors: str) -> Path:
+    xdg_config = tmp_path / "xdg-config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_config))
+    sel_path = xdg_config / "biomodstack" / "host-selectors.env"
+    sel_path.parent.mkdir(parents=True, exist_ok=True)
+    sel_path.write_text("\n".join(f"{k}={v}" for k, v in selectors.items()) + "\n", encoding="utf-8")
+    return sel_path
+
+
 def test_frontend_preflight_blocks_lockfile_change_before_git_or_service_mutation(
     tmp_path: Path,
     monkeypatch,
@@ -772,8 +781,7 @@ def test_frontend_preflight_blocks_lockfile_change_before_git_or_service_mutatio
     )
     frontend_root = tmp_path / "managed-frontend"
     frontend_root.mkdir()
-    monkeypatch.setenv("BMS_FRONTEND_ROOT", str(frontend_root))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    _write_host_selectors(tmp_path, monkeypatch, BMS_FRONTEND_ROOT=str(frontend_root))
 
     frontend = sync._load_root_module(repo, "_test_fp_base", "biomodstack_frontend_prerequisites.py")
     (frontend_root / "state.json").write_text(
@@ -827,8 +835,7 @@ def test_frontend_preflight_allows_script_only_and_dockerfile_comment_edits(
     )
     frontend_root = tmp_path / "managed-frontend"
     frontend_root.mkdir()
-    monkeypatch.setenv("BMS_FRONTEND_ROOT", str(frontend_root))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    _write_host_selectors(tmp_path, monkeypatch, BMS_FRONTEND_ROOT=str(frontend_root))
 
     frontend = sync._load_root_module(repo, "_test_fp_ok", "biomodstack_frontend_prerequisites.py")
     (frontend_root / "state.json").write_text(
@@ -846,21 +853,24 @@ def test_frontend_preflight_allows_script_only_and_dockerfile_comment_edits(
     sync._preflight_frontend_prerequisites(repo, "fast-forward-deploy", cand_rev)
 
 
-def test_frontend_preflight_blocks_unmanaged_host_only_when_vite_missing(
+def test_frontend_preflight_blocks_unmanaged_host_when_vite_missing_or_broken(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     sync = load_module()
     repo, base_rev = _init_frontend_sync_repo(tmp_path)
-    monkeypatch.setenv("BMS_FRONTEND_ROOT", str(tmp_path / "absent-managed-root"))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    _write_host_selectors(tmp_path, monkeypatch, BMS_FRONTEND_ROOT=str(tmp_path / "absent-managed-root"))
 
     with pytest.raises(sync.FrontendPrerequisiteError, match="environment_missing"):
         sync._preflight_frontend_prerequisites(repo, "reconcile-live-deploy", base_rev)
 
     vite = repo / "platform/frontend/node_modules/vite/bin/vite.js"
     vite.parent.mkdir(parents=True, exist_ok=True)
-    vite.write_text("console.log('vite')\n", encoding="utf-8")
+    vite.write_text("require('./missing-vite-runtime.js');\n", encoding="utf-8")
+    with pytest.raises(sync.FrontendPrerequisiteError, match="environment_invalid"):
+        sync._preflight_frontend_prerequisites(repo, "reconcile-live-deploy", base_rev)
+
+    vite.write_text("console.log('vite/7.3.1 linux-x64 node-v22.16.0');\n", encoding="utf-8")
     sync._preflight_frontend_prerequisites(repo, "reconcile-live-deploy", base_rev)
 
 
@@ -872,8 +882,8 @@ def test_frontend_preflight_blocks_candidate_policy_bump_before_deploy(
     repo, base_rev = _init_frontend_sync_repo(tmp_path)
     fp_src = (repo / "biomodstack_frontend_prerequisites.py").read_text(encoding="utf-8")
     bumped_src = fp_src.replace(
-        'POLICY = "frontend-filter-frozen-ignore-scripts-v2"',
         'POLICY = "frontend-filter-frozen-ignore-scripts-v3"',
+        'POLICY = "frontend-filter-frozen-ignore-scripts-v4"',
         1,
     )
     assert bumped_src != fp_src
@@ -884,8 +894,7 @@ def test_frontend_preflight_blocks_candidate_policy_bump_before_deploy(
     )
     frontend_root = tmp_path / "managed-frontend"
     frontend_root.mkdir()
-    monkeypatch.setenv("BMS_FRONTEND_ROOT", str(frontend_root))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    _write_host_selectors(tmp_path, monkeypatch, BMS_FRONTEND_ROOT=str(frontend_root))
 
     frontend = sync._load_root_module(repo, "_test_fp_policy", "biomodstack_frontend_prerequisites.py")
     (frontend_root / "state.json").write_text(
@@ -898,5 +907,37 @@ def test_frontend_preflight_blocks_candidate_policy_bump_before_deploy(
         encoding="utf-8",
     )
 
+    with pytest.raises(sync.FrontendPrerequisiteError, match="identity_mismatch"):
+        sync._preflight_frontend_prerequisites(repo, "fast-forward-deploy", cand_rev)
+
+
+def test_frontend_preflight_ignores_caller_env_overrides_matching_restart_subprocess(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    sync = load_module()
+    repo, base_rev = _init_frontend_sync_repo(tmp_path)
+    cand_rev = _commit_candidate_branch(
+        repo,
+        base_rev,
+        {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n# lock bump\n"},
+    )
+    host_root = tmp_path / "host-selected-frontend"
+    host_root.mkdir()
+    _write_host_selectors(tmp_path, monkeypatch, BMS_FRONTEND_ROOT=str(host_root))
+    frontend = sync._load_root_module(repo, "_test_fp_host_sel", "biomodstack_frontend_prerequisites.py")
+    (host_root / "state.json").write_text(
+        json.dumps({
+            "schema_version": frontend.SCHEMA,
+            "identity": frontend.identity(repo),
+            "status": "complete",
+            "inventory_sha256": "inv-1",
+        }),
+        encoding="utf-8",
+    )
+    # Caller sets a different BMS_FRONTEND_ROOT in env (pointing to an absent dir),
+    # which _run() strips before restart. Preflight must still validate host_root
+    # and reject the lockfile bump.
+    monkeypatch.setenv("BMS_FRONTEND_ROOT", str(tmp_path / "caller-override-absent"))
     with pytest.raises(sync.FrontendPrerequisiteError, match="identity_mismatch"):
         sync._preflight_frontend_prerequisites(repo, "fast-forward-deploy", cand_rev)

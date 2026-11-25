@@ -23,7 +23,7 @@ from biomodstack_python_prerequisites import PrerequisiteError, save
 
 PNPM_VERSION = "10.11.0"  # docker/web.Dockerfile authority; existing workspace lock format
 SCHEMA = "bms.frontend-prerequisites.v1"
-POLICY = "frontend-filter-frozen-ignore-scripts-v2"
+POLICY = "frontend-filter-frozen-ignore-scripts-v3"
 ACTIONS = {"frontend-plan", "frontend-bootstrap", "frontend-verify"}
 NODE_REQUIREMENT = "^20.19.0 || >=22.12.0 (Node 22 recommended)"
 _PACKAGE_MANIFEST_FIELDS = (
@@ -91,7 +91,12 @@ def _package_json_digest(raw: bytes, relpath: str) -> str:
 
 
 def _dockerfile_pnpm_pins(raw: bytes) -> list[str]:
-    return sorted(set(_PNPM_PIN_RE.findall(raw.decode("utf-8", errors="replace"))))
+    pins: set[str] = set()
+    for line in raw.decode("utf-8", errors="replace").splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        pins.update(_PNPM_PIN_RE.findall(line))
+    return sorted(pins)
 
 
 def _normalize_patch_relpath(raw_value: str) -> str | None:
@@ -198,8 +203,7 @@ def identity_from_tree(
         if optional_raw in available:
             manifests[optional_raw] = hashlib.sha256(read_bytes(optional_raw)).hexdigest()
 
-    patch_paths = {p for p in available if p.startswith("patches/")}
-    patch_paths |= _referenced_patch_paths(lock_bytes, workspace_bytes, root_pkg_bytes)
+    patch_paths = _referenced_patch_paths(lock_bytes, workspace_bytes, root_pkg_bytes)
     for patch_rel in sorted(patch_paths):
         if patch_rel in available:
             raw_patch = read_bytes(patch_rel)
@@ -241,10 +245,6 @@ def identity(project_root: Path) -> dict:
         for p in source.glob(pattern):
             if p.is_file():
                 relpaths.add(p.relative_to(source).as_posix())
-    if (source / "patches").is_dir():
-        for p in (source / "patches").rglob("*"):
-            if p.is_file():
-                relpaths.add(p.relative_to(source).as_posix())
     for name in ("package.json", ".npmrc", ".pnpmfile.cjs"):
         if (source / name).is_file():
             relpaths.add(name)
@@ -260,8 +260,8 @@ def validate_lock_compatibility(source: Path) -> None:
     lock = (source / "pnpm-lock.yaml").read_text()
     if not re.search(r"^lockfileVersion: ['\"]?9\.0['\"]?\s*$", lock, re.M):
         raise PrerequisiteError("pnpm_lock_incompatible", "Pinned frontend setup requires the reviewed pnpm lock format 9.0")
-    dockerfile = (source / "docker/web.Dockerfile").read_text()
-    if f"pnpm@{PNPM_VERSION}" not in dockerfile:
+    dockerfile_pins = _dockerfile_pnpm_pins((source / "docker/web.Dockerfile").read_bytes())
+    if f"pnpm@{PNPM_VERSION}" not in dockerfile_pins:
         raise PrerequisiteError("pnpm_authority_mismatch", "Frontend setup and web build package-manager pins disagree")
 
 

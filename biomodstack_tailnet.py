@@ -795,9 +795,45 @@ def _process_in_exact_systemd_unit(cgroup: object, service: str) -> bool:
     )
 
 
-def _trusted_node_executables() -> set[Path]:
+def _resolved_frontend_node(root: Path | None = None) -> Path:
+    """Resolve the explicit host-configured Node binary without trusting ambient PATH."""
+    selectors: dict[str, str] = {}
+    try:
+        from biomodstack_runtime_profile import load_host_selectors
+        selectors = load_host_selectors()
+    except Exception:
+        selectors = {}
+
+    if root is not None:
+        saved_root = os.environ.get("BMS_FRONTEND_ROOT")
+        try:
+            if not str(saved_root or "").strip() and str(selectors.get("BMS_FRONTEND_ROOT", "")).strip():
+                os.environ["BMS_FRONTEND_ROOT"] = str(selectors["BMS_FRONTEND_ROOT"]).strip()
+            from biomodstack_frontend_prerequisites import location as frontend_location
+            state_path = frontend_location(root) / "state.json"
+            if state_path.is_file():
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                recorded = state.get("node") if isinstance(state, dict) else None
+                if isinstance(recorded, str) and Path(recorded).is_absolute() and os.access(recorded, os.X_OK):
+                    return Path(recorded).resolve()
+        except Exception:
+            pass
+        finally:
+            if saved_root is None:
+                os.environ.pop("BMS_FRONTEND_ROOT", None)
+            else:
+                os.environ["BMS_FRONTEND_ROOT"] = saved_root
+
+    configured = str(os.environ.get("BMS_FRONTEND_NODE") or selectors.get("BMS_FRONTEND_NODE", "")).strip()
+    if configured and Path(configured).is_absolute() and os.access(configured, os.X_OK):
+        return Path(configured).resolve()
+    return Path("/usr/bin/node")
+
+
+def _trusted_node_executables(root: Path | None = None) -> set[Path]:
     trusted: set[Path] = set()
-    for candidate in (Path("/usr/bin/node"), Path("/usr/bin/nodejs")):
+    candidates = [Path("/usr/bin/node"), Path("/usr/bin/nodejs"), _resolved_frontend_node(root)]
+    for candidate in candidates:
         try:
             trusted.add(candidate.resolve(strict=True))
         except OSError:
@@ -832,7 +868,7 @@ def _dev_frontend_matches_root(
             or _pid_environment_value(pid, "VITE_BMS_BUILD_SHA") != revision
             or report.get("build_revision") != revision
             or executable is None
-            or executable not in _trusted_node_executables()
+            or executable not in _trusted_node_executables(root)
             or len(argv) != 6
             or Path(argv[1]).resolve() != expected_vite
             or argv[2:] != ["--host", "127.0.0.1", "--port", str(spec.frontend_port)]
@@ -915,7 +951,7 @@ def _install_operator_development_frontend(root: Path, mutation_ledger: set[str]
         f"ExecStartPre=/usr/bin/sh -c 'test \"$BMS_DEV_API_PROXY_TARGET\" = \"{dev_api_target}\"'\n"
         f"ExecStartPre=/usr/bin/env python3 {systemd_exec_arg(root / 'scripts/rotate_biomodstack_logs.py')}\n"
         "ExecStart=\n"
-        f"ExecStart=/usr/bin/node {systemd_exec_arg(root / 'platform/frontend/node_modules/vite/bin/vite.js')} "
+        f"ExecStart={systemd_exec_arg(_resolved_frontend_node(root))} {systemd_exec_arg(root / 'platform/frontend/node_modules/vite/bin/vite.js')} "
         "--host 127.0.0.1 --port 18082\n",
     )
     daemon_reload(project_root=root)

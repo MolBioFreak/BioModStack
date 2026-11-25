@@ -799,11 +799,17 @@ def _preflight_frontend_prerequisites(
         )
         selectors = runtime_profile.load_host_selectors()
 
+    # Match _run() + manage_desktop_services.py: strip caller BMS_* overrides
+    # and apply only host-selectors.env so preflight checks the same runtime
+    # that restart will actually select.
     saved_env: dict[str, str | None] = {}
     for key in ("BMS_FRONTEND_ROOT", "BMS_FRONTEND_NODE"):
         saved_env[key] = os.environ.get(key)
-        if not str(saved_env[key] or "").strip() and str(selectors.get(key, "")).strip():
-            os.environ[key] = str(selectors[key]).strip()
+        selector_val = str(selectors.get(key, "")).strip()
+        if selector_val:
+            os.environ[key] = selector_val
+        else:
+            os.environ.pop(key, None)
 
     try:
         frontend_root = frontend.location(resolved_root)
@@ -828,6 +834,21 @@ def _preflight_frontend_prerequisites(
                     f"{candidate_revision} blocked by frontend prerequisites (environment_missing): "
                     "Vite missing at platform/frontend/node_modules/vite/bin/vite.js; "
                     "run ./start_ui.sh frontend-bootstrap before deploying"
+                )
+            node = frontend.node_runtime()
+            probe = subprocess.run(
+                [node, str(vite), "--version"],
+                cwd=resolved_root / "platform" / "frontend",
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if probe.returncode != 0 or not probe.stdout.strip().startswith("vite/"):
+                detail = (probe.stderr or probe.stdout).strip()
+                raise FrontendPrerequisiteError(
+                    "Candidate revision "
+                    f"{candidate_revision} blocked by frontend prerequisites (environment_invalid): "
+                    f"Unmanaged Vite check failed: {detail or f'exit {probe.returncode}'}"
                 )
             return
         if state.get("status") != "complete":

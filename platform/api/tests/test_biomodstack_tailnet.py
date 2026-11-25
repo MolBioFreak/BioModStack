@@ -2063,3 +2063,44 @@ def test_managed_adapter_receipt_preserves_observed_executable(monkeypatch, tmp_
     receipt = REAL_VALIDATED_WORKFLOW_ADAPTER_LISTENER(tmp_path, "a" * 40)
     assert receipt["listener_reports"][0]["executable"] == str(python)
     assert receipt["listener_reports"][0]["argv"] == report["argv"]
+
+
+def test_install_operator_development_frontend_honors_configured_node_and_trusts_it(
+    monkeypatch, tmp_path: Path
+) -> None:
+    systemd_dir = tmp_path / "systemd"
+    custom_node = tmp_path / "custom-node"
+    custom_node.write_text("#!/bin/sh\nprintf 'v22.16.0\\n'\n", encoding="utf-8")
+    custom_node.chmod(0o755)
+    monkeypatch.setenv("BMS_FRONTEND_NODE", str(custom_node))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    monkeypatch.setattr(tailnet, "_host_user_systemd_dir", lambda: systemd_dir)
+    monkeypatch.setattr(
+        tailnet,
+        "render_user_units",
+        lambda **kwargs: {
+            tailnet.FRONTEND_SERVICE: (
+                "[Service]\n"
+                f"Environment=BMS_HOME={tmp_path}\n"
+                "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18002\n"
+                f"Environment=VITE_BMS_BUILD_SHA={'a' * 40}\n"
+                f"Environment=VITE_BMS_BUILD_ID=test-{'a' * 12}\n"
+                "Environment=VITE_BMS_BUILD_TIME=2026-07-27T01:00:00Z\n"
+            )
+        },
+    )
+    monkeypatch.setattr(tailnet, "daemon_reload", lambda **kwargs: None)
+    monkeypatch.setattr(tailnet, "_git_revision", lambda root: "a" * 40)
+    monkeypatch.setattr(tailnet, "git_build_identity", lambda root: {
+        "revision": "a" * 40,
+        "build_id": f"test-{'a' * 12}",
+        "build_time": "2026-07-27T01:00:00Z",
+    })
+
+    tailnet._install_operator_development_frontend(tmp_path)
+
+    dropin = (
+        systemd_dir / f"{tailnet.FRONTEND_SERVICE}.d" / "99-tailnet-canonical-source.conf"
+    ).read_text(encoding="utf-8")
+    assert f"ExecStart={custom_node.resolve()} " in dropin
+    assert custom_node.resolve() in tailnet._trusted_node_executables(tmp_path)

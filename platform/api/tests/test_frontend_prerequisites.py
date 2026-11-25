@@ -18,7 +18,7 @@ class FrontendPrerequisitesTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.source = Path(self.temp.name) / "source"
         self.root = Path(self.temp.name) / "managed"
-        for name, value in {"pnpm-lock.yaml": "lockfileVersion: '9.0'", "pnpm-workspace.yaml": "packages: [packages/*, platform/frontend]", "platform/frontend/package.json": '{"name":"frontend"}', "packages/shared/package.json": '{"name":"shared"}', "patches/example.patch": "patch", "docker/web.Dockerfile": "pnpm@10.11.0"}.items():
+        for name, value in {"pnpm-lock.yaml": "lockfileVersion: '9.0'", "pnpm-workspace.yaml": "packages: [packages/*, platform/frontend]\npatchedDependencies:\n  example@1.0.0: patches/example.patch\n", "platform/frontend/package.json": '{"name":"frontend"}', "packages/shared/package.json": '{"name":"shared"}', "patches/example.patch": "patch", "docker/web.Dockerfile": "pnpm@10.11.0"}.items():
             p = self.source / name
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(value)
@@ -119,7 +119,8 @@ class FrontendPrerequisitesTests(unittest.TestCase):
             "scripts": {"dev": "vite"},
             "dependencies": {"vite": "7.3.1"},
         }))
-        dockerfile.write_text("FROM node:22-slim\n# unrelated comment\nRUN npm install -g pnpm@10.11.0\nCOPY platform /app/platform\n")
+        dockerfile.write_text("FROM node:22-slim\n# formerly pnpm@9.0.0\nRUN npm install -g pnpm@10.11.0\nCOPY platform /app/platform\n")
+        (self.source / "patches/unrelated-workflow.patch").write_text("not referenced by pnpm\n")
         self.assertEqual(before, frontend.identity(self.source))
 
         # Dependency and pnpm-pin changes must invalidate the identity.
