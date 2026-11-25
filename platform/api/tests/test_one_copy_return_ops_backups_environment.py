@@ -1,7 +1,5 @@
-"""GTK callback bodies and AI-environment close against tiny owned fixtures."""
-import ast
+"""SQLite backup fault-isolation and AI-environment close against tiny owned fixtures."""
 import sqlite3
-from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,83 +7,6 @@ import pytest
 
 from scripts import manage_ai_environment as env
 from services import sqlite_backup
-
-ROOT = Path(__file__).resolve().parents[3]
-
-
-@pytest.mark.parametrize("filename,callback", [("biomodstack_tray.py", "backup_database"), ("biomodstack_panel.py", "_on_backup_db")])
-def test_gtk_callbacks_take_consistent_wal_snapshot(tmp_path, filename, callback):
-    source = tmp_path / "live.db"
-    writer = sqlite3.connect(source)
-    writer.execute("PRAGMA journal_mode=WAL")
-    writer.execute("CREATE TABLE observations(id INTEGER PRIMARY KEY, value TEXT)")
-    writer.execute("INSERT INTO observations VALUES (1, 'committed WAL')")
-    # An unrelated legacy FK violation must not block an intentional UI backup.
-    writer.execute("CREATE TABLE legacy(parent INTEGER REFERENCES observations(id))")
-    writer.execute("INSERT INTO legacy VALUES (99)")
-    writer.commit()
-    writer.execute("INSERT INTO observations VALUES (2, 'uncommitted')")
-    node = next(n for n in ast.walk(ast.parse((ROOT / filename).read_text()))
-                if isinstance(n, ast.FunctionDef) and n.name == callback)
-    notices = []
-    namespace = {"DB_PATH": source, "PROJECT_ROOT": tmp_path, "API_ROOT": ROOT / "platform/api", "datetime": datetime,
-                 "show_notification": lambda *args: notices.append(args)}
-    exec(compile(ast.Module(body=[node], type_ignores=[]), filename, "exec"), namespace)
-    if callback == "_on_backup_db":
-        namespace[callback](None, None)
-    else:
-        namespace[callback]()
-    assert notices[0][0] == "Backup Complete"
-    backup, = (tmp_path / "backups").glob("*.db")
-    with sqlite3.connect(backup) as connection:
-        assert connection.execute("SELECT * FROM observations").fetchall() == [(1, "committed WAL")]
-        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
-        assert connection.execute("PRAGMA foreign_key_check").fetchall()
-    writer.rollback()
-    writer.close()
-    assert not list(backup.parent.glob(".*.tmp-*"))
-
-
-@pytest.mark.parametrize("filename,callback", [("biomodstack_tray.py", "backup_database"), ("biomodstack_panel.py", "_on_backup_db")])
-def test_desktop_stdlib_callback_import_and_wal(tmp_path, filename, callback):
-    import subprocess
-    # A real isolated desktop-like Python, without site-packages or injected
-    # services. Execute the actual callback AST; GUI display is the only omission.
-    program = r"""
-import ast, sqlite3, sys
-from pathlib import Path
-from datetime import datetime
-root, scratch, filename, callback = map(str, sys.argv[1:])
-root, scratch = Path(root), Path(scratch)
-source = scratch / 'live.db'
-writer = sqlite3.connect(source)
-writer.execute('PRAGMA journal_mode=WAL')
-writer.execute('CREATE TABLE t(value)')
-writer.execute("INSERT INTO t VALUES ('committed')")
-writer.commit()
-writer.execute("INSERT INTO t VALUES ('pending')")
-node = next(n for n in ast.walk(ast.parse((root / filename).read_text()))
-            if isinstance(n, ast.FunctionDef) and n.name == callback)
-notices = []
-namespace = dict(DB_PATH=source, PROJECT_ROOT=scratch, API_ROOT=root/'platform/api',
-                 datetime=datetime, show_notification=lambda *a: notices.append(a))
-exec(compile(ast.Module(body=[node], type_ignores=[]), filename, 'exec'), namespace)
-namespace[callback](*([None, None] if callback == '_on_backup_db' else []))
-assert notices[0][0] == 'Backup Complete', notices
-backup, = (scratch/'backups').glob('*.db')
-with sqlite3.connect(backup) as reader:
-    assert reader.execute('SELECT * FROM t').fetchall() == [('committed',)]
-    assert reader.execute('PRAGMA integrity_check').fetchone() == ('ok',)
-assert 'services' not in sys.modules
-assert not any(n.startswith(('sqlalchemy', 'numpy', 'torch', 'Bio.')) for n in sys.modules)
-writer.rollback()
-writer.close()
-print('stdlib leaf imported; committed WAL included; pending row excluded; no services package')
-"""
-    result = subprocess.run(['/usr/bin/python3', '-I', '-S', '-c', program,
-                             str(ROOT), str(tmp_path), filename, callback],
-                            capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_sqlite_snapshot_failure_keeps_existing_backup(tmp_path, monkeypatch):

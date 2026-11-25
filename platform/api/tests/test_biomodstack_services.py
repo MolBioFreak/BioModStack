@@ -80,28 +80,6 @@ def test_launch_preferences_normalize_invalid_surface_to_browser(tmp_path: Path,
     }
 
 
-def test_build_launch_ui_command_defaults_to_container_electron_surface(tmp_path: Path) -> None:
-    project_root = tmp_path / "repo"
-
-    command = services.build_launch_ui_command(project_root=project_root)
-
-    assert command == [
-        sys.executable,
-        str(project_root / "scripts" / "launch_biomodstack_ui.py"),
-        "--runtime",
-        services.CONTAINER_RUNTIME_MODE,
-        "--surface",
-        services.ELECTRON_LAUNCH_SURFACE,
-    ]
-
-
-def test_build_launch_ui_command_rejects_unknown_surface(tmp_path: Path) -> None:
-    project_root = tmp_path / "repo"
-
-    with pytest.raises(services.ServiceManagerError, match="Unsupported BioModStack launch surface"):
-        services.build_launch_ui_command(project_root=project_root, surface="sideways")
-
-
 def test_resolve_runtime_mode_defaults_to_container_when_unset(monkeypatch) -> None:
     monkeypatch.delenv("BMS_RUNTIME_MODE", raising=False)
 
@@ -602,35 +580,6 @@ def test_service_is_active_degrades_to_false_when_systemctl_is_unavailable(tmp_p
     monkeypatch.setattr(services, "run_systemctl", raise_missing_systemctl)
 
     assert services.service_is_active(services.CORE_RUNTIME_SERVICE, project_root=project_root) is False
-
-
-
-def test_operator_runtime_mode_prefers_fully_active_dev_runtime(tmp_path: Path, monkeypatch) -> None:
-    project_root = tmp_path / "repo"
-    monkeypatch.setattr(
-        services,
-        "service_is_active",
-        lambda name, project_root=None: name in {
-            services.TELEMETRY_SERVICE,
-            services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE,
-            services.API_SERVICE,
-            services.FRONTEND_SERVICE,
-        },
-    )
-
-    assert services.operator_runtime_mode(project_root=project_root) == services.DEV_RUNTIME_MODE
-    assert services.operator_frontend_url(project_root=project_root) == "http://127.0.0.1:18082/"
-
-
-
-def test_operator_runtime_mode_falls_back_to_default_when_no_runtime_is_fully_active(tmp_path: Path, monkeypatch) -> None:
-    project_root = tmp_path / "repo"
-    monkeypatch.setattr(services, "service_is_active", lambda name, project_root=None: False)
-    monkeypatch.delenv("BMS_RUNTIME_MODE", raising=False)
-
-    assert services.active_runtime_mode(project_root=project_root) is None
-    assert services.operator_runtime_mode(project_root=project_root) == services.CONTAINER_RUNTIME_MODE
-    assert services.operator_frontend_url(project_root=project_root) == "http://127.0.0.1:18080/bms/"
 
 
 
@@ -2071,70 +2020,4 @@ def test_ensure_user_units_skips_reload_when_systemd_is_current(monkeypatch, tmp
     assert reloads == [tmp_path]
 
 
-# ---- Development start-at-boot toggle -------------------------------------------------------------------------------
-def _fake_systemctl(monkeypatch, states, calls, fail=None):
-    def run(*args, check=True, capture_output=True, project_root=None):
-        calls.append(args)
-        if args[0] == "is-enabled":
-            return subprocess.CompletedProcess(args, 0 if states["state"] == "enabled" else 1, stdout=states["state"] + "\n", stderr="")
-        if fail and args[0] in fail:
-            return subprocess.CompletedProcess(args, 1, stdout="", stderr="Failed to enable unit: Access denied\n")
-        if args[0] == "enable":
-            states["state"] = "enabled"
-        if args[0] == "disable":
-            states["state"] = "disabled"
-        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(services, "run_systemctl", run)
-
-
-def test_dev_autostart_reads_the_real_unit_state(monkeypatch) -> None:
-    calls: list = []
-    for state, expected in (("enabled", True), ("disabled", False), ("not-found", None), ("static", None)):
-        _fake_systemctl(monkeypatch, {"state": state}, calls)
-        assert services.dev_autostart_enabled() is expected
-    assert all(c == ("is-enabled", services.DEV_TARGET_UNIT) for c in calls)
-
-
-def test_dev_autostart_is_unknown_when_systemctl_is_missing(monkeypatch) -> None:
-    def missing(*args, **kwargs):
-        raise FileNotFoundError("systemctl")
-
-    monkeypatch.setattr(services, "run_systemctl", missing)
-    assert services.dev_autostart_enabled() is None
-
-
-def test_set_dev_autostart_enables_and_disables_only_the_dev_target(monkeypatch) -> None:
-    calls: list = []
-    states = {"state": "disabled"}
-    _fake_systemctl(monkeypatch, states, calls)
-    assert services.set_dev_autostart(True) is True
-    assert services.set_dev_autostart(False) is False
-    verbs = [c for c in calls if c[0] in {"enable", "disable"}]
-    assert verbs == [("enable", services.DEV_TARGET_UNIT), ("disable", services.DEV_TARGET_UNIT)]
-    # nothing is started, stopped or restarted by the toggle
-    assert not [c for c in calls if c[0] in {"start", "stop", "restart", "daemon-reload", "kill"}]
-
-
-def test_set_dev_autostart_reports_systemctl_failure_and_missing_install(monkeypatch) -> None:
-    calls: list = []
-    _fake_systemctl(monkeypatch, {"state": "disabled"}, calls, fail={"enable"})
-    with pytest.raises(services.ServiceManagerError, match="Access denied"):
-        services.set_dev_autostart(True)
-    calls.clear()
-    _fake_systemctl(monkeypatch, {"state": "not-found"}, calls)
-    with pytest.raises(services.ServiceManagerError, match="not installed"):
-        services.set_dev_autostart(True)
-    assert not [c for c in calls if c[0] in {"enable", "disable"}]
-
-
-def test_user_linger_reads_loginctl(monkeypatch) -> None:
-    for out, expected in (("yes\n", True), ("no\n", False), ("", None)):
-        monkeypatch.setattr(services.subprocess, "run", lambda *a, _o=out, **k: subprocess.CompletedProcess(a, 0, stdout=_o, stderr=""))
-        assert services.user_linger_enabled() is expected
-
-    def missing(*a, **k):
-        raise FileNotFoundError("loginctl")
-
-    monkeypatch.setattr(services.subprocess, "run", missing)
-    assert services.user_linger_enabled() is None

@@ -55,9 +55,3 @@ def test_tailnet_dropins_preserve_path_argv(tmp_path, monkeypatch):
             if line.startswith(('ExecStart=', 'ExecStartPre=')) and str(root) in line.replace('%%', '%'):
                 assert any(arg.startswith(str(root) + '/') for arg in shlex.split(line.split('=', 1)[1].replace('%%', '%'))), line
                 assert '20%%' in line
-
-
-def test_desktop_path_argument_identity():
-    path = '/tmp/code 20% root/biomodstack_panel.py'
-    assert hasattr(manager, 'desktop_exec_arg')
-    assert shlex.split(manager.desktop_exec_arg(path).replace('%%', '%')) == [path]

@@ -7,7 +7,7 @@ shells that sit on top of it.
 
 BioModStack shells are clients, not supervisors.
 
-The browser, Electron shell, GTK panel, tray, and optional Android thin-shell
+The browser, Electron shell, and optional Android thin-shell
 path all sit on top of one shared runtime/service layer. They should open the
 hosted `/bms/` UI, inspect status, and request start/stop/restart actions
 through the shared control plane. They should not own long-lived API/frontend
@@ -150,8 +150,6 @@ The current service/runtime/shell split lives in these files:
   - router basename handling for hosted/browser/Electron shells
 - `platform/frontend/src/runtime/cordovaShell.ts`
   - optional Cordova shell readiness hook
-- `biomodstack_panel.py`, `biomodstack_tray.py`
-  - GTK control surfaces that remain clients of the shared service layer
 
 ## Path and profile contract
 
@@ -194,18 +192,11 @@ The API system routes expose this through local-only endpoints such as:
 
 These routes are intentionally limited to localhost/testclient callers.
 
-## Browser and GTK surfaces
+## Browser surface
 
-The browser remains the default operator surface.
-
-GTK panel/tray remain useful local helpers for:
-
-- start/stop/restart
-- status inspection
-- log access
-- opening the hosted UI
-
-They should never become the owner of backend lifetime.
+The browser remains the default operator surface. The legacy GTK panel and tray
+helpers have been removed; service control and operator workflows live in the
+CLI scripts, systemd user units, and localhost-only API routes documented below.
 
 ## Electron shell
 
@@ -294,6 +285,35 @@ Direct compose wrapper:
 ./scripts/run_biomodstack_core_runtime.sh ps
 ./scripts/run_biomodstack_core_runtime.sh down
 ```
+
+### Operator functions previously on the GTK panel
+
+- **Deploy pause / resume** (automatic Development deployment):
+
+  ```bash
+  python3 scripts/biomodstack_dev_sync.py --pause-deploy
+  python3 scripts/biomodstack_dev_sync.py --resume-deploy
+  ```
+
+- **Database backup / verify / restore** (SQLite stores and artifact roots):
+
+  ```bash
+  python3 scripts/bms_backup.py backup --dest /path/to/backup-dir
+  python3 scripts/bms_backup.py verify --backup-dir /path/to/backup-dir
+  python3 scripts/bms_backup.py restore --backup-dir /path/to/backup-dir
+  ```
+
+- **Storage and compute settings** (localhost-only API route):
+
+  Use `PUT /api/system/install-profile` (and `GET /api/system/install-profile`
+  to inspect current paths and local compute limits).
+
+- **Development autostart** (systemd user target):
+
+  ```bash
+  systemctl --user enable biomodstack-dev.target
+  systemctl --user disable biomodstack-dev.target
+  ```
 
 ## Bottom line
 

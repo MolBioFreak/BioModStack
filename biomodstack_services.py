@@ -332,28 +332,6 @@ def electron_shell_available(project_root: Path | None = None) -> bool:
     return (electron_dist / binary_name).exists()
 
 
-def build_launch_ui_command(
-    project_root: Path | None = None,
-    runtime_mode: str | None = CONTAINER_RUNTIME_MODE,
-    surface: str | None = ELECTRON_LAUNCH_SURFACE,
-    python_executable: str | None = None,
-) -> list[str]:
-    root = (project_root or get_project_root()).resolve()
-    command = [python_executable or sys.executable, str(root / "scripts" / "launch_biomodstack_ui.py")]
-
-    if runtime_mode:
-        command.extend(["--runtime", resolve_runtime_mode(runtime_mode)])
-    if surface:
-        normalized_surface = str(surface).strip().lower()
-        if normalized_surface not in SUPPORTED_LAUNCH_SURFACES:
-            raise ServiceManagerError(
-                f"Unsupported BioModStack launch surface '{surface}'. Expected one of: {', '.join(SUPPORTED_LAUNCH_SURFACES)}"
-            )
-        command.extend(["--surface", normalized_surface])
-
-    return command
-
-
 class ServiceManagerError(RuntimeError):
     """Raised when BioModStack service management fails."""
 
@@ -544,117 +522,6 @@ def runtime_api_url(runtime_mode: str | None = None, project_root: Path | None =
 
 def runtime_api_health_url(runtime_mode: str | None = None, project_root: Path | None = None) -> str:
     return f"{runtime_api_url(runtime_mode, project_root)}/api/health"
-
-
-def active_runtime_mode(project_root: Path | None = None) -> str | None:
-    root = (project_root or get_project_root()).resolve()
-    active_modes = [
-        mode
-        for mode in (DEV_RUNTIME_MODE, CONTAINER_RUNTIME_MODE)
-        if all(service["active"] for service in runtime_service_descriptors(root, mode))
-    ]
-    if len(active_modes) == 1:
-        return active_modes[0]
-    return None
-
-
-def operator_runtime_mode(project_root: Path | None = None, runtime_mode: str | None = None) -> str:
-    if runtime_mode:
-        return resolve_runtime_mode(runtime_mode)
-    detected_mode = active_runtime_mode(project_root)
-    if detected_mode:
-        return detected_mode
-    return resolve_runtime_mode(None)
-
-
-def operator_frontend_url(project_root: Path | None = None, runtime_mode: str | None = None) -> str:
-    return runtime_frontend_url(operator_runtime_mode(project_root=project_root, runtime_mode=runtime_mode), project_root=project_root)
-
-
-STORAGE_COMPUTE_ROOT_FIELDS = (
-    "data_root", "dev_data_root", "container_dir", "weights_root", "inputs_dir",
-    "results_dir", "db_path", "work_dir", "analysis_cache_dir", "colabfold_db",
-    "msa_cache_dir", "sabdab_cache_dir", "dev_results_dir",
-)
-STORAGE_COMPUTE_APPLY_NOTICE = (
-    "Saved configuration only. Existing files and running jobs are unchanged. "
-    "Configured values are not proof of currently applied limits. After all work drains, "
-    "use the existing service manager install/application path and restart the affected runtime "
-    "to apply paths and local budgets; no automatic restart or relocation is performed. "
-    "Remote instance resources remain independently owned."
-)
-
-
-def storage_compute_settings(project_root: Path | None = None) -> dict[str, object]:
-    """Read-only launcher preview; GPU discovery is bounded and query-only."""
-    from biomodstack_local_resources import GIB, configured_local_policy, detect_local_capacity
-    from biomodstack_runtime_profile import load_install_profile, resolve_runtime_paths
-    profile = load_install_profile()
-    resolved = resolve_runtime_paths(project_root=project_root, profile=profile, environ={})
-    capacity = detect_local_capacity()
-    defaults = configured_local_policy({})
-    validation_error = ""
-    try:
-        configured = configured_local_policy(profile)
-        configured_threads = configured.cpu_threads
-        configured_memory_gib = configured.memory_bytes / GIB
-    except (ValueError, TypeError) as exc:
-        # A profile moved to a smaller machine must remain editable. This is a
-        # preview, never validation for save, service start or admission.
-        validation_error = str(exc)
-        configured_threads = profile.get("local_cpu_threads", defaults.cpu_threads)
-        configured_memory_gib = profile.get("local_memory_gib", defaults.memory_bytes / GIB)
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=3, check=False,
-        )
-        detail = result.stdout.strip()[:1000]
-        cuda = f"NVIDIA driver visible: {detail}. CUDA execution not tested." if result.returncode == 0 and detail else "CUDA driver discovery unavailable; no GPU work was run."
-    except (OSError, subprocess.TimeoutExpired):
-        cuda = "CUDA driver discovery unavailable; no GPU work was run."
-    applied = "Applied workflow slice limits unavailable (not inferred from saved configuration)."
-    try:
-        result = subprocess.run(
-            ["systemctl", "--user", "show", "biomodstack-workflows.slice",
-             "--property=ActiveState,CPUQuotaPerSecUSec,MemoryMax"],
-            capture_output=True, text=True, timeout=3, check=False,
-        )
-        fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
-        if result.returncode == 0 and fields.get("ActiveState") == "active":
-            applied = (f"Applied workflow slice: CPU quota {fields.get('CPUQuotaPerSecUSec', 'unknown')} "
-                       f"CPU-time per second; RAM maximum {fields.get('MemoryMax', 'unknown')} bytes.")
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    return {
-        "applied_limits_status": applied,
-        "roots": {key: resolved[key] for key in STORAGE_COMPUTE_ROOT_FIELDS},
-        "detected_cpu_threads": capacity.cpu_threads,
-        "detected_memory_gib": capacity.memory_bytes / GIB,
-        "configured_cpu_threads": configured_threads,
-        "configured_memory_gib": configured_memory_gib,
-        "validation_error": validation_error,
-        "default_cpu_threads": defaults.cpu_threads,
-        "default_memory_gib": defaults.memory_bytes / GIB,
-        "cuda_status": cuda,
-        "apply_notice": STORAGE_COMPUTE_APPLY_NOTICE,
-    }
-
-
-def save_storage_compute_settings(values: Mapping[str, object], project_root: Path | None = None) -> str:
-    """Persist only explicitly edited fields. Never install/reload/restart units."""
-    from biomodstack_runtime_profile import save_install_profile
-    allowed = {*STORAGE_COMPUTE_ROOT_FIELDS, "local_cpu_threads", "local_memory_gib"}
-    if set(values) - allowed:
-        raise ServiceManagerError("Unsupported Storage and compute setting")
-    for key in STORAGE_COMPUTE_ROOT_FIELDS:
-        if key in values and not str(values[key] or "").strip():
-            raise ServiceManagerError(f"{key} must not be empty")
-    try:
-        save_install_profile(values, project_root=project_root)
-    except (ValueError, TypeError, OSError) as exc:
-        raise ServiceManagerError(str(exc)) from exc
-    return STORAGE_COMPUTE_APPLY_NOTICE
 
 
 def _coerce_host_port(value: int | str | None, *, label: str) -> int | None:
@@ -1327,16 +1194,6 @@ def systemd_value(value: object) -> str:
 
 def systemd_exec_arg(value: object) -> str:
     return systemd_value(str(value).replace("$", "$$"))
-
-
-def desktop_exec_arg(value: object) -> str:
-    """One Desktop Entry Exec token; preserve literal percent field codes."""
-    text = str(value).replace("%", "%%")
-    if any(char in text for char in "\n\r\x00"):
-        raise ValueError("desktop arguments cannot contain line breaks or NUL")
-    for char in ("\\", '"', '`', '$'):
-        text = text.replace(char, "\\\\" + char)
-    return '"' + text + '"'
 
 
 def _runtime_reference_directive(store: Path, lane: str) -> str:
@@ -2110,49 +1967,6 @@ def units_need_daemon_reload(unit_names: list[str], project_root: Path | None = 
 
 def ensure_target_enabled(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     run_systemctl("enable", runtime_target_unit(runtime_mode), project_root=project_root)
-
-
-def dev_autostart_enabled(project_root: Path | None = None) -> bool | None:
-    """True/False when the Development target is (not) enabled for session start; None if it is not installed or unreadable."""
-    try:
-        result = run_systemctl("is-enabled", DEV_TARGET_UNIT, check=False, project_root=project_root)
-    except (FileNotFoundError, OSError):
-        return None
-    state = (result.stdout or "").strip()
-    if state == "enabled":
-        return True
-    if state == "disabled":
-        return False
-    return None
-
-
-def user_linger_enabled() -> bool | None:
-    """Whether this account's user manager (and so an enabled Development target) starts at boot, before anyone logs in."""
-    try:
-        result = subprocess.run(
-            ["loginctl", "show-user", str(os.getuid()), "--property=Linger", "--value"],
-            check=False, capture_output=True, text=True, timeout=10,
-        )
-    except (FileNotFoundError, OSError, subprocess.SubprocessError):
-        return None
-    value = (result.stdout or "").strip().lower()
-    return True if value == "yes" else False if value == "no" else None
-
-
-def set_dev_autostart(enabled: bool, project_root: Path | None = None) -> bool | None:
-    """Enable or disable starting the Development target with the user session. Running services are left alone."""
-    if dev_autostart_enabled(project_root) is None:
-        raise ServiceManagerError(
-            f"{DEV_TARGET_UNIT} is not installed for this account yet; press Start once with Dev selected."
-        )
-    result = run_systemctl("enable" if enabled else "disable", DEV_TARGET_UNIT, check=False, project_root=project_root)
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip().splitlines()
-        raise ServiceManagerError(
-            f"systemctl --user {'enable' if enabled else 'disable'} {DEV_TARGET_UNIT} failed"
-            + (f": {detail[-1]}" if detail else "")
-        )
-    return dev_autostart_enabled(project_root)
 
 
 def ensure_mobile_update_publisher_running(
