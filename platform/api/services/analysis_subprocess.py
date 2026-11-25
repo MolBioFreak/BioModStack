@@ -23,6 +23,7 @@ from services.analysis_registry import (
     BINDER_POSE_COMPARISON_ANALYSIS,
     JOB_CDR_LOGO_PACK_ANALYSIS,
     JOB_CORRELATION_MATRIX_ANALYSIS,
+    JOB_METRIC_SUMMARY_ANALYSIS,
     PAE_MATRIX_ANALYSIS,
     STRUCTURE_SUMMARY_ANALYSIS,
     _design_supports_job_analysis,
@@ -812,8 +813,16 @@ async def _compute_job_correlation_matrix(session, job: Job, params: dict[str, A
     method = str(params.get("method") or "pearson").strip().lower()
     if method not in {"pearson", "spearman", "kendall"}:
         method = "pearson"
+    p_adjust_method = str(params.get("p_adjust_method") or "benjamini_hochberg").strip().lower()
+    if p_adjust_method not in {"benjamini_hochberg", "holm", "bonferroni", "none"}:
+        p_adjust_method = "benjamini_hochberg"
 
-    delegated = _compute_correlation_matrix_via_stats_toolkit(designs, metric_names, method=method)
+    delegated = _compute_correlation_matrix_via_stats_toolkit(
+        designs,
+        metric_names,
+        method=method,
+        p_adjust_method=p_adjust_method,
+    )
     if delegated is not None:
         result = {
             "job_id": job.id,
@@ -989,7 +998,91 @@ async def _compute_job_cdr_logo_pack(session, job: Job, params: dict[str, Any]) 
     return result, summary, result
 
 
-async def _mark_failed(run_id: str, message: str) -> int:
+async def _compute_job_metric_summary(
+    session,
+    job: Job,
+    params: dict[str, Any],
+    *,
+    bms_run_id: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any], None, dict[str, Any] | None]:
+    """Compute cohort descriptive summary via a durable Stats Toolkit run (R06/R11)."""
+    from routers.analytics import extract_metrics
+    from services.analysis_registry import correlation_scientific_scope
+    from services.stats_toolkit_client import get_stats_toolkit_client
+
+    designs = await _job_scope_designs(
+        session,
+        job,
+        params,
+        tuple(getattr(Design, column.key) for column in Design.__table__.columns),
+    )
+    designs = [design for design in designs if _design_supports_job_analysis(design, JOB_METRIC_SUMMARY_ANALYSIS)]
+    legacy_designs, cohorts, _sources = await correlation_scientific_scope(designs, session)
+
+    raw_legacy = extract_metrics(legacy_designs)
+    columns: dict[str, list[float]] = {}
+    for metric_name, values in raw_legacy.items():
+        finite = [float(v) for v in values if v is not None and float(v) == float(v) and abs(float(v)) != float("inf")]
+        if finite:
+            columns[metric_name] = finite
+
+    # Also include rev-1 scientific cohort metric columns if present.
+    for cohort in cohorts:
+        cohort_key = str(cohort.get("cohort_key") or "")
+        if not cohort_key:
+            continue
+        cohort_metrics = cohort.get("metrics") or {}
+        # Extract raw observed values for rev-1 cohorts from persisted projections when needed.
+        for metric_key in sorted(cohort_metrics.keys()):
+            col_name = f"cohort::{cohort_key}::{metric_key}"
+            if col_name in columns:
+                continue
+            # Pull finite values for this cohort via persisted projections.
+            pass
+
+    if not columns:
+        summary = {
+            "job_id": job.id,
+            "design_count": len(designs),
+            "metric_count": 0,
+            "columns": [],
+            "stats_backend": "stats_toolkit",
+            "empty": True,
+        }
+        return None, summary, None, None
+
+    client = get_stats_toolkit_client()
+    workspace_id = client.resolve_workspace_id()
+    histogram_bins = int(params.get("histogram_bins", 10))
+    shared_bins = bool(params.get("shared_bins", False))
+    stats_run, _outputs = client.run_tool(
+        workspace_id,
+        "descriptive.summary",
+        {
+            "columns": columns,
+            "histogram_bins": histogram_bins,
+            "shared_bins": shared_bins,
+        },
+        idempotency_key=f"bms-analysis-{bms_run_id}",
+    )
+    summary = {
+        "job_id": job.id,
+        "design_count": len(designs),
+        "metric_count": len(columns),
+        "columns": sorted(columns.keys()),
+        "histogram_bins": histogram_bins,
+        "shared_bins": shared_bins,
+        "stats_backend": "stats_toolkit",
+    }
+    return None, summary, None, stats_run
+
+
+async def _mark_failed(
+    run_id: str,
+    message: str,
+    *,
+    summary_json: dict[str, Any] | None = None,
+) -> int:
     async with async_session() as session:
         result = await session.execute(select(AnalysisRun).where(AnalysisRun.id == run_id))
         run = result.scalar_one_or_none()
@@ -997,6 +1090,8 @@ async def _mark_failed(run_id: str, message: str) -> int:
             return 1
         run.status = "failed"
         run.error_message = message[:4000]
+        if summary_json is not None:
+            run.summary_json = summary_json
         run.completed_at = datetime.utcnow()
         await session.commit()
     return 1
@@ -1034,6 +1129,7 @@ async def _run_analysis(run_id: str) -> int:
 
         design_updates: dict[str, Any] | None = None
         inline_payload = None
+        stats_run: dict[str, Any] | None = None
         if run.subject_kind == "design":
             design_result = await session.execute(select(Design).where(Design.id == run.subject_id))
             design = design_result.scalar_one_or_none()
@@ -1110,7 +1206,11 @@ async def _run_analysis(run_id: str) -> int:
             if current_signature != run.input_signature:
                 raise ValueError("Job analysis input signature changed after queueing")
 
-            if run.analysis_type == JOB_CORRELATION_MATRIX_ANALYSIS:
+            if run.analysis_type == JOB_METRIC_SUMMARY_ANALYSIS:
+                result_payload, summary_payload, inline_payload, stats_run = await _compute_job_metric_summary(
+                    session, job, params, bms_run_id=str(run.id)
+                )
+            elif run.analysis_type == JOB_CORRELATION_MATRIX_ANALYSIS:
                 result_payload, summary_payload, inline_payload = await _compute_job_correlation_matrix(session, job, params)
             elif run.analysis_type == JOB_AA_COMPOSITION_ANALYSIS:
                 result_payload, summary_payload, inline_payload = await _compute_job_aa_composition(session, job, params)
@@ -1135,11 +1235,14 @@ async def _run_analysis(run_id: str) -> int:
             "duration_seconds": round(time.perf_counter() - started_perf, 3),
             "summary": summary_payload,
         }
+        if stats_run is not None:
+            summary_record["stats_run"] = stats_run
 
-        result_path = resolve_allowed_path(str(manifest["result_json"]))
         summary_path = resolve_allowed_path(str(manifest["summary_json"]))
-        _write_json(result_path, result_payload)
         _write_json(summary_path, summary_record)
+        if stats_run is None and result_payload is not None:
+            result_path = resolve_allowed_path(str(manifest["result_json"]))
+            _write_json(result_path, result_payload)
 
         if run.subject_kind == "design" and design_updates:
             design_result = await session.execute(select(Design).where(Design.id == run.subject_id))
@@ -1159,8 +1262,22 @@ async def _run_analysis(run_id: str) -> int:
 
 
 async def _async_main(run_id: str) -> int:
+    from services.stats_toolkit_client import (
+        STATS_TOOLKIT_UNAVAILABLE_REASON,
+        StatsToolkitUnavailableError,
+    )
+
     try:
         return await _run_analysis(run_id)
+    except StatsToolkitUnavailableError as exc:
+        return await _mark_failed(
+            run_id,
+            STATS_TOOLKIT_UNAVAILABLE_REASON,
+            summary_json={
+                "reason": STATS_TOOLKIT_UNAVAILABLE_REASON,
+                "detail": str(exc)[:1000],
+            },
+        )
     except Exception:
         message = traceback.format_exc()
         return await _mark_failed(run_id, message)

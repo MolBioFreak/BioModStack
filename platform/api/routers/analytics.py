@@ -12,7 +12,14 @@ from pydantic import BaseModel
 
 from services.scientific_analytics import MetricState, MetricDescriptor, MetricSource, ScientificCohort, owning_jobs, projection, persisted_projection, revision_for_job, partition, native_scalar_owner
 from database import get_session, Job, Design
-from services.analysis_runs import get_matching_job_analysis_run, load_analysis_result, validate_job_analysis_request
+from services.analysis_runs import (
+    extract_stats_run,
+    get_latest_job_analysis_run_for_scope,
+    get_matching_job_analysis_run,
+    is_stats_toolkit_unavailable_run,
+    load_analysis_result,
+    validate_job_analysis_request,
+)
 from services.result_contracts import resolve_result_contract
 from schemas import JobResponse
 
@@ -362,6 +369,8 @@ class CorrelationMatrix(BaseModel):
     stats_backend: Optional[str] = None
     stats_tool_id: Optional[str] = None
     stats_method_version: Optional[str] = None
+    stats_run: Optional[Dict[str, Any]] = None
+    stale: bool = False
 
 class AACount(BaseModel):
     aa: str
@@ -445,7 +454,7 @@ async def _get_cached_job_analysis_payload(
     }
     try:
         await validate_job_analysis_request(session, job, analysis_type, params)
-        run, _definition, _params, _cache_key = await get_matching_job_analysis_run(
+        run, _definition, _params, _cache_key, is_stale = await get_latest_job_analysis_run_for_scope(
             session,
             job,
             analysis_type,
@@ -456,12 +465,21 @@ async def _get_cached_job_analysis_payload(
 
     if run is None:
         raise HTTPException(status_code=404, detail=f"{analysis_type} not computed yet")
+    if is_stats_toolkit_unavailable_run(run):
+        raise HTTPException(status_code=503, detail="stats_toolkit_unavailable")
     if run.status != "completed":
         raise HTTPException(status_code=409, detail=f"{analysis_type} status is {run.status}")
 
     payload = load_analysis_result(run)
     if payload is None:
         raise HTTPException(status_code=500, detail=f"Cached {analysis_type} payload is unavailable")
+    if isinstance(payload, dict) and _definition.toolkit_backed:
+        enriched = dict(payload)
+        stats_run = extract_stats_run(run)
+        if stats_run is not None:
+            enriched.setdefault("stats_run", stats_run)
+        enriched["stale"] = is_stale
+        return enriched
     return payload
 
 

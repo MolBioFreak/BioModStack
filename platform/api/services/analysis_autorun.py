@@ -14,13 +14,15 @@ from services.analysis_registry import (
     CHAIN_METRICS_ANALYSIS,
     FAMPNN_PSCE_PROFILE_ANALYSIS,
     IPSAE_INTERFACE_ANALYSIS,
+    JOB_CORRELATION_MATRIX_ANALYSIS,
+    JOB_METRIC_SUMMARY_ANALYSIS,
     PAE_MATRIX_ANALYSIS,
     BINDER_POSE_COMPARISON_ANALYSIS,
     STRUCTURE_SUMMARY_ANALYSIS,
 )
 from services.analysis_runs import (
     REUSABLE_ANALYSIS_STATUSES, normalize_analysis_params,
-    request_design_analysis, stable_json_hash,
+    request_design_analysis, request_job_analysis, stable_json_hash,
 )
 from runtime_policy import acquire_workflow_mutation_lease, run_with_workflow_mutation_lease
 
@@ -110,6 +112,34 @@ def _iter_unique(items: Sequence[str]) -> Iterable[str]:
         yield item
 
 
+_JOB_STATS_ANALYSIS_TYPES = (
+    JOB_METRIC_SUMMARY_ANALYSIS,
+    JOB_CORRELATION_MATRIX_ANALYSIS,
+)
+
+
+async def _ensure_job_stats_analyses(session, job: Job) -> dict[str, int]:
+    """Queue job-level stats analyses once per completed design/prediction/binder job (R09)."""
+    queued = 0
+    reused = 0
+    skipped = 0
+    for analysis_type in _JOB_STATS_ANALYSIS_TYPES:
+        try:
+            _run, was_reused = await request_job_analysis(
+                session,
+                job,
+                analysis_type,
+                requested_by="system:auto",
+            )
+            if was_reused:
+                reused += 1
+            else:
+                queued += 1
+        except ValueError:
+            skipped += 1
+    return {"queued": queued, "reused": reused, "skipped": skipped}
+
+
 async def ensure_viewer_minimum_analyses_for_job(job_id: str) -> dict[str, int]:
     async with async_session() as session:
         result = await session.execute(select(Job).where(Job.id == str(job_id)))
@@ -122,6 +152,18 @@ async def ensure_viewer_minimum_analyses_for_job(job_id: str) -> dict[str, int]:
         if (job.parent_job_id and not _is_binder_round_prediction(job)
                 and str(job.status or "").strip().lower() != "awaiting_input"):
             return {"designs": 0, "queued": 0, "reused": 0, "skipped": 0}
+
+        # Queue job-level stats analyses in an isolated error boundary independent
+        # of the 500-design per-design viewer cap (R09).
+        try:
+            await _ensure_job_stats_analyses(session, job)
+        except Exception as exc:
+            logger.warning(
+                "[ANALYSIS AUTO] Failed job-level stats queueing for %s (%s): %s",
+                job.name,
+                job.id,
+                exc,
+            )
 
         design_result = await session.execute(
             select(Design)

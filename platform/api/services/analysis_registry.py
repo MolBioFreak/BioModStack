@@ -21,9 +21,24 @@ def _persisted_job_design_contract(design: Design):
     return resolve_result_contract(review_profile_id=design.review_profile_id)
 
 
+_COHORT_STATS_CAPABILITIES = frozenset({
+    "antibody_backbone_metrics",
+    "complex_interface_metrics",
+    "structure_confidence_metrics",
+    "de_novo_generation_metrics",
+    "sequence_design_metrics",
+    "ppiflow_maturation_metrics",
+})
+
+
 def _design_supports_binder_metrics(design: Design) -> bool:
     capabilities = _persisted_job_design_contract(design).viewer_capabilities
     return "antibody_backbone_metrics" in capabilities or "complex_interface_metrics" in capabilities
+
+
+def _design_supports_cohort_stats(design: Design) -> bool:
+    capabilities = _persisted_job_design_contract(design).viewer_capabilities
+    return bool(set(capabilities) & _COHORT_STATS_CAPABILITIES)
 
 
 def _design_supports_job_analysis(design: Design, analysis_type: str) -> bool:
@@ -32,8 +47,8 @@ def _design_supports_job_analysis(design: Design, analysis_type: str) -> bool:
         return False
     if analysis_type in {JOB_AA_COMPOSITION_ANALYSIS, JOB_CDR_LOGO_PACK_ANALYSIS}:
         return "antibody_backbone_metrics" in contract.viewer_capabilities
-    if analysis_type == JOB_CORRELATION_MATRIX_ANALYSIS:
-        return _design_supports_binder_metrics(design)
+    if analysis_type in {JOB_CORRELATION_MATRIX_ANALYSIS, JOB_METRIC_SUMMARY_ANALYSIS}:
+        return _design_supports_cohort_stats(design)
     return False
 
 
@@ -45,9 +60,22 @@ PAE_MATRIX_ANALYSIS = "pae_matrix"
 IPSAE_INTERFACE_ANALYSIS = "ipsae_interface"
 BINDER_POSE_COMPARISON_ANALYSIS = "binder_pose_comparison"
 ANTIBODY_ANNOTATION_PACK_ANALYSIS = "antibody_annotation_pack"
+JOB_METRIC_SUMMARY_ANALYSIS = "job_metric_summary"
 JOB_CORRELATION_MATRIX_ANALYSIS = "job_correlation_matrix"
 JOB_AA_COMPOSITION_ANALYSIS = "job_aa_composition"
 JOB_CDR_LOGO_PACK_ANALYSIS = "job_cdr_logo_pack"
+SELECTION_METRIC_SUMMARY_ANALYSIS = "selection_metric_summary"
+SELECTION_BATCH_SUMMARY_ANALYSIS = "selection_batch_summary"
+
+TOOLKIT_BACKED_ANALYSIS_TYPES = frozenset({
+    JOB_METRIC_SUMMARY_ANALYSIS,
+    JOB_CORRELATION_MATRIX_ANALYSIS,
+    SELECTION_METRIC_SUMMARY_ANALYSIS,
+    SELECTION_BATCH_SUMMARY_ANALYSIS,
+})
+
+_VALID_CORRELATION_METHODS = frozenset({"pearson", "spearman", "kendall"})
+_VALID_P_ADJUST_METHODS = frozenset({"benjamini_hochberg", "holm", "bonferroni", "none"})
 
 AnalysisParamsBuilder = Callable[[dict[str, Any] | None], dict[str, Any]]
 InputSignatureBuilder = Callable[[Any, dict[str, Any], AsyncSession], str | Awaitable[str]]
@@ -61,6 +89,7 @@ class AnalysisDefinition:
     resource_class: str
     normalize_params: AnalysisParamsBuilder
     build_input_signature: InputSignatureBuilder
+    toolkit_backed: bool = False
 
 
 def _json_hash(payload: dict[str, Any]) -> str:
@@ -252,6 +281,65 @@ def normalize_job_scope_params(raw: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _normalize_histogram_bins(raw: Any, default: int = 10) -> int:
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        raise ValueError("histogram_bins must be an integer between 2 and 200")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("histogram_bins must be an integer between 2 and 200") from exc
+    if value < 2 or value > 200:
+        raise ValueError("histogram_bins must be between 2 and 200")
+    return value
+
+
+def normalize_job_metric_summary_params(raw: dict[str, Any] | None) -> dict[str, Any]:
+    params = dict(raw or {})
+    return {
+        "include_children": _normalize_bool(params.get("include_children"), True),
+        "design_ids": _normalize_design_id_list(params.get("design_ids")),
+        "histogram_bins": _normalize_histogram_bins(params.get("histogram_bins"), 10),
+        "shared_bins": _normalize_bool(params.get("shared_bins"), False),
+    }
+
+
+def normalize_job_correlation_params(raw: dict[str, Any] | None) -> dict[str, Any]:
+    params = dict(raw or {})
+    method = str(params.get("method") or "pearson").strip().lower()
+    if method not in _VALID_CORRELATION_METHODS:
+        raise ValueError(f"Unsupported correlation method: {method}")
+    p_adjust_method = str(params.get("p_adjust_method") or "benjamini_hochberg").strip().lower()
+    if p_adjust_method not in _VALID_P_ADJUST_METHODS:
+        raise ValueError(f"Unsupported p_adjust_method: {p_adjust_method}")
+    return {
+        "include_children": _normalize_bool(params.get("include_children"), True),
+        "design_ids": _normalize_design_id_list(params.get("design_ids")),
+        "method": method,
+        "p_adjust_method": p_adjust_method,
+    }
+
+
+def normalize_selection_metric_summary_params(raw: dict[str, Any] | None) -> dict[str, Any]:
+    params = dict(raw or {})
+    return {
+        "job_ids": _normalize_design_id_list(params.get("job_ids")),
+        "design_ids": _normalize_design_id_list(params.get("design_ids")),
+        "histogram_bins": _normalize_histogram_bins(params.get("histogram_bins"), 10),
+        "shared_bins": _normalize_bool(params.get("shared_bins"), False),
+    }
+
+
+def normalize_selection_batch_summary_params(raw: dict[str, Any] | None) -> dict[str, Any]:
+    params = dict(raw or {})
+    return {
+        "job_ids": _normalize_design_id_list(params.get("job_ids")),
+        "histogram_bins": _normalize_histogram_bins(params.get("histogram_bins"), 10),
+        "shared_bins": _normalize_bool(params.get("shared_bins"), False),
+    }
+
+
 def build_structure_summary_signature(design: Design, params: dict[str, Any], _session: AsyncSession) -> str:
     del params
     return _json_hash({
@@ -375,12 +463,86 @@ async def correlation_scientific_scope(designs, session):
     return legacy, [cohort.model_dump(mode="json") for cohort in cohorts], sources
 
 
-async def build_job_correlation_signature(job: Job, params: dict[str, Any], session: AsyncSession) -> str:
+_JOB_METRIC_SUMMARY_FIELDS = (
+    "plddt_overall",
+    "plddt_binder",
+    "pae_overall",
+    "pae_interaction",
+    "rmsd_binder",
+    "rmsd_overall",
+    "mpnn_score",
+    "conf_score",
+    "ptm",
+    "rog",
+    "ligand_iptm",
+    "affinity_score",
+    "binder_probability",
+    "fampnn_psce",
+    "maturation_interface_score",
+    "maturation_rmsd",
+    "maturation_delta_interface",
+    "maturation_selected_interface_score",
+    "maturation_selected_rmsd",
+    "maturation_nonselected_rmsd",
+    "ppiflow_objective_score",
+    "ppiflow_primary_loop_rmsd",
+    "frustration_high_count",
+    "frustration_min_count",
+    "frustration_pct_high",
+)
+
+
+async def build_job_metric_summary_signature(job: Job, params: dict[str, Any], session: AsyncSession) -> str:
+    scope_params = {
+        "include_children": bool(params.get("include_children", True)),
+        "design_ids": list(params.get("design_ids") or []),
+    }
     designs = await _job_design_scope_rows(
         session,
         job,
-        include_children=bool(params.get("include_children", True)),
-        design_ids=params.get("design_ids") or [],
+        include_children=scope_params["include_children"],
+        design_ids=scope_params["design_ids"],
+        columns=tuple(getattr(Design, column.key) for column in Design.__table__.columns),
+    )
+    designs = [design for design in designs if _design_supports_job_analysis(design, JOB_METRIC_SUMMARY_ANALYSIS)]
+    designs, cohorts, sources = await correlation_scientific_scope(designs, session)
+    payload = {
+        "analysis_type": JOB_METRIC_SUMMARY_ANALYSIS,
+        "job_id": str(job.id),
+        "scope": scope_params,
+        "designs": [
+            {
+                "id": design.id,
+                "review_profile_id": design.review_profile_id,
+                **{field: getattr(design, field, None) for field in _JOB_METRIC_SUMMARY_FIELDS},
+            }
+            for design in designs
+        ],
+    }
+    if sources:
+        payload.update(scientific_contract_revision=1, scientific_sources=sources, scientific_cohorts=cohorts)
+    return _json_hash(payload)
+
+
+def build_selection_input_signature(selection: Any, params: dict[str, Any], _session: AsyncSession) -> str:
+    if isinstance(selection, dict):
+        sig = str(selection.get("selection_signature") or selection.get("signature") or "").strip()
+        if sig:
+            return sig
+        return _json_hash({"selection": selection, "scope": {k: params.get(k) for k in ("job_ids", "design_ids") if k in params}})
+    return str(selection)
+
+
+async def build_job_correlation_signature(job: Job, params: dict[str, Any], session: AsyncSession) -> str:
+    scope_params = {
+        "include_children": bool(params.get("include_children", True)),
+        "design_ids": list(params.get("design_ids") or []),
+    }
+    designs = await _job_design_scope_rows(
+        session,
+        job,
+        include_children=scope_params["include_children"],
+        design_ids=scope_params["design_ids"],
         columns=tuple(getattr(Design, column.key) for column in Design.__table__.columns),
     )
     designs = [design for design in designs if _design_supports_job_analysis(design, JOB_CORRELATION_MATRIX_ANALYSIS)]
@@ -388,7 +550,7 @@ async def build_job_correlation_signature(job: Job, params: dict[str, Any], sess
     payload = {
         "analysis_type": JOB_CORRELATION_MATRIX_ANALYSIS,
         "job_id": str(job.id),
-        "params": params,
+        "params": scope_params,
         "designs": [
             {
                 "id": design.id,
@@ -554,13 +716,41 @@ ANALYSIS_DEFINITIONS: Dict[str, AnalysisDefinition] = {
         normalize_params=normalize_antibody_annotation_pack_params,
         build_input_signature=build_antibody_annotation_pack_signature,
     ),
+    JOB_METRIC_SUMMARY_ANALYSIS: AnalysisDefinition(
+        analysis_type=JOB_METRIC_SUMMARY_ANALYSIS,
+        subject_kind="job",
+        version="2026-11-25-v1",
+        resource_class="cpu_light",
+        normalize_params=normalize_job_metric_summary_params,
+        build_input_signature=build_job_metric_summary_signature,
+        toolkit_backed=True,
+    ),
     JOB_CORRELATION_MATRIX_ANALYSIS: AnalysisDefinition(
         analysis_type=JOB_CORRELATION_MATRIX_ANALYSIS,
         subject_kind="job",
         version="2026-03-18-v2",
         resource_class="cpu_heavy",
-        normalize_params=normalize_job_scope_params,
+        normalize_params=normalize_job_correlation_params,
         build_input_signature=build_job_correlation_signature,
+        toolkit_backed=True,
+    ),
+    SELECTION_METRIC_SUMMARY_ANALYSIS: AnalysisDefinition(
+        analysis_type=SELECTION_METRIC_SUMMARY_ANALYSIS,
+        subject_kind="selection",
+        version="2026-11-25-v1",
+        resource_class="cpu_light",
+        normalize_params=normalize_selection_metric_summary_params,
+        build_input_signature=build_selection_input_signature,
+        toolkit_backed=True,
+    ),
+    SELECTION_BATCH_SUMMARY_ANALYSIS: AnalysisDefinition(
+        analysis_type=SELECTION_BATCH_SUMMARY_ANALYSIS,
+        subject_kind="selection",
+        version="2026-11-25-v1",
+        resource_class="cpu_light",
+        normalize_params=normalize_selection_batch_summary_params,
+        build_input_signature=build_selection_input_signature,
+        toolkit_backed=True,
     ),
     JOB_AA_COMPOSITION_ANALYSIS: AnalysisDefinition(
         analysis_type=JOB_AA_COMPOSITION_ANALYSIS,
@@ -583,3 +773,8 @@ ANALYSIS_DEFINITIONS: Dict[str, AnalysisDefinition] = {
 
 def get_analysis_definition(analysis_type: str) -> AnalysisDefinition | None:
     return ANALYSIS_DEFINITIONS.get(str(analysis_type or "").strip().lower())
+
+
+def is_toolkit_backed_analysis(analysis_type: str) -> bool:
+    definition = get_analysis_definition(analysis_type)
+    return bool(definition and definition.toolkit_backed)

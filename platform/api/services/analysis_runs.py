@@ -19,6 +19,11 @@ from services.analysis_registry import (
     get_analysis_definition,
 )
 from services.result_contracts import resolve_result_contract, validate_design_analysis_request
+from services.stats_toolkit_client import (
+    STATS_TOOLKIT_UNAVAILABLE_REASON,
+    StatsToolkitUnavailableError,
+    get_stats_toolkit_client,
+)
 
 
 ACTIVE_ANALYSIS_STATUSES = {"queued", "running"}
@@ -90,6 +95,50 @@ def _preferred_run(runs: list[AnalysisRun]) -> AnalysisRun | None:
     return runs[0]
 
 
+def extract_stats_run(run: AnalysisRun | None) -> dict[str, Any] | None:
+    if run is None:
+        return None
+    summary = load_analysis_summary(run)
+    if not isinstance(summary, dict):
+        return None
+    stats_run = summary.get("stats_run")
+    if isinstance(stats_run, dict) and stats_run.get("run_id"):
+        return dict(stats_run)
+    return None
+
+
+def is_stats_toolkit_unavailable_run(run: AnalysisRun | None) -> bool:
+    if run is None or run.status != "failed":
+        return False
+    if str(run.error_message or "").strip().startswith(STATS_TOOLKIT_UNAVAILABLE_REASON):
+        return True
+    summary = run.summary_json if isinstance(run.summary_json, dict) else {}
+    return summary.get("reason") == STATS_TOOLKIT_UNAVAILABLE_REASON
+
+
+def _normalize_scope_tuple(params_json: dict[str, Any] | None) -> tuple[bool, tuple[str, ...]]:
+    params = params_json if isinstance(params_json, dict) else {}
+    include_children = bool(params.get("include_children", True))
+    raw_ids = params.get("design_ids") or []
+    design_ids = tuple(sorted({str(item).strip() for item in raw_ids if str(item).strip()}))
+    return include_children, design_ids
+
+
+def _order_superseding_runs(runs: list[AnalysisRun]) -> list[AnalysisRun]:
+    """Order runs newest-first, ensuring superseding runs always precede superseded ones."""
+    superseded_ids = {str(r.supersedes_run_id) for r in runs if r.supersedes_run_id}
+    return sorted(
+        runs,
+        key=lambda r: (
+            0 if str(r.id) in superseded_ids else 1,
+            r.queued_at or datetime.min,
+            r.completed_at or datetime.min,
+            str(r.id),
+        ),
+        reverse=True,
+    )
+
+
 async def get_matching_analysis_run(
     session: AsyncSession,
     *,
@@ -157,6 +206,102 @@ async def get_matching_job_analysis_run(
     )
 
 
+async def get_matching_selection_analysis_run(
+    session: AsyncSession,
+    selection_signature: str,
+    analysis_type: str,
+    raw_params: Optional[dict[str, Any]] = None,
+) -> tuple[Optional[AnalysisRun], AnalysisDefinition, dict[str, Any], str]:
+    return await get_matching_analysis_run(
+        session,
+        subject={"selection_signature": str(selection_signature)},
+        subject_kind="selection",
+        subject_id=str(selection_signature),
+        analysis_type=analysis_type,
+        raw_params=raw_params,
+    )
+
+
+async def get_latest_job_analysis_run_for_scope(
+    session: AsyncSession,
+    job: Job,
+    analysis_type: str,
+    raw_params: Optional[dict[str, Any]] = None,
+    *,
+    explicit_option_keys: frozenset[str] | set[str] = frozenset(),
+) -> tuple[Optional[AnalysisRun], AnalysisDefinition, dict[str, Any], str, bool]:
+    """Read-path lookup supporting superseding options (R08) and stale fallback (R07)."""
+    definition, normalized_params = normalize_analysis_params(analysis_type, raw_params)
+    if definition.subject_kind != "job":
+        raise ValueError(f"Analysis type {definition.analysis_type} is not valid for job subjects")
+    current_input_signature = await build_analysis_input_signature(
+        definition, job, normalized_params, session
+    )
+    current_cache_key = _cache_key_for_subject(
+        subject_kind="job",
+        subject_id=str(job.id),
+        analysis_type=definition.analysis_type,
+        params=normalized_params,
+        input_signature=current_input_signature,
+        code_version=definition.version,
+    )
+
+    if not definition.toolkit_backed:
+        result = await session.execute(
+            select(AnalysisRun)
+            .where(
+                AnalysisRun.subject_kind == "job",
+                AnalysisRun.subject_id == str(job.id),
+                AnalysisRun.analysis_type == definition.analysis_type,
+                AnalysisRun.cache_key == current_cache_key,
+            )
+            .order_by(AnalysisRun.queued_at.desc())
+        )
+        return _preferred_run(list(result.scalars().all())), definition, normalized_params, current_cache_key, False
+
+    target_scope = _normalize_scope_tuple(normalized_params)
+    result = await session.execute(
+        select(AnalysisRun)
+        .where(
+            AnalysisRun.subject_kind == "job",
+            AnalysisRun.subject_id == str(job.id),
+            AnalysisRun.analysis_type == definition.analysis_type,
+        )
+        .order_by(AnalysisRun.queued_at.desc())
+    )
+    scoped_runs = [
+        row
+        for row in result.scalars().all()
+        if _normalize_scope_tuple(row.params_json) == target_scope
+    ]
+    if explicit_option_keys:
+        scoped_runs = [
+            row
+            for row in scoped_runs
+            if all(
+                (row.params_json or {}).get(key) == normalized_params.get(key)
+                for key in explicit_option_keys
+            )
+        ]
+    if not scoped_runs:
+        return None, definition, normalized_params, current_cache_key, False
+
+    ordered = _order_superseding_runs(scoped_runs)
+    newest = ordered[0]
+    if newest.status in ACTIVE_ANALYSIS_STATUSES:
+        return newest, definition, newest.params_json or normalized_params, current_cache_key, False
+    if newest.status == "completed":
+        is_stale = newest.input_signature != current_input_signature
+        return newest, definition, newest.params_json or normalized_params, current_cache_key, is_stale
+    if newest.status == "failed":
+        return newest, definition, newest.params_json or normalized_params, current_cache_key, False
+    for candidate in ordered:
+        if candidate.status == "completed":
+            is_stale = candidate.input_signature != current_input_signature
+            return candidate, definition, candidate.params_json or normalized_params, current_cache_key, is_stale
+    return newest, definition, newest.params_json or normalized_params, current_cache_key, False
+
+
 async def request_analysis(
     session: AsyncSession,
     *,
@@ -185,6 +330,26 @@ async def request_analysis(
         await session.commit()
         return existing, True
 
+    supersedes_id = existing.id if existing is not None else None
+    if supersedes_id is None and definition.toolkit_backed and subject_kind == "job":
+        target_scope = _normalize_scope_tuple(params)
+        prior_result = await session.execute(
+            select(AnalysisRun)
+            .where(
+                AnalysisRun.subject_kind == subject_kind,
+                AnalysisRun.subject_id == str(subject_id),
+                AnalysisRun.analysis_type == definition.analysis_type,
+            )
+            .order_by(AnalysisRun.queued_at.desc())
+        )
+        prior_scoped = [
+            row
+            for row in prior_result.scalars().all()
+            if _normalize_scope_tuple(row.params_json) == target_scope
+        ]
+        if prior_scoped:
+            supersedes_id = _order_superseding_runs(prior_scoped)[0].id
+
     input_signature = await build_analysis_input_signature(definition, subject, params, session)
     params_hash = stable_json_hash(params)
     run = AnalysisRun(
@@ -202,7 +367,7 @@ async def request_analysis(
         requested_by=requested_by,
         queued_at=now,
         last_accessed_at=now,
-        supersedes_run_id=existing.id if existing is not None else None,
+        supersedes_run_id=supersedes_id,
     )
     run.artifact_manifest = build_artifact_manifest_for_run(run)
     session.add(run)
@@ -304,6 +469,30 @@ async def request_job_analysis(
     )
 
 
+async def request_selection_analysis(
+    session: AsyncSession,
+    selection_signature: str,
+    analysis_type: str,
+    raw_params: Optional[dict[str, Any]] = None,
+    *,
+    force_refresh: bool = False,
+    requested_by: str = "ui",
+) -> tuple[AnalysisRun, bool]:
+    definition = get_analysis_definition(analysis_type)
+    if definition is None or definition.subject_kind != "selection":
+        raise ValueError(f"Unknown selection analysis type: {analysis_type}")
+    return await request_analysis(
+        session,
+        subject={"selection_signature": str(selection_signature)},
+        subject_kind="selection",
+        subject_id=str(selection_signature),
+        analysis_type=analysis_type,
+        raw_params=raw_params,
+        force_refresh=force_refresh,
+        requested_by=requested_by,
+    )
+
+
 def _resolve_artifact_path(run: AnalysisRun, key: str) -> Path | None:
     manifest = run.artifact_manifest if isinstance(run.artifact_manifest, dict) else {}
     rel_path = manifest.get(key)
@@ -316,6 +505,9 @@ def _resolve_artifact_path(run: AnalysisRun, key: str) -> Path | None:
 
 
 def load_analysis_result(run: AnalysisRun) -> Any:
+    stats_run = extract_stats_run(run)
+    if stats_run is not None:
+        return get_stats_toolkit_client().read_run_outputs(str(stats_run["run_id"]))
     if run.result_inline_json is not None:
         return run.result_inline_json
     result_path = _resolve_artifact_path(run, "result_json")
@@ -348,6 +540,7 @@ def serialize_analysis_run(
     params: Optional[dict[str, Any]] = None,
     cache_hit: bool = False,
     include_result: bool = True,
+    stale: bool = False,
 ) -> dict[str, Any]:
     if run is None:
         return {
@@ -361,6 +554,10 @@ def serialize_analysis_run(
             "cache_hit": cache_hit,
             "summary": None,
             "result": None,
+            "stats_run": None,
+            "stale": False,
+            "supersedes_run_id": None,
+            "reason": None,
             "error_message": None,
             "artifacts": {},
             "queued_at": None,
@@ -369,18 +566,41 @@ def serialize_analysis_run(
             "last_accessed_at": None,
         }
 
+    summary = load_analysis_summary(run)
+    stats_run = extract_stats_run(run)
+    status = run.status
+    reason: str | None = None
+    error_message = run.error_message
+    result_payload: Any = None
+
+    if is_stats_toolkit_unavailable_run(run):
+        status = "unavailable"
+        reason = STATS_TOOLKIT_UNAVAILABLE_REASON
+    elif include_result and run.status == "completed":
+        try:
+            result_payload = load_analysis_result(run)
+        except StatsToolkitUnavailableError as exc:
+            status = "unavailable"
+            reason = STATS_TOOLKIT_UNAVAILABLE_REASON
+            error_message = str(exc)
+            result_payload = None
+
     return {
         "run_id": run.id,
         "analysis_type": run.analysis_type,
         "subject_kind": run.subject_kind,
         "subject_id": run.subject_id,
-        "status": run.status,
+        "status": status,
         "resource_class": run.resource_class,
         "params": run.params_json or {},
         "cache_hit": cache_hit,
-        "summary": load_analysis_summary(run),
-        "result": load_analysis_result(run) if include_result and run.status == "completed" else None,
-        "error_message": run.error_message,
+        "summary": summary,
+        "result": result_payload,
+        "stats_run": stats_run,
+        "stale": bool(stale),
+        "supersedes_run_id": run.supersedes_run_id,
+        "reason": reason,
+        "error_message": error_message,
         "artifacts": run.artifact_manifest or {},
         "queued_at": run.queued_at,
         "started_at": run.started_at,
