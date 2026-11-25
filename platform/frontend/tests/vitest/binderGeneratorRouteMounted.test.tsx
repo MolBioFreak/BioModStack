@@ -11,7 +11,6 @@ vi.mock('../../src/components/TemplateManagerModal', () => ({ TemplateManagerMod
 vi.mock('../../src/components/FrameworkBrowser', () => ({ FrameworkBrowser: () => null }));
 
 vi.mock('../../src/components/EpitopeMolstarViewer', () => ({ default: () => null }));
-vi.mock('../../src/components/Rfd3SourceSelector', () => ({ Rfd3SourceSelector: () => null }));
 import { AntibodyDenovoTemplate, type AntibodyDenovoTemplateProps } from '../../src/components/AntibodyDenovoTemplate';
 let root: Root; let client: QueryClient;
 afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); localStorage.clear(); sessionStorage.clear(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });

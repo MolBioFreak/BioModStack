@@ -24,7 +24,7 @@ async def capture():
     model = 'protein_modification_experimental'
     tasks = ['generate', 'unconditional_monomer', 'unconditional', 'motif_scaffolding', 'custom_json', 'dna_conditioned', 'rna_conditioned', 'ligand_conditioned']
     result = {'detail': await get_model(model)}
-    for generator in ['rfd3', 'laproteina', 'disco']:
+    for generator in ['laproteina', 'disco']:
         result[generator] = {task: await get_generation_settings(model, 'de_novo_design', generator=generator, task=task) for task in tasks}
     return result
 print(json.dumps(asyncio.run(capture())))`], { cwd: '../..', encoding: 'utf8' }));

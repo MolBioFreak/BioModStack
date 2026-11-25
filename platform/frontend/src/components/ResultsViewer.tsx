@@ -71,8 +71,6 @@ import { ProteinDesignPanel } from './ProteinDesignWorkflow';
 import { readRoundStorage, type CandidateRef } from '../lib/binderSelectedRound';
 import NativeSequenceResults, { nativeSequenceResultKind } from './NativeSequenceResults';
 import { fetchNativeBinderGeneration, isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
-import { fetchRFD3Generation } from '../lib/api';
-import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';
 import { readBinderSelection, writeBinderSelection, readBinderCandidateDocuments, writeBinderCandidateDocuments, readBinderNativeSources, writeBinderNativeSources, type NativeCandidateSource } from '../lib/binderContinuation';
 import { BinderResultFamily } from './BinderResultFamily';
 const BinderResultComparison = lazy(() => import('./BinderResultComparison').then(module => ({ default: module.BinderResultComparison })));
@@ -103,7 +101,6 @@ const MolstarViewer = lazy(() => import('./MolstarViewer'));
 const StabilityHeatmap = lazy(() => import('./MetricCharts').then(module => ({ default: module.StabilityHeatmap })));
 const BatchComparePane = lazy(() => import('./BatchComparePane').then(module => ({ default: module.BatchComparePane })));
 const DesignComparePane = lazy(() => import('./DesignComparePane').then(module => ({ default: module.DesignComparePane })));
-const NativeBinderComparison = lazy(() => import('./NativeBinderComparison').then(module => ({ default: module.NativeBinderComparison })));
 const DataViewerLanding = lazy(() => import('./DataViewerLanding').then(module => ({ default: module.DataViewerLanding })));
 const AnalyticsDashboard = lazy(() => import('./AnalyticsDashboard').then(module => ({ default: module.AnalyticsDashboard })));
 const StructureViewerPane = lazy(() => import('./StructureViewerPane'));
@@ -112,7 +109,6 @@ const StructurePredictionResults = lazy(() => import('./StructurePredictionResul
 const MDResultsPane = lazy(() => import('./MDResultsPane'));
 const BindCraft2JobResults = lazy(() => import('./BindCraft2JobResults').then(module => ({ default: module.BindCraft2JobResults })));
 const NativeBinderGenerationResults = lazy(() => import('./NativeBinderGenerationResults').then(module => ({ default: module.NativeBinderGenerationResults })));
-const RFD3GenerationResultsPane = lazy(() => import('./RFD3GenerationResultsPane'));
 const ConformationalMappingViewer = lazy(() => import('./conformationalMapping/ConformationalMappingViewer').then(module => ({ default: module.ConformationalMappingViewer })));
 const BlindPoseSelectedControls = lazy(() => import('./BlindPoseSelectedControls'));
 const BinderSelectedControls = lazy(() => import('./BinderSelectedControls'));
@@ -2073,7 +2069,6 @@ function ResultsViewerContent() {
             const displayDesigns = (() => {
                 if (jobCategory(job) === 'alignments') return 'Family alignment';
                 if (jobCategory(job) === 'ngs') return 'NGS results';
-                if (isRFD3GenerationResultJob(job)) return 'RFD3 generation';
                 if (isPostRfantibodyStage(job)) {
                     const rawCount = Number(job.awaiting_payload?.raw_candidate_count || 0);
                     const screenedCount = Number(job.awaiting_payload?.filtered_candidate_count || 0);
@@ -2435,7 +2430,6 @@ function ResultsViewerContent() {
         placeholderData: (previous, previousQuery) => nativeResults && hashKey([{...previousQuery?.queryKey[1] as DesignFilters, limit: undefined, offset: undefined}]) === nativeReadScope ? previous : undefined,
         enabled: !!activeJob
             && activeJob.model_id !== 'molecular_dynamics'
-            && !isRFD3GenerationResultJob(activeJob)
             && !reviewSelectionRequired,
     });
     // A failed retry can be paused while hidden/offline. It is not still loading.
@@ -3152,18 +3146,8 @@ function ResultsViewerContent() {
             ? `${activeReviewSetLabel} set`
             : 'No review set selected';
     const activeResultSetLabel = RESULT_SET_BUTTON_LABELS.find(([value]) => value === resultSetFilter)?.[1] ?? 'All result sets';
-    const nativeGenerationQuery = useQuery({
-        queryKey: ['rfd3-generation', activeJob?.id],
-        queryFn: () => fetchRFD3Generation(activeJob!.id),
-        enabled: isRFD3GenerationResultJob(activeJob),
-        retry: false,
-    });
-    const nativeGeneration = nativeGenerationQuery.data?.data;
-    const nativeGenerationCount = nativeGeneration?.schema === 'bms.rfd3.generation.read-model.v1'
-        && nativeGeneration.job_id === activeJob?.id ? nativeGeneration.counts.generated : undefined;
-    const isNativeGeneration = isRFD3GenerationResultJob(activeJob);
     // Registered native generations publish records, not Design rows; design_count stays 0.
-    const publishedNativeJob = !isNativeGeneration && isNativeBinderGeneration(activeJob);
+    const publishedNativeJob = isNativeBinderGeneration(activeJob);
     const publishedNativeTotalQuery = useQuery({
         queryKey: ['native-generation-total', activeJob?.id, activeJob?.status],
         queryFn: ({ signal }) => fetchNativeBinderGeneration(activeJob!.id, 0, 1, signal),
@@ -3176,7 +3160,6 @@ function ResultsViewerContent() {
     const activeBadgeLabel = useMemo(() => {
         if (activeJob?.model_id === 'bindcraft2') return 'Campaign results';
         if (nativeSequenceResultKind(activeJob)) return 'Native sequence results';
-        if (isNativeGeneration) return nativeGenerationCount == null ? 'Generated count unavailable' : `${nativeGenerationCount.toLocaleString()} generated candidates`;
         if (publishedNativeJob) return publishedNativeTotal == null ? 'Native results' : `${publishedNativeTotal.toLocaleString()} generated candidates`;
         if (isPostRFantibodyReview && reviewSelectionRequired) {
             return 'Select a review source';
@@ -3188,7 +3171,7 @@ function ResultsViewerContent() {
             return `${tableDesigns.length.toLocaleString()} visible`;
         }
         return `${totalDesigns.toLocaleString()} designs`;
-    }, [activeJob, isNativeGeneration, nativeGenerationCount, publishedNativeJob, publishedNativeTotal, activeCurrentSetLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
+    }, [activeJob, publishedNativeJob, publishedNativeTotal, activeCurrentSetLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
     const paginationSubject = isPostRFantibodyReview
         ? reviewSelectionRequired
             ? 'outputs'
@@ -5272,7 +5255,7 @@ function ResultsViewerContent() {
 
     const showResultFamily = !!activeJob && (
         ['bindcraft2', 'boltzgen', 'ppiflow', 'rfantibody', 'template_antibody_denovo', 'binder_refinement'].includes(activeJob.model_id)
-        || !!nativeSequenceResultKind(activeJob) || isRFD3GenerationResultJob(activeJob)
+        || !!nativeSequenceResultKind(activeJob)
         || isNativeBinderGeneration(activeJob)
         || !!(activeJob.lineage_root_job_id || activeJob.selection_source_job_id || activeJob.source_stage_job_id
             || activeJob.params?.lineage_root_job_id || activeJob.params?.iteration_source_root_job_id));
@@ -5280,7 +5263,7 @@ function ResultsViewerContent() {
     const selectedCandidateControls = activeJob && <>
         <BinderSelectedControls key={`binder-${activeJob.id}`}
             sourceJobId={activeJob.id} selectedDesignIds={selectedDesignIds} selectedNativeSources={selectedNativeSources}
-            operationScope={isRFD3GenerationResultJob(activeJob) || ['rfd4_proteina', 'complexa'].includes(activeJob.model_id) || ['disco', 'laproteina'].includes(activeJob.params?.backend ?? activeJob.params?.generator) ? 'whole_composition' : undefined}
+            operationScope={['rfd4_proteina', 'complexa'].includes(activeJob.model_id) || ['disco', 'laproteina'].includes(activeJob.params?.backend ?? activeJob.params?.generator) ? 'whole_composition' : undefined}
             projectDraftRef={returnParams.get('project_id') && returnParams.get('setup_context_id') ? { project_id: returnParams.get('project_id')!, setup_context_id: returnParams.get('setup_context_id')! } : undefined}
             launchContextId={destinationLaunchContextId}
             candidateDocuments={selectedCandidateDocuments}
@@ -5566,8 +5549,6 @@ function ResultsViewerContent() {
                                 }} />
                             {selectedCandidateControls}
                         </>
-                    ) : isRFD3GenerationResultJob(activeJob) ? (
-                        <RFD3GenerationResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : activeJob.model_id === 'molecular_dynamics' ? (
                         <MDResultsPane key={activeJob.id} jobId={activeJob.id} returnTo={typeof activeJob.params?.intent === 'object' && activeJob.params.intent !== null && 'return_to' in activeJob.params.intent && typeof activeJob.params.intent.return_to === 'string' ? activeJob.params.intent.return_to : undefined} />
                     ) : designsError && !nativeResults ? (
@@ -8866,9 +8847,6 @@ function ResultsViewerContent() {
                                             selectedDesignIds={selectedDesignIds}
                                             onSelectedDesignIdsChange={setSelectedDesignIds}
                                         />
-                                        {activeJob && isRFD3GenerationResultJob(activeJob) && (
-                                            <NativeBinderComparison jobIds={[activeJob.id]} selectedDesignIds={selectedDesignIds} />
-                                        )}
                                     </>}
 
                                     {/* CHARTS TAB - Full Analytics Dashboard */}

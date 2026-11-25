@@ -162,7 +162,6 @@ export default defineConfig({
             './tests/vitest/molecularDynamicsNativeAuthoring.test.tsx',
             './tests/molecularDynamicsNativeCatalog.test.tsx',
             './tests/vitest/mdTrajectoryFrameControls.test.tsx',
-            './tests/vitest/rfd3GenerationMounted.test.tsx',
             './tests/vitest/deNovoV15*.test.{ts,tsx}',
             './tests/vitest/deNovoDocumentCapture.test.ts',
             './tests/vitest/deNovoCaptureReceivingMounted.test.tsx',

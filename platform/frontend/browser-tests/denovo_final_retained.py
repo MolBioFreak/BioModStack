@@ -15,8 +15,7 @@ p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);a=p
 assert a.root.resolve().is_relative_to(SCRATCH_ROOT)
 import os
 base=Path(os.environ.get('BMS_FINAL_RETAINED_BASE',str(SCRATCH_ROOT/'denovo-complete-parent/phase2/api-receiving/basetemp')))
-sources=[(base/'test_complete_receiving_real_e1/state.sqlite', ['jobs','job_artifacts']),
-         (base/'test_partial_zero_unexpected_a2/test.db', ['jobs','rfd3_local_redesign_requests','rfd3_local_redesign_candidates','rfd3_local_redesign_artifacts'])]
+sources=[(base/'test_complete_receiving_real_e1/state.sqlite', ['jobs','job_artifacts'])]
 manifest=[]
 with sqlite3.connect(a.root/'core.db') as target:
     for source,tables in sources:
@@ -32,7 +31,7 @@ with sqlite3.connect(a.root/'core.db') as target:
                 for row in rows:
                     columns=row.keys()
                     values=dict(row)
-                    if table == 'rfd3_local_redesign_artifacts' and values['role'] == 'source_structure':
+                    if table == 'job_artifacts' and values.get('role') == 'source_structure':
                         source_path=Path(values['storage_path'])
                         destination=a.root/'data/retained-source'/source_path.name
                         destination.parent.mkdir(parents=True,exist_ok=True)

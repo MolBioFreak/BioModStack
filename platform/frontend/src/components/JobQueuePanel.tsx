@@ -283,8 +283,6 @@ function StageBadge({ stage, progress }: { stage: string | null; progress?: stri
         'wf_clone_validation': 'wf-clone-validation',
         'wf-clone-validation': 'wf-clone-validation',
         'rfantibody': 'RFAntibody',
-        'runrfd3': 'RFD3',
-        'filterrfd3': 'RFD3 Filter',
         'fampnn': 'FA-MPNN',
         'prepareproteinlocalvalidatorinput': 'Preparing Validators',
         'esmfold2frompdb': 'ESMFold2',

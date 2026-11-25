@@ -18,10 +18,9 @@ vi.mock('../../src/components/LaProteinaMotifInput', () => ({ LaProteinaMotifInp
 vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: () => null }));
 import { ProteinModificationTemplate } from '../../src/components/ProteinModificationTemplate';
 const inventories = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python3', ['-c', `import json
-from scripts.lib.rfd3_scientific_settings import scientific_inventory
 from scripts.lib.laproteina_contract import settings_schema, PROFILES, resolve_profile, native_profile_defaults
 from scripts.lib.disco_contract import settings_schema as disco_schema, native_profile_reference
-print(json.dumps({'rfd3':scientific_inventory(),'laproteina':{'parameter_schema':settings_schema(),'profiles':{k:resolve_profile(k) for k in PROFILES},'native_profile_defaults':native_profile_defaults()},'disco':{'parameter_schema':disco_schema(),'native_profile_reference':native_profile_reference()}}))`], { cwd: '../..', encoding: 'utf8' }));
+print(json.dumps({'laproteina':{'parameter_schema':settings_schema(),'profiles':{k:resolve_profile(k) for k in PROFILES},'native_profile_defaults':native_profile_defaults()},'disco':{'parameter_schema':disco_schema(),'native_profile_reference':native_profile_reference()}}))`], { cwd: '../..', encoding: 'utf8' }));
 let root: Root; let client: QueryClient; const previous = api.defaults.adapter;
 let requests: string[] = []; let unexpected: string[] = [];
 afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); api.defaults.adapter = previous; vi.restoreAllMocks(); expect(unexpected).toEqual([]); requests = []; unexpected = []; });
@@ -33,18 +32,6 @@ async function render(node: React.ReactNode) {
 }
 async function click(text: string) { const item = [...document.querySelectorAll('button,summary')].find(x => x.textContent === text); expect(item, text).toBeTruthy(); await act(async () => (item as HTMLElement).click()); await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); }
 async function edit(label: string, value: string) { const item = document.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(`[aria-label="${label}"]`)!; expect(item).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(item), 'value')!.set!.call(item, value); item.dispatchEvent(new Event(item.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); }
-it('RFD3 uses its own inventory, preserves saved sampler values and submits them without DISCO', async () => {
-    const draft = vi.fn(); const settings = { num_timesteps: 23, cfg_scale: 0, allow_realignment: false, cfg_t_max: null, cfg_features: [] };
-    await render(<ProteinModificationTemplate onBack={() => {}} onDraftChange={draft} initialValues={{ generator: 'rfd3', inference_sampler: settings, low_memory_mode: false }} />);
-    expect(requests.every(x => x.endsWith(':rfd3'))).toBe(true);
-    expect(document.body.textContent).not.toContain('DISCO native overrides');
-    const request = JSON.parse(document.querySelector('[data-request]')!.textContent!);
-    expect(request.params.inference_sampler).toEqual(settings); expect(request.params.low_memory_mode).toBe(false);
-    const normalized = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python3', ['-c', 'import json,sys; from scripts.lib.rfd3_scientific_settings import execution_settings; print(json.dumps(execution_settings(json.loads(sys.stdin.read()))))'], { cwd: '../..', input: JSON.stringify(request.params), encoding: 'utf8' }));
-    expect(normalized.inference_sampler).toEqual(settings);
-    expect(draft.mock.calls.at(-1)![0].inference_sampler).toEqual(settings);
-    await click('Generate candidates'); expect(mocks.submit.mock.calls.at(-1)![0].params.inference_sampler).toEqual(settings);
-});
 it('all current settings are reachable in model-specific sections without filling sparse requests', async () => {
     const changed = vi.fn(); await render(<OtherDeNovoSettings model="laproteina" task="motif_scaffolding" value={{}} onChange={changed} />);
     for (const title of ['Backbone sampler', 'Local latent sampler', 'Motif overrides', 'Sampling and outputs']) await click(title);
@@ -181,13 +168,12 @@ it('uses the exact preset for motif references and reports unlisted values hones
     expect(field('max_nsamples_per_batch').textContent).toContain('Inherited value not reported');
     expect(changed).not.toHaveBeenCalled();
 });
-it.each(['rfd3', 'disco'] as const)('%s discovers the complete current settings inventory without writing overrides', async model => {
-    const changed = vi.fn(); const value = model === 'rfd3' ? { inference_sampler: {} } : { pcad_disco_settings_json: { noisy_guidance: {}, sequence_sampling: {} } };
+it.each(['disco'] as const)('%s discovers the complete current settings inventory without writing overrides', async model => {
+    const changed = vi.fn(); const value = { pcad_disco_settings_json: { noisy_guidance: {}, sequence_sampling: {} } };
     await render(<OtherDeNovoSettings model={model} task="unconditional" value={value} onChange={changed} />);
     for (const summary of [...document.querySelectorAll('summary')]) await click(summary.textContent!);
-    const fields = model === 'rfd3' ? inventories.rfd3.execution : inventories.disco.parameter_schema.properties;
-    for (const name of Object.keys(fields).filter(name => name !== 'dump_trajectories')) expect(document.querySelector(`[data-native-setting="${name}"], [title="${name}"], [aria-label="inference_sampler.${name} presence"]`), name).not.toBeNull();
-    if (model === 'rfd3') for (const name of Object.keys(fields.inference_sampler.properties)) expect(document.querySelector(`[data-native-setting="${name}"], [title="${name}"], [aria-label="inference_sampler.${name} presence"]`), name).not.toBeNull();
+    const fields = inventories.disco.parameter_schema.properties;
+    for (const name of Object.keys(fields).filter(name => name !== 'dump_trajectories')) expect(document.querySelector(`[data-native-setting="${name}"], [title="${name}"]`), name).not.toBeNull();
     expect(changed).not.toHaveBeenCalled();
 });
 it('native La modes replace invalid menu choices while preserving an explicit historical saved token', async () => {

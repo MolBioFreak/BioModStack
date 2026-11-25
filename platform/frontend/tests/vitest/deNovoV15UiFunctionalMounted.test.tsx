@@ -12,7 +12,7 @@ import { prepareDeNovoContinuation } from '../../src/lib/deNovoContinuation';
 import { DeNovoDraftPreparationContext } from '../../src/lib/deNovoDocumentCapture';
 import models from './fixtures/resequenceDesignerModels.json';
 import { execFileSync } from 'node:child_process';
-const inventory = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python', ['tests/test_de_novo_gap_rfd3.py', 'inventory'], { cwd: '../..', encoding: 'utf8' }));
+const inventory = {};
 
 vi.mock('../../src/components/DeNovoNativeSources', () => ({ NativeSourceInput: ({ onAcquire }: any) => <button onClick={() => onAcquire({ job_id: 'source-job', design_id: 'source-design', model_number: 7, output_format: 'native' })}>Pick exact source</button> }));
 vi.mock('../../src/components/ExecutionTargetPicker', () => ({ ExecutionTargetPicker: ({ onChange }: any) => <><button onClick={() => onChange(null)}>Place Local</button><button onClick={() => onChange('worker')}>Place worker</button></> }));
@@ -165,11 +165,6 @@ it('allows explicit empty DISCO jobs without inactive lengths', async () => {
 it('allows La atom-spec-only motif without inactive contig', async () => {
     await mount({ generator: 'laproteina', modification_mode: 'de_novo_design', design_task: 'motif_scaffolding', target_lengths: '100', laproteina_motif_pdb: 'motif.pdb', laproteina_motif_atom_spec: { A1: ['CA'] }, laproteina_contig_string: '', sequence_design: null });
     expect(latest.native_job_request).toMatchObject({ params: { laproteina_motif_atom_spec: { A1: ['CA'] } } });
-});
-it.each(['partial_diffusion', 'minimal_insertion'])('migrates flat historical %s into the unified generation request without dropping sparse values', async task => {
-    await mount({ modification_mode: 'rfd3_local_redesign', generator: 'rfd3', input_structure: 'native.cif', redesign_mode: task, model_number: 7, design_chains: 'AB', context_chains: ['CD'], redesign_ranges: 'AB10-12', insertion_anchor: 'AB12', insertion_min_length: 1, insertion_max_length: 3, ...(task === 'partial_diffusion' ? { partial_t: 0 } : {}), plddt_enhanced: false, sequence_policy: 'preserve' });
-    expect(latest.native_job_request).toMatchObject({ mode: 'de_novo_design', params: { generation_task: task, source_model: 7, redesign: { design_chains: ['AB'], context_chains: ['CD'], redesign_ranges: 'AB10-12', insertion_anchor: 'AB12', insertion_min_length: 1, insertion_max_length: 3 }, conditioning: { plddt_enhanced: false, ...(task === 'partial_diffusion' ? { partial_t: 0 } : {}) } } });
-    expect(latest.native_job_request.params).not.toHaveProperty('redesign_mode');
 });
 it('continuation retains native CIF and places a zero continuation seed only under search.resume_seed', async () => {
     await mount(loop);

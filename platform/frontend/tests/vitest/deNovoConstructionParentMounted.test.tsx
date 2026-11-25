@@ -31,7 +31,7 @@ async def capture():
     result = {'details': {k: await get_model(k) for k in ('protein_modification_experimental','rfd4_proteina','complexa')}}
     result['rfd4_proteina'] = generation_settings('generate')
     result['complexa'] = discovery()
-    for engine in ('rfd3','disco','laproteina'):
+    for engine in ('disco','laproteina'):
         result[engine] = {task:await get_generation_settings('protein_modification_experimental','de_novo_design',engine,task) for task in ('unconditional','unconditional_monomer','dna_conditioned','rna_conditioned')}
     return result
 print(json.dumps(asyncio.run(capture())))
@@ -116,7 +116,7 @@ async function edit(label: string, value: string) {
     await settle();
 }
 
-it.each(['rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa'])('shared optional construction leaves untouched %s request byte-identical', async generator => {
+it.each(['rfd4_proteina', 'disco', 'laproteina', 'complexa'])('shared optional construction leaves untouched %s request byte-identical', async generator => {
     await mount({ generator, complexa_request: { task: 'protein_binder', task_name: 'unchanged', seed: 0, reward: null } });
     const before = JSON.stringify(latest.native_job_request);
     expect(calls.filter(c => c.url.startsWith('/api/molecular-'))).toEqual([]);
@@ -126,7 +126,7 @@ it.each(['rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa'])('shared op
     expect(latest).not.toHaveProperty('molecular_construction');
     expect(calls.filter(c => c.method !== 'get')).toEqual([]);
 });
-it.each(['rfd3', 'disco', 'laproteina', 'complexa'])('opens the common RFD4 entry explicitly from %s and restores its exact request', async generator => {
+it.each(['disco', 'laproteina', 'complexa'])('opens the common RFD4 entry explicitly from %s and restores its exact request', async generator => {
     await mount({ generator, complexa_request: { task: 'unconditional', task_name: 'retained' } });
     const before = JSON.stringify(latest.native_job_request);
     expect(control('Engine')?.value).toBe(generator);
@@ -158,7 +158,7 @@ it('incomplete recipe stays shared across engine/goal switches and Template mana
     const retained = structuredClone(latest.molecular_construction);
     expect(retained.editor.strands[0]).toMatchObject({ id: 'unfinished', residues: [], polymer: '' });
     expect(latest.native_job_request).toEqual(original);
-    await edit('Engine', 'disco'); await edit('Goal', 'rna_conditioned'); await edit('Engine', 'rfd3'); await edit('Engine', 'rfd4_proteina');
+    await edit('Engine', 'disco'); await edit('Goal', 'rna_conditioned'); await edit('Engine', 'laproteina'); await edit('Engine', 'rfd4_proteina');
     await wait(() => expect(latest.generator).toBe('rfd4_proteina'));
     expect(latest.molecular_construction).toEqual(retained);
     expect(latest.native_job_request).toEqual(original);

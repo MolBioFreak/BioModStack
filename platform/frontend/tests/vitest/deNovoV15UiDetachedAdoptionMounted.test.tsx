@@ -21,7 +21,7 @@ vi.mock('../../src/components/EpitopeMolstarViewer', () => ({ default: () => nul
 vi.mock('../../src/components/TargetAntigenSelector', () => ({ TargetAntigenSelector: () => null }));
 vi.mock('../../src/lib/bindcraft2StructureInputs', () => ({ createBC2SourceSession: () => ({ read: async () => ({ models: [] }) }) }));
 const python = process.env.BMS_TEST_PYTHON ?? 'python';
-const inventory = JSON.parse(execFileSync(python, ['tests/test_de_novo_gap_rfd3.py', 'inventory'], { cwd: '../..', encoding: 'utf8' }));
+const inventory = {};
 const pdb = 'ATOM      1  CA  ALA A   1       1.000   2.000   3.000  1.00 20.00           C  \nATOM      2  CA  GLY A   2       4.000   5.000   6.000  1.00 20.00           C  \nEND\n';
 const cif = execFileSync(python, ['-c', 'import sys,io;from Bio.PDB import MMCIFIO,PDBParser;w=MMCIFIO();w.set_structure(PDBParser(QUIET=True).get_structure("fixture",io.StringIO(sys.stdin.read())));w.save(sys.stdout)'], { input: pdb, encoding: 'utf8' });
 const frozen = cif + '\n# frozen Studio transport fixture\n';
@@ -49,12 +49,11 @@ async function mount(generator: string, extra: Record<string, unknown> = {}) {
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     query = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
     const values = { generator, modification_mode: 'de_novo_design', min_length: 100, max_length: 100, target_lengths: '100', sequence_design: null, sequence_design_null: true,
-        ...(generator === 'rfd3' ? { input_structure: 'inputs/original.cif', source_model: 1, conditioning } : generator === 'laproteina' ? { design_task: 'motif_scaffolding', laproteina_preset: 'motif_idx_aa', laproteina_motif_pdb: 'inputs/original.pdb', laproteina_contig_string: '10/A2/10', laproteina_motif_task_name: 'retained-task', pcad_laproteina_settings_json: { motif_atom_spec: null, num_steps: 0, future_option: false } } : { pcad_disco_jobs_json: [], pcad_disco_jobs_source_path: 'inputs/original/jobs.json' }), ...extra };
+        ...(generator === 'laproteina' ? { design_task: 'motif_scaffolding', laproteina_preset: 'motif_idx_aa', laproteina_motif_pdb: 'inputs/original.pdb', laproteina_contig_string: '10/A2/10', laproteina_motif_task_name: 'retained-task', pcad_laproteina_settings_json: { motif_atom_spec: null, num_steps: 0, future_option: false } } : { pcad_disco_jobs_json: [], pcad_disco_jobs_source_path: 'inputs/original/jobs.json' }), ...extra };
     await act(async () => root!.render(<QueryClientProvider client={query}><MemoryRouter><DeNovoDraftPreparationContext.Provider value={prep}><ProteinModificationTemplate initialValues={values} onBack={() => {}} onDraftChange={value => { latest = value; }} /></DeNovoDraftPreparationContext.Provider></MemoryRouter></QueryClientProvider>)); await settle();
 }
-async function open(generator: string) {
-    if (generator === 'rfd3') { await click('Input structure (optional)'); await click('Edit input in AtomWorks Studio'); }
-    else await click('Edit motif source in Studio');
+async function open(_generator: string) {
+    await click('Edit motif source in Studio');
     await wait(() => expect(document.querySelector('iframe[title="AtomWorks Studio"]')).not.toBeNull());
 }
 beforeEach(() => {

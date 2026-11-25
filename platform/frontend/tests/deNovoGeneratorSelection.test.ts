@@ -9,7 +9,7 @@ test('launcher retains every existing generator and describes exact supported mo
     assert.deepEqual(card?.stages[0].tool.split(' / '), ['BindCraft2', 'BoltzGen', 'PPIFlow']);
     assert.match(card?.description ?? '', /model-native inputs and settings/);
     assert.match(card?.description ?? '', /optional selected refinement/);
-    assert.doesNotMatch(card?.stages[0].tool ?? '', /seeded|RFD3|VHH/);
+    assert.doesNotMatch(card?.stages[0].tool ?? '', /seeded|VHH/);
 });
 
 test('saved native generator mode restores its own route and unknown selectors refuse substitution', () => {

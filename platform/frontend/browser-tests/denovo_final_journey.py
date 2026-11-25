@@ -171,7 +171,7 @@ with connect(page['webSocketDebuggerUrl'],origin=None,max_size=64*1024*1024) as 
             check('native download byte-identical to retained capture',json.dumps(download['status']==200 and download['sha256']=='a1916e81afe2cb0511e68fc3af3c39a8801a665f14fa11ae4fe176a2dfebc5d5'))
             snapshot('generation-returned-results')
             if os.environ.get('BMS_FINAL_REDESIGN_UNEXECUTABLE')=='1':
-                (a.evidence/'redesign-unexecuted.json').write_text(json.dumps({'unexecuted':'retained cancelled RFD3 redesign results (/bms/designs/rfd)','reason':'real producer (RFD3 local-redesign service, rfd3_local_redesign_* tables) deleted in 1da53bf; no real fixture can be written; not fabricated'},indent=2))
+                (a.evidence/'redesign-unexecuted.json').write_text(json.dumps({'unexecuted':'retained legacy redesign results (/bms/designs/rfd)','reason':'retired local-redesign service deleted; no real fixture can be written; not fabricated'},indent=2))
             else:
                 call('Page.navigate',url='http://127.0.0.1:18871/bms/designs/rfd')
                 wait("document.body.innerText.includes('1 published candidates')")

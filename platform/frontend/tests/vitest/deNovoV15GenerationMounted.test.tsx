@@ -53,7 +53,6 @@ async function click(name: string) {
 const latest = (spy: ReturnType<typeof vi.fn>) => spy.mock.calls.at(-1)![0];
 
 it.each([
-    { generator: 'rfd3', min_length: 73, max_length: 99, seed: 0, dump_trajectories: false },
     { generator: 'disco', disco_effort: 'fast', pcad_disco_settings_json: { deterministic: false, seeds: [] } },
     { generator: 'laproteina', pcad_laproteina_settings_json: { self_cond: false, motif_atom_spec: null } },
 ])('Simple and Advanced preserve the native request for $generator', async initialValues => {
@@ -67,8 +66,8 @@ it.each([
 
 it('retains opaque editor imports across an engine switch without submitting them', async () => {
     const draft = vi.fn(); const opaque = { provenance: null, tags: [], selected: false };
-    await render({ initialValues: { generator: 'rfd3', opaque_import: opaque }, onDraftChange: draft });
-    await edit('Engine', 'disco'); await edit('Engine', 'rfd3');
+    await render({ initialValues: { generator: 'laproteina', target_lengths: '120', opaque_import: opaque }, onDraftChange: draft });
+    await edit('Engine', 'disco'); await edit('Engine', 'laproteina');
     const saved = JSON.parse(JSON.stringify(latest(draft)));
     expect(saved.opaque_import).toEqual(opaque);
     expect(saved.native_job_request.params).not.toHaveProperty('opaque_import');
@@ -78,19 +77,6 @@ it('retains opaque editor imports across an engine switch without submitting the
     expect(latest(draft).native_job_request.params).not.toHaveProperty('opaque_import');
 });
 
-it('preserves explicit cleared numeric drafts across engine switching and JSON reopen without converting them to zero', async () => {
-    const draft = vi.fn();
-    await render({ initialValues: { generator: 'rfd3' }, onDraftChange: draft });
-    await edit('Minimum length', ''); await edit('Seed', '');
-    await edit('Engine', 'disco'); await edit('Engine', 'rfd3');
-    expect(control('Minimum length').value).toBe(''); expect(control('Seed').value).toBe('');
-    const saved = JSON.parse(JSON.stringify(latest(draft)));
-    expect(saved.native_job_request).toBeNull();
-    await act(async () => root.unmount()); document.body.replaceChildren();
-    await render({ onDraftChange: draft, initialValues: saved });
-    expect(control('Minimum length').value).toBe(''); expect(control('Seed').value).toBe('');
-});
-
 it('retains DISCO nullable primary seed count through switching, submit, and cold reopen', async () => {
     const draft = vi.fn();
     await render({ initialValues: { generator: 'disco', target_lengths: '120', disco_num_inference_seeds: null }, onDraftChange: draft });
@@ -98,7 +84,7 @@ it('retains DISCO nullable primary seed count through switching, submit, and col
     expect(document.body.textContent).toContain('None (native seeds list; legacy launch may resolve a count)');
     expect(latest(draft).disco_num_inference_seeds).toBeNull();
     expect(latest(draft).native_job_request.params.disco_num_inference_seeds).toBeNull();
-    await edit('Engine', 'rfd3'); await edit('Engine', 'disco');
+    await edit('Engine', 'laproteina'); await edit('Engine', 'disco');
     expect(latest(draft).disco_num_inference_seeds).toBeNull();
     await click('Generate candidates');
     expect(latest(mocks.submit).params.disco_num_inference_seeds).toBeNull();
@@ -119,7 +105,7 @@ it.each(['disco', 'laproteina'])('retains %s discrete and exact drafts through s
     expect(control('Exact target length').value).toBe('');
     await edit('Exact target length', '173');
     expect(latest(draft).native_job_request.params.target_lengths).toBe('173');
-    await edit('Engine', 'rfd3'); await edit('Engine', generator);
+    await edit('Engine', 'rfd4_proteina'); await edit('Engine', generator);
     expect(control('Exact target length').value).toBe('173');
     await click('Generate candidates');
     expect(latest(mocks.submit).params.target_lengths).toBe('173');
@@ -143,28 +129,10 @@ it.each(['disco', 'laproteina'])('reopens historical %s lists without normalizin
     expect(latest(draft).native_job_request.params.target_lengths).toBe(' 99,101, 99 ');
 });
 
-it('renders one RFD3 editor and one run area after scientific inputs when selected', async () => {
-    await render({ initialValues: { generator: 'rfd3' }, runDetails: <div data-policy>Execution details</div> });
-    expect(control('Engine').value).toBe('rfd3');
-    expect([...document.querySelectorAll('nav[aria-label="Design task"] button')].map(el => el.textContent)).toEqual(['Generate', 'Redesign structure', 'Resequence', 'Shape']);
-    expect([...document.querySelectorAll('nav[aria-label="Generation sections"] button')].map(el => el.textContent)).toEqual(['Design', 'Sampling', 'Sequence Design']);
-    expect(document.querySelectorAll('[data-execution]')).toHaveLength(1);
-    expect(document.querySelectorAll('[data-policy]')).toHaveLength(1);
-    expect([...document.querySelectorAll('h2')].filter(el => el.textContent === 'De novo design workspace')).toHaveLength(1);
-    expect(document.body.textContent).not.toContain('backup');
-    expect(control('Minimum length').compareDocumentPosition(document.querySelector('[data-execution]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    await click('Generate candidates');
-    expect(mocks.submit).toHaveBeenCalledOnce();
-    expect(latest(mocks.submit)).toEqual({ sequence_design: { schema_version: 2, enabled: false, round_plan: { schema_version: 2, stages: [] } }, name: 'protein_modification', model_id: 'protein_modification_experimental', mode: 'de_novo_design', params: { generator: 'rfd3', generation_mode: 'unconditional_monomer', min_length: 100, max_length: 200, num_designs: 8, seed: 0, dump_trajectories: false } });
-});
-
 it('exposes real conditional engines, retains independent goal drafts, and submits only active scientific values', async () => {
     const draft = vi.fn(); const navigation = vi.fn();
-    await render({ initialValues: { generator: 'rfd3' }, onDraftChange: draft, onNavigationChange: navigation });
-    await edit('Minimum length', '111');
+    await render({ initialValues: { generator: 'disco' }, onDraftChange: draft, onNavigationChange: navigation });
     await edit('Goal', 'dna_conditioned');
-    expect(control('Engine').value).toBe('rfd3');
-    await edit('Engine', 'disco'); await edit('Goal', 'dna_conditioned');
     await edit('Target lengths', '120');
     await edit('DNA/RNA sequence', 'ACGT');
     await edit('Inference seed count', '3');
@@ -174,14 +142,12 @@ it('exposes real conditional engines, retains independent goal drafts, and submi
     await edit('Goal', 'dna_conditioned');
     expect(control('DNA/RNA sequence').value).toBe('ACGT');
     expect(control('Inference seed count').value).toBe('3');
-    expect(navigation).toHaveBeenCalledTimes(5);
     expect(document.querySelectorAll('[data-execution]')).toHaveLength(1);
     await click('Generate candidates');
     expect(latest(mocks.submit).params).toMatchObject({ generator: 'disco', design_task: 'dna_conditioned', disco_na_sequence: 'ACGT', disco_num_inference_seeds: 3, disco_effort: 'fast' });
     expect(latest(mocks.submit).params).not.toHaveProperty('de_novo_drafts');
     expect(latest(mocks.submit).params).not.toHaveProperty('min_length');
     expect(latest(mocks.submit).params).not.toHaveProperty('laproteina_preset');
-    expect(latest(draft).de_novo_drafts['de_novo_design:rfd3:unconditional'].min_length).toBe(111);
     await edit('Engine', 'laproteina'); await edit('Goal', 'motif_scaffolding');
     expect(control('Engine').value).toBe('laproteina');
     await click('Sampling');
@@ -255,20 +221,18 @@ it('retains explicit generation clears, zero and false through engine switches a
     const draft = vi.fn();
     await render({ onDraftChange: draft, initialValues: { generator: 'disco', job_name: 'saved', disco_seeds: '1,2' } });
     await edit('Job name', ''); await edit('Target lengths', ''); await edit('Exact seeds', '');
-    await edit('Engine', 'rfd3'); await edit('Seed', '0'); await edit('Engine', 'disco');
+    await edit('Engine', 'laproteina'); await edit('Engine', 'disco');
     expect(control('Job name').value).toBe(''); expect(control('Target lengths').value).toBe(''); expect(control('Exact seeds').value).toBe('');
     const saved = latest(draft);
     await act(async () => root.unmount()); document.body.replaceChildren();
     await render({ initialValues: saved, onDraftChange: draft });
     expect(control('Engine').value).toBe('disco'); expect(control('Job name').value).toBe(''); expect(control('Target lengths').value).toBe('');
-    await edit('Engine', 'rfd3');
-    expect(control('Seed').value).toBe('0'); expect((control('Dump trajectories') as HTMLInputElement).checked).toBe(false);
 });
 
 it('hydrates saved identity first then follows explicit browser navigation without losing drafts or echoing callbacks', async () => {
     const draft = vi.fn(); const navigation = vi.fn();
     const props = { initialValues: { generator: 'disco', design_task: 'dna_conditioned', disco_na_sequence: 'saved' }, onDraftChange: draft, onNavigationChange: navigation };
-    const defaultRoute: DeNovoNavigationState = { modification_mode: 'de_novo_design', generator: 'rfd3', design_task: 'unconditional' };
+    const defaultRoute: DeNovoNavigationState = { modification_mode: 'de_novo_design', generator: 'rfd4_proteina', design_task: 'unconditional' };
     await render({ ...props, navigationState: defaultRoute });
     expect(control('DNA/RNA sequence').value).toBe('saved');
     await edit('DNA/RNA sequence', 'edited');
@@ -278,36 +242,24 @@ it('hydrates saved identity first then follows explicit browser navigation witho
     expect(navigation).not.toHaveBeenCalled();
 });
 
-it('mounts only the active child and forwards embedded run details; Redesign is the RFD3 editor', async () => {
+it('mounts only the active child and forwards embedded run details; Redesign runs on RFD4-Proteina', async () => {
     const draft = vi.fn(); const navigation = vi.fn();
-    await render({ initialValues: { modification_mode: 'region_redesign', generator: 'rfd3' }, onDraftChange: draft, onNavigationChange: navigation, runDetails: <div data-policy /> });
-    // Redesign is a task of the RFD3 editor, not a separate child form.
-    expect(control('Engine').value).toBe('rfd3');
+    await render({ initialValues: { modification_mode: 'redesign_structure' }, onDraftChange: draft, onNavigationChange: navigation, runDetails: <div data-policy /> });
     expect(document.querySelector('[data-child]')).toBeNull();
     expect(document.querySelectorAll('[data-policy]')).toHaveLength(1);
     await click('Resequence');
     expect(document.querySelectorAll('[data-policy]')).toHaveLength(1);
     await click('Redesign structure');
     expect(document.querySelector('[data-child]')).toBeNull();
-    expect(control('Engine').value).toBe('rfd3');
     expect(document.querySelectorAll('[data-policy]')).toHaveLength(1);
-});
-
-it('both historical Redesign routes open the same unified RFD3 editor', async () => {
-    const initialValues = { modification_mode: 'region_redesign' };
-    for (const modification_mode of ['region_redesign', 'rfd3_local_redesign']) {
-        await render({ initialValues, navigationState: { modification_mode } });
-        expect(document.querySelector('[data-child]')).toBeNull();
-        expect(control('Engine').value).toBe('rfd3');
-    }
 });
 
 it('forwards the full retained draft envelope to Template Manager without submitting', async () => {
     const open = vi.fn();
-    await render({ initialValues: { generator: 'rfd3' }, onOpenTemplateManager: open });
-    await edit('Minimum length', '123'); await edit('Engine', 'laproteina'); await edit('Samples per length', '5');
+    await render({ initialValues: { generator: 'disco' }, onOpenTemplateManager: open });
+    await edit('Target lengths', '123'); await edit('Engine', 'laproteina'); await edit('Samples per length', '5');
     await click('Template Manager');
-    expect(latest(open)).toMatchObject({ currentModelId: 'protein_modification_experimental', currentMode: 'de_novo_design', currentParams: { generator: 'laproteina', laproteina_samples_per_length: 5, de_novo_drafts: { 'de_novo_design:rfd3:unconditional': { min_length: 123 } } } });
+    expect(latest(open)).toMatchObject({ currentModelId: 'protein_modification_experimental', currentMode: 'de_novo_design', currentParams: { generator: 'laproteina', laproteina_samples_per_length: 5, de_novo_drafts: { 'de_novo_design:disco:unconditional': { target_lengths: '123' } } } });
     expect(mocks.submit).not.toHaveBeenCalled();
 });
 
@@ -362,10 +314,10 @@ it('retains the real source/residue workbench through sections, engine switches 
 
 it('shares job intent only with untouched engine drafts and preserves explicit native false/paths on replay', async () => {
     const draft = vi.fn();
-    await render({ initialValues: { generator: 'rfd3' }, onDraftChange: draft });
-    await edit('Job name', 'Shared name'); await edit('Number of designs', '6'); await edit('Engine', 'disco');
-    expect(control('Job name').value).toBe('Shared name'); expect(control('Requested design count').value).toBe('6');
-    await edit('Job name', ''); await edit('Engine', 'rfd3'); await edit('Job name', 'Changed RFD3'); await edit('Engine', 'disco');
+    await render({ initialValues: { generator: 'laproteina' }, onDraftChange: draft });
+    await edit('Job name', 'Shared name'); await edit('Engine', 'disco');
+    expect(control('Job name').value).toBe('Shared name');
+    await edit('Job name', ''); await edit('Engine', 'laproteina'); await edit('Job name', 'Changed La'); await edit('Engine', 'disco');
     expect(control('Job name').value).toBe('');
     const saved = JSON.parse(JSON.stringify(latest(draft)));
     expect(saved.de_novo_drafts).not.toHaveProperty('de_novo_design:disco:unconditional');

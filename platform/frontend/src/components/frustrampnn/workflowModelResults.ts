@@ -19,7 +19,6 @@ const labelForModel = (modelId: string): string => {
         frustrampnn: 'FrustraMPNN',
         thermompnn: 'ThermoMPNN',
         proteinmpnn: 'ProteinMPNN',
-        rfd3: 'RFD3',
         fampnn: 'FA-MPNN',
         esmfold2: 'ESMFold2',
         conformational_mapping: 'Conformational Mapping',

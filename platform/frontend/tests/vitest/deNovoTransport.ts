@@ -20,7 +20,7 @@ export function isolateDeNovoTransport() {
             '/api/input-presets': [],
             '/api/inputs/presets': [],
             '/api/shape-blueprint/geometries': { geometries: [] },
-            '/api/shape-blueprint/settings': { rfd3: { initial_values: {}, params: [] }, validators: {} },
+            '/api/shape-blueprint/settings': { validators: {} },
             '/api/shape-blueprint/sequence-settings/proteinmpnn': { engine: 'proteinmpnn', initial_values: {}, contextual_defaults: {}, params: [] },
         };
         if (!Object.hasOwn(known, url)) {

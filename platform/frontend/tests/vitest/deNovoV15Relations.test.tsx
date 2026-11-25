@@ -10,23 +10,6 @@ import { nativeGenerationMetricDetail, nativeGenerationMetricUnit } from '../../
 vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: () => <div /> }));
 vi.mock('react-plotly.js', () => ({ default: () => <div /> }));
 const text = (node: any): string => typeof node === 'string' ? node : (node.children ?? []).map(text).join('');
-it('restores RFD3 measurements through its existing bounded reader, retaining zero/null', async () => {
-    const original = api.defaults.adapter;
-    const job = { id: 'rfd3', name: 'Native RFD3', model_id: 'protein_modification_experimental', mode: 'de_novo_design', params: { generator: 'rfd3' } };
-    api.defaults.adapter = async config => {
-        expect(config.url).toBe('/api/jobs/rfd3/rfd3-generation');
-        expect(config.params).toEqual({ offset: 0, limit: 100 });
-        return { config, status: 200, statusText: 'OK', headers: {}, data: { total: 1, candidates: [{ candidate_id: 'one', design_id: 'd', length: 100, radius: 0, helix_count: null, strand_count: 0, status: 'accepted' }] } };
-    };
-    try {
-        expect(hasNativeComparison(job)).toBe(true);
-        const set = await readNativeComparison(job);
-        expect(set.complete).toBe(true);
-        expect(set.records[0].metrics).toEqual({ length: 100, radius: 0, helix_count: null, strand_count: 0 });
-        expect(nativeComparisonMetric(set, set.records[0], 'radius').unit).toBe('angstrom');
-        expect(nativeGenerationMetricDetail(set.records[0], 'helix_count')).toContain('annotations unavailable');
-    } finally { api.defaults.adapter = original; }
-});
 it.skipIf(!process.env.BMS_RETAINED_RESULTS_WIRE)('mounts real retained publisher/cold-reader page and exports relations with exact continuation', async () => {
     const page = JSON.parse(readFileSync(process.env.BMS_RETAINED_RESULTS_WIRE!, 'utf8'));
     const original = api.defaults.adapter;

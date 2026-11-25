@@ -17,7 +17,7 @@ const cwd = resolve(process.cwd(), '../..');
 function native(code: string, value?: unknown) {
     return JSON.parse(execFileSync(python, ['-c', code], { cwd, input: value === undefined ? undefined : JSON.stringify(value), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }));
 }
-const inventories = native("import sys,json;sys.path.insert(0,'platform/api');from services.rfd4_proteina import generation_settings as r;from services.complexa import discovery as c;from scripts.lib.laproteina_contract import settings_schema as l;from scripts.lib.disco_contract import settings_schema as d;from scripts.lib.rfd3_scientific_settings import scientific_inventory as f;print(json.dumps({'rfd4_proteina':{m:r(m) for m in ('generate','evaluate')},'complexa':{m:c() for m in ('generate','evaluate')},'rfd3':f(),'laproteina':{'parameter_schema':l()},'disco':{'parameter_schema':d()}}))");
+const inventories = native("import sys,json;sys.path.insert(0,'platform/api');from services.rfd4_proteina import generation_settings as r;from services.complexa import discovery as c;from scripts.lib.laproteina_contract import settings_schema as l;from scripts.lib.disco_contract import settings_schema as d;print(json.dumps({'rfd4_proteina':{m:r(m) for m in ('generate','evaluate')},'complexa':{m:c() for m in ('generate','evaluate')},'laproteina':{'parameter_schema':l()},'disco':{'parameter_schema':d()}}))");
 const constructionSchema = native("import sys,json;sys.path.insert(0,'platform/api');from routers.molecular_construction import construction_schema;print(json.dumps(construction_schema()))");
 const project = (params: unknown) => native('import json,sys;from scripts.lib.protein_cad_settings import settings_projection;print(json.dumps(settings_projection(json.load(sys.stdin))))', params);
 let root: Root | undefined, client: QueryClient;
@@ -187,7 +187,7 @@ it('preserves aliases, sparse maps and inactive five-engine drafts through navig
     await mount({ generator: 'laproteina', target_lengths: '120', pcad_laproteina_num_steps: 0, laproteina_settings: { self_cond: false }, de_novo_drafts: { 'de_novo_design:disco:unconditional': { target_lengths: '140', disco_settings: { seeds: [0], num_inference_seeds: null } } } });
     const la = JSON.stringify(params());
     await click('Advanced'); await click('Simple'); expect(JSON.stringify(params())).toBe(la);
-    for (const engine of ['rfd4_proteina', 'complexa', 'rfd3', 'disco']) await edit('Engine', engine);
+    for (const engine of ['rfd4_proteina', 'complexa', 'laproteina', 'disco']) await edit('Engine', engine);
     expect(project(params()).pcad_disco_settings_json).toMatchObject({ seeds: [0], num_inference_seeds: null });
     const saved = JSON.parse(JSON.stringify(latest())); await unmount(); await mount(saved); await edit('Engine', 'laproteina');
     expect(control('Sampling steps').value).toBe('0'); expect(project(params()).pcad_laproteina_settings_json).toMatchObject({ num_steps: 0, self_cond: false });

@@ -117,8 +117,8 @@ it('measures legacy engine-switch draft duplication with the actual editor', asy
         await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(control, value); control!.dispatchEvent(new Event('change', { bubbles: true })); });
         await settle();
     }
-    await selectEngine('disco'); await selectEngine('rfd3');
+    await selectEngine('disco'); await selectEngine('rfd4_proteina');
     expect(draft).toBeDefined();
-    const report = { fixture: 'default RFD3 generate; switch Engine disco then rfd3; no scientific edits', revision: process.env.BMS_MEASUREMENT_REVISION, cold, editorBytes: Buffer.byteLength(JSON.stringify(draft)), envelope: draft };
+    const report = { fixture: 'default RFD4-Proteina generate; switch Engine disco then rfd4_proteina; no scientific edits', revision: process.env.BMS_MEASUREMENT_REVISION, cold, editorBytes: Buffer.byteLength(JSON.stringify(draft)), envelope: draft };
     if (process.env.BMS_UI_EVIDENCE_DIR) writeFileSync(resolve(process.env.BMS_UI_EVIDENCE_DIR, `measurement-${process.env.BMS_MEASUREMENT_REVISION}-legacy.json`), JSON.stringify(report, null, 2));
 });

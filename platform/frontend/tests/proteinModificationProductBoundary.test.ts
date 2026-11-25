@@ -14,19 +14,13 @@ describe('De Novo Design product boundary', () => {
         assert.equal(template.includes("import { DE_NOVO_MODIFICATION_MODE_CARDS"), true);
         assert.match(template, /model_id: 'protein_modification_experimental'/);
         assert.match(template, /mode: 'de_novo_design'/);
-        assert.match(template, /generator: 'rfd3'/);
-        assert.match(template, /generation_mode: 'unconditional_monomer'/);
-        assert.match(template, /min_length: minLength/);
-        assert.match(template, /max_length: maxLength/);
+        assert.match(template, /generator: 'rfd4_proteina'/);
         assert.match(template, /num_designs: numDesigns/);
-        assert.match(template, /seed/);
-        assert.match(template, /dump_trajectories: dumpTrajectories/);
         assert.doesNotMatch(template, /Experimental backup methods/);
         assert.match(template, /aria-label="Design task"/);
         assert.match(template, /DISCO/);
         assert.match(template, /La-Proteina/);
-        assert.equal(template.includes("mode === 'rfd3_iteration'"), true);
-        assert.match(template, /submissionModelId=\{validatedRedesign \? 'protein_modification_experimental' : 'protein_local_redesign'\}/);
+        assert.equal(template.includes("mode === 'redesign_structure'"), true);
         assert.equal(template.includes('submissionMode='), false);
         assert.equal(template.includes('Protein Hunter'), false);
         assert.equal(template.includes('Iterative Binder Design'), false);
@@ -51,7 +45,7 @@ describe('De Novo Design product boundary', () => {
 
         assert.match(
             inventory,
-            /workflowId: 'protein_modification_experimental'[\s\S]*label: 'De Novo Design'[\s\S]*modelTopics: \['rfd3', 'laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2'\]/,
+            /workflowId: 'protein_modification_experimental'[\s\S]*label: 'De Novo Design'[\s\S]*modelTopics: \['laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2'\]/,
         );
         assert.equal(inventory.includes("workflowId: 'protein_local_redesign'"), false);
         assert.equal(inventory.includes("workflowId: 'protein_cad_experimental'"), false);

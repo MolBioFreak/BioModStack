@@ -351,21 +351,17 @@ const isProteinLocalRedesignBackboneDesign = (design: OutputSourceDesign): boole
     const stageFamily = String(design.stage_family || '').toLowerCase();
     const stageMode = String(design.stage_mode || '').toLowerCase();
     const sourceStageFamily = String(design.source_stage_family || '').toLowerCase();
-    const sourceStageMode = String(design.source_stage_mode || '').toLowerCase();
 
     const hasProteinLocalHints = (
         containsAny(stageFamily, ['protein_local_redesign']) ||
-        containsAny(stageMode, ['post_rfd3', 'protein_local_redesign']) ||
+        containsAny(stageMode, ['protein_local_redesign']) ||
         containsAny(sourceStageFamily, ['protein_local_redesign']) ||
-        containsAny(sourceStageMode, ['post_rfd3']) ||
         path.includes('/protein_local_redesign_backbones/') ||
         path.includes('/collected/protein_local_redesign_backbones/')
     );
 
     return hasProteinLocalHints && (
         sourceStage === 'post_rfantibody' ||
-        containsAny(stageMode, ['post_rfd3']) ||
-        containsAny(sourceStageMode, ['post_rfd3']) ||
         path.includes('/protein_local_redesign_backbones/')
     );
 };
@@ -739,7 +735,7 @@ export const inferPreferredAnalysisLens = (
 };
 
 export const getOutputSourceLabel = (design: OutputSourceDesign): string => {
-    if (isProteinLocalRedesignBackboneDesign(design)) return 'RFD3 Backbone';
+    if (isProteinLocalRedesignBackboneDesign(design)) return 'Redesign Backbone';
     const source = inferDesignOutputSource(design);
     if (source === 'imported') return 'Imported';
     if (source === 'validation') {

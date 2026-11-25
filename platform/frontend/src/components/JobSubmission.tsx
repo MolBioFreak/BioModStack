@@ -93,12 +93,11 @@ const getTemplateDocumentationTopics = (
     if (identity.includes('boltz_cp_experimental') || identity.includes('fold-cp')) return ['fold_cp', 'boltz2'];
     if (identity.includes('confornets')) return ['confornets'];
     if (identity.includes('esmfold2')) return ['esmfold2'];
-    if (identity.includes('protein_modification_experimental') || identity.includes('protein_local_redesign') || identity.includes('local redesign')) return ['laproteina', 'disco', 'rfd3', 'fampnn', 'proteinmpnn', 'boltz2'];
+    if (identity.includes('protein_modification_experimental') || identity.includes('protein_local_redesign') || identity.includes('local redesign')) return ['laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2'];
     if (identity.includes('antibody_denovo') || identity.includes('nanobody') || identity.includes('rfantibody')) return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2'];
 
     if (identity.includes('structure_prediction') || identity.includes('structure prediction')) return ['boltz2', 'fold_cp', 'protenix', 'esmfold2'];
     if (identity.includes('boltz')) return ['boltz2'];
-    if (identity.includes('rfd3') || identity.includes('diffusion')) return ['rfd3'];
     return [];
 };
 
@@ -113,7 +112,6 @@ const getModelDocumentationTopics = (model: UntypedApiValue | null | undefined):
     if (identity.includes('protenix')) return ['protenix'];
     if (identity.includes('rf3') || identity.includes('rosettafold')) return ['rf3'];
     if (identity.includes('antibody') || identity.includes('rfantibody')) return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2'];
-    if (identity.includes('rfd3')) return ['rfd3'];
     if (identity.includes('boltzgen')) return ['boltzgen'];
     if (identity.includes('boltz2') || identity.includes('boltz-2')) return ['boltz2'];
     return [];
@@ -810,7 +808,7 @@ export function JobSubmission() {
                 job_name: loadedJobName,
                 template_model_id: isLegacyEsmfold2 || isLegacyFoldCp || isLegacyBoltzGen ? undefined : templateModelId,
                 modification_mode: templateModelId === 'protein_local_redesign'
-                    ? 'rfd3_local_redesign'
+                    ? 'redesign_structure'
                     : template.params?.modification_mode,
                 ...(isLegacyEsmfold2 ? { pred_method: 'esmfold2' } : {}),
                 ...(isLegacyFoldCp ? { pred_method: 'fold_cp' } : {}),
@@ -1293,7 +1291,7 @@ export function JobSubmission() {
         : [];
     const fampnnLaunchParams = isTemplateMode ? { ...templateDetail?.preset_params, ...params } : params;
     const usesFampnn = wizardMode === 'manual' && selectedModelId === 'fampnn';
-    // General RFD3 is backbone-only, BoltzGen skips sequence design, and
+    // BoltzGen skips sequence design, and
     // non-dedicated generic FA-MPNN parents are not in the admitted caller inventory.
     const unsupportedFampnnParent = isTemplateMode && !isDedicatedLauncherTemplate(selectedTemplateId)
         && (fampnnLaunchParams.seq_method === 'fampnn' || fampnnLaunchParams.seq_design_fampnn === true);

@@ -53,11 +53,11 @@ including Idempotency-Key, traverse the actual browser HTTP transport.
 Roster: legacy capture Save twice; fresh optional operations OFF/restore;
 sequence/packing and two independent Boltz modes plus native MD editor drafts;
 source-native retained RFD4 document selection and exact MODEL 2; native Project
-Save/full reload and full API+Chrome process restart; retained cancelled RFD3
+Save/full reload and full API+Chrome process restart; retained native
 receiving; native document download hash; actual Results continuation anchor.
 The existing native receiving fixture SQLite rows/artifacts are imported read-only
 from parent scratch. They are explicitly inert source atoms, **NOT inference**.
-Only the RFD3 source artifact's scratch storage binding is relocated byte-identically
+Only the retained source artifact's scratch storage binding is relocated byte-identically
 under BMS_DATA, preserving its content hash and request/document identity.
 
 Execution exits nonzero on a product failure. Historical `cc1525a` failed at the

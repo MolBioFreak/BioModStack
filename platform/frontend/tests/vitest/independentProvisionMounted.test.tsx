@@ -590,18 +590,18 @@ it('does not resurrect an approved workflow preview after a cancellation/recover
 
 it('the real de-novo typed form provisions the same unsaved request as launch and invalidates scientific edits', async () => {
   window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, target.id);
-  await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter><ProteinModificationTemplate onBack={() => {}} initialValues={{ generator: 'rfd3' }} /></MemoryRouter></QueryClientProvider>); await settle(); });
+  await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter><ProteinModificationTemplate onBack={() => {}} initialValues={{ generator: 'disco', target_lengths: '100' }} /></MemoryRouter></QueryClientProvider>); await settle(); });
   await act(async () => { await settle(); });
   expect(posts).toEqual([]);
   await click('Preview artifact downloads');
   const original = posts.at(-1)!.body as unknown as { workflow_request: { model_id: string; mode: string; params: Record<string, unknown> } };
-  expect(original.workflow_request).toMatchObject({ model_id: 'protein_modification_experimental', mode: 'de_novo_design', params: { generator: 'rfd3', generation_mode: 'unconditional_monomer', min_length: 100, max_length: 200, num_designs: 8, seed: 0, dump_trajectories: false } });
-  const input = [...container.querySelectorAll('label')].find(label => label.textContent?.startsWith('Minimum length'))!.querySelector('input')!;
+  expect(original.workflow_request).toMatchObject({ model_id: 'protein_modification_experimental', mode: 'de_novo_design', params: { generator: 'disco', target_lengths: '100' } });
+  const input = [...container.querySelectorAll('label')].find(label => label.textContent?.startsWith('Target lengths'))!.querySelector('input')!;
   await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '120'); input.dispatchEvent(new Event('input', { bubbles: true })); await settle(); });
   expect(button('Start provision').disabled).toBe(true);
   await click('Preview artifact downloads');
   const approved = posts.at(-1)!.body as unknown as { workflow_request: Record<string, unknown> };
-  expect(approved.workflow_request).toMatchObject({ params: { min_length: 120 } });
+  expect(approved.workflow_request).toMatchObject({ params: { target_lengths: '120' } });
   expect(posts.every(post => post.url.endsWith('/provision/preview'))).toBe(true);
   const launch = [...container.querySelectorAll('button')].find(item => item.textContent?.trim() === 'Generate candidates')!;
   expect(launch).toBeTruthy();

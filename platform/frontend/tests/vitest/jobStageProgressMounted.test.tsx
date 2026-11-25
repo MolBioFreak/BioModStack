@@ -9,7 +9,7 @@ import { getModelDisplayName } from '../../src/constants/displayNames';
 
 const statuses: Job['status'][] = ['queued', 'running', 'completed', 'awaiting_input', 'failed', 'cancelled'];
 const states: ExecutionStage['state'][] = ['planned', 'running', 'completed', 'awaiting_input', 'failed', 'cancelled', 'unknown'];
-const models = ['ppiflow', 'boltzgen', 'rfd3', 'bindcraft2', 'rfantibody', 'antibody_denovo', 'antifold', 'iggm', 'boltz2', 'protenix', 'af2', 'rf3', 'esmfold2', 'proteinmpnn', 'fampnn', 'md', 'nanopore', 'future_native_model'];
+const models = ['ppiflow', 'boltzgen', 'rfd4_proteina', 'bindcraft2', 'rfantibody', 'antibody_denovo', 'antifold', 'iggm', 'boltz2', 'protenix', 'af2', 'rf3', 'esmfold2', 'proteinmpnn', 'fampnn', 'md', 'nanopore', 'future_native_model'];
 const job = (overrides: Partial<Job> = {}): Job => ({
     id: 'stage-job', name: 'Stage fixture', model_id: 'ppiflow', mode: 'protein_binder', status: 'completed',
     params: {}, created_at: '2026-09-01T00:00:00Z', design_count: 0, output_dir: null, ...overrides,

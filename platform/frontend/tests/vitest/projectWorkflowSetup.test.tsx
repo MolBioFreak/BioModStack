@@ -82,7 +82,7 @@ describe('Project workflow setup', () => {
     it('lists only server-ready workflows and creates a primary setup before navigating to its native destination', async () => {
         await render(<NewProjectExperimentDialog projectId="project-1" open onClose={() => undefined}/>);
         await waitUntil(() => expect(container.textContent).toContain(ready.label));
-        expect(container.textContent).not.toContain('RFD3 local redesign');
+        expect(container.textContent).not.toContain('Local Redesign');
 
         const inputs = container.querySelectorAll<HTMLInputElement>('input');
         await act(async () => {

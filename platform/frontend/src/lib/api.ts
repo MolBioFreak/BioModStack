@@ -195,99 +195,6 @@ export interface MDArtifact {
     content_url: string;
 }
 
-export interface RFD3LocalRedesignReadModel {
-    schema: 'bms.rfd3.local-redesign.read-model.v1';
-    job_id: string;
-    population?: { requested: number | null; generated: number | null; failed: number | null;
-        missing: number | null; unexpected: number | null; unpaired_artifacts: number | null };
-    execution_status?: string;
-    population_completeness?: 'complete' | 'partial' | 'unknown';
-    capabilities: {
-        source_structure: boolean;
-        candidate_structures: boolean;
-        native_metadata: boolean;
-        trajectories: {
-            requested: boolean;
-            available: boolean;
-            reason: 'produced' | 'not_requested' | 'requested_artifacts_unavailable';
-        };
-    };
-    request: {
-        request_id: string;
-        schema_version: number;
-        request_sha256: string;
-        profile_id: string;
-        profile_registry_sha256: string;
-        redesign_mode: string;
-        sequence_policy: string;
-        status: string;
-        request: Record<string, UntypedApiValue>;
-        request_path_scope: 'basename';
-        provenance_path_scope: 'basename';
-        preparation_receipt?: Record<string, UntypedApiValue> | null;
-        runtime_identity?: Record<string, UntypedApiValue> | null;
-        result_manifest_sha256?: string | null;
-        failure_receipt?: Record<string, UntypedApiValue> | null;
-        created_at?: string | null;
-        updated_at?: string | null;
-        terminal_at?: string | null;
-    };
-    candidates: Array<{
-        candidate_id: string;
-        source_structure?: StructureSourceSelection | null;
-        result_set: string;
-        stage: string;
-        status: string;
-        artifact_manifest_sha256: string;
-        metrics: Record<string, UntypedApiValue>;
-        metadata: Record<string, UntypedApiValue>;
-    }>;
-    artifacts: Array<{
-        artifact_id: string;
-        candidate_id?: string | null;
-        role: string;
-        relative_path: string;
-        sha256: string;
-        bytes: number;
-        media_type: string;
-        metadata: Record<string, UntypedApiValue>;
-    }>;
-}
-
-export interface RFD3GenerationRange {
-    min: number | null;
-    mean: number | null;
-    max: number | null;
-}
-
-export interface RFD3GenerationReadModel {
-    schema: 'bms.rfd3.generation.read-model.v1';
-    job_id: string;
-    request: Record<string, UntypedApiValue>;
-    result_manifest_sha256: string;
-    counts: {
-        requested: number;
-        generated: number;
-        accepted: number;
-    };
-    aggregates: {
-        length: RFD3GenerationRange;
-        radius: RFD3GenerationRange;
-        helix: RFD3GenerationRange;
-        strand: RFD3GenerationRange;
-    };
-    candidates: Array<{
-        candidate_id: string;
-        design_id?: string;
-        source_structure?: StructureSourceSelection | null;
-        status: string;
-        length: number;
-        radius: number;
-        helix_count: number | null;
-        strand_count: number | null;
-        structure_url: string;
-    }>;
-}
 export interface ProteinLocalRedesignResultSurface {
     schema: 'bms.workflow.protein-local-redesign.results.v1';
     job: {
@@ -301,7 +208,7 @@ export interface ProteinLocalRedesignResultSurface {
     source: { artifacts: ProteinLocalRedesignResultArtifact[] };
     receipt: Record<string, UntypedApiValue> | null;
     tabs: Array<{
-        id: 'rfd3' | 'fampnn' | 'esmfold2' | 'protenix_v2';
+        id: 'fampnn' | 'esmfold2' | 'protenix_v2';
         label: string;
         role: string;
         status: 'complete' | 'partial';
@@ -1142,8 +1049,6 @@ export const fetchTelemetryChartHistory = (
     timeout: 10_000,
 });
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
-export const fetchRFD3LocalRedesign = (id: string) => api.get<RFD3LocalRedesignReadModel>(`/api/jobs/${id}/rfd3-local-redesign`);
-export const fetchRFD3Generation = (id: string) => api.get<RFD3GenerationReadModel>(`/api/jobs/${encodeURIComponent(id)}/rfd3-generation`);
 export const fetchProteinLocalRedesignResults = (id: string) => api.get<ProteinLocalRedesignResultSurface>(`/api/jobs/${encodeURIComponent(id)}/workflow-results`);
 export interface NativeConfidenceArtifacts {
     design_id: string; status: 'ok' | 'unavailable'; reason: string | null;

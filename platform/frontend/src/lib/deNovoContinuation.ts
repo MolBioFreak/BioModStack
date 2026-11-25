@@ -31,7 +31,7 @@ export function continuationHref(source: StructureSourceSelection, destination: 
     }
     if (destination === 'redesign') {
         query.set('template', 'protein_modification_experimental');
-        query.set('modification_mode', 'rfd3_local_redesign');
+        query.set('modification_mode', 'redesign_structure');
     } else if (destination.startsWith('rfd4_')) {
         query.set('template', 'protein_modification_experimental');
         query.set('modification_mode', 'de_novo_design');
@@ -76,7 +76,7 @@ export function nativeSequenceInput(model: string, prepared: StructureMaterializ
 // Materialization retains immutable input only; never submits a scientific Job.
 export async function prepareDeNovoContinuation(source: StructureSourceSelection, destination: DeNovoDestination, state?: { path: string; sha256?: string; seed?: number }) {
     const native = await materializeExactStructure({ ...source, output_format: 'native' });
-    // RFD3 receives native CIF directly, including author identifiers and annotations.
+    // Redesign receives native CIF directly, including author identifiers and annotations.
     const prepared = native;
     const retainedSource = native.source_structure ?? source;
     const common = { ...continuationRoleDefaults(native, destination), source_structure: retainedSource, _source_prepared: prepared, _source_native_prepared: native };

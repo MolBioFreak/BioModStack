@@ -44,12 +44,12 @@ test('treats missing saved preview preference as disabled by default', () => {
 });
 
 
-test('binder launcher lists four initial generators and leaves RFD3 in its separate product', async () => {
-    const { launcherWorkflowTemplates, launcherExperimentalTemplates } = await import('../src/lib/launcherCatalog.js');
+test('binder launcher lists four initial generators and keeps De Novo Design in its separate product', async () => {
+    const { launcherWorkflowTemplates } = await import('../src/lib/launcherCatalog.js');
     const binder = launcherWorkflowTemplates.find(template => template.id === 'antibody_denovo')!;
     assert.equal(binder.stages[0].tool, 'BindCraft2 / BoltzGen / PPIFlow / RFantibody');
     assert.doesNotMatch(binder.description, /seeded-only|seeded PPIFlow/);
-    assert.match(launcherExperimentalTemplates.find(template => template.id === 'protein_modification_experimental')!.description, /RFD3/);
+    assert.match(launcherWorkflowTemplates.find(template => template.id === 'protein_modification_experimental')!.description, /RFD4-Proteina/);
 });
 
 

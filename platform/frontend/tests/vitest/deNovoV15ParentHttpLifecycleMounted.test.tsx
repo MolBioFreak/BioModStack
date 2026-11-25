@@ -185,7 +185,6 @@ suite('all five populated engine drafts survive real SQLite template Save and co
     await mount(undefined, { ...clone, params: { ...clone.params, opaque_import: opaque } });
     const named = (name: string) => [...document.querySelectorAll('label')].find(node => !node.closest('[hidden]') && node.firstChild?.textContent === name)?.querySelector('input,select') as HTMLInputElement | HTMLSelectElement;
     const engine = async (name: string) => { await edit(named('Engine'), name); await settle(); };
-    await engine('rfd3'); await edit(named('Minimum length'), '111');
     await engine('disco'); await edit(named('Target lengths'), '144');
     await engine('laproteina'); await edit(named('Target lengths'), '155');
     await engine('complexa');
@@ -202,7 +201,7 @@ suite('all five populated engine drafts survive real SQLite template Save and co
         await act(async () => close!.click()); await settle();
     };
     await closeManager();
-    const engines = ['rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa'];
+    const engines = ['rfd4_proteina', 'disco', 'laproteina', 'complexa'];
     const before: Record<string, any> = { rfd4_proteina: saved.params.native_job_request };
     const assertNoEditorMetadata = (request: any) => {
         for (const key of ['editor_state', 'opaque_import', 'native_task_drafts', 'native_source_drafts', 'native_control_drafts', 'suite_last_generation']) {
@@ -222,7 +221,6 @@ suite('all five populated engine drafts survive real SQLite template Save and co
     await coldLoad(saved);
     for (const name of engines) {
         await engine(name);
-        if (name === 'rfd3') expect(named('Minimum length').value).toBe('111');
         if (name === 'disco') expect(named('Target lengths').value).toBe('144');
         if (name === 'laproteina') expect(named('Target lengths').value).toBe('155');
         if (name === 'complexa') await vi.waitFor(async () => { await settle(); expect(document.querySelector<HTMLSelectElement>('[aria-label="Complexa task"]')?.value).toBe('AME'); });
@@ -257,8 +255,8 @@ suite.each(['disco', 'laproteina'])('%s exact and discrete lengths survive SQLit
 suite('last generation selection survives redesign and a real SQLite cold Template Load', async () => {
     await mount();
     const named = (name: string) => [...document.querySelectorAll('label')].find(node => !node.closest('[hidden]') && node.firstChild?.textContent === name)?.querySelector('input,select') as HTMLInputElement | HTMLSelectElement;
-    await edit(named('Engine'), 'rfd3');
-    await edit(named('Goal'), 'rna_conditioned');
+    await edit(named('Engine'), 'laproteina');
+    await edit(named('Goal'), 'motif_scaffolding');
     await edit(named('Engine'), 'disco');
     await edit(named('Target lengths'), '144');
     await edit(named('Goal'), 'dna_conditioned');
@@ -271,8 +269,8 @@ suite('last generation selection survives redesign and a real SQLite cold Templa
     expect(named('Goal').value).toBe('dna_conditioned');
     await edit(named('Goal'), 'unconditional');
     expect(named('Target lengths').value).toBe('144');
-    await edit(named('Engine'), 'rfd3');
-    expect(named('Goal').value).toBe('rna_conditioned');
+    await edit(named('Engine'), 'laproteina');
+    expect(named('Goal').value).toBe('motif_scaffolding');
 }, 30000);
 
 suite('ordinary parent clone saves native SQLite Template and cold Load preserves sparse science and explicit Local', async () => {

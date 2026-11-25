@@ -8,10 +8,9 @@ import { BioXpSchemaInput } from '../../src/components/BioXpSchemaInput';
 import { api } from '../../src/lib/api';
 
 const inventories = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python3', ['-c', `import json
-from scripts.lib.rfd3_scientific_settings import scientific_inventory
 from scripts.lib.disco_contract import settings_schema, native_profile_reference
 from scripts.lib.laproteina_contract import settings_schema as la_schema, native_profile_defaults
-print(json.dumps({'rfd3':scientific_inventory(),'disco':{'parameter_schema':settings_schema(),'native_profile_reference':native_profile_reference()},'laproteina':{'parameter_schema':la_schema(),'native_profile_defaults':native_profile_defaults()}}))`], { cwd: '../..', encoding: 'utf8' }));
+print(json.dumps({'disco':{'parameter_schema':settings_schema(),'native_profile_reference':native_profile_reference()},'laproteina':{'parameter_schema':la_schema(),'native_profile_defaults':native_profile_defaults()}}))`], { cwd: '../..', encoding: 'utf8' }));
 let root: Root | undefined;
 let client: QueryClient;
 const adapter = api.defaults.adapter;
@@ -79,18 +78,6 @@ it('editing an inherited nested leaf submits only that leaf, with zero/false/nul
     await edit('Cross-modal guidance.omega_struct presence', 'omitted');
     expect(params()).toEqual(initial);
     expect(document.querySelector<HTMLInputElement>('[aria-label="Cross-modal guidance.omega_struct"]')!.value).toBe(String(inventories.disco.native_profile_reference.variants['designable/fast']['noisy_guidance.omega_struct'].value));
-});
-it('RFD3 readable help and checkpoint-null choice preserve sparse sampler settings', async () => {
-    const initial = { inference_sampler: { cfg_t_max: null, cfg_scale: 0, allow_realignment: false, cfg_features: [] } };
-    const changed = vi.fn();
-    await mount(<OtherDeNovoSettings model="rfd3" task="unconditional_monomer" value={initial} onChange={changed} />);
-    await click('Sampler and classifier-free guidance');
-    expect(field('inference_sampler').textContent).toContain('Noise inflation');
-    expect(field('inference_sampler').textContent).toContain('Translation augmentation (Å)');
-    expect(field('inference_sampler').textContent).toContain('exceeds this value');
-    expect(field('inference_sampler').textContent).toContain('Native checkpoint fallback (null)');
-    expect([...field('inference_sampler').querySelectorAll('p')].some(p => p.textContent === 'Explicit null')).toBe(false);
-    expect(changed).not.toHaveBeenCalled();
 });
 it('La null is a qualified no-clamp choice, not Auto or an empty number', async () => {
     const changed = vi.fn();

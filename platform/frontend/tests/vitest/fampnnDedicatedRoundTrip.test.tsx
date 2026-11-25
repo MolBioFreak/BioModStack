@@ -11,7 +11,6 @@ vi.mock('../../src/components/TemplateManagerModal', () => ({ TemplateManagerMod
 vi.mock('../../src/components/FrameworkBrowser', () => ({ FrameworkBrowser: () => null }));
 vi.mock('../../src/components/TargetAntigenSelector', () => ({ TargetAntigenSelector: () => null }));
 vi.mock('../../src/components/EpitopeMolstarViewer', () => ({ default: () => null }));
-vi.mock('../../src/components/Rfd3SourceSelector', () => ({ Rfd3SourceSelector: () => null }));
 import { api } from '../../src/lib/api';
 import { AntibodyDenovoTemplate } from '../../src/components/AntibodyDenovoTemplate';
 import { execFileSync } from 'node:child_process';

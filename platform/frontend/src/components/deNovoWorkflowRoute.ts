@@ -1,3 +1,5 @@
+import { normalizeModificationMode } from './proteinModificationModes';
+
 // Navigation metadata only. Native model owners still compile scientific requests.
 export const DE_NOVO_TEMPLATE = 'protein_modification_experimental';
 const DE_NOVO_MODELS = new Set([DE_NOVO_TEMPLATE, 'protein_local_redesign', 'protein_cad_experimental', 'rfd4_proteina', 'complexa', 'laproteina']);
@@ -17,10 +19,10 @@ export function deNovoSavedValues(
 ): Record<string, unknown> {
     // Preserve the validated-pipeline identity; it is not interchangeable with
     // the native iteration route even though both share a visual workspace.
-    const modificationMode = mode === 'region_redesign' && values.backbone_input_pdbs && values.seq_method ? 'resequence' : values.modification_mode ?? (
+    const modificationMode = mode === 'region_redesign' && values.backbone_input_pdbs && values.seq_method ? 'resequence' : normalizeModificationMode(values.modification_mode) ?? (
         mode === 'region_redesign' ? 'region_redesign'
             : model === 'protein_local_redesign' || values.template_model_id === 'protein_local_redesign'
-                ? 'rfd3_local_redesign' : 'de_novo_design'
+                ? 'redesign_structure' : 'de_novo_design'
     );
     return {
         ...values,
@@ -42,7 +44,7 @@ export function deNovoRouteValues(params: URLSearchParams): Record<string, unkno
 
 export function deNovoNavigation(values: Record<string, unknown>): DeNovoNavigationState {
     return {
-        modification_mode: typeof values.modification_mode === 'string' ? values.modification_mode : 'de_novo_design',
+        modification_mode: normalizeModificationMode(values.modification_mode) ?? 'de_novo_design',
         ...(typeof values.native_mode === 'string' ? { native_mode: values.native_mode } : {}),
         ...(typeof values.generator === 'string' ? { generator: values.generator }
             : typeof values.backend === 'string' ? { generator: values.backend } : {}),

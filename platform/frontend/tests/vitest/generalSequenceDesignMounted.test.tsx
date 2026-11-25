@@ -124,7 +124,7 @@ it('keeps OFF compact and puts primary sampling ahead of collapsed native expert
     await click('Generate candidates'); expect(job()).not.toHaveProperty('sequence_design');
 });
 
-it.each(['rfd3', 'disco', 'laproteina'])('%s uses section navigation, defaults off and submits only active designer settings through the real helper', async generator => {
+it.each(['disco', 'laproteina'])('%s uses section navigation, defaults off and submits only active designer settings through the real helper', async generator => {
     await mount(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator, target_lengths: '120' }} />);
     expect((control('Enable optional operations') as HTMLInputElement).checked).toBe(false);
     expect(control('Enable optional operations').closest('[hidden]')).not.toBeNull();
@@ -179,7 +179,7 @@ it('stage edits reach the real placement/provisioning envelope independently of 
 });
 
 it('response.sequence_design survives the real JobSubmission clone and template modal round trip', async () => {
-    localStorage.setItem('clonedJobData', JSON.stringify({ name: 'Cloned fixture', model_id: 'protein_modification_experimental', mode: 'de_novo_design', params: { generator: 'rfd3' }, sequence_design: active }));
+    localStorage.setItem('clonedJobData', JSON.stringify({ name: 'Cloned fixture', model_id: 'protein_modification_experimental', mode: 'de_novo_design', params: { generator: 'laproteina', target_lengths: '120' }, sequence_design: active }));
     await mount(<JobSubmission />);
     await openSettings(); expect(control('fampnn_psce_threshold').value).toBe(''); expect((control('Enable sequence design') as HTMLInputElement).checked).toBe(true);
     await click('Template Manager');
@@ -193,7 +193,7 @@ it('response.sequence_design survives the real JobSubmission clone and template 
 
 it('Project hydration occurs before reporting and preserves all generator/designer drafts through Save draft and reopen', async () => {
     const sequence_design_drafts = { fampnn: { params: active.params }, proteinmpnn: { params: { mpnn_omitAAs: '', mpnn_relax_output: false, mpnn_backbone_noise: 0 } }, caliby_experimental: { params: { num_workers: 0, verbose: false, omit_aas: [] }, input_settings: { fixed_pos_seq: '', symmetry_pos: '' } } };
-    const draft = { generator: 'rfd3', sequence_design: active, sequence_design_drafts, de_novo_drafts: { 'de_novo_design:disco:unconditional': { generator: 'disco', sequence_design: { ...active, model_id: 'proteinmpnn', params: sequence_design_drafts.proteinmpnn.params }, sequence_design_drafts } } };
+    const draft = { generator: 'laproteina', target_lengths: '120', sequence_design: active, sequence_design_drafts, de_novo_drafts: { 'de_novo_design:disco:unconditional': { generator: 'disco', sequence_design: { ...active, model_id: 'proteinmpnn', params: sequence_design_drafts.proteinmpnn.params }, sequence_design_drafts } } };
     project.value = { project_id: 'project-fixture', setup_context_id: 'setup-fixture', generation: 1, draft, project_label: 'Fixture', experiment_label: 'Fixture', workflow_label: 'De Novo Design', state: 'open', return_uri: '/projects/project-fixture', field_errors: {} };
     project.save.mockImplementation(async (_p, _s, request) => { project.value = { ...project.value, generation: 2, draft: JSON.parse(JSON.stringify(request.draft)) }; return project.value; });
     const entry = '/submit?template=protein_modification_experimental&project_id=project-fixture&setup_context_id=setup-fixture';

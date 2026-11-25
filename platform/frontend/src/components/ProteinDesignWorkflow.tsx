@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react';
 
-// The existing RFD3 workflow presentation, shared without its scientific state.
+// Shared protein design workflow presentation, without scientific state.
 export const themedPanelStyle: CSSProperties = {
     backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-primary)', color: 'var(--text-primary)',
 };

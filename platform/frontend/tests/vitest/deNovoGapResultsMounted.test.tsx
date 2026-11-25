@@ -15,14 +15,12 @@ import { api } from '../../src/lib/api';
 import { NativeBinderGenerationResults } from '../../src/components/NativeBinderGenerationResults';
 import * as handoff from '../../src/components/gen2StartingStructureState';
 import { JobSubmission } from '../../src/components/JobSubmission';
-import { RFD3GenerationResultsContent } from '../../src/components/RFD3GenerationResultsPane';
-import type { RFD3GenerationReadModel } from '../../src/lib/api';
 import { prepareDeNovoContinuation } from '../../src/lib/deNovoContinuation';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
 
 // Offline transport fixtures, not inference, native-writer or API acceptance.
 // All receiving/editor/serializer code is real. Only WebGL and HTTP are inert.
-vi.mock('../../src/components/MolstarViewer', () => ({ default: (props: object) => <div data-rfd3-viewer>{JSON.stringify(props)}</div> }));
+vi.mock('../../src/components/MolstarViewer', () => ({ default: (props: object) => <div data-molstar-viewer>{JSON.stringify(props)}</div> }));
 vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: () => <div data-webgl /> }));
 vi.mock('../../src/components/EpitopeMolstarViewer', () => ({ default: () => <div data-webgl /> }));
 vi.mock('../../src/components/CanonicalMeshPreview', () => ({ default: () => <div data-webgl /> }));
@@ -124,24 +122,6 @@ afterEach(async () => {
     vi.unstubAllGlobals();
     try { restore(); } finally { vi.restoreAllMocks(); }
     expect(unexpected).toEqual([]);
-});
-
-it('RFD3 labels keep exact IDs in copyable details, metrics, downloads and continuation intact', async () => {
-    const result: RFD3GenerationReadModel = {
-        schema: 'bms.rfd3.generation.read-model.v1', job_id: jobId, request: {}, result_manifest_sha256: 'a'.repeat(64),
-        counts: { requested: 2, generated: 2, accepted: 1 },
-        aggregates: Object.fromEntries(['length', 'radius', 'helix', 'strand'].map(key => [key, { min: 1, mean: 2, max: 3 }])) as RFD3GenerationReadModel['aggregates'],
-        candidates: ['internal-generated-A', 'internal-generated-B'].map(candidate_id => ({ candidate_id, status: 'generated', length: 100, radius: 0, helix_count: null, strand_count: null, structure_url: `/fixture/${candidate_id}.cif`, source_structure: source })),
-    };
-    await mount(<RFD3GenerationResultsContent result={result} />, '/designs/' + jobId);
-    await act(async () => document.querySelectorAll<HTMLButtonElement>('tbody button')[1].click());
-    expect(document.querySelector<HTMLInputElement>('[aria-label="Exact candidate identifier"]')?.value).toBe('internal-generated-B');
-    expect(JSON.parse(document.querySelector('[data-rfd3-viewer]')!.textContent!)).toMatchObject({ label: 'Candidate 2', structureUrl: '/fixture/internal-generated-B.cif', format: 'cif' });
-    expect(document.body.textContent).toContain('0.00');
-    expect(document.body.textContent).toContain('—');
-    expect([...document.querySelectorAll('a[download]')].map(a => a.getAttribute('href'))).toEqual(result.candidates.map(c => c.structure_url));
-    const link = [...document.querySelectorAll<HTMLAnchorElement>('a')].find(a => a.textContent === 'Redesign')!;
-    expect(JSON.parse(new URL(link.href).searchParams.get('source_structure')!)).toEqual(source);
 });
 
 it('Complexa reward and timing rows are named for their file, not as candidates', async () => {

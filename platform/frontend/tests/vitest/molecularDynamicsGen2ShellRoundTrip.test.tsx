@@ -230,7 +230,7 @@ describe('mounted JobSubmission same-route MD handoff ownership', () => {
         apiMocks.fetchTemplates.mockResolvedValueOnce({
             data: [
                 { id: 'protein_cad_experimental', name: 'Protein CAD Experimental', experimental: true, stages: [] },
-                { id: 'protein_local_redesign', name: 'RFD3 Local Redesign', experimental: true, stages: [] },
+                { id: 'protein_local_redesign', name: 'Local Redesign', experimental: true, stages: [] },
                 { id: 'confornets_experimental', name: 'ConforNets Experimental', experimental: true, stages: [] },
                 { id: 'molecular_dynamics', name: 'Molecular Dynamics', experimental: true, stages: [] },
             ],
@@ -247,7 +247,7 @@ describe('mounted JobSubmission same-route MD handoff ownership', () => {
         expect(cards?.textContent).not.toContain('De Novo Design');
         expect(cards?.textContent).toContain('Molecular Dynamics');
         expect(cards?.textContent).not.toContain('Protein CAD Experimental');
-        expect(cards?.textContent).not.toContain('RFD3 Local Redesign');
+        expect(cards?.textContent).not.toContain('Local Redesign');
         expect(cards?.textContent).not.toContain('ConforNets Experimental');
     });
 

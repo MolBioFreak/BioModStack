@@ -399,7 +399,7 @@ test('explicit Job switching clears only Job-local selection and keeps the Proje
     expect(text(renderer!.root)).not.toContain('Requested Design');
 });
 
-const plrModels = [['rfd3', 'RFD3', 8], ['fampnn', 'FA-MPNN', 8], ['esmfold2', 'ESMFold2', 8], ['protenix_v2', 'Protenix V2', 40]] as const;
+const plrModels = [['rfd4_proteina', 'RFD4-Proteina', 8], ['fampnn', 'FA-MPNN', 8], ['esmfold2', 'ESMFold2', 8], ['protenix_v2', 'Protenix V2', 40]] as const;
 const plrRows = plrModels.flatMap(([model, , count]) => Array.from({ length: count }, (_, index) => ({
     ...design(`${model}-${index}`, 'protein_modification_experimental'),
     provenance: { model_id: 'protein_modification_experimental', producer_model_id: model },
@@ -419,14 +419,14 @@ test.each(plrModels)('PLR %s opens the exact producer-scoped Design without conf
     expect(pane.props.designs.every((row: typeof plrRows[number]) => row.provenance.producer_model_id === model)).toBe(true);
     expect(text(renderer!.root)).not.toContain('No other candidate has been selected');
     expect(calls.some(call => call.url.endsWith('/workflow-results'))).toBe(false);
-    const otherLabel = model === 'rfd3' ? 'FA-MPNN' : 'RFD3';
+    const otherLabel = model === 'rfd4_proteina' ? 'FA-MPNN' : 'RFD4-Proteina';
     await act(async () => nav.findAllByType('button').find(button => text(button) === otherLabel)!.props.onClick()); await flush();
     const location = renderer!.root.findAllByType('span').find(item => item.props['data-location'])?.props['data-location'];
     expect(location).toContain('launch_context_id=context');
     expect(location).not.toContain('design_id=');
     const structureTab = renderer!.root.findAllByType('button').find(button => text(button).endsWith('Structure'))!;
     await act(async () => structureTab.props.onClick()); await flush();
-    expect(renderer!.root.findByType(StructureViewerPane).props.selectedDesign.provenance.producer_model_id).toBe(model === 'rfd3' ? 'fampnn' : 'rfd3');
+    expect(renderer!.root.findByType(StructureViewerPane).props.selectedDesign.provenance.producer_model_id).toBe(model === 'rfd4_proteina' ? 'fampnn' : 'rfd4_proteina');
 });
 
 test('PLR workflow context composes with the exact shared Design structure workbench', async () => {

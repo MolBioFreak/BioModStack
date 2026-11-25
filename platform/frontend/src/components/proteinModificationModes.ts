@@ -1,4 +1,10 @@
-export type ModificationMode = 'de_novo_design' | 'rfd3_iteration' | 'resequence';
+export type ModificationMode = 'de_novo_design' | 'redesign_structure' | 'resequence';
+
+export function normalizeModificationMode(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    if (value === 'rfd3_iteration' || value === 'rfd3_local_redesign') return 'redesign_structure';
+    return value;
+}
 
 export interface DeNovoModificationModeCard {
     id: ModificationMode;
@@ -17,9 +23,9 @@ export const DE_NOVO_MODIFICATION_MODE_CARDS: DeNovoModificationModeCard[] = [
         labelClassName: 'text-[var(--text-primary)]',
     },
     {
-        id: 'rfd3_iteration',
+        id: 'redesign_structure',
         label: 'Redesign structure',
-        description: 'Load or simulate a complex, select residue roles in Mol*, then choose native RFD3 output or downstream sequence design and validation.',
+        description: 'Load or simulate a complex, select residue roles in Mol*, then redesign with RFD4-Proteina or run downstream sequence design and validation.',
         cardClassName: 'border-[var(--border-primary)] bg-[var(--card-bg)] hover:border-[var(--accent-primary)]',
         labelClassName: 'text-[var(--text-primary)]',
     },

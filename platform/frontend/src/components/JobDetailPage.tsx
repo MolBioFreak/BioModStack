@@ -10,7 +10,6 @@ import { useQuery } from '@tanstack/react-query';
 import { sourceResultReturn } from '../lib/sourceResultReturn';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import type { Job } from '../lib/api';
-import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';
 import { isNgsJob, ngsResultHref } from '../lib/ngsResultRouting';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { RemoteResultsPrompt } from './RemoteResultsPrompt';
@@ -52,7 +51,6 @@ export function JobDetailPage() {
         job?.mode === 'molecular_dynamics' ||
         job?.mode === 'md';
     const isConformationalMappingJob = job?.model_id === 'conformational_mapping';
-    const isRFD3GenerationJob = isRFD3GenerationResultJob(job);
     const isNgsResultJob = job ? isNgsJob(job) : false;
 
     // Fetch structure files for structure prediction jobs
@@ -63,7 +61,7 @@ export function JobDetailPage() {
             if (!res.ok) throw new Error('Failed to fetch structure files');
             return res.json();
         },
-        enabled: job?.status === 'completed' && !isMolecularDynamicsJob && !isConformationalMappingJob && !isNgsResultJob && !isRFD3GenerationJob,
+        enabled: job?.status === 'completed' && !isMolecularDynamicsJob && !isConformationalMappingJob && !isNgsResultJob,
     });
 
     if (jobLoading) {
@@ -86,10 +84,6 @@ export function JobDetailPage() {
                 </div>
             </div>
         );
-    }
-
-    if (isRFD3GenerationJob) {
-        return <Navigate replace to={`/designs/${job.id}${location.search}`} />;
     }
 
     if (isNgsResultJob) {

@@ -53,7 +53,6 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
     'fampnn': 'FAMPNN',
     'proteinmpnn': 'ProteinMPNN',
     'rfantibody': 'RFantibody',
-    'rfd3': 'RFdiffusion3',
     'boltzgen': 'BoltzGen',
     'antiberty': 'AntiBERTy',
     'thermompnn': 'ThermoMPNN',
@@ -78,7 +77,6 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
 export const STAGE_DISPLAY_NAMES: Record<string, string> = {
     'runppiflowgeneration': 'PPIFlow Generation',
     'runboltzgen': 'BoltzGen',
-    'runrfd3': 'RFdiffusion3',
     'rfantibody': 'RFantibody',
     'post_rfantibody': 'RFantibody Review',
     'boltzgen': 'BoltzGen',
@@ -113,7 +111,6 @@ export const STAGE_DISPLAY_NAMES: Record<string, string> = {
     'fastqalign': 'FASTQ Align',
     'runclonevalidation': 'wf-clone-validation',
     'af2': 'AlphaFold2',
-    'rfd3': 'RFdiffusion3',
     'rf3': 'RoseTTAFold3',
     'esmfold2': 'ESMFold2',
     'ppiflow_backbone': 'PPIFlow Backbone',

@@ -21,7 +21,7 @@ vi.mock('../../src/components/EpitopeMolstarViewer', () => ({ default: () => nul
 vi.mock('../../src/components/TargetAntigenSelector', () => ({ TargetAntigenSelector: () => null }));
 vi.mock('../../src/lib/bindcraft2StructureInputs', () => ({ createBC2SourceSession: () => ({ read: async () => ({ models: [] }) }) }));
 const python = process.env.BMS_TEST_PYTHON ?? 'python';
-const inventory = JSON.parse(execFileSync(python, ['tests/test_de_novo_gap_rfd3.py', 'inventory'], { cwd: '../..', encoding: 'utf8' }));
+const inventory = {};
 const pdb = 'ATOM      1  CA  ALA A   1       1.000   2.000   3.000  1.00 20.00           C  \nATOM      2  CA  GLY A   2       4.000   5.000   6.000  1.00 20.00           C  \nEND\n';
 const cif = execFileSync(python, ['-c', 'import sys,io;from Bio.PDB import MMCIFIO,PDBParser;w=MMCIFIO();w.set_structure(PDBParser(QUIET=True).get_structure("fixture",io.StringIO(sys.stdin.read())));w.save(sys.stdout)'], { input: pdb, encoding: 'utf8' });
 const frozen = cif + '\n# frozen Studio transport fixture\n';
@@ -49,12 +49,11 @@ async function mount(generator: string, extra: Record<string, unknown> = {}) {
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     query = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
     const values = { generator, modification_mode: 'de_novo_design', min_length: 100, max_length: 100, target_lengths: '100', sequence_design: null, sequence_design_null: true,
-        ...(generator === 'rfd3' ? { input_structure: 'inputs/original.cif', source_model: 1, conditioning } : generator === 'laproteina' ? { design_task: 'motif_scaffolding', laproteina_preset: 'motif_idx_aa', laproteina_motif_pdb: 'inputs/original.pdb', laproteina_contig_string: '10/A2/10', laproteina_motif_task_name: 'retained-task', pcad_laproteina_settings_json: { motif_atom_spec: null, num_steps: 0, future_option: false } } : { pcad_disco_jobs_json: [], pcad_disco_jobs_source_path: 'inputs/original/jobs.json' }), ...extra };
+        ...(generator === 'laproteina' ? { design_task: 'motif_scaffolding', laproteina_preset: 'motif_idx_aa', laproteina_motif_pdb: 'inputs/original.pdb', laproteina_contig_string: '10/A2/10', laproteina_motif_task_name: 'retained-task', pcad_laproteina_settings_json: { motif_atom_spec: null, num_steps: 0, future_option: false } } : { pcad_disco_jobs_json: [], pcad_disco_jobs_source_path: 'inputs/original/jobs.json' }), ...extra };
     await act(async () => root!.render(<QueryClientProvider client={query}><MemoryRouter><DeNovoDraftPreparationContext.Provider value={prep}><ProteinModificationTemplate initialValues={values} onBack={() => {}} onDraftChange={value => { latest = value; }} /></DeNovoDraftPreparationContext.Provider></MemoryRouter></QueryClientProvider>)); await settle();
 }
-async function open(generator: string) {
-    if (generator === 'rfd3') { await click('Input structure (optional)'); await click('Edit input in AtomWorks Studio'); }
-    else await click('Edit motif source in Studio');
+async function open(_generator: string) {
+    await click('Edit motif source in Studio');
     await wait(() => expect(document.querySelector('iframe[title="AtomWorks Studio"]')).not.toBeNull());
 }
 beforeEach(() => {
@@ -86,20 +85,15 @@ beforeEach(() => {
     };
 });
 afterEach(async () => { await close(); api.defaults.adapter = previous; vi.restoreAllMocks(); vi.unstubAllGlobals(); expect(unexpected).toEqual([]); });
-it.each(['rfd3', 'laproteina'])('%s captures Save twice, Generate and cold prepare with native representations', async generator => {
+it.each(['laproteina'])('%s captures Save twice, Generate and cold prepare with native representations', async generator => {
     await mount(generator); await open(generator);
     await act(async () => { await prep.current!(); });
     expect(exports).toBe(1);
     const first = structuredClone(latest);
     const params = first.native_job_request.params;
-    if (generator === 'rfd3') {
-        expect(params).toMatchObject({ input_structure: uploads[0].path, source_model: 1, conditioning });
-        expect(params).not.toHaveProperty('native_sources');
-    } else {
-        expect(params.pcad_laproteina_settings_json).toMatchObject({ motif_pdb: uploads[1].path, motif_atom_spec: null, num_steps: 0, future_option: false });
-        expect(uploads[1].text).toContain('GLY A   2'); expect(uploads[1].text).not.toContain('ALA A   1');
-        expect(params.laproteina_motif_task_name).toBe('retained-task');
-    }
+    expect(params.pcad_laproteina_settings_json).toMatchObject({ motif_pdb: uploads[1].path, motif_atom_spec: null, num_steps: 0, future_option: false });
+    expect(uploads[1].text).toContain('GLY A   2'); expect(uploads[1].text).not.toContain('ALA A   1');
+    expect(params.laproteina_motif_task_name).toBe('retained-task');
     expect(params).not.toHaveProperty('molecular_documents');
     await act(async () => { await prep.current!(); }); expect(exports).toBe(2);
     await click('Generate candidates'); expect(exports).toBe(3);
@@ -110,7 +104,7 @@ it.each(['rfd3', 'laproteina'])('%s captures Save twice, Generate and cold prepa
     expect(latest.native_job_request).toEqual(saved.native_job_request);
     expect(latest.molecular_documents).toEqual(saved.molecular_documents);
 });
-it.each(['rfd3', 'laproteina'])('%s failure retains editor and prevents stale Generate; retry recovers', async generator => {
+it.each(['laproteina'])('%s failure retains editor and prevents stale Generate; retry recovers', async generator => {
     await mount(generator); await open(generator); fail = true;
     await click('Generate candidates'); expect(calls.filter(call => call.url === '/api/jobs')).toEqual([]);
     expect(document.querySelector('iframe')).not.toBeNull(); fail = false;
@@ -123,17 +117,6 @@ it('La source A→B→A during export is fenced and leaves the manual source int
     await edit('Motif PDB path', 'inputs/replaced.pdb'); await edit('Motif PDB path', 'inputs/original.pdb');
     await act(async () => { finish({ ok: true, json: async () => ({ cif: frozen, revision: 4 }) }); await result; });
     expect(await result).toBeInstanceOf(Error); expect(latest.native_job_request.params.laproteina_motif_pdb).toBe('inputs/original.pdb');
-});
-it('RFD3 source replacement during export cannot overwrite a cleared native input', async () => {
-    await mount('rfd3'); await open('rfd3'); let finish!: (value: any) => void;
-    deferred = () => new Promise(resolve => { finish = resolve; });
-    let result!: Promise<unknown>; await act(async () => { result = prep.current!().catch(error => error); });
-    await click('Clear input structure');
-    await act(async () => { finish({ ok: true, json: async () => ({ cif: frozen, revision: 4 }) }); await result; });
-    expect(await result).toBeInstanceOf(Error);
-    expect(latest.native_job_request.params).not.toHaveProperty('input_structure');
-    expect(latest.native_job_request.params.conditioning).toEqual(conditioning);
-    expect(document.body.textContent).toContain('replaced source');
 });
 it('La unsupported checked projection retains recovery without changing manual/named task requests', async () => {
     await mount('laproteina'); await open('laproteina'); const before = structuredClone(latest.native_job_request);
@@ -153,8 +136,8 @@ it('capture serializes the latest native contig authored while Studio export is 
     expect(latest.native_job_request.params.pcad_laproteina_settings_json.contig_string).toBe('5/A1/5');
     expect(uploads.at(-1)!.text).toContain('ALA A   1'); expect(uploads.at(-1)!.text).not.toContain('GLY A   2');
 });
-it.each(['rfd3', 'laproteina'])('%s untouched source-free/manual prepare does not require Studio', async generator => {
-    await mount(generator, generator === 'rfd3' ? { input_structure: undefined, source_model: undefined } : { laproteina_motif_pdb: '', laproteina_motif_task_name: 'retained-task' });
+it.each(['laproteina'])('%s untouched source-free/manual prepare does not require Studio', async generator => {
+    await mount(generator, { laproteina_motif_pdb: '', laproteina_motif_task_name: 'retained-task' });
     const before = structuredClone(latest.native_job_request);
     await act(async () => { await prep.current!(); }); await click('Generate candidates');
     expect(exports).toBe(0); expect(uploads).toEqual([]);

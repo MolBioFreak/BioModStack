@@ -99,7 +99,7 @@ const baseSummary = {
     assembled_at: '2026-08-09T12:00:00Z',
     source_receipt_ids: ['receipt-9'],
     source_digest_set_sha256: 'a'.repeat(64),
-    adapter_versions: [{ adapter_id: 'bms.rfd3.local-redesign-reference.adapter.v1', version: '1' }],
+    adapter_versions: [{ adapter_id: 'bms.rfd4.protein-design-reference.adapter.v1', version: '1' }],
     reconciliation: { state: 'current' as const, last_verified_at: '2026-08-09T11:00:00Z', reason: null },
     counts: { global_experiments: 1, domain_experiments: 1, attached_entities: 1 },
     status_summary: {},
@@ -131,12 +131,12 @@ const baseSummary = {
             { node_key: 'project:project-1', node_type: 'project', label: 'DNA Polymerase Design', normalized_state: 'active', canonical_identity: { store_id: 'global', entity_id: 'project-1' }, counts: { global_experiments: 1 }, reconciliation: { state: 'current', last_verified_at: null, reason: null }, allowed_actions: ['edit'] },
             { node_key: 'global_experiment:global-1', node_type: 'global_experiment', label: 'Catalytic-loop redesign', normalized_state: 'active', canonical_identity: { store_id: 'global', entity_id: 'global-1' }, counts: { domain_experiments: 1 }, reconciliation: { state: 'current', last_verified_at: null, reason: null }, allowed_actions: ['select'] },
             { node_key: 'domain_experiment:domain-1', node_type: 'domain_experiment', label: 'Protein In Silico', normalized_state: 'active', canonical_identity: { store_id: 'global', entity_id: 'domain-1' }, counts: {}, reconciliation: { state: 'current', last_verified_at: null, reason: null }, allowed_actions: ['select', 'attach'] },
-            { node_key: 'external_entity_receipt:receipt-9', node_type: 'external_entity_receipt', label: 'PLM-07 result', normalized_state: 'completed', canonical_identity: { store_id: 'core', entity_kind: 'rfd3_local_redesign_request', entity_id: 'request-9', receipt_id: 'receipt-9', content_digest: 'b'.repeat(64) }, counts: {}, reconciliation: { state: 'current', last_verified_at: '2026-08-09T11:00:00Z', reason: null }, allowed_actions: ['open'] },
+            { node_key: 'external_entity_receipt:receipt-9', node_type: 'external_entity_receipt', label: 'PLM-07 result', normalized_state: 'completed', canonical_identity: { store_id: 'core', entity_kind: 'protein_design_request', entity_id: 'request-9', receipt_id: 'receipt-9', content_digest: 'b'.repeat(64) }, counts: {}, reconciliation: { state: 'current', last_verified_at: '2026-08-09T11:00:00Z', reason: null }, allowed_actions: ['open'] },
         ],
         edges: [
             { source_node_key: 'project:project-1', target_node_key: 'global_experiment:global-1', lineage_mode: 'contains', edge_key: 'contains:project-1:global-1', accessible_label: 'Project contains Global Experiment' },
             { source_node_key: 'global_experiment:global-1', target_node_key: 'domain_experiment:domain-1', lineage_mode: 'contains', edge_key: 'contains:global-1:domain-1', accessible_label: 'Global Experiment contains Domain Experiment' },
-            { source_node_key: 'domain_experiment:domain-1', target_node_key: 'external_entity_receipt:receipt-9', lineage_mode: 'validated_by', edge_key: 'validated:domain-1:receipt-9', accessible_label: 'Validated by RFD3 result' },
+            { source_node_key: 'domain_experiment:domain-1', target_node_key: 'external_entity_receipt:receipt-9', lineage_mode: 'validated_by', edge_key: 'validated:domain-1:receipt-9', accessible_label: 'Validated by RFD4-Proteina result' },
         ],
         truncated: false,
         next_cursor: null,
@@ -152,7 +152,7 @@ const baseSummary = {
         run_id: 'run-1',
         workflow_id: 'workflow-1',
         canonical_job_id: 'job-9',
-        workflow_type: 'rfd3',
+        workflow_type: 'rfd4_proteina',
         target_label: 'PLM-07',
         canonical_state: 'succeeded',
         normalized_state: 'completed',
@@ -166,7 +166,7 @@ const baseSummary = {
         condition: { severity: 'none', code: null, message: null },
         receipt_id: 'receipt-9',
         output_receipt_ids: ['receipt-9'],
-        adapter_id: 'bms.rfd3.local-redesign-reference.adapter.v1',
+        adapter_id: 'bms.rfd4.protein-design-reference.adapter.v1',
         available_actions: [],
         canonical_surface: null,
         canonical_surfaces: [],
@@ -203,12 +203,12 @@ function summaryFor(selectedNodeKey?: string) {
     const value = structuredClone(baseSummary);
     value.selection = {
         node_key: 'external_entity_receipt:receipt-9', node_type: 'external_entity_receipt', title: 'PLM-07 result', subtitle: 'Canonical redesign result',
-        canonical_identity: { store_id: 'core', entity_kind: 'rfd3_local_redesign_request', entity_id: 'request-9', receipt_id: 'receipt-9', content_digest: 'b'.repeat(64) },
+        canonical_identity: { store_id: 'core', entity_kind: 'protein_design_request', entity_id: 'request-9', receipt_id: 'receipt-9', content_digest: 'b'.repeat(64) },
         summary: {}, relationship: { parent_node_key: 'domain_experiment:domain-1' }, scientific_context: {},
         reconciliation: { state: 'current', last_verified_at: '2026-08-09T11:00:00Z', reason: null }, available_actions: ['open'],
         canonical_surface: {
-            schema: 'bms.result-surface.v1', receipt_id: 'receipt-9', entity_kind: 'rfd3_local_redesign_request', entity_id: 'request-9',
-            contract_id: 'rfd3_local_redesign_v1', content_digest: 'b'.repeat(64), surface_kind: 'protein_design',
+            schema: 'bms.result-surface.v1', receipt_id: 'receipt-9', entity_kind: 'protein_design_request', entity_id: 'request-9',
+            contract_id: 'protein_design_v1', content_digest: 'b'.repeat(64), surface_kind: 'protein_design',
             route: { template_id: 'bms.route.design-result.v1', path: '/designs/job-9', query: {} }, readiness: 'ready',
             native_summary: { schema_id: 'bms.result-summary.test.v1', content_sha256: 'c'.repeat(64), canonical_size_bytes: 17, payload: { candidates: 12 } },
             scientific_acceptance: { state: 'review', reason: null },
@@ -317,12 +317,12 @@ beforeEach(() => {
         }
         return Promise.resolve(normalizeProjectManagerReadModel(value));
     });
-    managerApi.listDomainAdapters.mockResolvedValue({ schema: 'bms.global.adapter-registry.v1', adapters: [{ adapter_id: 'bms.rfd3.local-redesign-reference.adapter.v1', adapter_version: '1', domain_kind: 'protein_in_silico', entity_kind: 'rfd3_local_redesign_request' }] });
+    managerApi.listDomainAdapters.mockResolvedValue({ schema: 'bms.global.adapter-registry.v1', adapters: [{ adapter_id: 'bms.rfd4.protein-design-reference.adapter.v1', adapter_version: '1', domain_kind: 'protein_in_silico', entity_kind: 'protein_design_request' }] });
     managerApi.listProteinProjectCapabilities.mockResolvedValue({
         schema: 'bms.protein-project.capability-inventory.v1',
         capabilities: [],
     });
-    managerApi.searchAdapterEntities.mockResolvedValue({ schema: 'bms.global.adapter-search.v1', adapter_id: 'bms.rfd3.local-redesign-reference.adapter.v1', adapter_version: '1', items: [{ adapter_id: 'bms.rfd3.local-redesign-reference.adapter.v1', entity_kind: 'rfd3_local_redesign_request', entity_id: 'request-10', label: 'PLM-07 redesign', canonical_state: 'completed', attachable: true, reason: null, reopen_uri: '/designs/job-9', metadata: { created_at: '2026-08-09' } }], next_cursor: null });
+    managerApi.searchAdapterEntities.mockResolvedValue({ schema: 'bms.global.adapter-search.v1', adapter_id: 'bms.rfd4.protein-design-reference.adapter.v1', adapter_version: '1', items: [{ adapter_id: 'bms.rfd4.protein-design-reference.adapter.v1', entity_kind: 'protein_design_request', entity_id: 'request-10', label: 'PLM-07 redesign', canonical_state: 'completed', attachable: true, reason: null, reopen_uri: '/designs/job-9', metadata: { created_at: '2026-08-09' } }], next_cursor: null });
     managerApi.attachExistingEntity.mockResolvedValue({ source_receipt_id: 'receipt-9' });
     managerApi.reverifySourceReceipt.mockResolvedValue({
         schema: 'bms.global.source-reverification-receipt.v1',
@@ -928,7 +928,7 @@ describe('ProjectManager', () => {
 
     it('attaches an adapter search result from the selected Domain Experiment with an explicit lineage role', async () => {
         // The shared attachment dialog lists only NGS/MolBio-domain adapters; expose the same fixture adapter under that domain.
-        managerApi.listDomainAdapters.mockResolvedValue({ schema: 'bms.global.adapter-registry.v1', adapters: [{ adapter_id: 'bms.rfd3.local-redesign-reference.adapter.v1', adapter_version: '1', domain_kind: 'ngs_molbio', entity_kind: 'rfd3_local_redesign_request' }] });
+        managerApi.listDomainAdapters.mockResolvedValue({ schema: 'bms.global.adapter-registry.v1', adapters: [{ adapter_id: 'bms.rfd4.protein-design-reference.adapter.v1', adapter_version: '1', domain_kind: 'ngs_molbio', entity_kind: 'protein_design_request' }] });
         await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
         await waitUntil(() => expect(container.textContent).toContain('Attach existing record'));
 
@@ -957,7 +957,7 @@ describe('ProjectManager', () => {
         const searchButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Search');
         await act(async () => searchButton?.click());
         await waitUntil(() => expect(container.textContent).toContain('PLM-07 redesign'));
-        expect(managerApi.searchAdapterEntities).toHaveBeenCalledWith('bms.rfd3.local-redesign-reference.adapter.v1', 'PLM-07', 25);
+        expect(managerApi.searchAdapterEntities).toHaveBeenCalledWith('bms.rfd4.protein-design-reference.adapter.v1', 'PLM-07', 25);
 
         const resultChoice = container.querySelector<HTMLInputElement>('input[type="radio"][value="request-10"]');
         await act(async () => resultChoice?.click());
@@ -979,7 +979,7 @@ describe('ProjectManager', () => {
         await waitUntil(() => expect(managerApi.attachExistingEntity).toHaveBeenCalledTimes(1));
 
         expect(managerApi.attachExistingEntity).toHaveBeenCalledWith('project-1', 'global-1', 'domain-1', {
-            adapter_id: 'bms.rfd3.local-redesign-reference.adapter.v1',
+            adapter_id: 'bms.rfd4.protein-design-reference.adapter.v1',
             entity_id: 'request-10',
             operation: 'attach_evidence',
             role: 'validated_by',

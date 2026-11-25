@@ -26,7 +26,7 @@ const nativeSettings = (model_id: string, mode: string): ShapeNativeSettingsDefi
   initial_values: {}, contextual_defaults: {}, contextual_default_reason: 'Offline navigation fixture',
 });
 const shapeSettings: ShapeSettingsDefinition = {
-  schema: 'bms_shape_settings_v1', rfd3: nativeSettings('rfd3', 'unconditional'),
+  schema: 'bms_shape_settings_v1',
   sequence_engines: ['proteinmpnn', 'fampnn', 'caliby_experimental'],
   validators: {
     esmfold2: nativeSettings('esmfold2', 'fold'),
@@ -104,7 +104,7 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); api.defaults.adapter = originalAdapter; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 it.each([
-  ['rfd3', 'unconditional'], ['disco', 'unconditional'], ['disco', 'dna_conditioned'],
+  ['disco', 'unconditional'], ['disco', 'dna_conditioned'],
   ['disco', 'rna_conditioned'], ['disco', 'ligand_conditioned'], ['disco', 'custom_json'],
   ['laproteina', 'unconditional'], ['laproteina', 'motif_scaffolding'],
 ])('prepares incomplete Generate %s / %s without a scientific request', async (generator, design_task) => {
@@ -133,20 +133,17 @@ it('connects global Workflow → De Novo to the telemetry target, not the stored
   expect(sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBe(other.id);
 });
 
-it.each(['rfd3', 'disco', 'laproteina'])('keeps %s exact requested science separate and unchanged by family preparation', async generator => {
-  await mount(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator, ...(generator === 'rfd3' ? {} : { target_lengths: '125' }) }} />);
-  if (generator === 'rfd3') { await edit('Minimum length', '111'); await edit('Seed', '17'); }
+it.each(['disco', 'laproteina'])('keeps %s exact requested science separate and unchanged by family preparation', async generator => {
+  await mount(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator, target_lengths: '125' }} />);
   const exact = () => host.querySelector('[aria-label="Unsaved workflow provisioning"]')!;
   await click('Preview artifact downloads', exact());
   const requested = structuredClone(posts[0].body);
   expect(requested.kind).toBe('workflow');
   expect(requested.workflow_request.params.generator).toBe(generator);
-  if (generator !== 'rfd3') expect(requested.workflow_request.params.target_lengths).toBe('125');
-  if (generator === 'rfd3') expect(requested.workflow_request.params).toMatchObject({ min_length: 111, seed: 17 });
+  expect(requested.workflow_request.params.target_lengths).toBe('125');
   await prepareFamily();
   await click('Preview artifact downloads', exact());
   expect(posts.at(-1)?.body).toEqual(requested);
-  if (generator === 'rfd3') { expect(field('Minimum length').value).toBe('111'); expect(field('Seed').value).toBe('17'); }
 });
 
 it('does not post on task, goal, engine or worker navigation', async () => {
