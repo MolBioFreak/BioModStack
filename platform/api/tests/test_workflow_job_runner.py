@@ -316,11 +316,11 @@ def test_runner_hands_ont_success_resource_receipt_to_terminal_cas(
     asyncio.run(scenario())
 
 
-def test_runner_uses_authoritative_msa_job_and_keeps_it_inside_unit(
+def test_runner_uses_authoritative_family_msa_job_and_keeps_it_inside_unit(
     monkeypatch: pytest.MonkeyPatch,
     transient_identity,
 ) -> None:
-    job = _job(model_id="msa_batch")
+    job = _job(model_id="family_msa_protein")
     job.params["gpu_id"] = 2
     monkeypatch.setattr(database, "async_session", lambda: _Session(job))
     properties = ownership.UnitProperties(
@@ -350,7 +350,7 @@ def test_runner_uses_authoritative_msa_job_and_keeps_it_inside_unit(
     )
 
     assert asyncio.run(runner.run_workflow_job("job-1", "development")) == 0
-    assert launch_calls[0]["model_id"] == "msa_batch"
+    assert launch_calls[0]["model_id"] == "family_msa_protein"
     assert launch_calls[0]["params"] == {"gpu_id": 2}
 
 

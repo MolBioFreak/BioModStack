@@ -430,7 +430,7 @@ def test_transient_runner_command_has_only_job_and_lane_arguments() -> None:
     assert "output_dir" in source
 
 
-def test_msa_batch_is_guarded_by_transient_runner_mode() -> None:
+def test_family_msa_is_guarded_by_transient_runner_mode() -> None:
     source = (API_ROOT / "services" / "nextflow.py").read_text(encoding="utf-8")
     import ast
 
@@ -439,13 +439,13 @@ def test_msa_batch_is_guarded_by_transient_runner_mode() -> None:
     guarded_branch = next(
         node for node in ast.walk(launcher)
         if isinstance(node, ast.If)
-        and ast.unparse(node.test) == "model_id == 'msa_batch' and transient_runner"
+        and ast.unparse(node.test) == "model_id in {'family_msa_protein', 'family_msa_nucleic'} and transient_runner"
     )
-    assert "await launch_msa_batch_job(job_id, params, output_dir)" in ast.unparse(guarded_branch)
-    direct_launcher = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == "launch_msa_batch_job")
-    direct_source = ast.unparse(direct_launcher)
-    assert "if not transient_workflow_runner_mode():" in direct_source
-    assert "msa_batch execution is only permitted inside the transient workflow runner" in direct_source
+    assert "await run_owned_job(job_id, params, output_dir, async_session)" in ast.unparse(guarded_branch)
+    assert not any(
+        isinstance(node, ast.AsyncFunctionDef) and node.name == "launch_msa_batch_job"
+        for node in tree.body
+    )
 
 
 def test_live_discovery_skips_failed_units_without_show(monkeypatch) -> None:

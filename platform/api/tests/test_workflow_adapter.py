@@ -1394,6 +1394,8 @@ async def test_launch_nextflow_job_allows_shared_db_prestarted_jobs_when_explici
 
     job = SimpleNamespace(
         id="job-123",
+        model_id="frustrampnn",
+        mode="predict",
         status="running",
         started_at=datetime.utcnow(),
         params={},
@@ -1413,24 +1415,47 @@ async def test_launch_nextflow_job_allows_shared_db_prestarted_jobs_when_explici
     monkeypatch.setattr(database, "Job", _FakeJobModel)
     monkeypatch.setattr(sqlalchemy, "select", lambda *_args, **_kwargs: _FakeSelect())
 
-    launch_calls: list[tuple[str, dict[str, object], str]] = []
+    class _LaunchContinued(BaseException):
+        pass
 
-    async def fake_launch_msa_batch_job(job_id: str, params: dict[str, object], output_dir: str) -> None:
-        launch_calls.append((job_id, params, output_dir))
+    launch_calls: list[tuple[str, str, dict[str, object], Path]] = []
 
-    monkeypatch.setattr(nextflow, "launch_msa_batch_job", fake_launch_msa_batch_job)
+    async def fake_prepare_launch_msa_on_controller(
+        _session,
+        _job,
+        model_id: str,
+        msa_params: dict[str, object],
+        prepared_dir: Path,
+        *_args,
+        **_kwargs,
+    ) -> dict[str, object]:
+        launch_calls.append((_job.id, model_id, dict(msa_params), prepared_dir))
+        raise _LaunchContinued()
+
+    monkeypatch.setattr(nextflow, "_prepare_launch_msa_on_controller", fake_prepare_launch_msa_on_controller)
 
     output_dir = tmp_path / "job-123"
     await nextflow.launch_nextflow_job(
         job_id="job-123",
-        model_id="msa_batch",
+        model_id="frustrampnn",
         mode="predict",
         params={"gpu_id": 1},
         output_dir=str(output_dir),
-        allow_running_job=True,
+        allow_running_job=False,
     )
+    assert launch_calls == []
 
-    assert launch_calls == [("job-123", {"gpu_id": 1}, str(output_dir))]
+    with pytest.raises(_LaunchContinued):
+        await nextflow.launch_nextflow_job(
+            job_id="job-123",
+            model_id="frustrampnn",
+            mode="predict",
+            params={"gpu_id": 1},
+            output_dir=str(output_dir),
+            allow_running_job=True,
+        )
+
+    assert launch_calls == [("job-123", "frustrampnn", {"gpu_id": 1}, output_dir / "prepared-msa")]
 
 
 def test_workflow_adapter_cancel_endpoint_resolves_job_handle_to_native_run_id(
