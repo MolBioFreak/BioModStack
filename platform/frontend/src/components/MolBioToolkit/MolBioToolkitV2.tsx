@@ -167,7 +167,6 @@ import {
     type MolBioMobileSurface,
 } from './utils/mobileLayout';
 import { useMolBioBodyScrollLock } from './useMolBioBodyScrollLock';
-import { ShareDialog, type ShareableItem } from './ShareDialog';
 
 const GCContentTrack = lazy(() => import('./GCContentTrack').then(module => ({ default: module.GCContentTrack })));
 
@@ -717,7 +716,6 @@ export function MolBioToolkitV2() {
     // A scope change hides old rows in the same render, before async effects run.
     const sequences = library.scope === libraryScope ? library.items : [];
     const [selectedSequenceId, setSelectedSequenceId] = useState<string | null>(null);
-    const [shareOpen, setShareOpen] = useState(false);
     const [showInputModal, setShowInputModal] = useState(false);
     useEffect(() => {
         if (queryParams.get('action') !== 'add-plasmid') return;
@@ -3315,29 +3313,6 @@ export function MolBioToolkitV2() {
         requestedLegacyMolecularSequenceId,
     ]);
 
-    const shareCurrentSequenceId = selectedExactMolecularRevision?.sequence_id ?? selectedSequenceId;
-    const shareCurrentSequence: ShareableItem | null = shareCurrentSequenceId
-        ? { id: shareCurrentSequenceId, name: sequenceData.name || shareCurrentSequenceId }
-        : null;
-    const shareSequences: ShareableItem[] = sequences.map((item) => ({ id: item.id, name: item.name }));
-    const shareOperations: ShareableItem[] = [...new Set([
-        deepLinkOperationId,
-        goldenGateLinkedOperation,
-        selectedExactMolecularRevision?.operation_id ?? null,
-    ].filter((id): id is string => Boolean(id)))].map((id) => ({ id, name: `Experiment ${id}` }));
-    const shareDialog = (
-        <ShareDialog
-            open={shareOpen}
-            onClose={() => setShareOpen(false)}
-            currentSequence={shareCurrentSequence}
-            sequences={shareSequences}
-            operations={shareOperations}
-            projectContext={workspaceId && globalExperimentId && domainExperimentId
-                ? { projectId: workspaceId, globalExperimentId, domainExperimentId, stateRevisionId }
-                : null}
-        />
-    );
-
     if (isMobileMolBio) {
         const mobileMapViewMode: ViewMode = sequenceData.circular ? 'circular' : 'linear';
         const mobileViewer = (mode: ViewMode) => (
@@ -3361,9 +3336,7 @@ export function MolBioToolkitV2() {
 
         return (
             <>
-            {shareDialog}
             <MobileMolBioWorkspace
-                onShare={() => setShareOpen(true)}
                 constructName={sequenceData.name}
                 digestIdentity={`${activeWorkspaceId}:${selectedSequenceId ?? sequenceData.name}:${sequenceData.sequence.length}`}
                 digestAvailable={!isExactMolecularAuthority}
@@ -3598,7 +3571,6 @@ export function MolBioToolkitV2() {
                             onToggleLibraryPanel={toggleLibraryPanel}
                             onToggleToolPanel={toggleToolPanel}
                             historyJournal={historyJournal}
-                            onShare={() => setShareOpen(true)}
                         />
                     )}
 
@@ -4239,7 +4211,6 @@ export function MolBioToolkitV2() {
                 onDemoIntent={requestDemos}
                 demos={demoPlasmids}
             />
-            {shareDialog}
         </>
     );
 }

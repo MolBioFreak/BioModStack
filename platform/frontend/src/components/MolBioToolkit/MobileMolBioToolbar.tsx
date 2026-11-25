@@ -9,7 +9,6 @@ interface MobileMolBioToolbarProps {
     onBack: () => void;
     onOpenConstructs: () => void;
     onSurfaceChange: (surface: MolBioMobileSurface) => void;
-    onShare?: () => void;
 }
 
 const SURFACES: Array<{ id: MolBioMobileSurface; label: string }> = [
@@ -29,13 +28,12 @@ export function MobileMolBioToolbar({
     onBack,
     onOpenConstructs,
     onSurfaceChange,
-    onShare,
 }: MobileMolBioToolbarProps) {
     return (
         <header
             data-molbio-mobile-toolbar="true"
             style={{ paddingTop: 'calc(env(safe-area-inset-top) + 0.75rem)' }}
-            className={`z-40 grid flex-shrink-0 ${onShare ? 'grid-cols-[auto_auto_minmax(0,1fr)_auto]' : 'grid-cols-[auto_auto_minmax(0,1fr)]'} items-center gap-2 border-b border-slate-700 bg-slate-950/95 pb-2 pl-[max(env(safe-area-inset-left),0.75rem)] pr-[max(env(safe-area-inset-right),0.75rem)] shadow-lg`}
+            className="z-40 grid flex-shrink-0 grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-2 border-b border-slate-700 bg-slate-950/95 pb-2 pl-[max(env(safe-area-inset-left),0.75rem)] pr-[max(env(safe-area-inset-right),0.75rem)] shadow-lg"
         >
             <button
                 type="button"
@@ -55,15 +53,6 @@ export function MobileMolBioToolbar({
             <div className="min-w-0 px-1 text-sm font-semibold leading-tight text-slate-100 [overflow-wrap:anywhere]" title={constructName}>
                 {constructName || 'Choose a construct'}
             </div>
-            {onShare && (
-                <button
-                    type="button"
-                    onClick={onShare}
-                    className="min-h-12 min-w-12 flex-shrink-0 rounded-lg border border-slate-600 bg-slate-800 px-3 text-sm font-medium text-slate-100 transition-colors hover:bg-slate-700"
-                >
-                    Share
-                </button>
-            )}
             <nav className="col-span-full grid min-w-0 grid-cols-5 gap-1" aria-label="Mobile MolBio views">
                 {SURFACES.map((item) => (
                     <button

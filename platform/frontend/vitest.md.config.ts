@@ -296,8 +296,6 @@ export default defineConfig({
             './tests/vitest/molbio-primer-scientific.test.tsx',
             './tests/vitest/restrictionAnalysis.test.ts',
             './tests/vitest/molBioMobileToolbar.test.tsx',
-            './tests/vitest/molBioShareDialog.test.tsx',
-            './tests/vitest/molBioShareGuest.test.tsx',
             './tests/vitest/molBioDigestMobile.test.tsx',
             './tests/vitest/molBioBodyScrollLock.test.tsx',
             './tests/vitest/molBioMobileConstructs.test.tsx',

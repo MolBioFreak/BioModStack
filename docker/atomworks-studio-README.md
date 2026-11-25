@@ -90,7 +90,7 @@ a bounded multipart envelope. Responses, including auth/config errors, are
 available at `/api/atomworks-studio/api/...` and
 `/api/atomworks-studio/api/v1/...`; both traverse the **same** BMS authority.
 The router reuses `experiment_workspaces._authenticated_principal` and
-`molbio_share.browser_mutation_origin`. It does not invent accounts, roles or
+`http_origin.browser_mutation_origin`. It does not invent accounts, roles or
 per-user gates. The existing trusted proxy secret resolves to shared
 `local-application-operator`; that remains a shared operator. If trusted middleware
 sets distinct authenticated principals, their hashed owner bindings are isolated

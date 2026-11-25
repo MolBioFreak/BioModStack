@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException, Request
 
 from routers.experiment_workspaces import _authenticated_principal
-from routers.molbio_share import browser_mutation_origin
+from http_origin import browser_mutation_origin
 from services.atomworks_studio import PREFIX, forward
 
 router = APIRouter(prefix=PREFIX, tags=["atomworks-studio"])
