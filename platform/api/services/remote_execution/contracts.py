@@ -8,7 +8,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator, model_serializer
 from schemas import JobCreate
-from services.shape_requests import SubmittedShapeRequest
 
 SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
@@ -155,14 +154,9 @@ class MolecularDynamicsProvisionWorkflow(StrictModel):
     request: MdLaunchPreviewRequest
 
 
-class ShapeProvisionWorkflow(StrictModel):
-    workflow_type: Literal["shape_blueprint"]
-    request: SubmittedShapeRequest
-
-
 class WorkflowProvisionSelection(StrictModel):
     kind: Literal["workflow"]
-    workflow_request: JobCreate | ConformationalMappingProvisionWorkflow | MolecularDynamicsProvisionWorkflow | ShapeProvisionWorkflow
+    workflow_request: JobCreate | ConformationalMappingProvisionWorkflow | MolecularDynamicsProvisionWorkflow
 
     @field_validator("workflow_request", mode="before")
     @classmethod
@@ -171,7 +165,6 @@ class WorkflowProvisionSelection(StrictModel):
             native_type = {
                 "conformational_mapping": ConformationalMappingProvisionWorkflow,
                 "molecular_dynamics": MolecularDynamicsProvisionWorkflow,
-                "shape_blueprint": ShapeProvisionWorkflow,
             }.get(value["workflow_type"])
             if native_type is None:
                 raise ValueError("Unsupported native workflow type")

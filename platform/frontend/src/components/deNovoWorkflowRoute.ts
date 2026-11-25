@@ -18,10 +18,9 @@ export function deNovoSavedValues(
     // Preserve the validated-pipeline identity; it is not interchangeable with
     // the native iteration route even though both share a visual workspace.
     const modificationMode = mode === 'region_redesign' && values.backbone_input_pdbs && values.seq_method ? 'resequence' : values.modification_mode ?? (
-        mode === 'shape_blueprint' ? 'shape_blueprint'
-            : mode === 'region_redesign' ? 'region_redesign'
-                : model === 'protein_local_redesign' || values.template_model_id === 'protein_local_redesign'
-                    ? 'rfd3_local_redesign' : 'de_novo_design'
+        mode === 'region_redesign' ? 'region_redesign'
+            : model === 'protein_local_redesign' || values.template_model_id === 'protein_local_redesign'
+                ? 'rfd3_local_redesign' : 'de_novo_design'
     );
     return {
         ...values,

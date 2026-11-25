@@ -197,8 +197,8 @@ it('navigation metadata preserves context, native aliases and false/empty scient
     const values = { backend: 'disco', disco_na_sequence: '', dump_trajectories: false, seed: 0 };
     expect(deNovoSavedValues('protein_modification_experimental', 'de_novo_design', values)).toEqual({ ...values, generator: 'disco', modification_mode: 'de_novo_design' });
     expect(deNovoSavedValues('protein_modification_experimental', 'region_redesign', {})).toEqual({ modification_mode: 'region_redesign' });
-    const destination = deNovoSearch(new URLSearchParams('model=protein_local_redesign&mode=local_redesign&project_id=keep&extra=stay'), { modification_mode: 'shape_blueprint' });
-    expect(Object.fromEntries(destination)).toEqual({ template: 'protein_modification_experimental', modification_mode: 'shape_blueprint', project_id: 'keep', extra: 'stay' });
+    const destination = deNovoSearch(new URLSearchParams('model=protein_local_redesign&mode=local_redesign&project_id=keep&extra=stay'), { modification_mode: 'resequence' });
+    expect(Object.fromEntries(destination)).toEqual({ template: 'protein_modification_experimental', modification_mode: 'resequence', project_id: 'keep', extra: 'stay' });
 });
 
 it.each([
@@ -234,7 +234,7 @@ it.each(['rfd3', 'disco', 'laproteina'])('legacy %s clone retains a null optiona
 
 it.each([
     ['de_novo_design', 'disco', 'dna_conditioned'],
-    ['shape_blueprint', undefined, undefined],
+    ['resequence', undefined, undefined],
     ['region_redesign', undefined, undefined],
 ])('launcher Back and re-entry keep retained %s route identity', async (modification_mode, generator, design_task) => {
     const query = deNovoSearch(new URLSearchParams('extra=keep'), { modification_mode, generator, design_task });
@@ -288,8 +288,8 @@ it('direct generation model link bypasses the manual catalog and retains native 
     const minimum = [...document.querySelectorAll('label')].find(e => e.textContent?.includes('Minimum length'))?.querySelector('input');
     expect(minimum).toBeTruthy();
     minimum!.setAttribute('data-route-length', 'true'); await input('[data-route-length]', '123');
-    await click('Shape');
-    expect(route()).toContain('modification_mode=shape_blueprint');
+    await click('Resequence');
+    expect(route()).toContain('modification_mode=resequence');
     await click('History back fixture');
     expect([...document.querySelectorAll('input')].some(e => e.value === '123')).toBe(true);
     expect(route()).toContain('extra=kept'); expect(route()).toContain('#context');

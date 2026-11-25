@@ -66,10 +66,8 @@ def test_legacy_esm_batch_selects_same_process_as_dispatcher(params, process):
 
 
 @pytest.mark.parametrize('owner,required', [
-    ('modules/shape_blueprint.nf:RunShapeFAMPNN', FAM | {'scripts/fampnn_shape_analysis.py'}),
     ('workflows/protein_local_redesign.nf:PrepProteinLocalMPNN', {'scripts/proteinmpnn_native_binding.py'}),
     ('workflows/protein_local_redesign.nf:PrepProteinLocalFAMPNN', FAM),
-    ('modules/shape_blueprint.nf:RunShapeBoltzValidator', {'scripts/lib/boltz_fidelity.py'}),
     ('modules/boltz_cp_experimental.nf:RunBoltzCPExperimental', {'scripts/fold_cp_input.py'}),
 ])
 def test_embedded_owner_helper_declarations(owner, required):

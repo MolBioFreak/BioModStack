@@ -14,10 +14,8 @@ import {
     submitOntBarcodeBatch,
     submitOntNgsJob,
     submitPooledReferenceAssignment,
-    submitShapeBlueprint,
     submitJob,
     type ExecutionPlacement,
-    type ShapeLaunchRequest,
     type StructureSourceSelection,
 } from '../../src/lib/api';
 import { CANONICAL_CM_ANALYSIS_POLICY, submitCmRequest, type CmSubmitRequest } from '../../src/components/conformationalMapping/conformationalMappingApi';
@@ -601,12 +599,6 @@ describe('remote execution operator surfaces', () => {
         window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'vast:123');
         setDraftExecutionPolicy({ remote_result_policy: policy === 'manual' ? 'automatic' : 'manual' });
         const post = vi.spyOn(api, 'post').mockResolvedValue(response({}));
-        const shape: ShapeLaunchRequest = {
-            client_request_id: 'shape-placement-fixture', name: 'Shape placement', geometry_id: 'geometry-fixture',
-            expected_geometry_sha256: 'a'.repeat(64), expected_geometry_manifest_sha256: 'b'.repeat(64),
-            expected_point_pool_sha256: 'c'.repeat(64), target_length: 100, num_backbones: 2,
-            sequences_per_backbone: 1, seed: 23, guidance_profile: 'rfd3_ca_shape_transfer_control_v1',
-        };
         const cm: CmSubmitRequest = {
             name: 'CM placement', notes: 'Transport fixture', idempotency_key: 'cm-placement-fixture',
             backend: 'protenix_v2_ensemble', ordered_seeds: [23, 7], samples_per_seed: 2,
@@ -626,77 +618,15 @@ describe('remote execution operator surfaces', () => {
             const placement: ExecutionPlacement = { execution_policy: { remote_result_policy: policy }, ...(target === undefined ? {} : { execution_target_id: target }) };
             const expectedPlacement = { execution_target_id: target === undefined ? 'vast:123' : target, execution_policy: { remote_result_policy: policy } };
             post.mockClear();
-            await submitShapeBlueprint({ ...shape, ...placement });
             await submitCmRequest({ ...cm, ...placement });
             await submitOntNgsJob('wf-clone', { ...ngs, ...placement });
             expect(post.mock.calls.map(([url, body]) => [url, body])).toEqual([
-                ['/api/shape-blueprint/requests', { ...shape, launch_context_id: null, ...expectedPlacement }],
                 ['/api/conformational-mapping/requests', { ...cm, ...expectedPlacement }],
                 ['/api/ont/ngs/wf-clone/submit', { ...ngs, ...expectedPlacement }],
             ]);
         }
     });
 
-    it.each([true, false])('reviews the prepared Shape job and returns approval to its native owner (approve=%s)', async (approve) => {
-        // Load the real dialog before the async mutation starts, not a timing-sensitive mock.
-        await import('../../src/components/ExecutionPlanApproval');
-        const shape: ShapeLaunchRequest = {
-            client_request_id: 'shape-review-fixture', name: 'Shape review', geometry_id: 'geometry-fixture',
-            expected_geometry_sha256: 'a'.repeat(64), expected_geometry_manifest_sha256: 'b'.repeat(64),
-            expected_point_pool_sha256: 'c'.repeat(64), target_length: 100, num_backbones: 2,
-            sequences_per_backbone: 0, sequence_policy: 'skip', seed: 23,
-            guidance_profile: 'rfd3_ca_shape_transfer_control_v1', execution_target_id: 'vast:123',
-            execution_policy: { remote_result_policy: 'manual' },
-        };
-        const original = structuredClone(shape);
-        const prepared = { name: shape.name, model_id: 'protein_modification_experimental', mode: 'shape_blueprint',
-            params: { shape_request_path: '/retained/shape/request.json', shape_target_length: 100 },
-            execution_target_id: shape.execution_target_id, execution_policy: shape.execution_policy };
-        const calls: Array<{ url: string; data: unknown }> = [];
-        api.defaults.adapter = async config => {
-            const data = JSON.parse(config.data);
-            calls.push({ url: config.url!, data });
-            if (config.url === '/api/shape-blueprint/requests') {
-                if (!data.execution_plan_approval) throw new AxiosError('Prepared review', 'ERR_BAD_REQUEST', config, undefined, {
-                    ...response({ detail: { code: 'remote_prepared_job_review_required', job_request: prepared,
-                        response_context: { request_id: 'retained-shape', job_id: 'retained-job' } } }), status: 409, config,
-                });
-                return { ...response({ request_id: 'retained-shape', job_id: 'retained-job', reused: false }), config };
-            }
-            if (config.url === '/api/jobs/execution-plan/preview') return { ...response({
-                approval_digest: 'd'.repeat(64), admissible: true, request: prepared,
-                plan: { requested_json: prepared.params, effective_json: prepared.params,
-                    source_identity: { revision: 'fixture', tree: 'fixture' },
-                    metadata: { static_components: [], dynamic_templates: [], external_services: [] } },
-                deferred_preparation: [], blockers: [],
-            }), config };
-            throw new Error(`Unexpected mutation ${config.url}`);
-        };
-        const completed = submitShapeBlueprint(shape).then(value => ({ value }), error => ({ error }));
-        await vi.waitFor(async () => {
-            await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
-            expect(document.body.textContent).toContain('Review remote execution plan');
-        });
-        expect(calls).toEqual([
-            { url: '/api/shape-blueprint/requests', data: { ...original, launch_context_id: null } },
-            { url: '/api/jobs/execution-plan/preview', data: prepared },
-        ]);
-        // Changes made while reviewing cannot alter the submitted snapshot or destination.
-        shape.seed = 99;
-        window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'vast:different');
-        const button = [...document.querySelectorAll('button')].find(item => item.textContent === (approve ? 'Approve and submit' : 'Cancel'))!;
-        await act(async () => { button.click(); await completed; });
-        const outcome = await completed;
-        if (approve) {
-            expect('value' in outcome && outcome.value.data.job_id).toBe('retained-job');
-            expect(calls[2]).toEqual({ url: '/api/shape-blueprint/requests', data: { ...original, launch_context_id: null, execution_plan_approval: 'd'.repeat(64) } });
-            expect(calls).toHaveLength(3);
-        } else {
-            expect('error' in outcome && outcome.error.message).toBe('Execution-plan approval cancelled');
-            expect(calls).toHaveLength(2);
-        }
-        expect(calls.some(call => call.url === '/api/jobs')).toBe(false);
-    });
 
     it.each([null, 'vast:new-worker'])('transports selected-source ancestry outside native params with explicit placement %s', async (target) => {
         await import('../../src/components/ExecutionPlanApproval');

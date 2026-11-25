@@ -554,7 +554,6 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("frustrampnn", "analyze"): "workflows/frustrampnn_analysis.nf",
     ("protein_local_redesign", "local_redesign"): "workflows/protein_local_redesign.nf",
     ("protein_modification_experimental", "de_novo_design"): "workflows/protein_design.nf",
-    ("protein_modification_experimental", "shape_blueprint"): "workflows/shape_blueprint_design.nf",
     ("protein_modification_experimental", "region_redesign"): "workflows/protein_local_redesign.nf",
     ("molecular_dynamics", "simulate"): "workflows/experimental/molecular_dynamics/orchestrator.nf",
     ("molecular_dynamics", "replica"): "workflows/experimental/molecular_dynamics/replica.nf",
@@ -4047,33 +4046,6 @@ pickle.dump(invocation, sys.stdout.buffer)
     return _bind_ont_runtime(invocation, params)
 
 
-def _shape_selected_gpu_memory_gib(job):
-    """Project this placement's observation; never observe the host for a worker."""
-    from services.shape_requests import selected_gpu_memory_gib
-    assigned = getattr(job, 'assigned_gpu', None)
-    selected = [] if assigned is None else [assigned]
-    if getattr(job, 'execution_target_id', None):
-        assignment = (job.provenance or {}).get('remote_execution_assignment') or {}
-        if assignment.get('execution_target_id') != job.execution_target_id:
-            return None
-        selected = assignment.get('gpu_indices') or selected
-        snapshot = assignment.get('admission_snapshot') or {}
-        observation = snapshot.get('telemetry') or {'gpus': [
-            {'index': item.get('gpu_index'), 'memory_total_mb': item.get('memory_total_mb')}
-            for item in snapshot.get('devices', [])]}
-    else:
-        if not selected:
-            return None
-        from routers.gpu import get_gpu_stats
-        try:
-            observation = {'gpus': [{'index': gpu.index, 'memory_total_mb': gpu.memory_total_mb}
-                                    for gpu in get_gpu_stats()]}
-        except Exception:
-            logger.warning('Shape selected-GPU observation unavailable', exc_info=True)
-            return None
-    return selected_gpu_memory_gib(observation, selected)
-
-
 @overload
 def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: Literal[True]) -> 'NativeInvocationPreview': ...
 
@@ -4106,11 +4078,6 @@ def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: b
     # would change its legacy scientific transport flags.
     requested_json = canonical_bytes(dict(job.params or {}) if requested is None else requested)
     prepared = workflow_params(job, params)
-    if (job.model_id, job.mode) == ('protein_modification_experimental', 'shape_blueprint'):
-        if prepared.get('shape_gpu_memory_gib') is None:
-            capacity = _shape_selected_gpu_memory_gib(job)
-            if capacity is not None:
-                prepared['shape_gpu_memory_gib'] = capacity
     if job.model_id == 'nanopore':
         from services.ont_ngs_contract import replay_expected_plasmid_size
         prepared = replay_expected_plasmid_size(prepared, job.provenance, mode=job.mode)
@@ -4146,17 +4113,15 @@ def _native_plan_metadata_settings(model_id, params):
     settings = deepcopy(params)
     key = ('cm_request' if model_id == 'conformational_mapping'
            else 'md_config' if model_id == 'molecular_dynamics'
-           else 'shape_request' if model_id == 'protein_modification_experimental' and params.get('shape_request_path')
            else None)
     if key is None:
         return settings
-    if key in settings and key != 'shape_request':
+    if key in settings:
         return settings
     if model_id == 'molecular_dynamics' and isinstance(params.get('md_job_spec'), dict):
         settings[key] = deepcopy(params['md_job_spec'])
         return settings
-    name = params.get({'cm_request': 'cm_request_path', 'md_config': 'md_job_config',
-                       'shape_request': 'shape_request_path'}[key])
+    name = params.get({'cm_request': 'cm_request_path', 'md_config': 'md_job_config'}[key])
     if not name:
         return settings
     path = Path(str(name)).expanduser()
@@ -4173,12 +4138,6 @@ def _native_plan_metadata_settings(model_id, params):
     document = json.loads(path.read_bytes())
     if not isinstance(document, dict):
         raise ValueError('Selected native configuration must be an object')
-    if key == 'shape_request':
-        from scripts.shape_blueprint.plan_rfd3_batches import _validate_request_hash
-        _validate_request_hash(document)
-        if (document.get('request_id') != params.get('shape_request_id')
-                or document.get('request_sha256') != params.get('shape_request_sha256')):
-            raise ValueError('Shape request snapshot identity mismatch')
     settings[key] = document
     if key == 'cm_request' and document.get('backend') == 'protenix_v2_ensemble':
         registry_path = path.parent / 'cm_runtime_registry_v1.json'
@@ -5513,7 +5472,6 @@ def compile_nextflow_invocation(
         ('protein_local_redesign', 'local_redesign'): 'protein_local_redesign',
         ('protein_cad_experimental', 'design'): 'protein_cad_experimental',
         ('protein_modification_experimental', 'de_novo_design'): 'rfd3_generation',
-        ('protein_modification_experimental', 'shape_blueprint'): 'shape_blueprint',
         ('protein_modification_experimental', 'region_redesign'): 'protein_local_redesign',
 
         ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',

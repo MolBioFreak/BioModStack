@@ -31,9 +31,6 @@ def request_for(case, tmp_path):
         else:
             params.update(backend=case, design_task='unconditional', target_lengths='100')
         model, mode, capability = 'protein_modification_experimental', 'de_novo_design', f'protein.de_novo.{case}'
-    elif case == 'shape':
-        model, mode = 'protein_modification_experimental', 'shape_blueprint'
-        capability, params = f'protein.native.{model}.{mode}', {}
     elif case == 'validated_local':
         source = tmp_path / 'source.pdb'
         source.write_text(
@@ -65,7 +62,7 @@ def request_for(case, tmp_path):
         'pinned_gpu': 0}
 
 
-CASES = ['rfd3', 'laproteina', 'disco', 'validated_local', 'shape'] + [f'{model}:{mode}'
+CASES = ['rfd3', 'laproteina', 'disco', 'validated_local'] + [f'{model}:{mode}'
     for model in ('rfd4_proteina', 'complexa') for mode in ('generate', 'evaluate')]
 
 
@@ -115,19 +112,10 @@ async def test_native_http_save_second_save_cold_prepare(tmp_path, case, monkeyp
     project_engine = create_experiment_engine(project_url)
     core_engine = create_async_engine(core_url)
     async with core_engine.begin() as connection:
-        from database import ShapeCadSource, ShapeDesignGeometry, ShapeDesignRequest
-        for table in (UserTemplate, ShapeCadSource, ShapeDesignGeometry, ShapeDesignRequest):
-            await connection.run_sync(table.__table__.create)
+        await connection.run_sync(UserTemplate.__table__.create)
     sessions = create_experiment_session_factory(project_engine)
     core_sessions = async_sessionmaker(core_engine, expire_on_commit=False)
-    if case == 'shape':
-        from test_shape_project_launch import submitted
-        async with core_sessions() as core:
-            shape_request = await submitted(core, tmp_path)
-            await core.commit()
-        draft.pop('native_job_request')
-        draft['shape_submitted_request'] = shape_request.model_dump(mode='json')
-    request_key = 'shape_submitted_request' if case == 'shape' else 'native_job_request'
+    request_key = 'native_job_request'
     saved_native = copy.deepcopy(draft[request_key])
     try:
         async with sessions() as session:
@@ -208,17 +196,9 @@ async def test_native_http_save_second_save_cold_prepare(tmp_path, case, monkeyp
             assert scheduler['model_id'] == request['model_id']
             assert scheduler['mode'] == request['mode']
             assert scheduler['execution_target_id'] is None
-            if case != 'shape':
-                assert scheduler['execution_policy'] == request['execution_policy']
-                if 'pinned_gpu' in request:
-                    assert scheduler['resources']['pinned_gpu'] == request['pinned_gpu']
-            else:
-                from database import ShapeDesignRequest
-                async with core_sessions() as core:
-                    records = (await core.scalars(select(ShapeDesignRequest))).all()
-                    assert len(records) == 1
-                assert scheduler['params']['shape_seed'] == 0
-                assert scheduler['params']['shape_sequences_per_backbone'] == 0
+            assert scheduler['execution_policy'] == request['execution_policy']
+            if 'pinned_gpu' in request:
+                assert scheduler['resources']['pinned_gpu'] == request['pinned_gpu']
             assert not {'editor_state', 'native_mode_drafts', 'optional_sequence_stage'} & scheduler['params'].keys()
             for key, value in request['params'].items():
                 if not isinstance(value, dict):

@@ -47,8 +47,6 @@ def test_cad_family_reuses_generation_contract_without_granting_other_parent_tas
     assert resolve_result_contract(model_type='protein_modification_experimental',
         stage_mode='de_novo_design').analysis_contract_id is None
     assert resolve_result_contract(model_type='protein_modification_experimental',
-        stage_mode='shape_blueprint').analysis_contract_id == 'shape_blueprint'
-    assert resolve_result_contract(model_type='protein_modification_experimental',
         stage_mode='region_redesign').analysis_contract_id == 'protein_local_redesign_validation_v1'
 
 

@@ -21,15 +21,11 @@ vi.mock('../../src/components/EpitopeMolstarViewer', () => ({ default: ({ struct
 vi.mock('../../src/components/MolstarViewer', () => ({ default: () => <div data-testid="points" /> }));
 vi.mock('../../src/lib/api', async (original) => ({
     ...await original<object>(),
-    listShapeGeometries: mocks.geometries,
-    fetchShapeSequenceSettings: mocks.settings,
-    submitShapeBlueprint: mocks.submit,
     submitJob: mocks.submit,
     fetchExecutionTargets: mocks.targets,
     fetchSystemStatus: vi.fn(async () => ({ data: { gpus: [], gpu_error: null } })),
 }));
 import { api, EXECUTION_TARGET_STORAGE_KEY } from '../../src/lib/api';
-import ShapeBlueprintTemplate from '../../src/components/ShapeBlueprintTemplate';
 import { StructurePredictionTemplate } from '../../src/components/StructurePredictionTemplate';
 import { prepareDeNovoContinuation } from '../../src/lib/deNovoContinuation';
 import recipes from './fixtures/deNovoContinuationRecipes.json';
@@ -99,98 +95,7 @@ beforeEach(() => {
 });
 afterEach(async () => { await unmount(); vi.unstubAllGlobals(); document.body.replaceChildren(); restoreTransport(); });
 
-it('keeps the real geometry controls and active preview mounted across sections, reporting a complete restorable draft', async () => {
-    const changed = vi.fn();
-    await mount(<ShapeBlueprintTemplate embedded onDraftChange={changed} runDetails={<details data-testid="policy"><summary>Transfer policy</summary></details>} />);
-    expect(container.querySelector('h1')).toBeNull();
-    const upload = field('Geometry file');
-    await edit(field('Geometry'), 'second');
-    const preview = container.querySelector('[data-testid="mesh"]');
-    await click('RFD3');
-    await edit(field('Deterministic seed'), '0');
-    await edit(field('Target length'), '140');
-    await click('Sequence design');
-    await edit(field('Sequence policy'), 'skip');
-    await edit(field('Job name'), '');
-    await click('Geometry');
-    expect(field('Geometry file')).toBe(upload);
-    expect(container.querySelector('[data-testid="mesh"]')).toBe(preview);
-    expect(mocks.meshMount).toHaveBeenCalledTimes(1);
-    expect(mocks.geometries).toHaveBeenCalledTimes(1);
-    const draft = changed.mock.lastCall![0];
-    expect(draft).toMatchObject({ shape_geometry_id: 'second', shape_target_length: 140, shape_seed: 0,
-        shape_name: '', shape_sequence_policy: 'skip', shape_sequence_settings_by_engine: { proteinmpnn: definition.initial_values },
-        shape_geometry_sha256: geometry('second').geometry_sha256, shape_length_policy: { mode: 'fixed', min: 140, max: 140 } });
-    const policy = container.querySelector('[data-testid="policy"]')!;
-    expect(policy.compareDocumentPosition(container.querySelector('[aria-label="Execution target"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(preview!.closest('.grid')?.contains(policy)).toBe(true); // Existing side-by-side workbench, not the retired vertical layout.
-    await unmount();
-    await mount(<ShapeBlueprintTemplate embedded initialValues={draft} onDraftChange={changed} />);
-    expect(field('Geometry').value).toBe('second'); expect(field('Job name').value).toBe('');
-    expect(field('Target length').value).toBe('140'); expect(field('Sequence policy').value).toBe('skip');
-    expect(mocks.submit).not.toHaveBeenCalled();
-});
 
-it('preserves Shape explicit false, zero, empty settings through late native definitions and across engine drafts', async () => {
-    let resolve!: (value: unknown) => void;
-    mocks.settings.mockImplementation(() => new Promise(done => { resolve = done; }));
-    const changed = vi.fn();
-    const initial = { shape_geometry_id: 'second', shape_sequence_settings: { temperature: 0, use_noise: false, omit: '' },
-        shape_sequence_settings_by_engine: { proteinmpnn: { temperature: 0, use_noise: false, omit: '' }, fampnn: { temperature: 0.3 } } };
-    await mount(<ShapeBlueprintTemplate initialValues={initial} onDraftChange={changed} />);
-    expect(container.querySelector('h1')?.textContent).toBe('Shape Blueprint');
-    expect(changed.mock.calls[0][0]).toMatchObject({ shape_geometry_id: 'second', shape_sequence_settings: initial.shape_sequence_settings });
-    await act(async () => resolve({ data: definition })); await flush();
-    expect(changed.mock.lastCall![0].shape_sequence_settings).toEqual(initial.shape_sequence_settings);
-    expect(changed.mock.lastCall![0].shape_sequence_settings_by_engine).toEqual(initial.shape_sequence_settings_by_engine);
-});
-
-it('prepares and submits the exact current Shape request, keeping retry identity and source-free family preload', async () => {
-    const target = { id: 'vast:shape', provider: 'vast', provider_instance_id: 'shape', active: true, state: 'ready', capabilities: {} };
-    mocks.targets.mockResolvedValue({ data: [target] });
-    sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, target.id);
-    const posts: Array<{ url: string; body: any }> = [];
-    const adapter = api.defaults.adapter;
-    api.defaults.adapter = async config => {
-        const body = config.data ? JSON.parse(String(config.data)) : undefined;
-        if (config.method === 'post') posts.push({ url: String(config.url), body });
-        return { data: config.method === 'get' ? null : { selection: body, artifacts: [], total_bytes: 0,
-            preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'managed_asset_activation' },
-            status: 200, statusText: 'OK', headers: {}, config };
-    };
-    mocks.submit.mockRejectedValue(new Error('Review cancelled'));
-    try {
-        await mount(<ShapeBlueprintTemplate initialValues={{ shape_sequence_policy: 'skip' }} />);
-        expect(posts).toEqual([]); expect(mocks.submit).not.toHaveBeenCalled();
-        await click('RFD3'); await edit(field('Target length'), '140');
-        const panel = () => container.querySelector('[aria-label="Unsaved workflow provisioning"]')!;
-        const previewCurrent = async () => {
-            const node = [...panel().querySelectorAll('button')].find(b => b.textContent === 'Preview artifact downloads')!;
-            expect(node).toBeTruthy(); await act(async () => node.click()); await flush();
-            return posts.at(-1)!.body.workflow_request.request;
-        };
-        const prepared = await previewCurrent();
-        expect(prepared).toMatchObject({ target_length: 140, sequence_policy: 'skip', sequences_per_backbone: 0,
-            execution_target_id: target.id, geometry_id: 'first' });
-        await click('Launch Shape Blueprint'); await flush();
-        const { execution_target_id, execution_policy, ...preparedScience } = prepared;
-        expect(JSON.parse(JSON.stringify(mocks.submit.mock.lastCall![0]))).toEqual(preparedScience);
-        expect(execution_target_id).toBe(target.id); expect(execution_policy).toBeTruthy();
-        const submitted = mocks.submit.mock.lastCall![0];
-        expect(submitted.client_request_id).toBe(prepared.client_request_id);
-        await click('Sequence design'); await click('RFD3');
-        await click('Launch Shape Blueprint'); await flush();
-        expect(mocks.submit.mock.lastCall![0]).toEqual(submitted);
-        await edit(field('Target length'), '160');
-        const edited = await previewCurrent();
-        expect(edited.target_length).toBe(160);
-        expect(edited.client_request_id).not.toBe(prepared.client_request_id);
-        const family = container.querySelector('[aria-label="Independent dependency preparation"]')!;
-        const familyButton = [...family.querySelectorAll('button')].find(b => b.textContent === 'Preview artifact downloads')!;
-        await act(async () => familyButton.click()); await flush();
-        expect(posts.at(-1)!.body).toEqual({ kind: 'workflow_pack', workflow_id: 'de_novo_design' });
-    } finally { api.defaults.adapter = adapter; }
-});
 
 // These lifecycle cases use the real continuation and submission helpers and
 // editors. Only HTTP, telemetry transport and the low-level viewers are inert.

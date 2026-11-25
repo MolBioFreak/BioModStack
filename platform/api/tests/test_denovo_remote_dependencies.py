@@ -62,10 +62,10 @@ async def test_existing_catalog_exposes_family_without_scientific_request():
 def test_family_union_exact_deduplicated_native_members_and_no_unrelated_assets(assets):
     refs = model_runtime_dependencies(MODEL)
     images = {r.relative_path for r in refs if r.kind == 'image'}
-    assert images == {'foundry.sif', 'shape_rfd3.sif', 'disco.sif', 'laproteina.sif',
+    assert images == {'foundry.sif', 'disco.sif', 'laproteina.sif',
                       'pyrosetta_tools.sif', 'fampnn.sif', 'proteinmpnn.sif',
                       'boltz2.sif', 'esmfold2.sif', 'protenix.sif', 'caliby.sif'}
-    protenix, blockers = native_checkpoint_dependencies('RunShapeProtenixValidator', {})
+    protenix, blockers = native_checkpoint_dependencies('ProtenixPredict', {})
     assert not blockers
     assert {r.relative_path for r in refs if r.kind == 'weights'} == {
         'foundry/checkpoints/rfd3_latest.ckpt', 'disco', 'laproteina', 'esmfold2',
@@ -113,28 +113,6 @@ def test_validated_redesign_keeps_selected_designer_and_validator(designer, vali
     assert {(d.kind, d.relative_path) for d in selected.dependencies
             if d.kind in {'image', 'weights'}} <= family
 
-
-@pytest.mark.parametrize('designer', ['proteinmpnn', 'fampnn'])
-@pytest.mark.parametrize('validators', [[], ['boltz2'], ['protenix_v2'], ['boltz2', 'protenix_v2']])
-def test_shape_selected_sequence_and_peers_are_subset_of_family(designer, validators):
-    params = {'shape_request': {'sequence_policy': 'auto', 'sequences_per_backbone': 1,
-              'sequence_engine': designer, 'validator_suite': validators}}
-    selected = plan(params, mode='shape_blueprint', entrypoint='shape_blueprint_design')
-    images = {d.relative_path for d in selected.dependencies if d.kind == 'image'}
-    assert images == {'shape_rfd3.sif', 'esmfold2.sif',
-        'fampnn.sif' if designer == 'fampnn' else 'proteinmpnn.sif',
-        *({'boltz2': 'boltz2.sif', 'protenix_v2': 'protenix.sif'}[v] for v in validators)}
-    family = {(d.kind, d.relative_path) for d in model_runtime_dependencies(MODEL)}
-    assert {(d.kind, d.relative_path) for d in selected.dependencies
-            if d.kind in {'image', 'weights'}} <= family
-
-
-def test_shape_skip_excludes_all_downstream_engines():
-    selected = plan({'shape_request': {'sequence_policy': 'skip'}},
-                    mode='shape_blueprint', entrypoint='shape_blueprint_design')
-    assert {d.relative_path for d in selected.dependencies if d.kind == 'image'} == {'shape_rfd3.sif'}
-    assert {d.relative_path for d in selected.dependencies if d.kind == 'weights'} == {
-        'foundry/checkpoints/rfd3_latest.ckpt'}
 
 
 def test_native_redesign_ignores_stray_rfd3_request_and_selects_no_generator():
@@ -337,9 +315,8 @@ async def test_family_cold_install_and_warm_reuse(assets, tmp_path, local_transp
     assert not (Path(connection.remote_root) / 'attempts').exists()
 
 
-@pytest.mark.parametrize('shape', [False, True])
 @pytest.mark.parametrize('custom', [False, True])
-def test_boltz_selected_bundle_and_family_manifest_native_closure(assets, shape, custom):
+def test_boltz_selected_bundle_and_family_manifest_native_closure(assets, custom):
     from services.remote_execution import managed_inventory
 
     for ref in model_runtime_dependencies(MODEL):
@@ -353,14 +330,10 @@ def test_boltz_selected_bundle_and_family_manifest_native_closure(assets, shape,
     for member in (*members, *extras):
         leaf(root / member)
         leaf(assets['weights'] / 'boltz' / member)
-    params: dict = ({'shape_request': {'sequence_policy': 'auto', 'sequences_per_backbone': 1,
-                                     'sequence_engine': 'fampnn',
-                               'validator_suite': ['boltz2']}} if shape else
-              {'plr_seq_method': 'fampnn', 'plr_structure_validators': ['boltz2']})
+    params: dict = {'plr_seq_method': 'fampnn', 'plr_structure_validators': ['boltz2']}
     if custom:
         params['boltz_models'] = str(root)
-    kwargs = ({'mode': 'shape_blueprint', 'entrypoint': 'shape_blueprint_design'} if shape else
-              {'mode': 'region_redesign', 'entrypoint': 'protein_local_redesign'})
+    kwargs = {'mode': 'region_redesign', 'entrypoint': 'protein_local_redesign'}
     selected = plan(params, **kwargs)
     deps = [d for d in selected.dependencies if d.logical_id.startswith('weights:boltz')]
     assert {d.selector_subpath for d in deps} == {'boltz2_conf.ckpt', 'boltz2_aff.ckpt', 'mols'}
@@ -389,8 +362,3 @@ def test_boltz_native_cli_override_preserves_historical_closure():
     assert not blockers
     assert [(d.relative_path, d.selector, d.selector_subpath) for d in dependencies] == [
         ('boltz', 'boltz_models', None)]
-    # Shape does not forward this free-form setting to the native CLI.
-    dependencies, blockers = native_checkpoint_dependencies('RunShapeBoltzValidator',
-        {'boltz_extra_config': '--model boltz1'})
-    assert not blockers
-    assert {d.selector_subpath for d in dependencies} == {'boltz2_conf.ckpt', 'boltz2_aff.ckpt', 'mols'}

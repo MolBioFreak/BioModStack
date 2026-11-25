@@ -21,7 +21,6 @@ BASE_TABLES = (
     "frustrampnn_comparisons", "frustrampnn_guidance_plans", "input_files",
     "jobs", "nucleotide_sequences", "primers", "rfd3_local_redesign_artifacts",
     "rfd3_local_redesign_candidates", "rfd3_local_redesign_requests",
-    "shape_cad_sources", "shape_design_geometries", "shape_design_requests",
     "user_sequences", "user_templates",
 )
 

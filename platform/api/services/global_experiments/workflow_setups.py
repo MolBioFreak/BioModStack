@@ -36,7 +36,6 @@ from services.global_experiments.launch_contexts import create_prepared_launch_c
 from services.family_msa_project_capabilities import family_msa_capability
 from services.protein_project_capabilities import (
     ProteinProjectCapabilityError,
-    SHAPE_SETUP_CAPABILITY_ID,
     protein_capability_record,
     protein_parameter_schema,
     protein_setup_parameter_schema,
@@ -89,7 +88,7 @@ async def _detailed_document(
         "editor_state" in draft and protein_setup_parameter_schema(row.capability_id).get("x-bms-native-editor-draft")
     ):
         draft = {**draft.get("editor_state", {}), **{
-            key: draft[key] for key in ("native_job_request", "shape_submitted_request") if key in draft
+            key: draft[key] for key in ("native_job_request",) if key in draft
         }}
     return {
         **_document(row),
@@ -240,19 +239,13 @@ def _materialize_draft(schema: dict[str, Any], supplied: dict[str, Any]) -> tupl
         raise ValidationFailure("workflow setup draft must be an object")
     if schema.get("x-bms-native-editor-draft"):
         # UI/source metadata is durable editor state, never native parameters.
-        request_key = "shape_submitted_request" if "shape_submitted_request" in schema["properties"] else "native_job_request"
+        request_key = "native_job_request"
         if "editor_state" not in supplied:
             editor = {key: value for key, value in supplied.items() if key != request_key}
             if not supplied:
                 editor = copy.deepcopy(schema["properties"]["editor_state"].get("default", {}))
             supplied = {"editor_state": editor,
                         **({request_key: supplied[request_key]} if request_key in supplied else {})}
-        if "shape_submitted_request" in supplied:
-            from services.shape_requests import SubmittedShapeRequest
-            try:
-                SubmittedShapeRequest.model_validate(supplied["shape_submitted_request"])
-            except ValueError as exc:
-                raise ValidationFailure(str(exc)) from exc
         if supplied.get("native_job_request") is not None:
             from schemas import JobCreate
             try:
@@ -533,18 +526,6 @@ async def prepare_workflow_setup_launch(
         "editor_state" in stored_draft and protein_setup_parameter_schema(row.capability_id).get("x-bms-native-editor-draft")
     )
     native_request = stored_draft.get("native_job_request") if native else None
-    if row.capability_id == SHAPE_SETUP_CAPABILITY_ID:
-        from paths import get_data_root
-        from services.shape_requests import SubmittedShapeRequest, materialize_shape_request, shape_job_request
-
-        if core_session is None:
-            raise ValidationFailure("Shape setup preparation requires the core session")
-        try:
-            submitted = SubmittedShapeRequest.model_validate(stored_draft["shape_submitted_request"])
-            staged = await materialize_shape_request(core_session, data_root=get_data_root(), submitted=submitted)
-        except ValueError as exc:
-            raise ValidationFailure(str(exc)) from exc
-        native_request = shape_job_request(staged, submitted).model_dump(mode="json")
     if native and core_session is not None and (native_request or {}).get("params", {}).get("native_sources"):
         # Freeze the same retained source projection that canonical Job creation
         # consumes; otherwise valid source materialization changes Plan params.

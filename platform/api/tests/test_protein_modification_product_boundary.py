@@ -32,7 +32,7 @@ def test_registry_exposes_one_protein_modification_product_with_three_truthful_m
 
     assert model is not None
     assert model.name == "De Novo Design"
-    assert {mode.id for mode in model.modes} == {"de_novo_design", "shape_blueprint", "region_redesign"}
+    assert {mode.id for mode in model.modes} == {"de_novo_design", "region_redesign"}
 
 
 def test_canonical_de_novo_mode_uses_native_rfd3_generation_entrypoint(tmp_path: Path) -> None:

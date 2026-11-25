@@ -18,7 +18,6 @@ import '../../src/components/MolecularDynamicsTemplate';
 import '../../src/components/ProteinModificationTemplate';
 import { StructurePredictionTemplate } from '../../src/components/StructurePredictionTemplate';
 import { prepareDeNovoContinuation } from '../../src/lib/deNovoContinuation';
-import ShapeBlueprintTemplate from '../../src/components/ShapeBlueprintTemplate';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
 
 // Offline transport fixtures, not inference, native-writer or API acceptance.
@@ -291,17 +290,3 @@ it('actual Results redesign opens the unified RFD3 editor with the exact source 
     expect(request.params.seq_method).toBeUndefined();
 });
 
-it.each(['auto', 'skip', 'external'] as const)('actual Shape cold %s replay emits geometry and contextual validation without duplicate general sequence stages', async policy => {
-    const initial = { shape_geometry_id: 'fixture-geometry', shape_geometry_sha256: 'b'.repeat(64), shape_sequence_policy: policy, shape_sequence_engine: 'proteinmpnn', shape_seed: 0, shape_target_length: 100 };
-    await mount(<ShapeBlueprintTemplate initialValues={JSON.parse(JSON.stringify(initial))} />, '/submit?template=protein_modification_experimental&modification_mode=shape_blueprint');
-    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[data-webgl]'), document.body.textContent ?? '').not.toBeNull(); });
-    expect(posts).toEqual([]);
-    await click('Launch Shape Blueprint');
-    const request = posts.find(p => p.url === '/api/shape-blueprint/requests')?.body;
-    expect(request, document.body.textContent ?? '').toMatchObject({ geometry_id: 'fixture-geometry', expected_geometry_sha256: 'b'.repeat(64), sequence_policy: policy, seed: 0 });
-    expect(request.validator_suite).toEqual(['boltz2', 'esmfold2', 'protenix_v2']);
-    expect(request.sequences_per_backbone).toBe(policy === 'skip' ? 0 : 1);
-    expect(request.sequence_engine).toBe(policy === 'external' ? 'proteinmpnn' : undefined);
-    expect(request.round_plan).toBeUndefined(); expect(request.sequence_design).toBeUndefined();
-    expect(posts.filter(p => p.url === '/api/jobs')).toEqual([]);
-});

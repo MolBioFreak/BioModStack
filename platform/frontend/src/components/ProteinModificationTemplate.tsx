@@ -20,7 +20,6 @@ import { useNavigate } from 'react-router-dom';
 import { api, completeCurrentLaunchContext, submitJob, type NativeGenerationSourceBinding, type StructureMaterialization, type Job } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { ModelReferenceCard } from './ModelReferenceCard';
-import ShapeBlueprintTemplate from './ShapeBlueprintTemplate';
 import { ProteinDesignSections, ProteinDesignPanel, ProteinDesignRun, themedInsetStyle } from './ProteinDesignWorkflow';
 import { LaProteinaMotifInput, type LaProteinaMotifInspection } from './LaProteinaMotifInput';
 import { DeNovoContextInput } from './DeNovoContextInput';
@@ -99,7 +98,7 @@ const resolveNavigation = (values?: Record<string, unknown>): DeNovoNavigationSt
     const rawMode = values?.backbone_input_pdbs && values?.seq_method ? 'resequence' : values?.modification_mode;
     const modification_mode = rawMode === 'rfd3_local_redesign'
         ? 'rfd3_iteration'
-        : rawMode === 'rfd3_iteration' || rawMode === 'region_redesign' || rawMode === 'resequence' || rawMode === 'shape_blueprint' ? rawMode : 'de_novo_design';
+        : rawMode === 'rfd3_iteration' || rawMode === 'region_redesign' || rawMode === 'resequence' ? rawMode : 'de_novo_design';
     const native = values?.generator === 'rfd4_proteina' || values?.generator === 'complexa' || values?.generator === 'laproteina';
     const nativeMode = native ? { native_mode: typeof values?.native_mode === 'string' ? values.native_mode : 'generate' } : {};
     if (modification_mode !== 'de_novo_design') return { modification_mode, ...(values?.generator === 'rfd4_proteina' ? { generator: 'rfd4_proteina', design_task: 'refine', ...nativeMode } : {}) };
@@ -117,7 +116,7 @@ const draftKey = (state: DeNovoNavigationState) => state.modification_mode === '
     ? `${state.modification_mode}:${state.generator}:${state.design_task}${state.generator === 'rfd4_proteina' || state.generator === 'complexa' || state.generator === 'laproteina' && state.native_mode === 'evaluate' ? `:${state.native_mode ?? 'generate'}:v1` : ''}` : state.generator === 'rfd4_proteina' ? `${state.modification_mode}:rfd4_proteina:${state.native_mode ?? 'generate'}:v1` : state.modification_mode;
 
 export function ProteinModificationTemplate({
-    onBack, initialValues, onDraftChange, onNavigationChange, navigationState, runDetails, onOpenTemplateManager, launchContextId,
+    onBack, initialValues, onDraftChange, onNavigationChange, navigationState, runDetails, onOpenTemplateManager,
 }: ProteinModificationTemplateProps) {
     const [navigation, setNavigation] = useState(() => resolveNavigation({ ...navigationState, ...initialValues }));
     // Suite-owned authoring, not a generator override or engine-specific draft.
@@ -225,7 +224,7 @@ export function ProteinModificationTemplate({
     // Keep the hydration object stable while a child reports changes.
     const childValues = useRef<{ key: string; values: Record<string, unknown> } | null>(null);
     if (childValues.current?.key !== activeKey) childValues.current = { key: activeKey, values: drafts.current[activeKey] ?? {} };
-    const nativeModeControl = (generator === 'rfd4_proteina' || generator === 'laproteina') && mode !== 'shape_blueprint' ? <label className={labelClass}>Operation
+    const nativeModeControl = (generator === 'rfd4_proteina' || generator === 'laproteina') ? <label className={labelClass}>Operation
         <select aria-label="Native mode" className={fieldClass} value={navigation.native_mode ?? 'generate'} onChange={event => changeNavigation({ ...navigation, native_mode: event.target.value })}>
             <option value="generate">Generate</option><option value="evaluate">Evaluate</option>
         </select>
@@ -264,9 +263,9 @@ export function ProteinModificationTemplate({
                 <div role="group" aria-label="Editor detail" className="flex gap-2">
                 {(['simple', 'advanced'] as const).map(view => <button type="button" key={view} aria-pressed={suiteView === view} onClick={() => setSuiteView(view)} className="rounded-lg bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm">{view === 'simple' ? 'Simple' : 'Advanced'}</button>)}
             </div>
-                <div className="ml-auto">{mode !== 'shape_blueprint' && <ModelReferenceCard model={generator} />}</div>
+                <div className="ml-auto"><ModelReferenceCard model={generator} /></div>
             </div>
-            {mode !== 'shape_blueprint' && mode !== 'de_novo_design' && mode !== 'resequence' && constructionPanel(false)}
+            {mode !== 'de_novo_design' && mode !== 'resequence' && constructionPanel(false)}
             {mode === 'de_novo_design' ? <>
                 <div className="grid grid-cols-2 gap-3 lg:grid-cols-3" data-de-novo-context>
                     {!['rfd4_proteina', 'complexa'].includes(generator) && <label className={labelClass}>Goal
@@ -298,9 +297,8 @@ export function ProteinModificationTemplate({
                     : ['rfd3', 'disco', 'laproteina'].includes(generator) ? <GenerationEditor key={activeKey} initialValues={childValues.current.values} generator={generator}
                     designTask={task} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} /> : <p role="alert">No native editor registered for {generator}. Retained settings have not been translated to another engine.</p>}
             </> : mode === 'resequence' ? <ResequencePanel key={activeKey} initialValues={childValues.current.values} onDraftChange={reportDraft} runDetails={runDetails} />
-            : mode === 'rfd3_iteration' ? <><div className="grid grid-cols-2 gap-3">{nativeModeControl}<label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label></div>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings entryWorkspace={false} key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} /> : <GenerationEditor key={activeKey} initialValues={childValues.current.values.input_structure && !childValues.current.values.redesign_mode ? { generation_task: 'partial_diffusion', ...childValues.current.values } : childValues.current.values} generator="rfd3"
-                designTask="unconditional" runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} />}</>
-                : <ShapeBlueprintTemplate launchContextId={launchContextId} key={activeKey} embedded initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />}
+            : <><div className="grid grid-cols-2 gap-3">{nativeModeControl}<label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label></div>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings entryWorkspace={false} key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} /> : <GenerationEditor key={activeKey} initialValues={childValues.current.values.input_structure && !childValues.current.values.redesign_mode ? { generation_task: 'partial_diffusion', ...childValues.current.values } : childValues.current.values} generator="rfd3"
+                designTask="unconditional" runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} />}</>}
             {onOpenTemplateManager && <button type="button" className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm"
                 onClick={() => onOpenTemplateManager({
                     currentParams: { ...drafts.current[activeKey], ...activeRequest.current, ...(constructionRef.current ? { molecular_construction: constructionRef.current } : {}), ...(Object.keys(preparedRef.current).length ? { prepared_geometry_documents: preparedRef.current } : {}), ...navigation, suite_view: suiteView, suite_last_generation: { ...lastGeneration.current }, suite_last_tasks: { ...lastTaskByEngine.current }, suite_last_modes: { ...lastModeByEngine.current }, modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) },

@@ -600,8 +600,7 @@ export interface MdLaunchPreviewRequest {
 // Reuse native scientific contracts, never translate them into synthetic Jobs.
 export type NativeWorkflowProvisionRequest =
     | { workflow_type: 'conformational_mapping'; request: CmSubmitRequest }
-    | { workflow_type: 'molecular_dynamics'; request: MdLaunchPreviewRequest }
-    | { workflow_type: 'shape_blueprint'; request: ShapeLaunchRequest };
+    | { workflow_type: 'molecular_dynamics'; request: MdLaunchPreviewRequest };
 export type WorkflowProvisionRequest = Partial<Job> | NativeWorkflowProvisionRequest;
 export type ProvisionSelection = CatalogProvisionSelection | WorkflowPackSelection | { kind: 'workflow'; workflow_request: WorkflowProvisionRequest };
 export interface WorkflowRuntimeSelection { kind: 'workflow'; model_id: string; }
@@ -1466,132 +1465,6 @@ export const completeCurrentLaunchContext = async (responseData: unknown): Promi
     return typeof returnUri === 'string' && returnUri.startsWith('/') && !returnUri.startsWith('//')
         ? returnUri
         : null;
-};
-
-export interface ShapeGeometrySummary {
-    geometry_id: string;
-    source_id: string;
-    original_filename?: string | null;
-    geometry_sha256: string;
-    manifest_sha256: string;
-    source_sha256: string;
-    preview_obj_sha256: string | null;
-    point_pool_sha256: string;
-    sdf_sha256: string;
-    sdf_sign: 'positive_inside';
-    sdf_grid_shape: [number, number, number];
-    vertex_count: number;
-    face_count: number;
-    point_count: number;
-    bounds_angstrom: [number, number, number, number, number, number];
-    dimensions_angstrom: [number, number, number];
-    source_format: 'obj' | 'stl';
-    source_parser: 'obj_triangle_v1' | 'obj_triangle_v2' | 'stl_ascii_v1' | 'stl_binary_v1';
-    source_unit: string;
-    angstrom_per_unit: number;
-}
-
-export interface ShapeLengthPolicy {
-    mode: 'fixed' | 'uniform_integer_range' | 'deterministic_range';
-    min: number;
-    max: number;
-    allocation_policy_id?: 'fixed_length_v1' | 'balanced_bucket_v1' | null;
-    allocation_policy_sha256?: string | null;
-}
-
-export type ShapeSequenceEngine = 'proteinmpnn' | 'fampnn' | 'caliby_experimental';
-export type ShapeSequenceSettings = Record<string, unknown>;
-export type ShapePredictor = 'boltz2' | 'esmfold2' | 'protenix_v2';
-
-// Wire projection of model-owned metadata, never a second settings authority.
-export interface ShapeSequenceSettingsDefinition {
-    engine: ShapeSequenceEngine;
-    model_version: string;
-    schema_sha256: string;
-    params: Array<{ name: string; type: string; default?: unknown; [metadata: string]: unknown }>;
-    initial_values: ShapeSequenceSettings;
-    contextual_defaults: ShapeSequenceSettings;
-    contextual_default_reason: string;
-    json_schema?: Record<string, unknown>;
-    input_settings_schema?: Record<string, unknown>;
-}
-
-export interface ShapeNativeSettingsDefinition extends Omit<ShapeSequenceSettingsDefinition, 'engine'> {
-    model_id: string;
-    mode: string;
-}
-
-export interface ShapeSettingsDefinition {
-    schema: 'bms_shape_settings_v1';
-    rfd3: ShapeNativeSettingsDefinition;
-    sequence_engines: ShapeSequenceEngine[];
-    validators: Record<ShapePredictor, ShapeNativeSettingsDefinition>;
-}
-
-export const fetchShapeSettings = () =>
-    api.get<ShapeSettingsDefinition>('/api/shape-blueprint/settings');
-
-export const fetchShapeSequenceSettings = (engine: ShapeSequenceEngine, sequenceCount: number) =>
-    api.get<ShapeSequenceSettingsDefinition>(`/api/shape-blueprint/sequence-settings/${engine}`, {
-        params: { sequence_count: sequenceCount },
-    });
-
-export interface ShapeLaunchRequest extends ExecutionPlacement {
-    execution_plan_approval?: string | null;
-    launch_context_id?: string | null;
-    client_request_id: string;
-    name: string;
-    geometry_id: string;
-    expected_geometry_sha256: string;
-    expected_geometry_manifest_sha256: string;
-    expected_point_pool_sha256: string;
-    target_length?: number;
-    length_policy?: ShapeLengthPolicy;
-    num_backbones: number;
-    sequences_per_backbone: number;
-    seed: number;
-    sequence_policy?: 'auto' | 'skip' | 'external';
-    sequence_engine?: ShapeSequenceEngine;
-    sequence_settings?: ShapeSequenceSettings;
-    sequence_input_settings?: Record<string, unknown>;
-    rfd3_settings?: Record<string, unknown>;
-    validator_settings?: Partial<Record<ShapePredictor, Record<string, unknown>>>;
-    validator_suite?: ShapePredictor[];
-    guidance_profile: 'rfd3_unguided_control_v1' | 'rfd3_ca_shape_transfer_control_v1';
-}
-
-export const listShapeGeometries = () =>
-    api.get<{ geometries: ShapeGeometrySummary[] }>('/api/shape-blueprint/geometries');
-
-export const uploadShapeGeometry = (file: File, unit: string) => {
-    const body = new FormData();
-    body.append('file', file);
-    body.append('unit', unit);
-    return api.post<ShapeGeometrySummary>('/api/shape-blueprint/geometries', body);
-};
-
-export const submitShapeBlueprint = (request: ShapeLaunchRequest) => {
-    // Explicit destination (including null/standalone) wins over ambient Project
-    // navigation. Snapshot the same body/header context through remote review.
-    const launchContextId = request.launch_context_id === undefined && typeof window !== 'undefined'
-        ? new URLSearchParams(window.location.search).get('launch_context_id')
-        : request.launch_context_id;
-    const payload = structuredClone(prepareExecutionPlacement({
-        ...request, launch_context_id: launchContextId ?? null,
-    }));
-    const contextConfig = jobLaunchContextConfig(payload, { launchContext: false });
-    type Response = {
-        request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean;
-        launch_context_id?: string | null; return_uri?: string | null;
-        launch_context_binding?: Record<string, unknown> | null;
-    } & Required<ExecutionPlacement>;
-    return submitPreparedJobAction(
-        () => api.post<Response>('/api/shape-blueprint/requests', payload, contextConfig),
-        approved => api.post<Response>('/api/shape-blueprint/requests', {
-            ...payload, execution_plan_approval: approved.execution_plan_approval,
-        }, contextConfig),
-        { launchContext: false },
-    );
 };
 
 export interface BoltzApiStructureRequest {

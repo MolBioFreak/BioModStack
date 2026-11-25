@@ -147,7 +147,6 @@ async def test_preview_insert_replay_clone_real_stores(isolated_core, setup_stor
 
 @pytest.mark.parametrize('model,mode,generator', [
     ('boltz2', 'predict', 'rfd4_proteina'),
-    ('protein_modification_experimental', 'shape_blueprint', 'complexa'),
     ('protein_modification_experimental', 'de_novo_design', 'rfd3'),
 ])
 def test_closure_discovery_is_model_scoped(tmp_path, model, mode, generator):

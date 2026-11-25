@@ -117,16 +117,6 @@ it.each([
   expect(JSON.stringify(changed.mock.lastCall?.[0])).toBe(draft);
 });
 
-it.each(['shape_blueprint'])('prepares %s with no source or geometry through the actual leaf', async modification_mode => {
-  const changed = vi.fn();
-  await mount(<ProteinModificationTemplate onBack={() => {}} onDraftChange={changed} initialValues={{ modification_mode }} />);
-  expect(posts).toEqual([]);
-  expect(host.querySelector('[aria-label="Unsaved workflow provisioning"]')).toBeNull();
-  const draft = JSON.stringify(changed.mock.lastCall?.[0]);
-  await prepareFamily();
-  expect(JSON.stringify(changed.mock.lastCall?.[0])).toBe(draft);
-});
-
 it('connects global Workflow → De Novo to the telemetry target, not the stored worker', async () => {
   sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, other.id);
   await mount(<RemotePreloadPanel target={ready} jobs={[]} onChanged={async () => {}} />);

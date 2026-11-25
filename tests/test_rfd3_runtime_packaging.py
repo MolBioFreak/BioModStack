@@ -16,7 +16,6 @@ _SPEC.loader.exec_module(patch)
 
 @pytest.mark.parametrize("name,expected", [
     ("foundry", patch.PATCHED_SHA256),
-    ("shape_rfd3", patch.SHAPE_PATCHED_SHA256),
 ])
 def test_exact_native_lineage(name, expected):
     root = os.environ.get("BMS_RFD3_PACKAGING_SOURCE_DIR")

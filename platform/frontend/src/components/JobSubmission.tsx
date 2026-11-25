@@ -612,7 +612,7 @@ export function JobSubmission() {
                     });
                     setJobName(data.name || 'Conformational mapping');
                 }
-                else if (isDeNovoModel(data.model_id) || isDeNovoModel(data.params?.template_model_id) || data.mode === 'shape_blueprint' || data.params?.modification_mode === 'shape_blueprint') {
+                else if (isDeNovoModel(data.model_id) || isDeNovoModel(data.params?.template_model_id)) {
                     const draft = deNovoSavedValues(data.model_id, data.mode, {
                         ...data.params, pinned_gpu: data.pinned_gpu,
                         ...(Object.hasOwn(data, 'sequence_design') ? { sequence_design: data.sequence_design } : {}),

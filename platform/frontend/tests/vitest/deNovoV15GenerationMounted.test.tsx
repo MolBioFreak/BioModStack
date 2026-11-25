@@ -16,7 +16,6 @@ function Child({ initialValues, onDraftChange, embedded, runDetails, kind, submi
     useEffect(() => { onDraftChange({ ...initialValues, source: value, enabled: false, amount: 0, selection: null }); }, [value, onDraftChange]);
     return <section data-child={kind} data-embedded={embedded} data-model={submissionModelId}><label>Source<input value={value} onChange={e => setValue(e.target.value)} /></label>{runDetails}<button>Child launch</button></section>;
 }
-vi.mock('../../src/components/ShapeBlueprintTemplate', () => ({ default: (props: any) => <Child {...props} kind="shape" /> }));
 import { ProteinModificationTemplate, type DeNovoNavigationState } from '../../src/components/ProteinModificationTemplate';
 import { api } from '../../src/lib/api';
 vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: (props: any) => <output data-low-level-viewer data-url={props.structureUrl} /> }));
@@ -273,8 +272,7 @@ it('hydrates saved identity first then follows explicit browser navigation witho
     await render({ ...props, navigationState: defaultRoute });
     expect(control('DNA/RNA sequence').value).toBe('saved');
     await edit('DNA/RNA sequence', 'edited');
-    await render({ ...props, navigationState: { modification_mode: 'shape_blueprint' } });
-    expect(document.querySelector('[data-child="shape"]')).toBeTruthy();
+    await render({ ...props, navigationState: { modification_mode: 'resequence' } });
     await render({ ...props, navigationState: { modification_mode: 'de_novo_design', generator: 'disco', design_task: 'dna_conditioned' } });
     expect(control('DNA/RNA sequence').value).toBe('edited');
     expect(navigation).not.toHaveBeenCalled();
@@ -287,9 +285,7 @@ it('mounts only the active child and forwards embedded run details; Redesign is 
     expect(control('Engine').value).toBe('rfd3');
     expect(document.querySelector('[data-child]')).toBeNull();
     expect(document.querySelectorAll('[data-policy]')).toHaveLength(1);
-    await click('Shape');
-    expect(document.querySelectorAll('[data-child]')).toHaveLength(1);
-    expect(document.querySelector('[data-child]')?.getAttribute('data-embedded')).toBe('true');
+    await click('Resequence');
     expect(document.querySelectorAll('[data-policy]')).toHaveLength(1);
     await click('Redesign structure');
     expect(document.querySelector('[data-child]')).toBeNull();
@@ -317,8 +313,8 @@ it('forwards the full retained draft envelope to Template Manager without submit
 
 it('does not republish child drafts indefinitely when the external callback identity changes', async () => {
     const draft = vi.fn();
-    function Owner() { const [, setDraft] = useState({}); return <ProteinModificationTemplate onBack={() => {}} initialValues={{ modification_mode: 'shape_blueprint' }} onDraftChange={value => { draft(value); setDraft(value); }} />; }
-    await render({ initialValues: { modification_mode: 'shape_blueprint' } });
+    function Owner() { const [, setDraft] = useState({}); return <ProteinModificationTemplate onBack={() => {}} initialValues={{ modification_mode: 'resequence' }} onDraftChange={value => { draft(value); setDraft(value); }} />; }
+    await render({ initialValues: { modification_mode: 'resequence' } });
     await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><Owner /></MemoryRouter></QueryClientProvider>));
     expect(draft).toHaveBeenCalledOnce();
 });

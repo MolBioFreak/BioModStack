@@ -526,7 +526,7 @@ async def finalize_successful_job(
                     str(job.model_id or "").strip().lower() == "protein_modification_experimental"
                     # Resequence (region_redesign) is the protein_local_redesign workflow under its current
                     # model id; it publishes no generic candidate record, so it is its own native owner.
-                    and (str(job.mode or "").strip().lower() in {"shape_blueprint", "region_redesign"} or (
+                    and (str(job.mode or "").strip().lower() == "region_redesign" or (
                         str(job.mode or "").strip().lower() == "de_novo_design"
                         and str(_parse_job_params(job.params).get("generator") or "rfd3").strip().lower() == "rfd3"
                     ))
@@ -551,20 +551,10 @@ async def finalize_successful_job(
             idempotent_prior_results = int(ingested_count or 0) <= 0
     except Exception as exc:
         session.info.setdefault('component_projection_verified', {}).pop(job_id, None)
-        from services.result_ingester import ShapeNoCandidates
-
-        native_no_yield = (
-            isinstance(exc, ShapeNoCandidates)
-            and isinstance(exc.shape_publication, dict)
-            and await _authoritative_result_count(session, job) == 0
-        )
-        if not native_no_yield:
-            await session.rollback()
-            if manual_remote_pull:
-                # Import failure remains received-but-unimported, never science completion.
-                raise
-        # Only validated zero-yield native publication preserves the caller's
-        # generation transaction; its science disposition remains failed.
+        await session.rollback()
+        if manual_remote_pull:
+            # Import failure remains received-but-unimported, never science completion.
+            raise
         job = await session.get(Job, job_id)
         if job is None:
             raise RuntimeError(f"job disappeared during result finalization: {job_id}") from exc
@@ -608,11 +598,6 @@ async def finalize_successful_job(
             job,
             details,
         )
-        # A native no-yield result is not an accepted Design, but its validated
-        # rejection/evidence custody survives the existing scientific disposition.
-        shape_publication = getattr(exc, "shape_publication", None)
-        if no_candidates and isinstance(shape_publication, dict):
-            failure_provenance["shape_result_publication"] = shape_publication
         failure = await session.execute(
             update(Job)
             .where(
@@ -632,7 +617,7 @@ async def finalize_successful_job(
                 completed_at=datetime.utcnow(),
                 error_message=(f"No candidates: {message}" if no_candidates else f"Result ingestion failed: {message}"),
                 provenance=failure_provenance,
-                **({"remote_state": "ingested" if native_no_yield else "returned_ingestion_failed"}
+                **({"remote_state": "returned_ingestion_failed"}
                    if remote_authority else {}),
             )
         )

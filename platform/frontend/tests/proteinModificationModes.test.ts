@@ -3,10 +3,10 @@ import test from 'node:test';
 
 import { DE_NOVO_MODIFICATION_MODE_CARDS } from '../src/components/proteinModificationModes';
 
-test('De Novo Design prefers native RFD3 while preserving iteration and shape blueprint', () => {
+test('De Novo Design prefers native RFD3 while preserving iteration and resequence', () => {
     assert.deepEqual(
         DE_NOVO_MODIFICATION_MODE_CARDS.map((card) => card.id),
-        ['de_novo_design', 'rfd3_iteration', 'shape_blueprint'],
+        ['de_novo_design', 'rfd3_iteration', 'resequence'],
     );
 
     const deNovo = DE_NOVO_MODIFICATION_MODE_CARDS[0];

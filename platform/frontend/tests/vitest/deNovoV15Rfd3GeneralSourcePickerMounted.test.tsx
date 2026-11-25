@@ -10,7 +10,6 @@ import { api } from '../../src/lib/api';
 vi.mock('../../src/components/FileBrowser', () => ({ FileBrowser: ({ onSelect, onCancel }: any) => <div><button onClick={() => onSelect('/retained/two-models.pdb')}>Select retained fixture</button><button onClick={() => onSelect('/retained/replacement.pdb')}>Select replacement fixture</button><button onClick={onCancel}>Cancel file browser</button></div> }));
 vi.mock('../../src/components/ExecutionTargetPicker', () => ({ ExecutionTargetPicker: ({ workflowRequest }: any) => <output data-request>{JSON.stringify(workflowRequest)}</output> }));
 vi.mock('../../src/components/ModelDocumentationLinks', () => ({ ModelDocumentationLinks: () => null }));
-vi.mock('../../src/components/ShapeBlueprintTemplate', () => ({ default: () => null }));
 vi.mock('../../src/components/GeneralSequenceDesignSettings', () => ({ GeneralSequenceDesignSettings: () => null }));
 vi.mock('../../src/components/LaProteinaMotifInput', () => ({ LaProteinaMotifInput: () => null }));
 vi.mock('../../src/components/MolstarViewer', () => ({ default: () => <div data-viewer /> }));

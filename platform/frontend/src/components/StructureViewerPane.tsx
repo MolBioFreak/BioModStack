@@ -6,7 +6,6 @@ import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
 import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
 import { nativePlddtLayers, plddtBandColor } from '../structureViewer/metrics/nativeConfidenceLayer';
-import { shapeDocuments, type ShapeDocument } from '../lib/shapeResultsView';
 import ChainDetailsPanel from './ChainDetailsPanel';
 import { parseScientificPae, parseScientificNativeMetric } from '../lib/scientificViewerIdentity';
 import ReferenceSelector, { type ReferenceStructure } from './ReferenceSelector';
@@ -301,33 +300,6 @@ const getFampnnScalar = (payload: Record<string, unknown> | null, ...keys: strin
     return null;
 };
 
-/** Exact native documents share the standard host, not the primary Design metric binding. */
-export function ShapeDocumentInspector({ design, document }: { design: Design; document: ShapeDocument }) {
-    const [toolsOpen, setToolsOpen] = useState(false);
-    const [geometryOpen, setGeometryOpen] = useState(false);
-    const [sourceOpen, setSourceOpen] = useState(false);
-    const geometry = design.provenance?.geometry_id;
-    const source = shapeDocuments(design).find(doc => doc.key === 'source_backbone');
-    const overlays = useMemo(() => [
-        ...(geometryOpen && typeof geometry === 'string' ? [{ id: `shape-${geometry}`, structureUrl: `/api/shape-blueprint/geometries/${encodeURIComponent(geometry)}/points.cif`, format: 'cif' as const, label: 'Canonical Shape point pool' }] : []),
-        ...(sourceOpen && source && source.key !== document.key ? [{ id: `source-${design.id}`, structureUrl: source.url, format: source.format, label: 'Source backbone (published coordinates)' }] : []),
-    ], [geometryOpen, geometry, sourceOpen, source?.url, source?.format, document.key, design.id]);
-    return <section aria-label="Exact Shape document" className="min-w-0 space-y-3">
-        <header className="break-words text-sm"><h3 className="font-semibold">{design.name} · {document.label}</h3><p>{document.format.toUpperCase()} · Native document; confidence is not inferred from atom B factors.</p></header>
-        <div className="flex flex-wrap gap-4 text-sm">
-            <button type="button" aria-expanded={toolsOpen} onClick={() => setToolsOpen(value => !value)}>Measurements and exports</button>
-            {typeof geometry === 'string' && <label><input type="checkbox" checked={geometryOpen} onChange={event => setGeometryOpen(event.target.checked)} />Canonical point pool</label>}
-            {source && source.key !== document.key && <label><input type="checkbox" checked={sourceOpen} onChange={event => setSourceOpen(event.target.checked)} />Source backbone comparison</label>}
-            <a href={document.url} download>Download exact native document</a>
-        </div>
-        <StructureWorkbench mode="standard" structureUrl={document.url} format={document.format}
-            structureContentSha256={document.sha256} overlayStructures={overlays}
-            alphafoldView={false} height={520} hideControls={false} showSequenceTrack showMeasurements showM6Workbench
-            workbenchCollapsed={!toolsOpen} />
-        {(geometryOpen || sourceOpen) && <p className="text-xs">Published coordinate frames; this overlay does not compute an alignment or a scientific score.</p>}
-    </section>;
-}
-
 export default function StructureViewerPane({
     confidenceCompanion = false,
     confidenceCharts,
@@ -420,7 +392,6 @@ export default function StructureViewerPane({
         enabled: Boolean(
             activeJob?.id
             && activeJob.status === 'completed'
-            && selectedDesign?.review_profile_id !== 'shape_blueprint'
             && volumeViewerSupported
         ),
         retry: false,
@@ -454,15 +425,7 @@ export default function StructureViewerPane({
         return getFampnnScalar(fampnnPayload, 'fampnn_max_residue_psce', 'max_residue_psce');
     }, [fampnnPayload, selectedDesign?.fampnn_max_residue_psce]);
     const sourceBackboneReference = useMemo<ReferenceStructure | null>(() => {
-        const isShapeBlueprint = selectedDesign?.review_profile_id === 'shape_blueprint';
-        if (designLens !== 'ppiflow' && !isShapeBlueprint) return null;
-        if (isShapeBlueprint) {
-            return {
-                url: `/api/designs/${selectedDesign?.id}/source-pdb`,
-                format: 'pdb',
-                name: 'Generating RFD3 Backbone',
-            };
-        }
+        if (designLens !== 'ppiflow') return null;
         const sourceName = typeof selectedDesignPpiflowRecord?.source_design_name === 'string' && selectedDesignPpiflowRecord.source_design_name.trim()
             ? selectedDesignPpiflowRecord.source_design_name.trim()
             : 'Source Backbone';
@@ -471,7 +434,7 @@ export default function StructureViewerPane({
             format: 'pdb',
             name: `Source Backbone • ${sourceName}`,
         };
-    }, [designLens, selectedDesign?.id, selectedDesign?.review_profile_id, selectedDesignPpiflowRecord]);
+    }, [designLens, selectedDesign?.id, selectedDesignPpiflowRecord]);
     const conforNetsConformerSet = useMemo(
         () => buildConforNetsConformerSet(designs, selectedDesignId),
         [designs, selectedDesignId],
@@ -576,7 +539,7 @@ export default function StructureViewerPane({
     const requiresBoundMetrics = selectedDesign?.core_protein_scientific_contract != null || Boolean(selectedDesign?.scientific_structure_document);
     const residueQuery = useQuery({
         queryKey:['viewer-residue-metrics',selectedDesignId],
-        enabled:Boolean(selectedDesignId && selectedDesign?.review_profile_id !== 'shape_blueprint'),
+        enabled: Boolean(selectedDesignId),
         queryFn:async ({signal}) => {
             const response=await fetch(`/api/designs/${selectedDesignId}/residue-metrics`,{signal});
             if (!response.ok) throw Error('Confidence request failed');
@@ -872,20 +835,7 @@ export default function StructureViewerPane({
             };
         });
     }, [conforNetsConformerSet, effectiveColorMode, resolvedConforNetsOverlayIds, viewerStructureFormat]);
-    const viewerOverlayStructures = useMemo(() => {
-        const overlays = [...conforNetsOverlayStructures];
-        const provenance = selectedDesign?.provenance;
-        const geometryId = provenance && typeof provenance.geometry_id === 'string' ? provenance.geometry_id : null;
-        if (selectedDesign?.review_profile_id === 'shape_blueprint' && geometryId && effectiveColorMode !== 'cdr') {
-            overlays.push({
-                id: `shape-geometry-${geometryId}`,
-                structureUrl: `/api/shape-blueprint/geometries/${geometryId}/points.cif`,
-                format: 'cif',
-                label: 'Canonical Shape Point Pool',
-            });
-        }
-        return overlays;
-    }, [conforNetsOverlayStructures, effectiveColorMode, selectedDesign?.provenance, selectedDesign?.review_profile_id]);
+    const viewerOverlayStructures = useMemo(() => [...conforNetsOverlayStructures], [conforNetsOverlayStructures]);
 
     useEffect(() => {
         if (selectedChain && !new Set([...Object.keys(chainMetrics), ...fampnnPsceChainIds]).has(selectedChain)) {
@@ -2970,14 +2920,6 @@ export default function StructureViewerPane({
         </div>
     );
 
-    const shapeMetrics = selectedDesign?.review_profile_id === 'shape_blueprint' && selectedDesign.confidence_metrics
-        ? selectedDesign.confidence_metrics as Record<string, unknown>
-        : null;
-    const shapeMetric = (key: string, digits = 3) => {
-        const value = shapeMetrics?.[key];
-        return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—';
-    };
-
     const metricStatus = (nativeMetrics || scientificPae || requiresBoundMetrics) && (nativeResidue.status !== 'ok' || nativeChains.status !== 'ok' || scientificPae?.status === 'unavailable') && (
                             <div role="status" className={confidenceCompanion || isFullscreen ? "mt-2 rounded-lg border border-[var(--border-primary)] p-2 text-xs text-[var(--text-secondary)]" : "absolute bottom-2 left-2 right-2 bg-slate-950/90 p-2 text-xs text-amber-200"}>
                                 {scientificPae?.status === 'unavailable' ? `${scientificPae.reason}. ` : ''}Structure viewing remains available.
@@ -3032,23 +2974,6 @@ export default function StructureViewerPane({
                         </fieldset>}
                     </div>
 
-                    {shapeMetrics && !isFullscreen && (
-                        <div className="mb-3 rounded-xl border border-cyan-500/30 bg-slate-950/70 p-3 text-[11px] text-slate-200">
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                                <span className="font-semibold uppercase tracking-wider text-cyan-300">Shape Blueprint candidate</span>
-                                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-emerald-300">{String(selectedDesign?.provenance?.sequence_engine ?? 'unknown')}</span>
-                            </div>
-                            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-5">
-                                <span>Shape total <strong className="ml-1 font-mono text-white">{shapeMetric('shape_total')}</strong></span>
-                                <span>Outside penalty <strong className="ml-1 font-mono text-white">{shapeMetric('shape_outside')}</strong></span>
-                                <span>Inside fraction <strong className="ml-1 font-mono text-white">{shapeMetric('sdf_positive_inside_fraction')}</strong></span>
-                                <span>Source RMSD Å <strong className="ml-1 font-mono text-white">{shapeMetric('alignment_transform.rmsd_angstrom') === '—' && typeof (shapeMetrics.alignment_transform as Record<string, unknown> | undefined)?.rmsd_angstrom === 'number' ? Number((shapeMetrics.alignment_transform as Record<string, unknown>).rmsd_angstrom).toFixed(3) : shapeMetric('alignment_transform.rmsd_angstrom')}</strong></span>
-                                <span>pLDDT <strong className="ml-1 font-mono text-white">{shapeMetric('plddt_overall', 1)}</strong></span>
-                            </div>
-                            <div className="mt-2 border-t border-slate-800 pt-2 text-slate-400">Cyan overlay: exact canonical point pool. Use <span className="text-cyan-200">Source Backbone</span> for the generating RFD3 comparison.</div>
-                        </div>
-                    )}
-
                     {/* Main Viewer - ALWAYS at this exact tree position */}
                     <div
                         className={isFullscreen
@@ -3076,23 +3001,23 @@ export default function StructureViewerPane({
                                 onMetricSelection={confidenceCompanion ? onConfidenceSelection : undefined}
                                 controlledResidueSelection={confidenceCompanion && confidenceSelection !== undefined}
                                 showComplexWorkbench={false}
-                                showM6Workbench={!shapeMetrics && metricWorkbenchOpen}
-                                showMeasurements={!shapeMetrics && metricWorkbenchOpen}
-                                jobId={shapeMetrics ? undefined : governedWorkbenchContext?.jobId ?? activeJob?.id}
-                                artifactJobId={shapeMetrics ? undefined : governedWorkbenchContext?.artifactJobId ?? activeJob?.id}
+                                showM6Workbench={metricWorkbenchOpen}
+                                showMeasurements={metricWorkbenchOpen}
+                                jobId={governedWorkbenchContext?.jobId ?? activeJob?.id}
+                                artifactJobId={governedWorkbenchContext?.artifactJobId ?? activeJob?.id}
                                 structureDocumentId={nativeDocument?.documentId ?? governedWorkbenchContext?.structureDocumentId}
                                 structureContentSha256={nativeDocument?.contentSha256}
                                 derivedComponents={derivedComponents}
                                 activeMetricId={overlayView === 'pae' ? 'pae' : nativeResidueLayer?.descriptor.id ?? residueMetricLayer?.descriptor.id}
-                                showMetricWorkbench={!shapeMetrics && metricWorkbenchOpen}
+                                showMetricWorkbench={metricWorkbenchOpen}
                                 metricDetails={selectedDesign && nativeChains.status === 'ok' ? (
                                     <details className="rounded border border-slate-700 bg-slate-900/95 p-2 text-xs">
                                         <summary className="cursor-pointer font-semibold">Chain metrics</summary>
                                         <ChainDetailsPanel design={selectedDesign} chainMetrics={null} nativeMetric={nativeChains}/>
                                     </details>
                                 ) : undefined}
-                                onMetricWorkbenchVisibilityChange={shapeMetrics ? undefined : setMetricWorkbenchOpen}
-                                showSequenceTrack={!shapeMetrics && metricWorkbenchOpen}
+                                onMetricWorkbenchVisibilityChange={setMetricWorkbenchOpen}
+                                showSequenceTrack={metricWorkbenchOpen}
                                 height="100%"
                                 backgroundColor={themeColors.bgPrimary}
                             />
@@ -3141,10 +3066,10 @@ export default function StructureViewerPane({
                                             format={selectedReference.format}
                                             alphafoldView={false}
                                             showComplexWorkbench={false}
-                                            showM6Workbench={!shapeMetrics}
-                                            showMeasurements={!shapeMetrics}
-                                            showMetricWorkbench={!shapeMetrics}
-                                            showSequenceTrack={!shapeMetrics && metricWorkbenchOpen}
+                                            showM6Workbench
+                                            showMeasurements
+                                            showMetricWorkbench
+                                            showSequenceTrack={metricWorkbenchOpen}
                                             height="100%"
                                             backgroundColor={themeColors.bgSecondary}
                                             label={selectedReference.name}

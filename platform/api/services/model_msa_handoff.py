@@ -71,8 +71,6 @@ def generated_msa_service_supported(service) -> bool:
             'modules/protenix.nf:ProtenixFromComplex',
             'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble',
             'modules/conformational_mapping_confornets.nf:RunCanonicalConforNets'},
-        'shape:boltz2:generated_msa': {'modules/shape_blueprint.nf:RunShapeBoltzValidator'},
-        'shape:protenix_v2:generated_msa': {'modules/shape_blueprint.nf:RunShapeProtenixValidator'},
     }
     return (get('state') == 'planned_from_generated_candidates'
             and get('provider') in {'colabfold_api', 'neurosnap_api'}
@@ -81,7 +79,7 @@ def generated_msa_service_supported(service) -> bool:
 
 
 def _generated_policy_model(service):
-    return 'boltz2' if service['logical_id'] == 'shape:boltz2:generated_msa' else 'protenix'
+    return 'protenix'
 
 
 def generated_protenix_request(payload: list) -> list:

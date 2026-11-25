@@ -1,4 +1,4 @@
-export type ModificationMode = 'de_novo_design' | 'rfd3_iteration' | 'resequence' | 'shape_blueprint';
+export type ModificationMode = 'de_novo_design' | 'rfd3_iteration' | 'resequence';
 
 export interface DeNovoModificationModeCard {
     id: ModificationMode;
@@ -27,13 +27,6 @@ export const DE_NOVO_MODIFICATION_MODE_CARDS: DeNovoModificationModeCard[] = [
         id: 'resequence',
         label: 'Resequence',
         description: 'Resequence a design from any generator with a chosen engine and residue selection, then validate it.',
-        cardClassName: 'border-[var(--border-primary)] bg-[var(--card-bg)] hover:border-[var(--accent-primary)]',
-        labelClassName: 'text-[var(--text-primary)]',
-    },
-    {
-        id: 'shape_blueprint',
-        label: 'Shape',
-        description: 'Author a geometry blueprint using the existing shape workbench.',
         cardClassName: 'border-[var(--border-primary)] bg-[var(--card-bg)] hover:border-[var(--accent-primary)]',
         labelClassName: 'text-[var(--text-primary)]',
     },

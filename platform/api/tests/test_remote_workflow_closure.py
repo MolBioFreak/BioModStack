@@ -828,7 +828,6 @@ def test_selected_descriptor_roster_matches_actual_compiler_dispatch():
                   'cm_request': {'backend': 'external_import'},
                   'pred_method': 'rf3' if model == 'rf3' else 'protenix',
                   'protenix_use_msa': False, 'run_frustrampnn': False,
-                  'shape_request': {'sequence_policy': 'skip'},
                   'bam_path': '/logical/reads.bam', 'reference_fasta': '/logical/reference.fasta'}
         metadata = selected_execution_metadata(model, mode, params, path)
         assert metadata.descriptors_reviewed, (model, mode, path)
@@ -904,7 +903,7 @@ def test_foundry_filters_do_not_select_inference_checkpoints(process):
     assert not blockers
 
 
-@pytest.mark.parametrize('process', ['RunRFD3', 'RunBoltzGen', 'RunShapeRFD3'])
+@pytest.mark.parametrize('process', ['RunRFD3', 'RunBoltzGen'])
 def test_native_checkpoint_requirements_never_select_whole_cache(process):
     from model_registry import native_checkpoint_dependencies
     deps, blockers = native_checkpoint_dependencies(process, {'cache_root': '/host/private/cache'})
@@ -912,11 +911,7 @@ def test_native_checkpoint_requirements_never_select_whole_cache(process):
     assert bool(blockers) == (process == 'RunBoltzGen')
     assert all(row.selector != 'cache_root' for row in deps)
     assert all('provision' in row.blocks for row in blockers)
-    if process == 'RunShapeRFD3':
-        root = Path(__file__).resolve().parents[3]
-        assert '/' + deps[0].relative_path in (root / 'scripts/shape_blueprint/run_shape_rfd3.py').read_text()
-    else:
-        assert all(row.relative_path is not None for row in deps)
+    assert all(row.relative_path is not None for row in deps)
     assert not any(row.relative_path.endswith('.npy') for row in deps)
 
 
@@ -1017,7 +1012,7 @@ def test_native_process_annotations_retain_current_output_requiredness():
     'modules/ppiflow.nf', 'workflows/binder_refinement.nf',
     'workflows/maturation_child_core.nf', 'modules/protenix.nf',
     'modules/boltz_cp_experimental.nf',
-    'modules/shape_blueprint.nf', 'modules/esmfold2.nf',
+    'modules/esmfold2.nf',
 ])
 def test_refinement_publication_descriptors_match_actual_process_sections(source):
     """Reverse I/O comparison catches newly emitted outputs, not only stale ones."""

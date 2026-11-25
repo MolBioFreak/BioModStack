@@ -102,10 +102,6 @@ def test_named_pack_separate_from_exact_request():
     paths = {ref.relative_path for ref in refs}
     assert {'rfd4_proteina.sif', 'complexa.sif', 'rfd4-proteina', 'gromacs-md-2025.3.sif',
             'disco.sif', 'laproteina.sif', 'foundry.sif'} <= paths
-    # shape_rfd3.sif is foundry.sif plus three Python files; the pack carries Foundry once.
-    assert 'shape_rfd3.sif' not in paths
-    family = {ref.relative_path for ref in model_runtime_dependencies('protein_modification_experimental')}
-    assert 'shape_rfd3.sif' in family
     assert 'protenix/mmcif' not in paths
 
 

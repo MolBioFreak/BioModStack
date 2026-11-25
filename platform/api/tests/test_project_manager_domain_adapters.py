@@ -273,8 +273,8 @@ async def _persist_core_design(
                 job_id=job_id,
                 name=design_id,
                 pdb_path=artifact_path,
-                artifact_class="shape_candidate",
-                review_profile_id="shape_blueprint",
+                artifact_class="de_novo_candidate",
+                review_profile_id="de_novo_generation_v1",
                 review_contract_version=1,
                 review_contract_source="producer",
                 review_artifact_manifest={

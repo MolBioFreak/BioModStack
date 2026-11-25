@@ -34,7 +34,7 @@ async def test_design_chain_real_dataset_occurrences(tmp_path, monkeypatch):
     cs, ps = async_sessionmaker(core, expire_on_commit=False), async_sessionmaker(project, expire_on_commit=False)
     try:
         async with cs() as c, ps() as p:
-            c.add_all([Job(id='job', name='job', status='completed', model_id='shape', mode='predict', params={}, output_dir=str(root)), Design(id='design',job_id='job',name='protein',pdb_path=str(path),artifact_class='shape_candidate',review_profile_id='shape_blueprint',review_contract_version=1,review_contract_source='producer',review_artifact_manifest=manifest,review_role_map={'result_role':'structure'})])
+            c.add_all([Job(id='job', name='job', status='completed', model_id='protein_modification_experimental', mode='de_novo_design', params={}, output_dir=str(root)), Design(id='design',job_id='job',name='protein',pdb_path=str(path),artifact_class='de_novo_candidate',review_profile_id='de_novo_generation_v1',review_contract_version=1,review_contract_source='producer',review_artifact_manifest=manifest,review_role_map={'result_role':'structure'})])
             await c.commit()
             adapter = CoreProteinResultAdapter()
             fresh = await adapter.verify(c, 'design')

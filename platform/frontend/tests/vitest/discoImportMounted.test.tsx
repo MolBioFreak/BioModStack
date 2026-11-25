@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({ submit: vi.fn(async (_payload: any) => ({ data
 vi.mock('../../src/lib/api', async original => ({ ...await original<typeof import('../../src/lib/api')>(), submitJob: mocks.submit, completeCurrentLaunchContext: vi.fn(async () => null) }));
 vi.mock('../../src/components/ExecutionTargetPicker', () => ({ ExecutionTargetPicker: ({ workflowRequest }: any) => <output data-request>{JSON.stringify(workflowRequest)}</output> }));
 vi.mock('../../src/components/ModelDocumentationLinks', () => ({ ModelDocumentationLinks: () => null }));
-vi.mock('../../src/components/ShapeBlueprintTemplate', () => ({ default: () => null }));
 vi.mock('../../src/components/GeneralSequenceDesignSettings', () => ({ GeneralSequenceDesignSettings: () => null }));
 vi.mock('../../src/components/LaProteinaMotifInput', () => ({ LaProteinaMotifInput: () => null }));
 vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: () => null }));

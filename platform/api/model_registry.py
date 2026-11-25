@@ -206,22 +206,19 @@ def _denovo_runtime_dependencies() -> tuple[RuntimeDependencyRef, ...]:
     from native_components import LABEL_ASSETS
 
     refs = []
-    for label in ('Foundry', 'ShapeRFD3', 'DISCO', 'LaProteina'):
+    for label in ('Foundry', 'DISCO', 'LaProteina'):
         image, _, weights, _ = LABEL_ASSETS[label]
         refs.append(RuntimeDependencyRef(kind='image', relative_path=image))
         if weights:
             refs.append(RuntimeDependencyRef(kind='weights', relative_path=weights))
     # Family preload retains the complete managed DISCO tree.
     refs.append(RuntimeDependencyRef(kind='weights', relative_path='disco'))
-    # ProteinMPNN and FA-MPNN ship defaults inside their images; Shape's
-    # ordinary Caliby design uses its model-owned managed checkpoint.
     for peer in ('fampnn', 'proteinmpnn', 'esmfold2'):
         refs.extend(model_runtime_dependencies(peer))
     refs.extend(model_image_dependencies('caliby_experimental'))
     refs.extend(model_image_dependencies('protenix'))
     refs.extend(model_image_dependencies('boltz2'))
-    for process in ('RunRFD3', 'RunShapeRFD3', 'RunLaProteina', 'RunShapeCaliby',
-                    'RunShapeBoltzValidator', 'RunShapeProtenixValidator'):
+    for process in ('RunRFD3', 'RunLaProteina', 'RunCalibyResequence', 'RunBoltz', 'ProtenixPredict'):
         dependencies, _ = native_checkpoint_dependencies(process, {})
         refs.extend(RuntimeDependencyRef(kind=dep.kind, relative_path=dep.relative_path)
                     for dep in dependencies)
@@ -351,17 +348,14 @@ def _denovo_component_dependencies(component_id: str) -> tuple[RuntimeDependency
         refs = [image('LaProteina'), *native('RunLaProteina')]
     elif component_id == 'complexa':
         refs = list(model_runtime_dependencies('complexa'))
-    elif component_id in {'proteinmpnn', 'fampnn', 'boltz2', 'esmfold2'}:
+    elif component_id in {'proteinmpnn', 'fampnn', 'boltz2', 'esmfold2', 'caliby_experimental'}:
         refs = list(model_runtime_dependencies(component_id))
         if component_id == 'boltz2':
-            refs.extend(native('RunShapeBoltzValidator'))
+            refs.extend(native('RunBoltz'))
     elif component_id in {'ligandmpnn', 'protonpottsmpnn', 'frustrampnn'}:
         refs = list(model_runtime_dependencies(component_id, internal=True))
-    elif component_id == 'caliby_experimental':
-        refs = [*model_runtime_dependencies('caliby_experimental'), *native('RunShapeCaliby')]
     elif component_id == 'protenix':
-        refs = [*model_image_dependencies('protenix'), *native('ProtenixPredict'),
-                *native('RunShapeProtenixValidator')]
+        refs = [*model_image_dependencies('protenix'), *native('ProtenixPredict')]
     elif component_id == 'molecular_dynamics':
         refs = [image('MolecularDynamicsPreparation'), image('MolecularDynamicsGromacs'),
                 image('MolecularDynamicsAnalysis'),
@@ -405,12 +399,7 @@ def workflow_pack_dependencies(workflow_id: str, component_ids=None):
     groups = workflow_pack_weight_groups(workflow_id)  # closed supported identity
     if workflow_id == 'de_novo_design':
         from native_components import LABEL_ASSETS
-        # shape_rfd3.sif is foundry.sif plus three Python files (113,761 of 113,767 files identical),
-        # so the pack ships the Foundry image once. A Shape run prepares its own image through the
-        # current-request preview; the model-family selection still lists it.
-        shape_image = LABEL_ASSETS['ShapeRFD3'][0]
-        refs = [ref for ref in _denovo_runtime_dependencies()
-                if not (ref.kind == 'image' and ref.relative_path == shape_image)]
+        refs = list(_denovo_runtime_dependencies())
         for label in ('RFD4Proteina', 'Complexa', 'MolecularDynamicsPreparation',
                       'MolecularDynamicsGromacs', 'MolecularDynamicsAnalysis'):
             refs.append(RuntimeDependencyRef(kind='image', relative_path=LABEL_ASSETS[label][0]))
@@ -562,19 +551,14 @@ def native_checkpoint_dependencies(process: str, params: dict):
         relative = assets['model_params_subdir'] + '/' + assets['checkpoint']
         dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
             'services.caliby_native:selected_assets; MODEL_PARAMS_DIR'))
-    elif process in {'RunCalibyNative', 'RunShapeCaliby'}:
+    elif process == 'RunCalibyNative':
         from services.caliby_native import selected_assets
-        if process == 'RunShapeCaliby':
-            request = params.get('shape_request') or {}
-            settings = request.get('sequence_settings', params.get('shape_sequence_settings', {}))
-            assets = selected_assets('ensemble_design', settings)
-        else:
-            assets = selected_assets(params['task'], params)
+        assets = selected_assets(params['task'], params)
         relative = assets['model_params_subdir'] + '/' + assets['checkpoint']
         dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
             'services.caliby_native:selected_assets; MODEL_PARAMS_DIR'))
     elif process in {'ProtenixPredict', 'ProtenixFromComplex', 'BatchProtenixValidation',
-                   'CanonicalProtenixEnsemble', 'PrepareProtenixExecution', 'RunShapeProtenixValidator'}:
+                   'CanonicalProtenixEnsemble', 'PrepareProtenixExecution'}:
         # Installed Protenix bd54a05d047b8925a241056f36d619700604068a:
         # runner/inference.py:download_inference_cache,load_checkpoint and
         # configs/configs_data.py,configs_inference.py. These are native input
@@ -593,11 +577,6 @@ def native_checkpoint_dependencies(process: str, params: dict):
                    'common/components.cif.rdkit_mol.pkl',
                    'common/clusters-by-entity-40.txt', 'common/obsolete_release_date.csv']
         selected_params = params
-        if process == 'RunShapeProtenixValidator':
-            request = params.get('shape_request') or {}
-            # Historical Shape always disables templates. Only this workflow's
-            # retained native settings opt in, never unrelated global defaults.
-            selected_params = request.get('validator_settings', {}).get('protenix_v2', {})
         enabled = lambda key: selected_params.get(key) in (True, 'true')
         anchored = process in {'ProtenixFromComplex', 'BatchProtenixValidation'} and enabled('protenix_anchor_target')
         templates = enabled('protenix_use_template') or anchored
@@ -610,7 +589,7 @@ def native_checkpoint_dependencies(process: str, params: dict):
         for member in members:
             dependencies.append(SelectedDependency('weights:protenix:' + member, 'weights',
                 'protenix/' + member, owner, selector='protenix_weights', selector_subpath=member))
-    elif process in {'RunBoltz', 'RunShapeBoltzValidator'}:
+    elif process == 'RunBoltz':
         owner = 'boltz/main.py:download_boltz2'
         # RunBoltz accepts opaque native CLI overrides (including --model).
         # Keep that historical closure rather than guessing their asset needs.
@@ -695,10 +674,6 @@ def native_checkpoint_dependencies(process: str, params: dict):
         else:
             dependencies.append(SelectedDependency('weights:rf3:checkpoint', 'weights',
                 'foundry/checkpoints/rf3_foundry_01_24_latest_remapped.ckpt', owner))
-    elif process == 'RunShapeRFD3':
-        dependencies.append(SelectedDependency('weights:shape-rfd3:checkpoint', 'weights',
-            'foundry/checkpoints/rfd3_latest.ckpt',
-            'scripts/shape_blueprint/run_shape_rfd3.py:DEFAULT_CHECKPOINT; nextflow.config:ShapeRFD3'))
     elif process == 'RunRFD3':
         owner = 'rfd3/cli.py; rfd3/configs/inference_engine/rfdiffusion3.yaml; foundry/inference_engines/checkpoint_registry.py'
         if params.get('rfd3_extra_config') and not (params.get('rfd3_request_path') or params.get('rfd3_generation_request_path')):

@@ -61,7 +61,7 @@ PROCESS_CONTRACTS = {
     'modules/conformational_mapping_protenix.nf:PrepareProtenixExecution': ((), ('tuple val(request_id), path(request_root)',), ("tuple val(request_id), path('protenix_preflight'), emit: prepared",), ('scripts/prepare_protenix_execution_snapshot.py', 'scripts/prepare_runtime_image_attestation.py', 'scripts/run_protenix_inference.py', 'scripts/lib/portable_inputs.py'), ()),
     'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble': (('Protenix', 'gpu'), ('tuple val(request_id), path(preflight), val(runtime_image), val(preflight_source)',), ("tuple val(request_id), path('canonical_protenix'), emit: canonical", "path 'canonical_protenix/cm_native_artifacts_v1.json', emit: native_manifest", "path 'canonical_protenix/cm_ensemble_v1.json', emit: ensemble_manifest"), ('scripts/attest_protenix_runtime.py', 'scripts/finalize_protenix_conformational_mapping.py', 'scripts/prepare_protenix_conformational_mapping.py', 'scripts/prepare_protenix_msa.py', 'scripts/protenix_chemistry.py', 'scripts/prepare_runtime_image_attestation.py'), ('container { runtime_image }', 'beforeScript {\n        def store = params.runtime_image_store ?: System.getenv(\'BMS_RUNTIME_IMAGE_STORE\') ?: "${params.container_dir}/.image-store"\n        """\n        ${params.api_python} ${params.code_root}/scripts/prepare_runtime_image_attestation.py \\\n          --resolve-reference --store-root "${store}" \\\n          --registry "${preflight_source}/request/cm_runtime_registry_v1.json" \\\n          --reference "${preflight_source}/runtime-image-reference.json" \\\n          --receipt "${preflight_source}/runtime-image-receipt.json" \\\n          --executing-image "${runtime_image}" >/dev/null || exit 1\n\n        """\n    }')),
     'modules/esmfold2.nf:ESMFold2MSAPredict': (('ESMFold2', 'gpu'), ("tuple val(producer_meta), val(request), val(source_paths), path(staged_files, stageAs: 'inputs/input??/*')",), ("tuple val(producer_meta), path('esmfold2_results/*.cif'), emit: typed_cifs", "path 'esmfold2_results/*.metrics.json', emit: metrics", "path 'esmfold2_results/*.confidence.npz', optional: true, emit: native_confidence", "path 'esmfold2_results/*.telemetry.json', emit: telemetry", "path 'esmfold2_results/manifest.json', emit: manifest", "path 'esmfold2_results/summary.tsv', emit: summary", "path 'esmfold2_results/effective_settings.json', emit: effective_settings"), (), ()),
-    'modules/esmfold2.nf:ESMFold2Predict': (('ESMFold2', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name)',), ("tuple val(producer_meta), path('esmfold2_results/*.cif'), emit: typed_cifs", 'path "esmfold2_results/*.metrics.json", emit: metrics', "path 'esmfold2_results/*.confidence.npz', optional: true, emit: native_confidence", "tuple val(sequence_name), path('esmfold2_results/*.cif'), path('esmfold2_results/*.metrics.json'), emit: shape_result", "tuple val(sequence_name), path('esmfold2_results'), emit: shape_bundle", 'path "esmfold2_results/*.telemetry.json", emit: telemetry', 'path "esmfold2_results/manifest.json", emit: manifest', 'path "esmfold2_results/summary.tsv", emit: summary'), ('scripts/run_esmfold2_inference.py', 'scripts/bms_gpu_run_telemetry.py', 'scripts/lib/portable_inputs.py'), ()),
+    'modules/esmfold2.nf:ESMFold2Predict': (('ESMFold2', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name)',), ("tuple val(producer_meta), path('esmfold2_results/*.cif'), emit: typed_cifs", 'path "esmfold2_results/*.metrics.json", emit: metrics', "path 'esmfold2_results/*.confidence.npz', optional: true, emit: native_confidence", 'path "esmfold2_results/*.telemetry.json", emit: telemetry', 'path "esmfold2_results/manifest.json", emit: manifest', 'path "esmfold2_results/summary.tsv", emit: summary'), ('scripts/run_esmfold2_inference.py', 'scripts/bms_gpu_run_telemetry.py', 'scripts/lib/portable_inputs.py'), ()),
     'modules/esmfold2.nf:ESMFold2FromPdb': (('ESMFold2', 'gpu'), ('tuple val(producer_meta), path(source_pdb), val(candidate_name)',), ("tuple val(producer_meta), val('esmfold2'), path('esmfold2_results/*.cif'), path('esmfold2_results/*.metrics.json'), emit: typed_results",), (), ("errorStrategy 'ignore'",)),
     'modules/experimental/molecular_dynamics/analyze.nf:MD_ANALYZE_REPLICA': (('MolecularDynamicsAnalysis',), ('tuple val(replica_index), path(replica_dir), val(manifest_sha256)',), ('tuple val(replica_index), path("md_analysis_replica_${replica_index}.json"), emit: reports', 'tuple val(replica_index), path("md_analysis_replica_${replica_index}.artifacts.json"), emit: artifact_manifests', 'tuple val(replica_index), path("md_analysis_replica_${replica_index}.timeseries.parquet"), emit: timeseries', 'tuple val(replica_index), path("md_analysis_replica_${replica_index}.residue_metrics.parquet"), emit: residue_metrics'), (), ('container params.md_analysis_container ?: "${params.data_root}/apptainer/md-analysis-1.0.0.sif"', "errorStrategy 'retry'", 'maxRetries 2')),
     'modules/experimental/molecular_dynamics/gromacs_replica.nf:MD_GROMACS_REPLICA': (('MolecularDynamicsGromacs',), ('tuple val(replica_index), path(normalized_config), path(preparation_bundle)',), ('path "gromacs_replica_${replica_index}_manifest.json", emit: manifest', 'path "replica_${replica_index}", emit: artifacts'), ('scripts/bms_md/aggregate_children.py',), ()),
@@ -125,23 +125,6 @@ PROCESS_CONTRACTS = {
     'modules/rfd3.nf:FilterRFD3': (('Foundry',), ('tuple path(cif_files), path(json_files)',), ('tuple path("filtered_output/*.pdb"), path("filtered_output/*.json"), emit: structures_metadata, optional: true', 'path "rfd3_filter_*", emit: stage_receipt, optional: true', 'path ("rfd3_data_*.jsonl"), topic: metadata_ch_fold', 'path "filter_rfd3_*.log"'), (), ()),
     'modules/rfdiffusion.nf:RunRFDiffusion': (('RFDiffusion', 'gpu'), ('tuple val(rfd_command), val(batch_id), val(batch_size), val(design_startnum), val(mode), path(input_files)',), ('path ("rfd_results/*.pdb"), emit: pdbs', 'tuple path("rfd_results/*.pdb"), path("rfd_results/*.json"), emit: pdbs_jsons', 'path "*.log"', 'path ("rfd_metadata_${batch_id}.jsonl"), topic: metadata_ch_fold'), (), ('beforeScript """\n        mkdir -p outputs schedules .dgl\n    """',)),
     'modules/rfdiffusion.nf:FilterRFD': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('tuple path("filtered_output/*.pdb"), path("filtered_output/*.json"), emit: pdbs_jsons, optional: true', 'path ("rfd_data_*.jsonl"), topic: metadata_ch_fold', 'path "filter_rfd_*.log"'), (), ()),
-    'modules/shape_blueprint.nf:ValidateShapeBundle': (('ShapeEvaluate',), ('path request_json', 'path geometry_manifest', 'path vertices_f64', 'path faces_u32', 'path points_f32le', 'path sdf_f32le'), ("path 'shape_input_receipt.json', emit: receipt",), ('scripts/shape_blueprint/validate_bundle.py',), ()),
-    'modules/shape_blueprint.nf:PlanRFD3Batches': (('ShapeEvaluate',), ('path request_json',), ("path 'rfd3_batch_plan.json', emit: plan", "path 'batch_requests/*.json', emit: batch_requests"), ('scripts/shape_blueprint/plan_rfd3_batches.py',), ()),
-    'modules/shape_blueprint.nf:RunShapeRFD3': (('ShapeRFD3', 'gpu'), ('path request_json', 'path geometry_manifest', 'path points_f32le', 'path sdf_f32le', 'path validation_receipt'), ("path 'rfd3_results/*.cif.gz', emit: structures", "tuple path('rfd3_results/*.cif.gz'), path('rfd3_results/*.json'), emit: structures_metadata", "path 'shape_rfd3_runtime_receipt.json', emit: runtime_receipt", "path 'rfd3_results/shape_guidance_steps.jsonl', emit: guidance_receipt", "path 'shape_rfd3_input.json', emit: input_spec", "path 'shape_rfd3.log', emit: log"), ('scripts/shape_blueprint/run_shape_rfd3.py',), ()),
-    'modules/shape_blueprint.nf:AdmitRFD3InitialCandidate': (('ShapeEvaluate',), ('path candidate', 'path request_json', 'path geometry_manifest', 'path points_f32le', 'path sdf_f32le'), ('tuple path(candidate), path("${candidate.simpleName}.initial_admission.json"), emit: admitted',), ('scripts/shape_blueprint/evaluate_rfd3_initial_candidate.py',), ()),
-    'modules/shape_blueprint.nf:PrepareShapeBackbone': (('ShapeEvaluate',), ('tuple path(candidate), path(admission)',), ("tuple val(candidate_id), path('shape_backbone_bundle'), emit: backbone",), ('scripts/shape_blueprint/prepare_shape_backbone.py',), ()),
-    'modules/shape_blueprint.nf:BuildRFD3Aggregate': (('ShapeEvaluate',), ('path batch_plan', "path admission_files, arity: '0..*'"), ("path 'rfd3_aggregate_manifest.json', emit: aggregate",), ('scripts/shape_blueprint/build_rfd3_aggregate.py',), ()),
-    'modules/shape_blueprint.nf:ShapeESMFold2Predict': (('ESMFold2', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name)', 'path request_dir'), ("tuple val(producer_meta), path('esmfold2_results/*.cif'), emit: typed_cifs", "path 'esmfold2_results/*.metrics.json', emit: metrics", "path 'esmfold2_results/*.confidence.npz', optional: true, emit: native_confidence", "tuple val(sequence_name), path('esmfold2_results/*.cif'), path('esmfold2_results/*.metrics.json'), emit: shape_result", "tuple val(sequence_name), path('esmfold2_results'), emit: shape_bundle", "path 'esmfold2_results/*.telemetry.json', emit: telemetry", "path 'esmfold2_results/manifest.json', emit: manifest", "path 'esmfold2_results/summary.tsv', emit: summary"), ('scripts/shape_blueprint/run_shape_esmfold2.py', 'scripts/run_esmfold2_inference.py', 'scripts/bms_gpu_run_telemetry.py', 'scripts/lib/portable_inputs.py'), ()),
-    'modules/shape_blueprint.nf:RunShapeProteinMPNN': (('MPNN', 'gpu_light'), ('tuple val(candidate_id), path(backbone)', 'val sequence_count', 'val seed', 'path request_dir'), ('path "${candidate_id}_proteinmpnn", emit: bundle',), ('scripts/shape_blueprint/run_shape_sequence.py', 'scripts/proteinmpnn_native_binding.py', 'scripts/prep_mpnn_designs.py', 'scripts/lib/portable_inputs.py'), ()),
-    'modules/shape_blueprint.nf:RunShapeFAMPNN': (('FAMPNN', 'gpu_light'), ('tuple val(candidate_id), path(backbone)', 'val sequence_count', 'val seed', 'path request_dir'), ('path "${candidate_id}_fampnn", emit: bundle',), ('scripts/shape_blueprint/run_shape_sequence.py', 'scripts/lib/portable_inputs.py', 'lib/FampnnNativeControls.groovy', 'lib/FampnnAnalysisPolicy.groovy', 'scripts/fampnn_native_runtime.py', 'scripts/fampnn_native_binding.py', 'scripts/prep_fampnn_constraints_generic.py', 'scripts/maturation_native_adapter.py', 'scripts/maturation_correspondence.py', 'scripts/analyse_fampnn.py', 'scripts/analyse_fampnn_seq_probs.py', 'scripts/fampnn_shape_analysis.py'), ()),
-    'modules/shape_blueprint.nf:RunShapeCaliby': (('Caliby', 'gpu_light'), ('tuple val(candidate_id), path(backbone)', 'val sequence_count', 'val seed', 'path request_dir'), ('path "${candidate_id}_caliby_experimental", emit: bundle',), ('scripts/shape_blueprint/run_shape_sequence.py', 'scripts/prep_caliby_request.py', 'scripts/run_caliby_experimental.py', 'scripts/caliby_runtime.py', 'scripts/lib/portable_inputs.py'), ()),
-    'modules/shape_blueprint.nf:EvaluateShapeCandidate': (('ShapeEvaluate',), ('tuple val(sample_id), val(sequence_name), path(structure), path(esm_metrics), path(source_backbone)', 'path request_json', 'path geometry_manifest', 'path point_pool', 'path sdf_grid'), ('tuple val(sample_id), path("shape_candidate_bundle_${task.index}"), emit: bundle',), ('scripts/shape_blueprint/evaluate_shape_candidate.py',), ()),
-    'modules/shape_blueprint.nf:RunShapeBoltzValidator': (('Boltz', 'gpu'), ('tuple val(sequence_name), val(sequence)', 'val seed', 'path request_json'), ('tuple val(sequence_name), path("boltz_validator_evidence_${sequence_name}"), emit: evidence',), ('scripts/shape_blueprint/run_shape_validator_suite.py', 'scripts/lib/boltz_fidelity.py'), ()),
-    'modules/shape_blueprint.nf:RunShapeProtenixValidator': (('Protenix', 'gpu'), ('tuple val(sequence_name), val(sequence)', 'val seed', 'path request_json'), ('tuple val(sequence_name), path("protenix_validator_evidence_${sequence_name}"), emit: evidence',), ('scripts/run_protenix_inference.py', 'scripts/shape_blueprint/run_shape_validator_suite.py', 'scripts/lib/boltz_fidelity.py'), ()),
-    'modules/shape_blueprint.nf:AggregateShapeValidatorEvidence': (('ShapeEvaluate',), ('tuple val(sequence_name), val(sample_id), path(esm_structure), path(esm_metrics), val(sequence), path(peer_evidence), path(esm_bundle)', 'val validator_suite', 'val seed', 'path request_json'), ('tuple val(sample_id), path("validator_evidence_${sample_id}"), emit: evidence',), ('scripts/shape_blueprint/run_shape_validator_suite.py',), ()),
-    'modules/shape_blueprint.nf:AttachShapePostRefold': (('ShapeEvaluate',), ('tuple val(sequence_name), path(candidate_bundle), path(validator_records), path(sequence_bundle)', 'path request_json', 'path geometry_manifest', 'path point_pool', 'path sdf_grid'), ('tuple val(sequence_name), path("attached_shape_candidate_bundle_${sequence_name}"), emit: bundle',), ('scripts/shape_blueprint/attach_shape_post_refold.py',), ()),
-    'modules/shape_blueprint.nf:BuildShapeSkipBundle': (('ShapeEvaluate',), ('tuple val(candidate_id), path(backbone_bundle)', 'path request_json'), ('path "shape_skip_bundle_${candidate_id}", emit: bundle',), ('scripts/shape_blueprint/build_shape_skip_bundle.py',), ()),
-    'modules/shape_blueprint.nf:BuildShapeResult': (('ShapeEvaluate',), ("path candidate_bundles, arity: '0..*'", 'path request_json', 'path aggregate_manifest', 'val job_id'), ("path 'final_shape_result/results', emit: results",), ('scripts/shape_blueprint/build_shape_result.py',), ()),
     'modules/structure_prediction.nf:GenerateLocalMSA': (('CPU',), ('tuple val(sequence), val(sequence_name)',), ('tuple val(sequence), val(sequence_name), path("${sequence_name}.a3m"), emit: msa', 'path "*_msa_quality.json", emit: quality_report, optional: true', 'path "*.log"'), ('scripts/run_local_msa.py',), ()),
     'modules/structure_prediction.nf:BoltzFromSequenceTask': (('Boltz', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name)',), ("path 'boltz_task_binding.json'", 'tuple val(producer_meta), path("producer_candidates.json"), path("predictions/*.{pdb,cif}"), emit: canonical_structures', 'path "predictions/*.json", emit: jsons, optional: true', 'path "predictions/*.npz", emit: native_identity_artifacts, optional: true', 'path "msa/*.a3m", emit: msa, optional: true', 'path "*.log"'), ('scripts/run_boltz_wrapper.py', 'scripts/lib/boltz_fidelity.py'), ()),
     'modules/structure_prediction.nf:BoltzFromSequenceWithMSATask': (('Boltz', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name), path(msa_file)',), ("path 'boltz_task_binding.json'", 'tuple val(producer_meta), path("producer_candidates.json"), path("predictions/*.{pdb,cif}"), emit: canonical_structures', 'path "predictions/*.json", emit: jsons, optional: true', 'path "predictions/*.npz", emit: native_identity_artifacts, optional: true', 'path "*.log"'), ('scripts/run_boltz_wrapper.py', 'scripts/lib/boltz_fidelity.py'), ()),
@@ -276,8 +259,6 @@ LABEL_ASSETS = {
     # A container label does not imply inference: RF3/RFD3 filters only use
     # structure readers. Checkpoints are selected by the native process below.
     'Foundry': ('foundry.sif', None, None, None),
-    'ShapeRFD3': ('shape_rfd3.sif', None, None, None),
-    'ShapeEvaluate': ('shape_rfd3.sif', None, None, None),
     'BoltzGen': ('boltzgen.sif', None, None, None),
     'RFD4Proteina': ('rfd4_proteina.sif', 'rfd4_proteina_container_path', None, None),
     'Complexa': ('complexa.sif', 'complexa_container_path', None, None),
@@ -366,7 +347,6 @@ def native_resource_policy(params, label='CPU'):
         'MolecularDynamicsAnalysis': (4, '12 GB', '4h'),
         'MolecularDynamicsGromacs': (8, '16 GB', '24h'),
         'MolecularDynamicsCpu': (1, '2 GB', '1h'),
-        'ShapeEvaluate': (2, '8 GB', None),
     }.get(label)
     md_config = params.get('md_config') or {}
     md_replica = label == 'MolecularDynamicsGromacs'
@@ -456,7 +436,7 @@ class _NativeAnnotations:
                     if preparation_owner(self.p['md_config']) != 'amber':
                         image, selector, weights, weight_selector = LABEL_ASSETS['MolecularDynamicsCpu']
                 deps.append(self.asset('image', image, 'nextflow.config:process.withLabel.' + label, selector))
-                if weights and native_name not in {'RunProteinPartialFlow', 'RunPPIFlowGeneration', 'RunBoltz', 'RunShapeBoltzValidator', 'DoradoBasecall', 'PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets'}:
+                if weights and native_name not in {'RunProteinPartialFlow', 'RunPPIFlowGeneration', 'RunBoltz', 'DoradoBasecall', 'PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets'}:
                     deps.append(self.asset('weights', weights, authority, weight_selector))
         for helper in helpers:
             deps.append(self.asset('support_tool', helper, authority))
@@ -519,7 +499,7 @@ class _NativeAnnotations:
                 'Selected native process has no declared output; native completion receipt binding required')
         label = next((x for x in labels if x.startswith('MolecularDynamics')), None) or next(
             (x for x in labels if x in {'gpu', 'gpu_light', 'process_gpu', 'frustrampnn_gpu',
-             'local_cpu', 'wf_clone', 'pooled_assignment_cpu', 'ShapeEvaluate'}), 'CPU')
+             'local_cpu', 'wf_clone', 'pooled_assignment_cpu'}), 'CPU')
         if native_name == 'RunProtonPottsMPNNDesign':
             from services.protonpottsmpnn_design import execution_device
             label = 'gpu' if str(execution_device(self.p)).startswith('cuda') else 'CPU'
@@ -1188,45 +1168,6 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             a.callback('OpenInteractiveGate', 'scripts/open_stage_gate.py')
         # Reporting/annotation calls in this native workflow are not replaced.
         a.callback(workflow, entrypoint + ':stage_reporter/ANARCII annotation authority')
-        return True
-
-    if workflow == 'shape_blueprint_design':
-        cfg = request('shape_request', entrypoint + ':shapeRequest')
-        prep = a.chain(['ValidateShapeBundle', 'PlanRFD3Batches', 'RunShapeRFD3', 'AdmitRFD3InitialCandidate'])
-        aggregate = a.chain(['BuildRFD3Aggregate'], prep)
-        after = a.chain(['PrepareShapeBackbone'], prep, condition='admission.status == accepted')
-        if cfg and cfg.get('sequence_policy', 'auto') != 'skip' and cfg.get('sequences_per_backbone', 0) > 0:
-            seq = cfg.get('sequence_engine') or 'proteinmpnn'
-            sequences = a.chain([{'proteinmpnn': 'RunShapeProteinMPNN', 'fampnn': 'RunShapeFAMPNN',
-                                 'caliby_experimental': 'RunShapeCaliby'}[seq]], after)
-            from dataclasses import replace
-            from component_runtime import NativeArtifactRole
-            from services.shape_native_settings import generated_msa_services
-            for service in generated_msa_services({'shape_' + key: value for key, value in cfg.items()}):
-                a.services.append(replace(service, input_role_ids=tuple(
-                    role.role_id for role in a.roles
-                    if role.component_key in sequences and role.direction == 'output')))
-                a.roles.append(NativeArtifactRole(
-                    service.logical_id, service.logical_id, 'input', 'native_chain_alignments',
-                    'platform/api/services/model_msa_handoff.py', requiredness='required',
-                    format='native_msa_handoff', identity_authority='biomodstack_msa_handoff.py'))
-                a.callback(service.logical_id, service.authority)
-                for path in ('scripts/shape_blueprint/generated_msa.py', 'biomodstack_msa_handoff.py',
-                             'biomodstack_boltz_msa.py', 'platform/api/component_runtime.py'):
-                    a.asset('support_tool', path, service.authority)
-            after = a.chain(['ShapeESMFold2Predict'], sequences)
-            evidence_sources = list(after)
-            suite = cfg.get('validator_suite') or []
-            if 'boltz2' in suite:
-                evidence_sources.append(a.stage('RunShapeBoltzValidator', sequences))
-            if 'protenix_v2' in suite:
-                evidence_sources.append(a.stage('RunShapeProtenixValidator', sequences))
-            evidence = a.chain(['AggregateShapeValidatorEvidence'], tuple(evidence_sources))
-            after = a.chain(['EvaluateShapeCandidate'], after)
-            after = a.chain(['AttachShapePostRefold'], (*after, *evidence))
-        elif cfg:
-            after = a.chain(['BuildShapeSkipBundle'], after)
-        a.stage('BuildShapeResult', (*after, *aggregate))
         return True
 
     if workflow == 'frustrampnn_analysis':

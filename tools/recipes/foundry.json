@@ -1,7 +1,7 @@
 {
   "schema": "bms.tool-recipe.v1",
   "id": "foundry",
-  "name": "Foundry (RFdiffusion3, RoseTTAFold3, LigandMPNN) and Shape RFD3",
+  "name": "Foundry (RFdiffusion3, RoseTTAFold3, LigandMPNN)",
   "label": "starting-point",
   "modules": [
     "design",
@@ -10,23 +10,12 @@
   "upstream": {
     "homepage": "https://github.com/RosettaCommons/foundry"
   },
-  "notes": "rc-foundry 0.1.9 from PyPI. BMS reads the RFdiffusion3 checkpoint as rfd3_latest.ckpt, so the upstream file is saved under that name. shape_rfd3.sif is built on top of foundry.sif. The definitions apptainer/foundry-schedule.def and apptainer/shape-rfd3-schedule.def patch an older base image and are not needed when building from foundry.def. Not yet built from clean by us: expect to fix things.",
+  "notes": "rc-foundry 0.1.9 from PyPI. BMS reads the RFdiffusion3 checkpoint as rfd3_latest.ckpt, so the upstream file is saved under that name. The definition apptainer/foundry-schedule.def patches an older base image and is not needed when building from foundry.def. Not yet built from clean by us: expect to fix things.",
   "images": [
     {
       "filename": "foundry.sif",
       "def": "apptainer/foundry.def",
       "approx_size_gb": 12
-    },
-    {
-      "filename": "shape_rfd3.sif",
-      "def": "apptainer/shape_rfd3.def",
-      "approx_size_gb": 12,
-      "needs": [
-        "foundry.sif"
-      ],
-      "build_args": {
-        "container_dir": "{container_dir}"
-      }
     }
   ],
   "weights": [

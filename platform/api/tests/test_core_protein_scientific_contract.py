@@ -37,7 +37,7 @@ def test_supported_callers_receive_current_revision_by_default():
     for caller in c.SUPPORTED_CALLERS:
         assert c.admission_revision(*caller) == c.REVISION
     for caller in [("rf3", "predict"), ("nanopore", "basecall"), ("frustrampnn", "analyze"),
-                   ("protein_modification_experimental", "shape_blueprint"), ("unknown", "predict")]:
+                   ("unknown", "predict")]:
         assert c.admission_revision(*caller) is None
 
 

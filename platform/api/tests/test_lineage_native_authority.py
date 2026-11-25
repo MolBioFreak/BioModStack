@@ -39,7 +39,7 @@ async def test_native_job_receipt_bounded_complete_and_historical_digest(tmp_pat
             if count == 2:
                 # Existing supported review-backed scope must keep old hashes.
                 for row in rows:
-                    row.review_profile_id = 'shape_blueprint'
+                    row.review_profile_id = 'de_novo_generation_v1'
                     row.review_contract_source = 'producer'
                     row.review_artifact_manifest = dict(row.confidence_metrics['core_protein_candidate_artifacts'])
                 await session.commit()
@@ -79,7 +79,7 @@ async def test_native_job_receipt_bounded_complete_and_historical_digest(tmp_pat
             ancillary = Design(id='ancillary', job_id=current.id, name='ancillary', source_stage='review', pdb_path='/unavailable')
             if count == 2:
                 ancillary.pdb_path = rows[0].pdb_path
-                ancillary.review_profile_id = 'shape_blueprint'
+                ancillary.review_profile_id = 'de_novo_generation_v1'
                 ancillary.review_contract_source = 'producer'
                 ancillary.review_artifact_manifest = {'structure': dict(rows[0].confidence_metrics['core_protein_candidate_artifacts']['structure'])}
             session.add(ancillary)

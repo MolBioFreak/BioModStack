@@ -20,7 +20,6 @@ from scripts.rfd3_generation.run_native import commands
 from scripts.rfd3_generation.install_schedule_return import patch_source, PATCHED_SHA256
 from scripts.rfd3_local_redesign.contract import build_request
 from scripts.rfd3_local_redesign.source_mapping import materialize_source, lower_native
-from scripts.shape_blueprint.install_rfd3_shape_extension import patch_sampler_source
 
 
 def load_script(name, relative, contract):
@@ -186,8 +185,6 @@ def test_exact_retained_native_schedule_source_and_shape():
     fixed = patch_source(source)
     assert hashlib.sha256(fixed).hexdigest() == PATCHED_SHA256
     assert patch_source(fixed) == fixed
-    assert patch_sampler_source(source) == patch_sampler_source(fixed)
-    assert patch_sampler_source(patch_sampler_source(source)) == patch_sampler_source(source)
     parsed = ast.parse(fixed)
     function = next(n for n in ast.walk(parsed) if isinstance(n, ast.FunctionDef) and n.name == '_construct_inference_noise_schedule')
     function.returns = None

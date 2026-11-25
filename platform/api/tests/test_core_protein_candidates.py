@@ -220,26 +220,6 @@ async def test_unmarked_ingress_retains_missing_sample_legacy_behavior(tmp_path)
         await engine.dispose()
 
 
-@pytest.mark.asyncio
-async def test_native_zero_survivor_finalizer_keeps_no_candidates(tmp_path):
-    from services.result_ingester import ShapeNoCandidates
-    factory, engine = await setup(tmp_path)
-    try:
-        async with factory() as session:
-            current = job(tmp_path)
-            current.model_id = 'protein_modification_experimental'
-            current.mode = 'shape_blueprint'
-            session.add(current)
-            await session.commit()
-            async def no_survivors(*args, **kwargs):
-                raise ShapeNoCandidates({'code': 'no_candidates', 'message': 'none survived'})
-            result = await finalize_successful_job(current, str(tmp_path), session, ingest_fn=no_survivors)
-            assert result.integrity_state == 'no_candidates'
-            await session.refresh(current)
-            assert current.provenance['result_integrity']['partial'] is False
-            assert current.provenance['result_integrity']['state'] == 'no_candidates'
-    finally:
-        await engine.dispose()
 
 
 @pytest.mark.asyncio

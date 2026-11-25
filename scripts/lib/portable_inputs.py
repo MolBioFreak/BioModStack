@@ -316,8 +316,6 @@ def _format(document, path):
             return "laproteina-evaluation"
         if document.get('schema_version') == 1 and 'native_request' in document and 'upstream_commit' in document:
             return 'bc2-compilation'
-        if document.get("schema") in {"bms_shape_design_request_v2", "bms_shape_design_request_v3"}:
-            return "shape-request"
         if str(document.get("schema", "")).startswith("bms.md.job."):
             return "md-job"
         if document.get("schema_name") == "cm_request" and "request_sha256" in document:
@@ -356,10 +354,6 @@ def prepared_generation_source_fields(model_id, mode, params):
                          mode == 'de_novo_design' and params.get('generator') == 'complexa'))
     if complexa_selected and params.get('complexa_request_dir'):
         return {'complexa_request', 'native_sources'}
-    if (model_id == 'protein_modification_experimental' and mode == 'shape_blueprint'
-            and params.get('shape_request_path')):
-        return {'shape_requested_sequence_settings', 'shape_requested_rfd3_settings',
-                'shape_requested_sequence_input_settings', 'shape_requested_validator_settings'}
     if (model_id == 'protonpottsmpnn' and mode == 'redesign'
             and params.get('protonpottsmpnn_design_request') and params.get('protonpottsmpnn_design_input')):
         return {'target_pdb', 'source_pdb_path', 'pdb_paths', 'source_identity_json',
@@ -597,8 +591,6 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         # including native state companions. Preserve this relative tree; never
         # deserialize state or rediscover paths inside annotation/provenance.
         visit(params['rfd4_input_closure'], None, ('rfd4_input_closure',), 'native-snapshot')
-    if model_id == 'protein_modification_experimental' and mode == 'shape_blueprint':
-        keys.add('shape_request_path')
     # Prepared source trees are owned by the selected native generator, not
     # arbitrary params on another model or experimental workflow.
     generation_model = (params.get('generator')

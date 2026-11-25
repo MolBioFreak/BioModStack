@@ -63,25 +63,6 @@ _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
               "structures retain their own ingested review profiles.",
     ),
     ResultContractDefinition(
-        contract_id="shape_blueprint",
-        # This product model owns multiple modes.  Model identity alone must
-        # never grant Shape review authority; persisted stage/mode identity or
-        # a producer artifact contract is required.
-        model_ids=[],
-        stage_families=["shape_blueprint"],
-        stage_modes=["shape_blueprint"],
-        artifact_classes=["shape_candidate"],
-        result_sets=["shape_candidates"],
-        supported_analyzers=[*_STRUCTURE_ANALYZERS, *_CONFIDENCE_ANALYZERS],
-        viewer_capabilities=[
-            "result_filter", "structure_viewer", "structure_confidence_metrics",
-            "shape_geometry_overlay", "shape_candidate_metrics", "content_addressed_download",
-        ],
-        required_fields=["artifact_class"],
-        required_artifacts=["structure", "source_backbone", "metrics"],
-        notes="Canonical Shape-guided, sequence-designed, ESMFold2-refolded structural candidates.",
-    ),
-    ResultContractDefinition(
         contract_id="ppiflow_maturation_v1",
         model_ids=["ppiflow"],
         stage_families=["ppiflow"],
@@ -532,56 +513,21 @@ def build_review_artifact_manifest(design: Any) -> Dict[str, Any]:
             "reason": reason,
         }
 
-    if profile_id == "shape_blueprint":
-        supplied = getattr(design, "review_artifact_manifest", None)
-        supplied = supplied if isinstance(supplied, dict) else {}
-        # ORM/replay callers may already carry the normalized envelope.
-        supplied = supplied.get("artifacts", supplied)
-        supplied = supplied if isinstance(supplied, dict) else {}
-        structure_raw = supplied.get("structure")
-        source_raw = supplied.get("source_backbone")
-        metrics_raw = supplied.get("metrics")
-        structure_descriptor: Dict[str, Any] = structure_raw if isinstance(structure_raw, dict) else {}
-        source_descriptor: Dict[str, Any] = source_raw if isinstance(source_raw, dict) else {}
-        metrics_descriptor: Dict[str, Any] = metrics_raw if isinstance(metrics_raw, dict) else {}
-        structure_artifact = artifact(getattr(design, "pdb_path", None), kind="structure")
-        source_artifact = artifact(getattr(design, "source_pdb_path", None), kind="source_backbone")
-        metrics_artifact = artifact(getattr(design, "json_path", None), kind="shape_metrics")
-        for target, source in (
-            (structure_artifact, structure_descriptor),
-            (source_artifact, source_descriptor),
-            (metrics_artifact, metrics_descriptor),
-        ):
-            for key in ("sha256", "bytes", "format", "relative_path"):
-                if key in source:
-                    target[key] = source[key]
-        artifacts = {"structure": structure_artifact, "source_backbone": source_artifact, "metrics": metrics_artifact}
-        provenance = getattr(design, "provenance", None)
-        provenance = provenance if isinstance(provenance, dict) else {}
-        evidence = provenance.get("shape_validator_evidence")
-        native = provenance.get("shape_validator_artifacts")
-        descriptors = {"validator_evidence": evidence} if isinstance(evidence, dict) else {}
-        if isinstance(native, list):
-            descriptors.update({f"validator_artifact_{index:04d}": descriptor
-                                for index, descriptor in enumerate(native) if isinstance(descriptor, dict)})
-        for role, descriptor in descriptors.items():
-            projected = artifact(descriptor.get("path"), kind=role, metadata_ready=bool(
-                descriptor.get("sha256") and type(descriptor.get("bytes")) is int
-            ))
-            projected.update({key: descriptor[key] for key in (
-                "sha256", "bytes", "format", "relative_path", "validator", "native_path",
-            ) if key in descriptor})
-            artifacts[role] = projected
-        return {
-            "schema": REVIEW_ARTIFACT_SCHEMA,
-            "artifacts": artifacts,
-            "roles": {**role_map, "has_binder": False},
-        }
+    supplied = getattr(design, "review_artifact_manifest", None)
+    supplied = supplied if isinstance(supplied, dict) else {}
+    supplied = supplied.get("artifacts", supplied)
+    supplied = supplied if isinstance(supplied, dict) else {}
+    structure_raw = supplied.get("structure")
+    structure_descriptor: Dict[str, Any] = structure_raw if isinstance(structure_raw, dict) else {}
+    structure_artifact = artifact(getattr(design, "pdb_path", None), kind="structure")
+    for key in ("sha256", "bytes", "format", "relative_path"):
+        if key in structure_descriptor:
+            structure_artifact[key] = structure_descriptor[key]
 
     return {
         "schema": REVIEW_ARTIFACT_SCHEMA,
         "artifacts": {
-            "structure": artifact(getattr(design, "pdb_path", None), kind="structure"),
+            "structure": structure_artifact,
             "aligned_error": artifact(
                 getattr(design, "aligned_error_path", None),
                 kind="aligned_error",
