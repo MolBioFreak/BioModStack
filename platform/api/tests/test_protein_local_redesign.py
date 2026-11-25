@@ -29,7 +29,6 @@ from services.nextflow import (
 )
 import routers.files as files_router
 from services import binder_source_materialization
-from scripts.rfd3_local_redesign.contract import ContractError, build_request
 
 
 SOURCE_IDENTITIES = [
@@ -185,83 +184,6 @@ def test_ingress_normalization_policy_preserves_native_requests(model, mode, par
     assert params == original
 
 
-
-
-def test_partial_diffusion_rejects_custom_fixed_atom_overrides() -> None:
-    with pytest.raises(ContractError, match="not exposed"):
-        build_request(
-            {
-                "input_structure": "/tmp/input.pdb",
-                "redesign_mode": "partial_diffusion",
-                "design_chains": ["A"],
-                "redesign_ranges": "A2",
-                "source_residue_identities": SOURCE_IDENTITIES,
-                "select_fixed_atoms": {"A1": []},
-            }
-        )
-
-
-def test_minimal_insertion_rejects_partial_fixed_atom_maps() -> None:
-    with pytest.raises(ContractError, match="does not accept select_fixed_atoms"):
-        build_request(
-            {
-                "input_structure": "/tmp/source.pdb",
-                "redesign_mode": "minimal_insertion",
-                "design_chains": ["A"],
-                "insertion_anchor": "A2",
-                "insertion_min_length": 1,
-                "insertion_max_length": 3,
-                "select_fixed_atoms": {"A1": ["ALL"]},
-                "source_residue_identities": SOURCE_IDENTITIES,
-            }
-        )
-
-
-def test_minimal_insertion_contig_is_source_derived_and_claim_bound() -> None:
-    request = build_request(
-        {
-            "input_structure": "/tmp/source.pdb",
-            "redesign_mode": "minimal_insertion",
-            "design_chains": ["A"],
-            "context_chains": ["B"],
-            "insertion_anchor": "A2",
-            "insertion_min_length": 1,
-            "insertion_max_length": 3,
-            "source_residue_identities": SOURCE_IDENTITIES,
-        }
-    )
-    assert request["rfd3"]["contig"] == "A1-2,1-3,A3,/0,B1"
-    assert request["selection"]["insertion_anchor"] == "A2"
-    assert request["sequence_policy"] == "insert_only"
-
-    with pytest.raises(ContractError, match="does not match"):
-        build_request(
-            {
-                "input_structure": "/tmp/source.pdb",
-                "redesign_mode": "minimal_insertion",
-                "design_chains": ["A"],
-                "context_chains": ["B"],
-                "insertion_anchor": "A2",
-                "insertion_min_length": 1,
-                "insertion_max_length": 3,
-                "contig": "A1,9-9,A2-3,/0,B1",
-                "source_residue_identities": SOURCE_IDENTITIES,
-            }
-        )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_retired_local_redesign_catalog_preserves_active_region_loop() -> None:
     from model_registry import ModelRegistry
     from services.nextflow import resolve_nextflow_entrypoint
@@ -395,38 +317,6 @@ def test_protein_local_validator_selection_rejects_unavailable_models() -> None:
     )
     with pytest.raises(HTTPException, match="disabled or unavailable"):
         _validate_plr_validator_availability(Registry(), {"structure_validators": ["boltz2"]})
-
-
-@pytest.mark.parametrize(("total", "batch_size", "batches"), [
-    (3, 1, [(3, 1)]), (6, 3, [(2, 3)]), (7, 3, [(2, 3), (1, 1)]),
-])
-def test_native_rfd3_command_uses_exact_canonical_execution_controls(total, batch_size, batches) -> None:
-    from scripts.rfd3_generation.run_native import commands
-
-    execution = {"diffusion_batch_size": batch_size, "seed": 0, "dump_trajectories": False,
-                 "write_full_json": True}
-    actual = commands({"generation": {"num_designs": total}, "execution": execution},
-                      "input with spaces.json", "output dir")
-    expected = []
-    for index, (count, size) in enumerate(batches):
-        command = ["rfd3", "inputs=input with spaces.json", "out_dir=output dir",
-                   f"n_batches={count}", f"diffusion_batch_size={size}",
-                   "dump_trajectories=false", "output_full_json=true", "seed=0"]
-        if len(batches) > 1:
-            command.append(f"global_prefix=bms_part{index}_")
-        expected.append(command)
-    assert actual == expected
-    module = (REPO_ROOT / "modules/rfd3.nf").read_text()
-    assert "def nativeRequest = localRedesignRequest || generalGenerationRequest" in module
-    assert "python3 /scripts/rfd3_generation/run_native.py --request" in module
-    assert """pattern: "rfd3_trajectories", saveAs: { ignored -> 'trajectories' }""" in module
-    assert 'pattern: "rfd3_trajectories/*.cif.gz"' not in module
-    assert "trajectory_inventory.json" not in module
-
-
-# The retired local-redesign manifest producer was deleted intentionally.
-# Current generation custody is exercised by test_rfd3_generation_contract.py
-# (hash-bound manifest, tamper rejection, ingestion and typed reopening).
 
 
 def test_resolve_redesign_regions_accepts_plain_manual_ranges(tmp_path: Path) -> None:

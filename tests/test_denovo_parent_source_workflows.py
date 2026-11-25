@@ -1,4 +1,4 @@
-"""Actual Nextflow source/collection shells; only RFD3 computation is inert.
+"""Actual Nextflow source/collection shells.
 
 MD uses a declared terminal replica fixture, not a dynamics result. All native
 input preparation, source copies, collection and metadata conversion are real.
@@ -13,8 +13,6 @@ import subprocess
 import sys
 
 import pytest
-
-from test_rfd3_bounded_corrections import cif_source, generation
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -42,91 +40,6 @@ def run_nextflow(tmp_path, pipeline, params, *, binaries=None):
     (tmp_path / 'nextflow-stdout.log').write_text(result.stdout)
     assert result.returncode == 0, result.stdout
     return list((tmp_path / 'work').glob('*/*/.command.sh'))
-
-
-@pytest.mark.parametrize('kind,mapped', [('generation', False), ('generation', True)])
-def test_actual_rfd3_prepare_to_run_tuple(tmp_path, kind, mapped):
-    source = tmp_path / 'original.cif'
-    source.write_text(cif_source())
-    source_digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    binding = {'path': str(source), 'sha256': source_digest}
-    request = generation()
-    request['source'] = binding
-    name = 'PrepareGeneralRFD3Input'
-    filename = 'workflows/protein_design.nf'
-    invoke = f'{name}(Channel.value(file(params.request)), Channel.value([file(params.source)]))'
-    if mapped:
-        request['source_mapping'] = 'bms.rfd3.source-map.v1'
-    request_path = tmp_path / 'request.json'
-    request_path.write_text(json.dumps(request))
-    binaries = tmp_path / 'bin'
-    binaries.mkdir()
-    python = binaries / 'python3'
-    python.write_text(f'''#!{sys.executable}
-import os, sys
-args = sys.argv[1:]
-if args and args[0].startswith('/scripts/'):
-    args[0] = {str(ROOT)!r} + args[0]
-os.execv({sys.executable!r}, [{sys.executable!r}, *args])
-''')
-    python.chmod(0o755)
-    native = binaries / 'rfd3'
-    native.write_text(f'''#!{sys.executable}
-# Explicit inert scientific leaf: no checkpoint, sampling or GPU execution.
-import gzip, hashlib, json, sys
-from pathlib import Path
-args = dict(value.split('=', 1) for value in sys.argv[1:])
-inputs = json.loads(Path(args['inputs']).read_text())
-item = next(iter(inputs.values()))
-Path({str(source)!r}).unlink(missing_ok=True)
-selected = Path(item['input'])
-assert not selected.is_absolute(), item
-assert selected.parts[0] == 'rfd3_sources', item
-payload = selected.read_bytes()
-out = Path(args['out_dir']); out.mkdir(exist_ok=True)
-with gzip.open(out / 'fixture_0.cif.gz', 'wb') as f:
-    f.write({cif_source().encode()!r})
-(out / 'fixture_0.json').write_text(json.dumps({{'native_execution': False,
-    'source_sha256': hashlib.sha256(payload).hexdigest(), 'source_path': str(selected)}}))
-''')
-    native.chmod(0o755)
-    quote = '''def shellQuote(value) {
-    return "'" + value.toString().replace("'", "'\\\"'\\\"'") + "'"
-}
-'''
-    (tmp_path / 'prep.nf').write_text(quote + process_source(filename, name))
-    (tmp_path / 'rfd3.nf').write_text(process_source('modules/rfd3.nf', 'RunRFD3'))
-    params = {'code_root': str(ROOT), 'out_dir': str(tmp_path / 'returned'),
-        'request': str(request_path), 'source': str(source), 'rfd3_extra_config': '',
-        'rfd3_request_path': str(request_path) if kind == 'local_redesign' else None,
-        'rfd3_generation_request_path': str(request_path) if kind == 'generation' else None,
-        'rfd3_generation_num_designs': 2, 'plr_num_designs': 2,
-        'rfd3_generation_min_length': 1, 'rfd3_generation_max_length': 2,
-        'rfd3_generation_seed': 0, 'rfd3_generation_dump_trajectories': False}
-    pipeline = f'''nextflow.enable.dsl=2
-include {{ {name} }} from './prep'
-include {{ RunRFD3 }} from './rfd3'
-workflow {{
-    {invoke}
-    RunRFD3({name}.out.input_json)
-}}
-'''
-    commands = run_nextflow(tmp_path, pipeline, params, binaries=binaries)
-    assert len(commands) == 2
-    assert not source.exists(), 'scientific fixture must hide the controller source'
-    output = tmp_path / 'returned'
-    record = json.loads((output / 'run/rfd3/fixture_0.json').read_text())
-    assert record['native_execution'] is False
-    retained = output / 'collected' / ('rfd3_generation' if kind == 'generation' else 'protein_local_redesign')
-    receipt_path = retained / ('rfd3_generation_preparation_receipt.json' if kind == 'generation' else 'rfd3_preparation_receipt.json')
-    receipt = json.loads(receipt_path.read_text())
-    assert record['source_sha256'] == receipt['runtime_input']['sha256']
-    staged = retained / record['source_path']
-    assert hashlib.sha256(staged.read_bytes()).hexdigest() == record['source_sha256']
-    if mapped:
-        assert receipt['source_mapping']['original_sha256'] == source_digest
-    else:
-        assert record['source_sha256'] == source_digest
 
 
 @pytest.mark.parametrize('with_provenance', [False, True])

@@ -10,26 +10,9 @@ from pydantic import TypeAdapter
 
 from scripts.lib import disco_contract as disco
 from scripts.lib import laproteina_contract as la
-from scripts.lib import rfd3_scientific_settings as rfd3
-
-
-def test_every_rfd3_control_has_readable_source_qualified_help():
-    for fields in (rfd3.SAMPLER_FIELDS, rfd3.EXECUTION_FIELDS):
-        for key, field in fields.items():
-            assert field['title'] != key
-            assert field['description'] and 'rc-foundry==0.1.9' in field['x-help-source']
-    assert 'exceeds this value' in rfd3.SAMPLER_FIELDS['cfg_t_max']['description']
-    assert 'allow_realignment' in rfd3.SAMPLER_FIELDS['s_trans']['description']
-    assert 'gamma_min' in rfd3.SAMPLER_FIELDS['gamma_0']['description']
 
 
 def test_help_does_not_author_or_change_native_requests():
-    requested = {'inference_sampler': {'cfg_t_max': None, 'cfg_scale': 0, 'allow_realignment': False, 'cfg_features': []}, 'low_memory_mode': False}
-    before = deepcopy(requested)
-    rfd3.scientific_inventory()
-    assert rfd3.execution_settings(requested) == before == requested
-    assert rfd3.execution_settings({}) == {}
-    assert 'inference_sampler.cfg_t_max=null' in rfd3.native_overrides(requested)
     native: disco.NativeSettings = {'seeds': [0, 9, 0], 'num_inference_seeds': None, 'deterministic': False, 'noisy_guidance': {'omega_seq': 0}, 'sequence_sampling': {'planner_name': None}}
     before = deepcopy(native)
     disco.settings_schema()
@@ -49,31 +32,6 @@ def test_null_labels_are_specific_without_changing_types_or_defaults():
         assert schema['properties'][key]['x-null-label'] == 'No upper clamp (null)'
     assert schema['properties']['motif_atom_spec']['x-null-label'] == 'Contig-based extraction (null)'
     assert all('default' not in leaf for leaf in schema['properties'].values())
-
-
-def test_rfd3_help_against_exact_published_wheel():
-    wheel = os.environ.get('RFD3_PRESENTATION_TEST_WHEEL')
-    if not wheel:
-        pytest.skip('Set RFD3_PRESENTATION_TEST_WHEEL to published rc-foundry 0.1.9 wheel')
-    with zipfile.ZipFile(wheel) as archive:
-        source = archive.read(rfd3.SAMPLER_SOURCE)
-        assert hashlib.sha256(source).hexdigest() == rfd3.SAMPLER_SOURCE_SHA256
-        text = source.decode()
-        config = next(node for node in ast.parse(text).body if isinstance(node, ast.ClassDef) and node.name == 'SampleDiffusionConfig')
-        defaults = {node.target.id: ast.literal_eval(node.value) for node in config.body if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None}
-        for key, definition in rfd3.SAMPLER_FIELDS.items():
-            if definition.get('hydra_add'):
-                assert definition['default'] == defaults[key]
-        # The observed arithmetic/branches, not an inferred Auto/Off meaning.
-        for fragment in ('gamma = self.gamma_0 if c_t > self.gamma_min else 0',
-                         's_trans=self.s_trans if step_num >= threshold_step else 0.0',
-                         'self.cfg_t_max is None or c_t > self.cfg_t_max',
-                         'zip(noise_schedule, noise_schedule[1:])',
-                         'delta_L = delta_L + (self.cfg_scale - 1) * (delta_L - delta_L_ref)'):
-            assert fragment in text
-        yaml = archive.read('rfd3/configs/inference_engine/rfdiffusion3.yaml').decode()
-        assert 'set to None to use the default in the checkpoint' in yaml
-        assert 'Translational noise scale' in yaml
 
 
 def test_laproteina_null_help_against_exact_pinned_source():

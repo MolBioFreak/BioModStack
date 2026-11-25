@@ -1,10 +1,8 @@
 """Exact native compiler transport and idempotent shared ingress."""
-import copy
 import json
 import pytest
 from component_runtime import SourceIdentity
 from services.nextflow import compile_nextflow_invocation
-from services.rfd3_generation import normalize_generation_params, GenerationContractError, request_sha256
 
 
 def compile(model, mode, params, tmp_path):
@@ -40,19 +38,3 @@ def test_cad_typed_json_transport_once(tmp_path, backend, key, value):
     index = invocation.command.index('--' + key)
     assert json.loads(invocation.command[index + 1]) == value
     assert invocation.native_parameters[key] == value
-
-
-def test_rfd3_double_normalization_preserves_verified_request():
-    normalized, request, digest = normalize_generation_params({'num_designs': 2.7}, job_name='native')
-    normalized.update(workflow_adapter='rfd3', frustrampnn_requiredness='optional')
-    again, retained, retained_digest = normalize_generation_params(normalized, job_name='native')
-    assert again == normalized and request == retained and digest == retained_digest
-    for mutate in ('digest', 'rehash_science', 'unknown', 'derived_alias'):
-        changed = copy.deepcopy(normalized)
-        if mutate == 'digest': changed['rfd3_generation_request_sha256'] = '0' * 64
-        elif mutate == 'rehash_science':
-            changed['rfd3_generation_request']['generation']['num_designs'] = 3
-            changed['rfd3_generation_request_sha256'] = request_sha256(changed['rfd3_generation_request'])
-        elif mutate == 'unknown': changed['invented_science'] = 2
-        else: changed['rfd_num_designs'] = 3
-        with pytest.raises(GenerationContractError): normalize_generation_params(changed, job_name='native')
