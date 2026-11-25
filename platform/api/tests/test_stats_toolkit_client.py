@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import io
 import json
-import threading
+import urllib.error
 
 import httpx
 import pytest
@@ -69,7 +69,7 @@ def test_client_create_run_and_list_tools() -> None:
     assert len(tools["tools"]) == 1
 
 
-def test_stdlib_rpc_helper_roundtrip_and_errors() -> None:
+def test_stdlib_rpc_helper_roundtrip_and_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     import sys
     from pathlib import Path
 
@@ -78,38 +78,38 @@ def test_stdlib_rpc_helper_roundtrip_and_errors() -> None:
         sys.path.insert(0, str(repo_root))
     from scripts._stats_toolkit_rpc import StatsToolkitRpcError, execute_stats_tool
 
-    class _Handler(BaseHTTPRequestHandler):
-        def log_message(self, format: str, *args: object) -> None:
-            return
+    class _FakeResp:
+        def __init__(self, payload: bytes) -> None:
+            self._payload = payload
 
-        def do_POST(self) -> None:  # noqa: N802
-            length = int(self.headers.get("Content-Length", "0"))
-            _ = self.rfile.read(length)
-            if self.path == "/api/v1/tools/inference.binomial_exact/execute":
-                payload = json.dumps({"result": {"p_value": 0.05}}).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(payload)
-                return
-            self.send_response(422)
-            self.end_headers()
-            self.wfile.write(b'{"detail": "bad request"}')
+        def read(self) -> bytes:
+            return self._payload
 
-    server = HTTPServer(("127.0.0.1", 0), _Handler)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        res = execute_stats_tool(
-            "inference.binomial_exact",
-            {"successes": 5, "trials": 10, "null_probability": 0.5},
-            base_url=f"http://127.0.0.1:{port}",
+        def __enter__(self) -> "_FakeResp":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    def fake_urlopen(req, timeout=15.0):
+        if req.full_url.endswith("/api/v1/tools/inference.binomial_exact/execute"):
+            assert json.loads(req.data.decode("utf-8")) == {
+                "successes": 5,
+                "trials": 10,
+                "null_probability": 0.5,
+            }
+            return _FakeResp(json.dumps({"result": {"p_value": 0.05}}).encode("utf-8"))
+        raise urllib.error.HTTPError(
+            req.full_url, 422, "Unprocessable Entity", hdrs=None, fp=io.BytesIO(b'{"detail": "bad request"}')
         )
-        assert res == {"p_value": 0.05}
-        with pytest.raises(StatsToolkitRpcError) as exc_info:
-            execute_stats_tool("bad.tool", {}, base_url=f"http://127.0.0.1:{port}")
-        assert exc_info.value.status_code == 422
-    finally:
-        server.shutdown()
-        server.server_close()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    res = execute_stats_tool(
+        "inference.binomial_exact",
+        {"successes": 5, "trials": 10, "null_probability": 0.5},
+        base_url="http://stats.test",
+    )
+    assert res == {"p_value": 0.05}
+    with pytest.raises(StatsToolkitRpcError) as exc_info:
+        execute_stats_tool("bad.tool", {}, base_url="http://stats.test")
+    assert exc_info.value.status_code == 422

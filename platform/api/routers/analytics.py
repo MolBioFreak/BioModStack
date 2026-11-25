@@ -352,8 +352,16 @@ class CorrelationMatrix(BaseModel):
     scientific_cohorts: List[ScientificCohort] = []
     job_id: str
     metrics: List[str]
-    matrix: List[List[float]]  # NxN Pearson R values
+    matrix: List[List[float]]  # NxN correlation values
     sample_sizes: List[List[int]]  # NxN sample counts
+    p_value_matrix: Optional[List[List[Optional[float]]]] = None
+    adjusted_p_value_matrix: Optional[List[List[Optional[float]]]] = None
+    pairs: Optional[List[Dict[str, Any]]] = None
+    method: Optional[str] = None
+    p_adjust_method: Optional[str] = None
+    stats_backend: Optional[str] = None
+    stats_tool_id: Optional[str] = None
+    stats_method_version: Optional[str] = None
 
 class AACount(BaseModel):
     aa: str
@@ -387,18 +395,37 @@ class CDRAnalysisResponse(BaseModel):
 
 
 def pearson_r(x: List[float], y: List[float]) -> float:
-    """Calculate Pearson correlation coefficient."""
+    """Calculate Pearson correlation coefficient via Stats Toolkit with local numpy fallback."""
     if len(x) < 3 or len(y) < 3:
         return 0.0
-    x_arr = np.array(x)
-    y_arr = np.array(y)
-    # Filter to only paired non-null values
+    x_arr = np.array(x, dtype=float)
+    y_arr = np.array(y, dtype=float)
     mask = ~(np.isnan(x_arr) | np.isnan(y_arr))
     x_arr = x_arr[mask]
     y_arr = y_arr[mask]
     if len(x_arr) < 3:
         return 0.0
-    return float(np.corrcoef(x_arr, y_arr)[0, 1])
+    try:
+        from services.stats_toolkit_client import (
+            StatsToolkitUnavailableError,
+            get_stats_toolkit_client,
+            stats_toolkit_required,
+        )
+        res = get_stats_toolkit_client().execute_tool(
+            "inference.correlation_matrix",
+            {
+                "columns": {"x": x_arr.tolist(), "y": y_arr.tolist()},
+                "method": "pearson",
+                "p_adjust_method": "none",
+            },
+        )
+        stat = (res.get("pairs") or [{}])[0].get("statistic")
+        return float(stat) if stat is not None else 0.0
+    except StatsToolkitUnavailableError:
+        if stats_toolkit_required():
+            raise
+    val = float(np.corrcoef(x_arr, y_arr)[0, 1])
+    return 0.0 if val != val else val
 
 
 STANDARD_AAs = "ACDEFGHIKLMNPQRSTVWY"

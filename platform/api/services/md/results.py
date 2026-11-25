@@ -739,7 +739,8 @@ def _analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dic
     if ((wham and wham.get("status") == "failed")
             or any(report.get("pull_error") or any(item.get("status") == "failed" for item in report.get("specialized_analyzers", [])) for report in reports)):
         overall = "partial" if reports and overall != "failed" else "failed"
-    return {
+    convergence_diagnostics = _compute_replica_convergence_diagnostics(completed_reports)
+    payload = {
         "schema": "bms.md.analysis-report-set.v1", "job_id": job.id,
         "source": "validated_job_owned_analysis_reports", "status": overall,
         "bounded": True, "replica_states": states, "reports": reports,
@@ -751,6 +752,80 @@ def _analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dic
             "reason": "RMSD/RMSF/Rg traces and replica summaries do not by themselves establish equilibrium or population-level certainty",
             "frames_are_independent_replicates": False,
         },
+    }
+    if convergence_diagnostics is not None:
+        payload["convergence_diagnostics"] = convergence_diagnostics
+    return payload
+
+
+def _compute_replica_convergence_diagnostics(completed_reports: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Compute per-replica RMSD convergence diagnostics via BioModStack Stats Toolkit when reachable."""
+    if not completed_reports:
+        return None
+    from services.stats_toolkit_client import (
+        StatsToolkitError,
+        StatsToolkitUnavailableError,
+        get_stats_toolkit_client,
+        stats_toolkit_required,
+    )
+    client = get_stats_toolkit_client()
+    per_replica: list[dict[str, Any]] = []
+    tool_version: str | None = None
+    for report in completed_reports:
+        points = report.get("points")
+        if not isinstance(points, list) or len(points) < 8:
+            continue
+        times: list[float] = []
+        values: list[float] = []
+        valid = True
+        for pt in points:
+            if not isinstance(pt, Mapping):
+                valid = False
+                break
+            t_val = pt.get("time_ps")
+            r_val = pt.get("rmsd_angstrom")
+            if isinstance(t_val, bool) or isinstance(r_val, bool) or not isinstance(t_val, (int, float)) or not isinstance(r_val, (int, float)):
+                valid = False
+                break
+            times.append(float(t_val))
+            values.append(float(r_val))
+        if not valid or len(values) < 8:
+            continue
+        try:
+            diag = client.execute_tool(
+                "timeseries.convergence_diagnostics",
+                {"values": values, "times": times},
+            )
+        except StatsToolkitUnavailableError:
+            if stats_toolkit_required():
+                raise
+            return None
+        except StatsToolkitError:
+            continue
+        tool_version = tool_version or diag.get("method_version")
+        per_replica.append({
+            "replica": report.get("replica"),
+            "n_frames": diag.get("n"),
+            "tau_int": diag.get("tau_int"),
+            "statistical_inefficiency": diag.get("statistical_inefficiency"),
+            "effective_sample_size": diag.get("effective_sample_size"),
+            "block_sem": diag.get("block_sem"),
+            "naive_sem": diag.get("naive_sem"),
+            "geweke_z": diag.get("geweke_z"),
+            "geweke_p_value": diag.get("geweke_p_value"),
+            "changepoint_time_ps": diag.get("changepoint_time"),
+            "equilibrated_after_index": diag.get("equilibrated_after_index"),
+            "drift_slope_angstrom_per_ps": diag.get("drift_slope"),
+            "drift_p_value": diag.get("drift_p_value"),
+            "converged": diag.get("converged"),
+        })
+    if not per_replica:
+        return None
+    return {
+        "stats_backend": "stats_toolkit",
+        "stats_tool_id": "timeseries.convergence_diagnostics",
+        "stats_method_version": tool_version,
+        "replicas": per_replica,
     }
 
 

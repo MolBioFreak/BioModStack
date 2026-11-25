@@ -19,6 +19,12 @@ class StatsToolkitRpcError(RuntimeError):
         self.status_code = status_code
 
 
+def stats_toolkit_required() -> bool:
+    """Return True when BMS_STATS_TOOLKIT_REQUIRED forbids local fallback on unavailable service."""
+    raw = (os.environ.get("BMS_STATS_TOOLKIT_REQUIRED") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def execute_stats_tool(
     tool_id: str,
     payload: dict[str, Any],
@@ -28,6 +34,8 @@ def execute_stats_tool(
 ) -> dict[str, Any]:
     """Execute an allowlisted Stats Toolkit tool via HTTP and return its result payload."""
     root = (base_url or os.environ.get("BMS_STATS_TOOLKIT_URL") or DEFAULT_STATS_TOOLKIT_URL).strip().rstrip("/")
+    if root.lower() in {"", "off", "disabled", "none"}:
+        raise StatsToolkitRpcError("Stats Toolkit RPC disabled by configuration")
     url = f"{root}/api/v1/tools/{tool_id}/execute"
     encoded = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -47,6 +55,10 @@ def execute_stats_tool(
         ) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise StatsToolkitRpcError(f"Stats Toolkit unreachable at {root}: {exc}") from exc
+    except Exception as exc:
+        if type(exc).__name__ == "SocketBlockedError":
+            raise StatsToolkitRpcError(f"Stats Toolkit unreachable (network sockets blocked): {exc}") from exc
+        raise
 
     try:
         envelope = json.loads(body)
@@ -58,4 +70,4 @@ def execute_stats_tool(
     return envelope["result"]
 
 
-__all__ = ["DEFAULT_STATS_TOOLKIT_URL", "StatsToolkitRpcError", "execute_stats_tool"]
+__all__ = ["DEFAULT_STATS_TOOLKIT_URL", "StatsToolkitRpcError", "execute_stats_tool", "stats_toolkit_required"]

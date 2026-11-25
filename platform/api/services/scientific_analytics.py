@@ -349,17 +349,87 @@ def summarize(rows, *, include_pairs=True):
             statistics=dict(min=min(values), max=max(values), avg=statistics.mean(values),
                 median=statistics.median(values), std_dev=statistics.pstdev(values)) if values else None,
             reason_code=None if values else 'no_observed_values')
-    pairs = {}
-    for x, y in combinations(sorted(metrics) if include_pairs else [], 2):
+    metric_keys = sorted(metrics) if include_pairs else []
+    pair_specs = []
+    for x, y in combinations(metric_keys, 2):
         points = [dict(id=id, x=p['metrics'][x], y=p['metrics'][y])
-            for id,p in rows if x in p['metrics'] and y in p['metrics']]
+            for id, p in rows if x in p['metrics'] and y in p['metrics']]
+        pair_specs.append((x, y, points))
+
+    toolkit_correlations: dict[tuple[str, str], MetricState] | None = None
+    eligible_specs = [(x, y, pts) for x, y, pts in pair_specs if len(pts) >= 3]
+    if eligible_specs:
+        try:
+            from services.stats_toolkit_client import (
+                StatsToolkitUnavailableError,
+                get_stats_toolkit_client,
+                stats_toolkit_required,
+            )
+            client = get_stats_toolkit_client()
+            complete_rows = [p for _, p in rows if all(k in p['metrics'] for k in metric_keys)]
+            if (
+                len(metric_keys) >= 2
+                and len(metric_keys) <= 50
+                and len(complete_rows) >= 3
+                and all(len(pts) == len(complete_rows) for _, _, pts in pair_specs)
+            ):
+                res = client.execute_tool(
+                    'inference.correlation_matrix',
+                    {
+                        'columns': {k: [float(p['metrics'][k]) for p in complete_rows] for k in metric_keys},
+                        'method': 'pearson',
+                        'p_adjust_method': 'benjamini_hochberg',
+                    },
+                )
+                lookup = {
+                    (str(item['var_a']), str(item['var_b'])): item.get('statistic')
+                    for item in (res.get('pairs') or [])
+                    if isinstance(item, dict)
+                }
+                toolkit_correlations = {}
+                for x, y, _pts in eligible_specs:
+                    stat = lookup.get((x, y))
+                    if stat is None:
+                        stat = lookup.get((y, x))
+                    toolkit_correlations[(x, y)] = (
+                        metric_state(float(stat))
+                        if stat is not None
+                        else MetricState(state='unavailable', value=None, reason_code='constant_metric')
+                    )
+            else:
+                toolkit_correlations = {}
+                for x, y, pts in eligible_specs:
+                    res = client.execute_tool(
+                        'inference.correlation_matrix',
+                        {
+                            'columns': {x: [float(pt['x']) for pt in pts], y: [float(pt['y']) for pt in pts]},
+                            'method': 'pearson',
+                            'p_adjust_method': 'none',
+                        },
+                    )
+                    stat = (res.get('pairs') or [{}])[0].get('statistic')
+                    toolkit_correlations[(x, y)] = (
+                        metric_state(float(stat))
+                        if stat is not None
+                        else MetricState(state='unavailable', value=None, reason_code='constant_metric')
+                    )
+        except StatsToolkitUnavailableError:
+            if stats_toolkit_required():
+                raise
+            toolkit_correlations = None
+
+    pairs = {}
+    for x, y, points in pair_specs:
         included = {p['id'] for p in points}
         correlation = MetricState(state='unavailable', value=None, reason_code='insufficient_pairs')
         if len(points) >= 3:
-            try:
-                correlation = metric_state(statistics.correlation([p['x'] for p in points], [p['y'] for p in points]))
-            except statistics.StatisticsError:
-                correlation = MetricState(state='unavailable', value=None, reason_code='constant_metric')
+            if toolkit_correlations is not None and (x, y) in toolkit_correlations:
+                correlation = toolkit_correlations[(x, y)]
+            else:
+                try:
+                    correlation = metric_state(statistics.correlation([p['x'] for p in points], [p['y'] for p in points]))
+                except statistics.StatisticsError:
+                    correlation = MetricState(state='unavailable', value=None, reason_code='constant_metric')
         pairs[f'{x}_vs_{y}'] = dict(x_metric=x, y_metric=y, points=points, pair_count=len(points),
             excluded_count=len(rows)-len(points), excluded_ids=[i for i in ids if i not in included], correlation=correlation)
     return dict(metrics=metrics, pairs=pairs)

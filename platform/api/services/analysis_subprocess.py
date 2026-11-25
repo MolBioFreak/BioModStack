@@ -644,6 +644,160 @@ async def _job_scope_designs(session, job: Job, params: dict[str, Any], columns:
     return list(result.scalars().all())
 
 
+def _compute_correlation_matrix_via_stats_toolkit(
+    designs: list[Design],
+    metric_names: list[str],
+    *,
+    method: str = "pearson",
+    p_adjust_method: str = "benjamini_hochberg",
+) -> dict[str, Any] | None:
+    """Compute pairwise correlation matrix + p-values + BH-FDR via BioModStack Stats Toolkit."""
+    from services.stats_toolkit_client import (
+        StatsToolkitUnavailableError,
+        get_stats_toolkit_client,
+        stats_toolkit_required,
+    )
+
+    m = len(metric_names)
+    if m < 2:
+        return None
+
+    sample_sizes: list[list[int]] = [[0] * m for _ in range(m)]
+    pair_map: dict[tuple[int, int], list[tuple[float, float]]] = {}
+    for i, mx in enumerate(metric_names):
+        vals_i = _extract_metric_values(designs, mx)
+        sample_sizes[i][i] = len(vals_i)
+        for j in range(i + 1, m):
+            pairs = _extract_metric_pairs(designs, mx, metric_names[j])
+            pair_map[(i, j)] = pairs
+            sample_sizes[i][j] = sample_sizes[j][i] = len(pairs)
+
+    complete_columns: dict[str, list[float]] = {name: [] for name in metric_names}
+    for design in designs:
+        extracted = [_metric_value(design, name) for name in metric_names]
+        if all(val is not None for val in extracted):
+            for name, val in zip(metric_names, extracted):
+                complete_columns[name].append(float(val))  # type: ignore[arg-type]
+    complete_n = len(complete_columns[metric_names[0]])
+    all_equal_complete = complete_n >= 3 and all(
+        sample_sizes[i][j] == complete_n for i in range(m) for j in range(m)
+    )
+
+    client = get_stats_toolkit_client()
+    try:
+        if all_equal_complete and m <= 50:
+            res = client.execute_tool(
+                "inference.correlation_matrix",
+                {
+                    "columns": complete_columns,
+                    "method": method,
+                    "p_adjust_method": p_adjust_method,
+                },
+            )
+            raw_corr = res["correlation_matrix"]
+            matrix = [
+                [1.0 if i == j else (round(float(raw_corr[i][j]), 4) if raw_corr[i][j] is not None else 0.0) for j in range(m)]
+                for i in range(m)
+            ]
+            return {
+                "matrix": matrix,
+                "sample_sizes": sample_sizes,
+                "p_value_matrix": res.get("p_value_matrix"),
+                "adjusted_p_value_matrix": res.get("adjusted_p_value_matrix"),
+                "pairs": res.get("pairs"),
+                "method": res.get("method", method),
+                "p_adjust_method": res.get("p_adjust_method", p_adjust_method),
+                "stats_backend": "stats_toolkit",
+                "stats_tool_id": "inference.correlation_matrix",
+                "stats_method_version": res.get("method_version"),
+            }
+
+        matrix = [[1.0 if i == j else 0.0 for j in range(m)] for i in range(m)]
+        p_value_matrix: list[list[float | None]] = [[0.0 if i == j else None for j in range(m)] for i in range(m)]
+        adjusted_p_value_matrix: list[list[float | None]] = [[0.0 if i == j else None for j in range(m)] for i in range(m)]
+        pair_records: list[dict[str, Any]] = []
+        valid_indices: list[int] = []
+        valid_pvals: list[float] = []
+        method_version: str | None = None
+        for i in range(m):
+            for j in range(i + 1, m):
+                pairs = pair_map[(i, j)]
+                mx, my = metric_names[i], metric_names[j]
+                if len(pairs) < 3:
+                    pair_records.append({
+                        "var_a": mx, "var_b": my, "n": len(pairs),
+                        "statistic": None, "p_value": None, "adjusted_p_value": None,
+                        "ci_low": None, "ci_high": None, "significant": False,
+                    })
+                    continue
+                pair_res = client.execute_tool(
+                    "inference.correlation_matrix",
+                    {
+                        "columns": {mx: [vx for vx, _ in pairs], my: [vy for _, vy in pairs]},
+                        "method": method,
+                        "p_adjust_method": "none",
+                    },
+                )
+                method_version = method_version or pair_res.get("method_version")
+                pair_info = (pair_res.get("pairs") or [{}])[0]
+                stat = pair_info.get("statistic")
+                p_val = pair_info.get("p_value")
+                matrix[i][j] = matrix[j][i] = round(float(stat), 4) if stat is not None else 0.0
+                p_value_matrix[i][j] = p_value_matrix[j][i] = float(p_val) if p_val is not None else None
+                rec = {
+                    "var_a": mx,
+                    "var_b": my,
+                    "n": len(pairs),
+                    "statistic": float(stat) if stat is not None else None,
+                    "p_value": float(p_val) if p_val is not None else None,
+                    "adjusted_p_value": float(p_val) if p_val is not None else None,
+                    "ci_low": pair_info.get("ci_low"),
+                    "ci_high": pair_info.get("ci_high"),
+                    "significant": bool(p_val is not None and float(p_val) < 0.05),
+                    "_i": i,
+                    "_j": j,
+                }
+                idx = len(pair_records)
+                pair_records.append(rec)
+                if p_val is not None:
+                    valid_indices.append(idx)
+                    valid_pvals.append(float(p_val))
+        if len(valid_pvals) >= 2 and p_adjust_method != "none":
+            adj = client.execute_tool(
+                "inference.adjust_p_values",
+                {"p_values": valid_pvals, "method": p_adjust_method},
+            )
+            for idx, adj_p in zip(valid_indices, adj["adjusted_p_values"]):
+                rec = pair_records[idx]
+                rec["adjusted_p_value"] = float(adj_p)
+                rec["significant"] = bool(float(adj_p) < 0.05)
+                ri, rj = rec["_i"], rec["_j"]
+                adjusted_p_value_matrix[ri][rj] = adjusted_p_value_matrix[rj][ri] = float(adj_p)
+        elif len(valid_pvals) == 1:
+            rec = pair_records[valid_indices[0]]
+            ri, rj = rec["_i"], rec["_j"]
+            adjusted_p_value_matrix[ri][rj] = adjusted_p_value_matrix[rj][ri] = float(valid_pvals[0])
+        for rec in pair_records:
+            rec.pop("_i", None)
+            rec.pop("_j", None)
+        return {
+            "matrix": matrix,
+            "sample_sizes": sample_sizes,
+            "p_value_matrix": p_value_matrix,
+            "adjusted_p_value_matrix": adjusted_p_value_matrix,
+            "pairs": pair_records,
+            "method": method,
+            "p_adjust_method": p_adjust_method,
+            "stats_backend": "stats_toolkit",
+            "stats_tool_id": "inference.correlation_matrix",
+            "stats_method_version": method_version,
+        }
+    except StatsToolkitUnavailableError:
+        if stats_toolkit_required():
+            raise
+        return None
+
+
 async def _compute_job_correlation_matrix(session, job: Job, params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any]:
     designs = await _job_scope_designs(
         session,
@@ -655,33 +809,56 @@ async def _compute_job_correlation_matrix(session, job: Job, params: dict[str, A
     from services.analysis_registry import correlation_scientific_scope
     designs, cohorts, _sources = await correlation_scientific_scope(designs, session)
     metric_names = [metric_name for metric_name in JOB_CORRELATION_METRICS if len(_extract_metric_values(designs, metric_name)) >= 5]
-    matrix: list[list[float]] = []
-    sample_sizes: list[list[int]] = []
+    method = str(params.get("method") or "pearson").strip().lower()
+    if method not in {"pearson", "spearman", "kendall"}:
+        method = "pearson"
 
-    for metric_x in metric_names:
-        row: list[float] = []
-        size_row: list[int] = []
-        for metric_y in metric_names:
-            pairs = _extract_metric_pairs(designs, metric_x, metric_y)
-            if metric_x == metric_y:
-                row.append(1.0)
+    delegated = _compute_correlation_matrix_via_stats_toolkit(designs, metric_names, method=method)
+    if delegated is not None:
+        result = {
+            "job_id": job.id,
+            "metrics": metric_names,
+            "matrix": delegated["matrix"],
+            "sample_sizes": delegated["sample_sizes"],
+            "scientific_cohorts": cohorts,
+            "p_value_matrix": delegated["p_value_matrix"],
+            "adjusted_p_value_matrix": delegated["adjusted_p_value_matrix"],
+            "pairs": delegated["pairs"],
+            "method": delegated["method"],
+            "p_adjust_method": delegated["p_adjust_method"],
+            "stats_backend": delegated["stats_backend"],
+            "stats_tool_id": delegated["stats_tool_id"],
+            "stats_method_version": delegated["stats_method_version"],
+        }
+    else:
+        matrix: list[list[float]] = []
+        sample_sizes: list[list[int]] = []
+        for metric_x in metric_names:
+            row: list[float] = []
+            size_row: list[int] = []
+            for metric_y in metric_names:
+                pairs = _extract_metric_pairs(designs, metric_x, metric_y)
+                if metric_x == metric_y:
+                    row.append(1.0)
+                    size_row.append(len(pairs))
+                    continue
+                row.append(round(_pearson_r([value_x for value_x, _value_y in pairs], [value_y for _value_x, value_y in pairs]), 4))
                 size_row.append(len(pairs))
-                continue
-            row.append(round(_pearson_r([value_x for value_x, _value_y in pairs], [value_y for _value_x, value_y in pairs]), 4))
-            size_row.append(len(pairs))
-        matrix.append(row)
-        sample_sizes.append(size_row)
-
-    result = {
-        "job_id": job.id,
-        "metrics": metric_names,
-        "matrix": matrix,
-        "sample_sizes": sample_sizes,
-        "scientific_cohorts": cohorts,
-    }
+            matrix.append(row)
+            sample_sizes.append(size_row)
+        result = {
+            "job_id": job.id,
+            "metrics": metric_names,
+            "matrix": matrix,
+            "sample_sizes": sample_sizes,
+            "scientific_cohorts": cohorts,
+            "method": "pearson",
+            "stats_backend": "not_applicable" if len(metric_names) < 2 else "local_fallback",
+        }
     summary = {
         "metric_count": len(metric_names),
         "design_count": len(designs),
+        "stats_backend": result.get("stats_backend"),
     }
     return result, summary, result
 

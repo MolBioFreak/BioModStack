@@ -542,6 +542,73 @@ def _ca_rmsd(path_a: Path, path_b: Path) -> float:
     return rmsd
 
 
+def _canonicalize_mds_2d(raw_coords: list[tuple[float, float]]) -> list[dict[str, float]]:
+    """Canonicalize 2-D MDS frame deterministically while preserving all pairwise distances."""
+    if not raw_coords:
+        return []
+    anchor = max(range(len(raw_coords)), key=lambda idx: raw_coords[idx][0] ** 2 + raw_coords[idx][1] ** 2)
+    angle = math.atan2(raw_coords[anchor][1], raw_coords[anchor][0])
+    cosine, sine = math.cos(angle), math.sin(angle)
+    rotated = [
+        (x * cosine + y * sine, -x * sine + y * cosine)
+        for x, y in raw_coords
+    ]
+    handedness_anchor = max(range(len(rotated)), key=lambda idx: abs(rotated[idx][1]))
+    if rotated[handedness_anchor][1] < 0.0:
+        rotated = [(x, -y) for x, y in rotated]
+    out: list[dict[str, float]] = []
+    for x, y in rotated:
+        cx = 0.0 if abs(x) < 5e-13 else x
+        cy = 0.0 if abs(y) < 5e-13 else y
+        out.append({"x": round(float(cx), 6), "y": round(float(cy), 6)})
+    return out
+
+
+def _mds_coordinates_via_stats_toolkit(distance_matrix: list[list[float]]) -> list[dict[str, float]] | None:
+    """Delegate 3..1000-item classical metric MDS to BioModStack Stats Toolkit when reachable."""
+    n = len(distance_matrix)
+    if n < 3 or n > 1000:
+        return None
+    scripts_dir = str(Path(__file__).resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    try:
+        from _stats_toolkit_rpc import StatsToolkitRpcError, execute_stats_tool, stats_toolkit_required
+    except ImportError:
+        return None
+    try:
+        result = execute_stats_tool(
+            "multivariate.distance_clustering",
+            {
+                "distance_matrix": [[float(v) for v in row] for row in distance_matrix],
+                "method": "hierarchical",
+                "mds_components": 2,
+            },
+        )
+    except StatsToolkitRpcError as exc:
+        if exc.status_code is not None and 400 <= exc.status_code < 500:
+            raise ValueError(str(exc)) from exc
+        if stats_toolkit_required():
+            raise
+        return None
+    coords_raw = result.get("mds_coordinates")
+    if not isinstance(coords_raw, list) or len(coords_raw) != n:
+        if stats_toolkit_required():
+            raise RuntimeError("Stats Toolkit multivariate.distance_clustering returned invalid mds_coordinates")
+        return None
+    pairs: list[tuple[float, float]] = []
+    for pt in coords_raw:
+        if not isinstance(pt, (list, tuple)) or len(pt) < 2:
+            if stats_toolkit_required():
+                raise RuntimeError("Stats Toolkit multivariate.distance_clustering returned malformed coordinates")
+            return None
+        x, y = float(pt[0]), float(pt[1])
+        if not (math.isfinite(x) and math.isfinite(y)):
+            raise RuntimeError("Stats Toolkit classical metric MDS produced non-finite coordinates")
+        pairs.append((x, y))
+    return _canonicalize_mds_2d(pairs)
+
+
 def _mds_coordinates(distance_matrix: list[list[float]]) -> list[dict[str, float]]:
     n = len(distance_matrix)
     if n == 0:
@@ -565,6 +632,9 @@ def _mds_coordinates(distance_matrix: list[list[float]]) -> list[dict[str, float
     if n == 2:
         distance = float(distance_matrix[0][1])
         return [{"x": round(-distance / 2.0, 6), "y": 0.0}, {"x": round(distance / 2.0, 6), "y": 0.0}]
+    delegated = _mds_coordinates_via_stats_toolkit(distance_matrix)
+    if delegated is not None:
+        return delegated
     try:
         import numpy as np  # type: ignore
     except ImportError as exc:
@@ -581,20 +651,7 @@ def _mds_coordinates(distance_matrix: list[list[float]]) -> list[dict[str, float
     for out_idx, eig_idx in enumerate(order[:2]):
         eig_value = max(float(values[eig_idx]), 0.0)
         coords[:, out_idx] = vectors[:, eig_idx] * math.sqrt(eig_value)
-    # Eigenvectors are sign-ambiguous and equal eigenvalues admit arbitrary
-    # rotations. Canonicalize the 2-D frame from sample order so repeated runs
-    # do not change serialized coordinates while preserving all distances.
-    anchor = int(np.argmax(np.sum(coords * coords, axis=1)))
-    angle = math.atan2(float(coords[anchor, 1]), float(coords[anchor, 0]))
-    cosine, sine = math.cos(angle), math.sin(angle)
-    canonical = np.empty_like(coords)
-    canonical[:, 0] = coords[:, 0] * cosine + coords[:, 1] * sine
-    canonical[:, 1] = -coords[:, 0] * sine + coords[:, 1] * cosine
-    handedness_anchor = int(np.argmax(np.abs(canonical[:, 1])))
-    if float(canonical[handedness_anchor, 1]) < 0.0:
-        canonical[:, 1] *= -1.0
-    canonical[np.abs(canonical) < 5e-13] = 0.0
-    return [{"x": round(float(x), 6), "y": round(float(y), 6)} for x, y in canonical]
+    return _canonicalize_mds_2d([(float(x), float(y)) for x, y in coords])
 
 
 def _normalize_outputs(request: dict[str, Any], raw_dir: Path, output_dir: Path) -> list[dict[str, Any]]:

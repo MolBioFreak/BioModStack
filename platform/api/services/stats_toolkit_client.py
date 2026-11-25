@@ -28,6 +28,12 @@ class StatsToolkitNotFoundError(StatsToolkitError):
     """Raised when a requested tool or run does not exist (HTTP 404)."""
 
 
+def stats_toolkit_required() -> bool:
+    """Return True when BMS_STATS_TOOLKIT_REQUIRED forbids local fallback on unavailable service."""
+    raw = (os.environ.get("BMS_STATS_TOOLKIT_REQUIRED") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _resolve_base_url(base_url: str | None = None) -> str:
     raw = (base_url or os.environ.get("BMS_STATS_TOOLKIT_URL") or DEFAULT_STATS_TOOLKIT_URL).strip()
     return raw.rstrip("/")
@@ -68,6 +74,8 @@ class StatsToolkitClient:
         json_body: dict[str, Any] | None = None,
         timeout: float | None = None,
     ) -> dict[str, Any]:
+        if self.base_url.lower() in {"", "off", "disabled", "none"}:
+            raise StatsToolkitUnavailableError("Stats Toolkit client disabled by configuration")
         effective_timeout = self.timeout if timeout is None else float(timeout)
         url = f"{self.base_url}{path}"
         try:
@@ -81,6 +89,12 @@ class StatsToolkitClient:
             raise StatsToolkitUnavailableError(
                 f"Stats Toolkit HTTP transport error at {self.base_url}: {exc}"
             ) from exc
+        except Exception as exc:
+            if type(exc).__name__ == "SocketBlockedError":
+                raise StatsToolkitUnavailableError(
+                    f"Stats Toolkit unreachable (network sockets blocked): {exc}"
+                ) from exc
+            raise
 
         if response.status_code == 404:
             raise StatsToolkitNotFoundError(self._extract_detail(response, f"Not found: {path}"))
@@ -172,4 +186,5 @@ __all__ = [
     "StatsToolkitUnavailableError",
     "StatsToolkitValidationError",
     "get_stats_toolkit_client",
+    "stats_toolkit_required",
 ]

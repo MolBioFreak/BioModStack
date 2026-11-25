@@ -188,17 +188,70 @@ def _rank_stability(
     pairwise: list[dict[str, Any]] = []
     stability: float | None = None
     if len(rank_scores) >= max(3, math.ceil(outer_minimum * len(expected))) and len(common) >= max(3, common_minimum):
-        ranks = {outer: _average_ranks({key: scores[key] for key in common}) for outer, scores in rank_scores.items()}
-        correlations: list[float] = []
         outer_ids = list(expected)
-        ranked_outer_ids = [outer for outer in outer_ids if outer in ranks]
-        for left_index, left in enumerate(ranked_outer_ids):
-            for right in ranked_outer_ids[left_index + 1:]:
-                correlation = _spearman(ranks[left], ranks[right])
-                pairwise.append({"left": left, "right": right, "spearman": correlation})
-                if correlation is None:
+        ranked_outer_ids = [outer for outer in outer_ids if outer in rank_scores]
+        delegated_pairs: list[dict[str, Any]] | None = None
+        if 2 <= len(ranked_outer_ids) <= 50:
+            try:
+                from services.stats_toolkit_client import (
+                    StatsToolkitUnavailableError,
+                    get_stats_toolkit_client,
+                    stats_toolkit_required,
+                )
+                common_keys = sorted(common)
+                columns = {
+                    outer: [float(rank_scores[outer][key]) for key in common_keys]
+                    for outer in ranked_outer_ids
+                }
+                res = get_stats_toolkit_client().execute_tool(
+                    "inference.correlation_matrix",
+                    {
+                        "columns": columns,
+                        "method": "spearman",
+                        "p_adjust_method": "benjamini_hochberg",
+                    },
+                )
+                pair_lookup = {
+                    (str(item["var_a"]), str(item["var_b"])): item
+                    for item in (res.get("pairs") or [])
+                    if isinstance(item, Mapping)
+                }
+                delegated_pairs = []
+                for left_index, left in enumerate(ranked_outer_ids):
+                    for right in ranked_outer_ids[left_index + 1:]:
+                        info = pair_lookup.get((left, right)) or pair_lookup.get((right, left)) or {}
+                        stat = info.get("statistic")
+                        corr_val = float(stat) if stat is not None else None
+                        entry: dict[str, Any] = {
+                            "left": left,
+                            "right": right,
+                            "spearman": corr_val,
+                            "p_value": info.get("p_value"),
+                            "adjusted_p_value": info.get("adjusted_p_value"),
+                            "stats_backend": "stats_toolkit",
+                        }
+                        delegated_pairs.append(entry)
+            except StatsToolkitUnavailableError:
+                if stats_toolkit_required():
+                    raise
+                delegated_pairs = None
+
+        correlations: list[float] = []
+        if delegated_pairs is not None:
+            for entry in delegated_pairs:
+                pairwise.append(entry)
+                if entry["spearman"] is None:
                     return None, common, pairwise, excluded
-                correlations.append(correlation)
+                correlations.append(float(entry["spearman"]))
+        else:
+            ranks = {outer: _average_ranks({key: scores[key] for key in common}) for outer, scores in rank_scores.items()}
+            for left_index, left in enumerate(ranked_outer_ids):
+                for right in ranked_outer_ids[left_index + 1:]:
+                    correlation = _spearman(ranks[left], ranks[right])
+                    pairwise.append({"left": left, "right": right, "spearman": correlation})
+                    if correlation is None:
+                        return None, common, pairwise, excluded
+                    correlations.append(correlation)
         if correlations and len(correlations) == len(pairwise):
             stability = statistics.median(correlations)
     return stability, common, pairwise, excluded
