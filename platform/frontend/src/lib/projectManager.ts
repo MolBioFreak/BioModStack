@@ -1596,34 +1596,6 @@ export async function fetchDomainFrustraMpnnResults(
     return parsed;
 }
 
-export async function getProjectSummary(projectId: string, options: ProjectSummaryOptions = {}): Promise<ProjectManagerReadModel> {
-    const response = await api.get<unknown>(`/api/projects/${segment(projectId)}/summary`, {
-        params: {
-            collection_families: options.collectionFamilies?.join(','),
-            focus_id: options.focusId,
-            selected_node_key: options.selectedNodeKey,
-            map_cursor: options.mapCursor,
-            run_cursor: options.runCursor,
-            result_cursor: options.resultCursor,
-            lineage_cursor: options.lineageCursor,
-            note_cursor: options.noteCursor,
-            decision_cursor: options.decisionCursor,
-            dataset_cursor: options.datasetCursor,
-            activity_cursor: options.activityCursor,
-            map_limit: options.mapLimit,
-            run_limit: options.runLimit,
-            result_limit: options.resultLimit,
-            lineage_limit: options.lineageLimit,
-            note_limit: options.noteLimit,
-            decision_limit: options.decisionLimit,
-            dataset_limit: options.datasetLimit,
-            activity_limit: options.activityLimit,
-        },
-        signal: options.signal,
-    });
-    return normalizeProjectManagerReadModel(response.data);
-}
-
 export async function listDomainAdapters(signal?: AbortSignal): Promise<DomainAdapterRegistry> {
     const response = await api.get<unknown>('/api/domain-adapters', { signal });
     return parseDomainAdapterRegistry(response.data);
@@ -1803,14 +1775,6 @@ export async function attachExistingEntity(
         request,
     );
     return parseAttachmentReceipt(response.data);
-}
-
-export async function getResultSurface(projectId: string, receiptId: string, signal?: AbortSignal): Promise<ResultSurface> {
-    const response = await api.get<unknown>(
-        `/api/projects/${segment(projectId)}/receipts/${segment(receiptId)}/surface`,
-        { signal },
-    );
-    return parseResultSurface(response.data);
 }
 
 export interface ProjectResultContext {
@@ -1994,30 +1958,6 @@ export async function launchDomainRunGroup(
         `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups`,
         { preparation_launches: preparationLaunches },
         { headers: { 'Idempotency-Key': crypto.randomUUID() } },
-    )).data;
-}
-
-export async function cloneDomainRunIntent(
-    projectId: string,
-    globalExperimentId: string,
-    domainExperimentId: string,
-    runGroupId: string,
-    request: {
-        expected_run_group_generation: number;
-        source_run_id: string;
-        source_attempt_id: string;
-        new_workflow_name: string;
-        change_summary: string;
-        expected_domain_revision_id: string;
-    },
-): Promise<RunCloneReceipt> {
-    return (await api.post<RunCloneReceipt>(
-        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups/${segment(runGroupId)}/clone`,
-        {
-            schema: 'bms.run-clone-request.v1',
-            ...request,
-            idempotency_key: crypto.randomUUID(),
-        },
     )).data;
 }
 

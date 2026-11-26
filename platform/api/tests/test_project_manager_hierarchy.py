@@ -67,7 +67,6 @@ from experiment_services import (
     save_dataset_revision,
     save_hierarchy_revision,
 )
-from routers.experiment_workspaces import router as compatibility_router
 from routers.projects import router as projects_router
 from services.global_experiments.launch_contexts import (
     LaunchContextError,
@@ -289,7 +288,6 @@ def _app(factory) -> FastAPI:
         }
         return await call_next(request)
 
-    app.include_router(compatibility_router)
     app.include_router(projects_router)
 
     async def override_session():
@@ -1501,45 +1499,3 @@ async def test_archive_restore_is_reversible_and_does_not_archive_children(proje
         assert "aggregate_created" in event_types
         assert "aggregate_archived" in event_types
         assert "aggregate_restored" in event_types
-
-
-
-
-@pytest.mark.asyncio
-async def test_compatibility_workspace_and_experiment_routes_share_project_authority(project_store):
-    _db_path, factory = project_store
-    app = _app(factory)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        legacy_project_response = await client.post(
-            "/api/experiment-workspaces", json={"name": "Legacy project", "description": "legacy"}
-        )
-        assert legacy_project_response.status_code == 201, legacy_project_response.text
-        legacy_project = legacy_project_response.json()
-        assert legacy_project["deprecation"]["replacement"] == "/api/projects"
-        projected = await client.get(f"/api/projects/{legacy_project['id']}")
-        assert projected.status_code == 200
-        assert projected.json()["id"] == legacy_project["id"]
-        assert projected.json()["kind"] == "project"
-        assert projected.json()["current_revision_id"] is not None
-        project_revisions = (await client.get(
-            f"/api/projects/{legacy_project['id']}/revisions"
-        )).json()["items"]
-        assert project_revisions[0]["payload"]["needs_metadata_review"] is False
-
-        legacy_experiment_response = await client.post(
-            f"/api/experiment-workspaces/{legacy_project['id']}/experiments",
-            json={"name": "Legacy experiment", "question": "legacy question"},
-        )
-        assert legacy_experiment_response.status_code == 201, legacy_experiment_response.text
-        legacy_experiment = legacy_experiment_response.json()
-        projected_experiment = await client.get(
-            f"/api/projects/{legacy_project['id']}/experiments/{legacy_experiment['id']}"
-        )
-        assert projected_experiment.status_code == 200
-        assert projected_experiment.json()["id"] == legacy_experiment["id"]
-        assert projected_experiment.json()["kind"] == "global_experiment"
-        assert projected_experiment.json()["current_revision_id"] is not None
-        experiment_revisions = (await client.get(
-            f"/api/projects/{legacy_project['id']}/experiments/{legacy_experiment['id']}/revisions"
-        )).json()["items"]
-        assert experiment_revisions[0]["payload"]["needs_metadata_review"] is False

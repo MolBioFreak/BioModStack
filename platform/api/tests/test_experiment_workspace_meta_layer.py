@@ -48,15 +48,14 @@ from experiment_services import (
     create_project,
     create_workflow,
     create_run_group,
-    clone_workflow,
     prepare_workflow,
     save_dataset_revision,
     save_workflow_draft,
     save_workflow_revision,
     workflow_plan_capability_contract,
 )
-from routers import experiment_workspaces as workspace_router
-from routers.experiment_workspaces import router
+from routers import _project_auth as workspace_router
+from routers.projects import router
 from services.global_experiments import workflow_setups
 
 
@@ -318,179 +317,10 @@ async def test_global_cm_mutation_owner_fails_closed_for_ownerless_and_foreign_r
         ) == "alice"
 
 
-_MUTATING_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
-_GLOBAL_OPERATOR_PATHS = {
-    "/api/experiment-workspaces/ops/backup",
-    "/api/experiment-workspaces/ops/backups/{backup_id}/restore-drill",
-    "/api/experiment-workspaces/dispatch/once",
-    "/api/experiment-workspaces/{workspace_id}/run-groups/{run_group_id}/reconcile",
-}
-
-
-def _mutating_routes() -> list[APIRoute]:
-    return [
-        route
-        for route in router.routes
-        if isinstance(route, APIRoute) and route.methods & _MUTATING_METHODS
-    ]
-
-
-def test_every_global_cm_mutation_route_has_the_appropriate_complete_auth_gate() -> None:
-    routes = _mutating_routes()
-    assert routes
-    for route in routes:
-        source = inspect.getsource(route.endpoint)
-        assert "request: Request" in source, f"{route.methods} {route.path} lacks request authority"
-        if route.path == "/api/experiment-workspaces":
-            assert "_mutation_principal(" in source
-        elif route.path in _GLOBAL_OPERATOR_PATHS:
-            assert "_operator_principal(" in source
-            assert "_require_mutation_owner(" not in source
-        else:
-            assert "_require_mutation_owner(" in source, (
-                f"{route.methods} {route.path} lacks persisted workspace-owner gate"
-            )
-
-
-_MUTATION_HTTP_CASES = {
-    "create_workspace": ("/api/experiment-workspaces", {"name": "workspace"}, None),
-    "archive_workspace_aggregate": (
-        "/api/experiment-workspaces/workspace/aggregates/aggregate/archive", {}, None,
-    ),
-    "create_workspace_experiment": (
-        "/api/experiment-workspaces/workspace/experiments", {"name": "experiment"}, None,
-    ),
-    "create_workspace_workflow": (
-        "/api/experiment-workspaces/workspace/workflows",
-        {
-            "name": "workflow",
-            "workflow_family": "generic_test",
-            "domain_experiment_id": "domain",
-        },
-        None,
-    ),
-    "save_workflow_draft_route": (
-        "/api/experiment-workspaces/workspace/workflows/workflow/draft",
-        {"payload": {}, "expected_generation": 0},
-        None,
-    ),
-    "save_workflow_revision_route": (
-        "/api/experiment-workspaces/workspace/workflows/workflow/revisions",
-        {"expected_head_generation": 0},
-        None,
-    ),
-    "clone_workspace_workflow": (
-        "/api/experiment-workspaces/workspace/workflows/workflow/clone", {}, None,
-    ),
-    "create_workspace_dataset": (
-        "/api/experiment-workspaces/workspace/datasets",
-        {
-            "name": "dataset",
-            "dataset_kind": "generic_inputs",
-            "domain_experiment_id": "domain",
-        },
-        None,
-    ),
-    "save_dataset_revision_route": (
-        "/api/experiment-workspaces/workspace/datasets/dataset/revisions",
-        {"payload": {}, "expected_head_generation": 0},
-        None,
-    ),
-    "derive_dataset_revision_route": (
-        "/api/experiment-workspaces/workspace/datasets/dataset/revisions/derive",
-        {"parent_revision_id": "revision", "ordinals": [0], "expected_head_generation": 0},
-        None,
-    ),
-    "prepare_workspace_workflow": (
-        "/api/experiment-workspaces/workspace/preparations",
-        {},
-        {"workflow_revision_id": "revision"},
-    ),
-    "create_workspace_run_group": (
-        "/api/experiment-workspaces/workspace/run-groups",
-        {
-            "preparation_ids": ["preparation"],
-            "source_domain_id": "domain",
-            "launch_context_ids": {},
-            "idempotency_key": "launch",
-        },
-        None,
-    ),
-    "reconcile_workspace_run_group": (
-        "/api/experiment-workspaces/workspace/run-groups/group/reconcile", None, None,
-    ),
-    "cancel_workspace_run_group": (
-        "/api/experiment-workspaces/workspace/run-groups/group/cancel",
-        {"idempotency_key": "cancel", "expected_generation": 0, "reason": "operator request"},
-        None,
-    ),
-    "retry_workspace_run_group": (
-        "/api/experiment-workspaces/workspace/run-groups/group/retry",
-        {
-            "idempotency_key": "retry",
-            "expected_generation": 0,
-            "source_domain_id": "domain",
-            "replacement_preparation_ids": {"run": "preparation"},
-            "replacement_launch_context_ids": {},
-        },
-        None,
-    ),
-    "resubmit_workspace_run_group": (
-        "/api/experiment-workspaces/workspace/run-groups/group/resubmit",
-        {
-            "idempotency_key": "resubmit",
-            "expected_generation": 0,
-            "source_domain_id": "domain",
-            "preparation_ids": ["preparation"],
-            "launch_context_ids": {},
-        },
-        None,
-    ),
-    "create_experiment_backup": (
-        "/api/experiment-workspaces/ops/backup", None, None,
-    ),
-    "restore_experiment_backup_drill": (
-        "/api/experiment-workspaces/ops/backups/backup/restore-drill", None, None,
-    ),
-    "export_workspace": (
-        "/api/experiment-workspaces/workspace/exports", None, None,
-    ),
-    "register_stats_toolkit_handoff": (
-        "/api/experiment-workspaces/workspace/analytics/stats-handoffs",
-        {
-            "stats_run_id": "stats-run",
-            "toolkit_version": "1",
-            "source_resource_ids": ["source"],
-            "source_content_digests": ["0" * 64],
-            "result_content_digest": "1" * 64,
-            "result_generation_or_revision": "1",
-        },
-        None,
-    ),
-    "register_workspace_external_receipt": (
-        "/api/experiment-workspaces/workspace/external-receipts",
-        {
-            "store_id": "store",
-            "entity_kind": "entity",
-            "entity_id": "external-id",
-            "generation_or_revision": "1",
-            "content_digest": "2" * 64,
-        },
-        None,
-    ),
-    "dispatch_one_experiment_outbox": (
-        "/api/experiment-workspaces/dispatch/once", None, None,
-    ),
-}
-
-
 @pytest.mark.asyncio
-async def test_every_global_cm_mutation_http_route_rejects_missing_authentication(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    routes = _mutating_routes()
-    assert {route.endpoint.__name__ for route in routes} == set(_MUTATION_HTTP_CASES)
-    monkeypatch.setattr(workspace_router, "create_online_backup", lambda: {"backup_id": "blocked"})
+async def test_relocated_stats_handoff_route_requires_authentication() -> None:
+    from experiment_database import get_experiment_session
+
     app = FastAPI()
     app.include_router(router)
 
@@ -501,74 +331,23 @@ async def test_every_global_cm_mutation_http_route_rejects_missing_authenticatio
     async def override_session():
         yield StubSession()
 
-    app.dependency_overrides[workspace_router.get_experiment_session] = override_session
+    app.dependency_overrides[get_experiment_session] = override_session
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        for route in routes:
-            path, body, params = _MUTATION_HTTP_CASES[route.endpoint.__name__]
-            method = next(iter(route.methods & _MUTATING_METHODS))
-            response = await client.request(method, path, json=body, params=params)
-            assert response.status_code == 401, (
-                f"{method} {path} returned {response.status_code} without authentication"
-            )
-
-
-@pytest.mark.asyncio
-async def test_global_backup_and_dispatch_http_routes_require_operator_or_admin_role(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[str] = []
-
-    def fake_backup() -> dict[str, Any]:
-        calls.append("backup")
-        return {"backup_id": "operator-backup"}
-
-    monkeypatch.setattr(workspace_router, "create_online_backup", fake_backup)
-    app = FastAPI()
-
-    @app.middleware("http")
-    async def inject_test_principal(request: Request, call_next):
-        role = request.headers.get("X-Test-Role")
-        if role:
-            request.state.authenticated_principal = {
-                "subject": "role-test-user",
-                "roles": [role],
-            }
-        return await call_next(request)
-
-    app.include_router(router)
-
-    class StubSession(SimpleNamespace):
-        def add(self, _row: object) -> None:
-            pass
-
-        async def commit(self) -> None:
-            pass
-
-        async def rollback(self) -> None:
-            pass
-
-    async def override_session():
-        yield StubSession()
-
-    app.dependency_overrides[workspace_router.get_experiment_session] = override_session
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        for path in _GLOBAL_OPERATOR_PATHS:
-            scientist = await client.post(path, headers={"X-Test-Role": "scientist"})
-            assert scientist.status_code == 403
-        assert calls == []
-        backup = await client.post(
-            "/api/experiment-workspaces/ops/backup",
-            headers={"X-Test-Role": "operator"},
+        resp = await client.post(
+            "/api/projects/proj-1/analytics/stats-handoffs",
+            json={
+                "stats_run_id": "stats-run",
+                "toolkit_version": "1",
+                "source_resource_ids": ["source"],
+                "source_content_digests": ["0" * 64],
+                "result_content_digest": "1" * 64,
+                "result_generation_or_revision": "1",
+            },
         )
-        dispatch = await client.post(
-            "/api/experiment-workspaces/dispatch/once",
-            headers={"X-Test-Role": "admin"},
-        )
-        assert backup.status_code == 201
-        assert dispatch.status_code == 409
-        assert calls == ["backup"]
+        assert resp.status_code == 401
+        gone = await client.get("/api/experiment-workspaces")
+        assert gone.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -657,18 +436,6 @@ async def test_workflow_and_dataset_revision_save_load_prepare_is_server_backed(
         assert (await session.execute(select(ExperimentAuditEvent))).scalars().all()
         assert json.loads(persisted_revision.canonical_payload)["workflow_family"] == "generic_test"
 
-        clone = await clone_workflow(session, workflow.id, source_revision_id=workflow_revision.id)
-        await session.commit()
-        assert clone.id != workflow.id
-        fork_edges = (
-            await session.execute(
-                select(ExperimentLineageEdge).where(
-                    ExperimentLineageEdge.source_resource_id == clone.id,
-                    ExperimentLineageEdge.edge_mode == "forked_from",
-                )
-            )
-        ).scalars().all()
-        assert len(fork_edges) == 1
 
 
 @pytest.mark.asyncio
@@ -752,49 +519,6 @@ class _FakeMaterializer:
 
 
 @pytest.mark.asyncio
-async def test_outbox_dispatch_is_idempotent_and_acknowledges_external_receipt(experiment_store):
-    _db_path, _engine, factory = experiment_store
-    from experiment_services import dispatch_pending_outbox
-
-    async with factory() as session:
-        setup = await _prepared_setup(session, "dispatch workspace")
-        await create_run_group(
-            session, setup.workspace_id, [setup.preparation_id], idempotency_key="dispatch-1",
-        )
-        await session.commit()
-
-        materializer = _FakeMaterializer()
-        first = await dispatch_pending_outbox(session, materializer, core_session=session)
-        second = await dispatch_pending_outbox(session, materializer, core_session=session)
-
-        assert first == 1
-        assert second == 0
-        assert len(materializer.calls) == 1
-        outbox = (await session.execute(select(ExperimentDispatchOutbox))).scalar_one()
-        assert outbox.status == "acknowledged"
-        run = (await session.execute(select(ExperimentWorkflowRun))).scalar_one()
-        assert run.state == "dispatched"
-
-        await create_run_group(
-            session, setup.workspace_id, [setup.preparation_id], idempotency_key="dispatch-2",
-        )
-        await session.commit()
-        stale = (
-            await session.execute(
-                select(ExperimentDispatchOutbox).where(ExperimentDispatchOutbox.status == "pending")
-            )
-        ).scalar_one()
-        stale.status = "dispatching"
-        stale.updated_at = "2000-01-01T00:00:00+00:00"
-        await session.commit()
-        recovered_materializer = _FakeMaterializer()
-        assert await dispatch_pending_outbox(
-            session, recovered_materializer, core_session=session,
-        ) == 1
-        assert len(recovered_materializer.calls) == 1
-
-
-@pytest.mark.asyncio
 async def test_workspace_router_exposes_server_backed_creation(
     experiment_store,
     monkeypatch: pytest.MonkeyPatch,
@@ -817,18 +541,18 @@ async def test_workspace_router_exposes_server_backed_creation(
         transport=transport, base_url="http://test", headers=headers,
     ) as client:
         response = await client.post(
-            "/api/experiment-workspaces",
+            "/api/projects",
             json={"name": "HTTP workspace", "description": "saved on server"},
         )
         assert response.status_code == 201
         body = response.json()
         assert body["name"] == "HTTP workspace"
         rejected = await client.post(
-            "/api/experiment-workspaces",
+            "/api/projects",
             json={"name": "invalid", "unexpected": True},
         )
         assert rejected.status_code == 422
-        loaded = await client.get(f"/api/experiment-workspaces/{body['id']}")
+        loaded = await client.get(f"/api/projects/{body['id']}")
         assert loaded.status_code == 200
         assert loaded.json()["id"] == body["id"]
 

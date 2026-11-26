@@ -294,6 +294,7 @@ export default defineConfig({
             './tests/vitest/sequenceViewerRestrictionAnnotations.test.tsx',
             './tests/vitest/gcRestrictionDensity.test.tsx',
             './tests/vitest/alignmentPresentationStatus.test.tsx',
+                    'tests/vitest/globalExperimentContext.test.tsx',
         ],
     },
 });

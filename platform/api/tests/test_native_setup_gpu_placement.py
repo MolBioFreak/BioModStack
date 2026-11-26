@@ -5,7 +5,7 @@ import pytest
 
 from experiment_models import ExperimentLaunchContext, ExperimentWorkflowPreparation
 from experiment_services import create_run_group, validate_preparation_authority
-from routers.project_manager import _launch_context_document
+from routers._projects_domain_ops import _launch_context_document
 from schemas import JobCreate
 from services.global_experiments import launch_contexts, workflow_setups
 from services.ngs_molbio_n5 import reserve_run_group

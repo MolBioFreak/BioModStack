@@ -8,7 +8,7 @@ from experiment_database import get_experiment_session
 from routers.projects import router
 from routers.projects import _complete_domain_v4_attestations
 from services.ngs_molbio_capabilities import validate_domain_experiment, NgsMolBioCapabilityError
-from routers.project_manager import list_domain_adapters, _edition_adapter
+from routers._projects_domain_ops import list_domain_adapters, _edition_adapter
 from services.global_experiments.adapters import AdapterError
 from tests.test_project_manager_hierarchy import project_store, _app, _project_payload
 

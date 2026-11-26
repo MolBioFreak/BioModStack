@@ -18,7 +18,7 @@ from test_project_workflow_setups import setup_store  # noqa: F401
 async def _running_bc2(native_http, setup_store, native_core_store):
     from database import Job
     from experiment_models import ExperimentWorkflowPreparation
-    from routers import project_manager as pm
+    from routers import _projects_domain_ops as pm
     from services.global_experiments import launch_contexts
     from services.global_experiments.launch_contexts import claim_launch_context, consume_launch_context
 

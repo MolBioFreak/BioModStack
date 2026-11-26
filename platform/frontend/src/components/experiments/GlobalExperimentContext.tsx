@@ -8,14 +8,17 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
-    fetchGlobalExperiments,
-    fetchGlobalWorkspaces,
+    api,
     fetchMolBioNgsProjectExperiments,
     VisibleApiError,
     type DomainExperimentView,
     type GlobalAggregateHead,
 } from '../../lib/api';
-import { getNgsMolBioBinding } from '../../lib/projectManager';
+import {
+    getNgsMolBioBinding,
+    type HierarchyMutationResult,
+    type ProjectListPage,
+} from '../../lib/projectManager';
 
 export const EXPERIMENT_CONTEXT_KEYS = [
     'workspace_id',
@@ -72,6 +75,68 @@ function visibleError(error: unknown): VisibleApiError | null {
     return new VisibleApiError(detail, null, detail);
 }
 
+function toWorkspaceHead(item: ProjectListPage['items'][number]): GlobalAggregateHead {
+    return {
+        id: item.id,
+        kind: 'workspace',
+        workspace_id: item.id,
+        parent_id: null,
+        current_revision_id: item.current_revision_id,
+        head_generation: item.head_generation,
+        lifecycle_state: item.lifecycle_state,
+        name: item.name,
+        description: item.description ?? '',
+        created_at: item.updated_at,
+        updated_at: item.updated_at,
+    };
+}
+
+function toExperimentHead(projectId: string, item: HierarchyMutationResult): GlobalAggregateHead {
+    return {
+        id: item.id,
+        kind: 'experiment',
+        workspace_id: item.project_id ?? projectId,
+        parent_id: item.parent_id ?? projectId,
+        current_revision_id: item.current_revision_id,
+        head_generation: item.head_generation,
+        lifecycle_state: item.lifecycle_state,
+        name: item.name,
+        description: '',
+        created_at: item.updated_at,
+        updated_at: item.updated_at,
+    };
+}
+
+async function fetchProjectWorkspaceHeads(signal?: AbortSignal): Promise<GlobalAggregateHead[]> {
+    const items: GlobalAggregateHead[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page += 1) {
+        const response = await api.get<ProjectListPage>('/api/projects', {
+            params: { limit: 100, project_scope: 'all', ...(cursor ? { cursor } : {}) },
+            signal,
+        });
+        items.push(...response.data.items.map(toWorkspaceHead));
+        if (!response.data.next_cursor) break;
+        cursor = response.data.next_cursor;
+    }
+    return items;
+}
+
+async function fetchProjectExperimentHeads(projectId: string, signal?: AbortSignal): Promise<GlobalAggregateHead[]> {
+    const items: GlobalAggregateHead[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page += 1) {
+        const response = await api.get<{ items: HierarchyMutationResult[]; next_cursor?: string | null }>(
+            `/api/projects/${encodeURIComponent(projectId)}/experiments`,
+            { params: { limit: 100, ...(cursor ? { cursor } : {}) }, signal },
+        );
+        items.push(...response.data.items.map((item) => toExperimentHead(projectId, item)));
+        if (!response.data.next_cursor) break;
+        cursor = response.data.next_cursor;
+    }
+    return items;
+}
+
 export function GlobalExperimentProvider({ children }: { children: ReactNode }) {
     const location = useLocation();
     const navigate = useNavigate();
@@ -84,12 +149,12 @@ export function GlobalExperimentProvider({ children }: { children: ReactNode }) 
 
     const workspaceQuery = useQuery({
         queryKey: ['global-workspaces'],
-        queryFn: fetchGlobalWorkspaces,
+        queryFn: ({ signal }) => fetchProjectWorkspaceHeads(signal),
         staleTime: 30_000,
     });
     const globalExperimentQuery = useQuery({
         queryKey: ['global-experiments', workspaceId],
-        queryFn: () => fetchGlobalExperiments(workspaceId as string),
+        queryFn: ({ signal }) => fetchProjectExperimentHeads(workspaceId as string, signal),
         enabled: workspaceId !== null,
         staleTime: 30_000,
     });

@@ -128,7 +128,7 @@ async def test_native_project_editor_save_reopen_and_prepare(setup_store, target
         assert not {'source_document', 'collapsed', 'native_job_request', 'editor_state'} & scheduler['params'].keys()
         from experiment_services import validate_preparation_authority
         await validate_preparation_authority(db, row)
-        from routers.project_manager import _launch_context_document
+        from routers._projects_domain_ops import _launch_context_document
         context = await db.get(ExperimentLaunchContext, prepared['launch_context_id'])
         pinned = (await _launch_context_document(db, context))['pinned_scheduler']
         bound = JobCreate.model_validate(pinned)

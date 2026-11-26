@@ -19,7 +19,7 @@ async def predict_selected(job_id: str, request: PredictionSelection,
         return await launch_prediction(job_id, request, background_tasks, session, experiment_session)
     from services.global_experiments.workflow_setups import _claim, _replay, _request_digest
     from experiment_services import ExperimentServiceError
-    from routers.project_manager import _service_error
+    from routers.projects import _service_error
 
     scope = f'protonpottsmpnn-predict:{request.launch_context_id}'
     digest = _request_digest({'source_job_id': job_id, **request.model_dump(mode='json')})

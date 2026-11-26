@@ -5253,16 +5253,6 @@ export interface GlobalAggregateHead {
     updated_at: string;
 }
 
-export const fetchGlobalWorkspaces = () =>
-    apiData(api.get<GlobalAggregateHead[]>('/api/experiment-workspaces'));
-export const fetchGlobalWorkspace = (workspaceId: string) =>
-    apiData(api.get<GlobalAggregateHead>(`/api/experiment-workspaces/${encodeURIComponent(workspaceId)}`));
-export const fetchGlobalExperiments = (workspaceId: string) =>
-    apiData(api.get<GlobalAggregateHead[]>(`/api/experiment-workspaces/${encodeURIComponent(workspaceId)}/experiments`));
-export const fetchGlobalExperiment = (workspaceId: string, experimentId: string) =>
-    apiData(api.get<GlobalAggregateHead>(
-        `/api/experiment-workspaces/${encodeURIComponent(workspaceId)}/experiments/${encodeURIComponent(experimentId)}`,
-    ));
 
 export interface LocalDomainCounts {
     samples: number;

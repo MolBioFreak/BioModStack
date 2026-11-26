@@ -8,7 +8,7 @@ from fastapi import FastAPI
 
 from experiment_models import ExperimentWorkflowPreparation, ExperimentLaunchContext
 from experiment_services import validate_preparation_authority, ValidationFailure
-from routers import project_manager as pm
+from routers import _projects_domain_ops as pm
 from services.global_experiments import launch_contexts
 from services.global_experiments.launch_contexts import validate_bound_job_request
 from test_project_workflow_setups import setup_store, _project_payload

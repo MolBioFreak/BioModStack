@@ -26,7 +26,7 @@ from experiment_models import (
     ExperimentWorkflowSetupContext,
 )
 from experiment_services import RevisionConflict, ValidationFailure, create_project
-from routers.project_manager import router as project_manager_router
+from routers._projects_domain_ops import router as project_manager_router
 from services.global_experiments import workflow_setups
 from services.global_experiments.read_models import build_project_manager_read_model
 from services import protein_project_capabilities

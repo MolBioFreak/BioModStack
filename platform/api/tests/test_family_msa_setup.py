@@ -7,7 +7,7 @@ from fastapi import FastAPI
 import experiment_migrations
 from experiment_database import create_experiment_engine, create_experiment_session_factory
 from experiment_models import ExperimentAggregateHead, ExperimentRevision
-from routers.project_manager import router, WorkflowSetupCreateRequest
+from routers._projects_domain_ops import router, WorkflowSetupCreateRequest
 from services.global_experiments import workflow_setups
 from test_project_workflow_setups import _project
 

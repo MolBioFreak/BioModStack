@@ -43,7 +43,7 @@ from experiment_services import (
     create_workflow,
     sha256_text,
 )
-from routers.project_manager import router as project_manager_router
+from routers._projects_domain_ops import router as project_manager_router
 from services.global_experiments.adapters import registry
 from services.global_experiments.launch_contexts import (
     LaunchContextError,

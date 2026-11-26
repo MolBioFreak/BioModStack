@@ -56,7 +56,22 @@ from experiment_services import (
     restore_aggregate,
     save_hierarchy_revision,
 )
-from routers.experiment_workspaces import _mutation_principal, _require_mutation_owner
+from experiment_operations import ExperimentOperationError, register_external_entity_receipt, workspace_analytics
+from routers._project_auth import (
+    _APPLICATION_PROXY_HEADER,
+    _authenticated_principal,
+    _mutation_principal,
+    _operator_principal,
+    _require_mutation_owner,
+)
+from routers._projects_domain_ops import (
+    WorkflowSetupCreateRequest,
+    _edition_adapter,
+    _launch_context_document,
+    _service_error,
+    list_domain_adapters,
+    router as _domain_ops_router,
+)
 from services.ngs_molbio_binding import (
     ConnectorConflict,
     ConnectorUnavailable,
@@ -65,7 +80,7 @@ from services.ngs_molbio_binding import (
 )
 
 
-router = APIRouter(prefix="/api/projects", tags=["projects"])
+_projects_router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
 class StrictRequestModel(BaseModel):
@@ -791,7 +806,7 @@ def _complete_domain_v4_attestations(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-@router.get("")
+@_projects_router.get("")
 async def list_projects(
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
@@ -813,7 +828,7 @@ async def list_projects(
     )
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@_projects_router.post("", status_code=status.HTTP_201_CREATED)
 async def create_project_route(
     payload: ProjectCreateRequest,
     request: Request,
@@ -842,7 +857,7 @@ async def create_project_route(
         raise _error(exc) from exc
 
 
-@router.get("/search")
+@_projects_router.get("/search")
 async def search_projects(
     q: str = Query(default="", max_length=256),
     status_filter: str | None = Query(default=None, alias="status"),
@@ -983,7 +998,7 @@ async def search_projects(
     }
 
 
-@router.get("/{project_id}")
+@_projects_router.get("/{project_id}")
 async def get_project(project_id: str, session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
         head = await _project(session, project_id)
@@ -992,7 +1007,7 @@ async def get_project(project_id: str, session: AsyncSession = Depends(get_exper
         raise _error(exc) from exc
 
 
-@router.get("/{project_id}/hub")
+@_projects_router.get("/{project_id}/hub")
 async def get_project_hub(
     project_id: str,
     request: Request,
@@ -1020,7 +1035,7 @@ async def get_project_hub(
     return payload
 
 
-@router.get("/{project_id}/sequences")
+@_projects_router.get("/{project_id}/sequences")
 async def get_project_sequences(
     project_id: str,
     domain_experiment_id: str | None = Query(default=None),
@@ -1044,7 +1059,7 @@ async def get_project_sequences(
     return payload
 
 
-@router.post("/{project_id}/upgrade")
+@_projects_router.post("/{project_id}/upgrade")
 async def upgrade_project_route(
     project_id: str,
     payload: ProjectUpgradeRequest,
@@ -1081,7 +1096,7 @@ async def upgrade_project_route(
         raise _error(exc) from exc
 
 
-@router.patch("/{project_id}")
+@_projects_router.patch("/{project_id}")
 async def patch_project(
     project_id: str,
     payload: ProjectPatchRequest,
@@ -1108,7 +1123,7 @@ async def patch_project(
         raise _error(exc) from exc
 
 
-@router.post("/{project_id}/archive")
+@_projects_router.post("/{project_id}/archive")
 async def archive_project(
     project_id: str,
     payload: LifecycleRequest,
@@ -1126,7 +1141,7 @@ async def archive_project(
         raise _error(exc) from exc
 
 
-@router.post("/{project_id}/restore")
+@_projects_router.post("/{project_id}/restore")
 async def restore_project(
     project_id: str,
     payload: LifecycleRequest,
@@ -1158,7 +1173,7 @@ def _project_link_json(edge: ExperimentLineageEdge) -> dict[str, Any]:
     }
 
 
-@router.get("/{project_id}/ngs-molbio-links")
+@_projects_router.get("/{project_id}/ngs-molbio-links")
 async def list_ngs_molbio_project_links(
     project_id: str,
     limit: int = Query(default=100, ge=1, le=100),
@@ -1189,7 +1204,7 @@ async def list_ngs_molbio_project_links(
     }
 
 
-@router.get("/{project_id}/ngs-molbio-shareable-results")
+@_projects_router.get("/{project_id}/ngs-molbio-shareable-results")
 async def list_ngs_molbio_shareable_results(
     project_id: str,
     session: AsyncSession = Depends(get_experiment_session),
@@ -1236,7 +1251,7 @@ async def list_ngs_molbio_shareable_results(
     }
 
 
-@router.post("/{project_id}/ngs-molbio-links", status_code=status.HTTP_201_CREATED)
+@_projects_router.post("/{project_id}/ngs-molbio-links", status_code=status.HTTP_201_CREATED)
 async def create_ngs_molbio_project_link(
     project_id: str,
     payload: NgsMolBioProjectLinkRequest,
@@ -1340,7 +1355,7 @@ async def create_ngs_molbio_project_link(
         raise _error(exc) from exc
 
 
-@router.get("/{project_id}/experiments")
+@_projects_router.get("/{project_id}/experiments")
 async def list_global_experiments(
     project_id: str,
     cursor: str | None = Query(default=None),
@@ -1364,7 +1379,7 @@ async def list_global_experiments(
         raise _error(exc) from exc
 
 
-@router.post("/{project_id}/experiments", status_code=status.HTTP_201_CREATED)
+@_projects_router.post("/{project_id}/experiments", status_code=status.HTTP_201_CREATED)
 async def create_global_experiment_route(
     project_id: str,
     payload: GlobalExperimentCreateRequest,
@@ -1388,7 +1403,7 @@ async def create_global_experiment_route(
         raise _error(exc) from exc
 
 
-@router.get("/{project_id}/experiments/{experiment_id}")
+@_projects_router.get("/{project_id}/experiments/{experiment_id}")
 async def get_global_experiment(
     project_id: str,
     experiment_id: str,
@@ -1407,7 +1422,7 @@ async def get_global_experiment(
         raise _error(exc) from exc
 
 
-@router.post("/{project_id}/experiments/{experiment_id}/upgrade")
+@_projects_router.post("/{project_id}/experiments/{experiment_id}/upgrade")
 async def upgrade_global_experiment_route(
     project_id: str,
     experiment_id: str,
@@ -1444,7 +1459,7 @@ async def upgrade_global_experiment_route(
         raise _error(exc) from exc
 
 
-@router.patch("/{project_id}/experiments/{experiment_id}")
+@_projects_router.patch("/{project_id}/experiments/{experiment_id}")
 async def patch_global_experiment(
     project_id: str,
     experiment_id: str,
@@ -1478,7 +1493,7 @@ async def patch_global_experiment(
         raise _error(exc) from exc
 
 
-@router.post("/{project_id}/experiments/{experiment_id}/archive")
+@_projects_router.post("/{project_id}/experiments/{experiment_id}/archive")
 async def archive_global_experiment(
     project_id: str,
     experiment_id: str,
@@ -1497,7 +1512,7 @@ async def archive_global_experiment(
         raise _error(exc) from exc
 
 
-@router.post("/{project_id}/experiments/{experiment_id}/restore")
+@_projects_router.post("/{project_id}/experiments/{experiment_id}/restore")
 async def restore_global_experiment(
     project_id: str,
     experiment_id: str,
@@ -1516,7 +1531,7 @@ async def restore_global_experiment(
         raise _error(exc) from exc
 
 
-@router.get("/{project_id}/experiments/{experiment_id}/domains")
+@_projects_router.get("/{project_id}/experiments/{experiment_id}/domains")
 async def list_domain_experiments(
     project_id: str,
     experiment_id: str,
@@ -1541,7 +1556,7 @@ async def list_domain_experiments(
         raise _error(exc) from exc
 
 
-@router.post("/{project_id}/experiments/{experiment_id}/domains", status_code=status.HTTP_201_CREATED)
+@_projects_router.post("/{project_id}/experiments/{experiment_id}/domains", status_code=status.HTTP_201_CREATED)
 async def create_domain_experiment_route(
     project_id: str,
     experiment_id: str,
@@ -1592,7 +1607,7 @@ async def create_domain_experiment_route(
         raise _error(exc) from exc
 
 
-@router.get("/{project_id}/experiments/{experiment_id}/domains/{domain_id}")
+@_projects_router.get("/{project_id}/experiments/{experiment_id}/domains/{domain_id}")
 async def get_domain_experiment(
     project_id: str,
     experiment_id: str,
@@ -1635,7 +1650,7 @@ async def _bind_domain_revision(
     )
 
 
-@router.get("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/binding")
+@_projects_router.get("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/binding")
 async def get_ngs_molbio_binding(
     project_id: str,
     experiment_id: str,
@@ -1702,7 +1717,7 @@ async def _mutate_ngs_molbio_binding(
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": str(exc)}) from exc
 
 
-@router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/initialize")
+@_projects_router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/initialize")
 async def initialize_ngs_molbio_binding(
     project_id: str,
     experiment_id: str,
@@ -1720,7 +1735,7 @@ async def initialize_ngs_molbio_binding(
     )
 
 
-@router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/binding/reverify")
+@_projects_router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/binding/reverify")
 async def reverify_ngs_molbio_binding(
     project_id: str,
     experiment_id: str,
@@ -1738,7 +1753,7 @@ async def reverify_ngs_molbio_binding(
     )
 
 
-@router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/upgrade")
+@_projects_router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/upgrade")
 async def upgrade_domain_experiment(
     project_id: str,
     experiment_id: str,
@@ -1795,7 +1810,7 @@ async def upgrade_domain_experiment(
         raise _error(exc) from exc
 
 
-@router.patch("/{project_id}/experiments/{experiment_id}/domains/{domain_id}")
+@_projects_router.patch("/{project_id}/experiments/{experiment_id}/domains/{domain_id}")
 async def patch_domain_experiment(
     project_id: str,
     experiment_id: str,
@@ -1846,7 +1861,7 @@ async def patch_domain_experiment(
         raise _error(exc) from exc
 
 
-@router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/archive")
+@_projects_router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/archive")
 async def archive_domain_experiment(
     project_id: str,
     experiment_id: str,
@@ -1892,7 +1907,7 @@ async def archive_domain_experiment(
         raise _error(exc) from exc
 
 
-@router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/restore")
+@_projects_router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/restore")
 async def restore_domain_experiment(
     project_id: str,
     experiment_id: str,
@@ -1959,7 +1974,7 @@ async def _append_record_route(
     return _record_json(record)
 
 
-@router.get("/{project_id}/revisions")
+@_projects_router.get("/{project_id}/revisions")
 async def list_project_revisions(
     project_id: str,
     cursor: str | None = Query(default=None),
@@ -1973,7 +1988,7 @@ async def list_project_revisions(
         raise _error(exc) from exc
 
 
-@router.get("/{project_id}/experiments/{experiment_id}/revisions")
+@_projects_router.get("/{project_id}/experiments/{experiment_id}/revisions")
 async def list_global_experiment_revisions(
     project_id: str,
     experiment_id: str,
@@ -1988,7 +2003,7 @@ async def list_global_experiment_revisions(
         raise _error(exc) from exc
 
 
-@router.get("/{project_id}/ngs-data-records")
+@_projects_router.get("/{project_id}/ngs-data-records")
 async def list_ngs_data_records(
     project_id: str,
     cursor: str | None = Query(default=None),
@@ -2007,7 +2022,7 @@ async def list_ngs_data_records(
         raise _error(exc) from exc
 
 
-@router.post("/{project_id}/ngs-data-records", status_code=status.HTTP_201_CREATED)
+@_projects_router.post("/{project_id}/ngs-data-records", status_code=status.HTTP_201_CREATED)
 async def append_ngs_data_record(
     project_id: str,
     payload: NgsDataRecordRequest,
@@ -2048,7 +2063,7 @@ async def append_ngs_data_record(
         raise _error(exc) from exc
 
 
-@router.get("/{project_id}/records")
+@_projects_router.get("/{project_id}/records")
 async def list_project_records(
     project_id: str,
     kind: Literal["note", "observation", "decision", "conclusion"] | None = Query(default=None),
@@ -2063,7 +2078,7 @@ async def list_project_records(
         raise _error(exc) from exc
 
 
-@router.post("/{project_id}/records", status_code=status.HTTP_201_CREATED)
+@_projects_router.post("/{project_id}/records", status_code=status.HTTP_201_CREATED)
 async def append_project_record(
     project_id: str,
     payload: ResearchRecordRequest,
@@ -2079,7 +2094,7 @@ async def append_project_record(
         raise _error(exc) from exc
 
 
-@router.get("/{project_id}/experiments/{experiment_id}/records")
+@_projects_router.get("/{project_id}/experiments/{experiment_id}/records")
 async def list_global_experiment_records(
     project_id: str,
     experiment_id: str,
@@ -2095,7 +2110,7 @@ async def list_global_experiment_records(
         raise _error(exc) from exc
 
 
-@router.post("/{project_id}/experiments/{experiment_id}/records", status_code=status.HTTP_201_CREATED)
+@_projects_router.post("/{project_id}/experiments/{experiment_id}/records", status_code=status.HTTP_201_CREATED)
 async def append_global_experiment_record(
     project_id: str,
     experiment_id: str,
@@ -2112,7 +2127,7 @@ async def append_global_experiment_record(
         raise _error(exc) from exc
 
 
-@router.get("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/records")
+@_projects_router.get("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/records")
 async def list_domain_experiment_records(
     project_id: str,
     experiment_id: str,
@@ -2129,7 +2144,7 @@ async def list_domain_experiment_records(
         raise _error(exc) from exc
 
 
-@router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/records", status_code=status.HTTP_201_CREATED)
+@_projects_router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/records", status_code=status.HTTP_201_CREATED)
 async def append_domain_experiment_record(
     project_id: str,
     experiment_id: str,
@@ -2147,7 +2162,7 @@ async def append_domain_experiment_record(
         raise _error(exc) from exc
 
 
-@router.get("/{project_id}/activity")
+@_projects_router.get("/{project_id}/activity")
 async def list_project_activity(
     project_id: str,
     cursor: str | None = Query(default=None),
@@ -2161,7 +2176,7 @@ async def list_project_activity(
         raise _error(exc) from exc
 
 
-@router.get("/{project_id}/experiments/{experiment_id}/activity")
+@_projects_router.get("/{project_id}/experiments/{experiment_id}/activity")
 async def list_global_experiment_activity(
     project_id: str,
     experiment_id: str,
@@ -2176,7 +2191,7 @@ async def list_global_experiment_activity(
         raise _error(exc) from exc
 
 
-@router.get("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/activity")
+@_projects_router.get("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/activity")
 async def list_domain_experiment_activity(
     project_id: str,
     experiment_id: str,
@@ -2192,4 +2207,89 @@ async def list_domain_experiment_activity(
         raise _error(exc) from exc
 
 
-__all__ = ["router"]
+class StatsHandoffRequest(StrictRequestModel):
+    stats_run_id: str = Field(min_length=1, max_length=255)
+    toolkit_version: str = Field(min_length=1, max_length=128)
+    source_resource_ids: list[str] = Field(min_length=1)
+    source_content_digests: list[str] = Field(min_length=1)
+    result_content_digest: str = Field(min_length=64, max_length=64)
+    result_generation_or_revision: str = Field(min_length=1, max_length=255)
+    acknowledgement: dict[str, Any] = Field(default_factory=dict)
+
+
+@_projects_router.get("/{project_id}/analytics/summary")
+async def get_project_analytics_summary(
+    project_id: str,
+    limit: int = 100,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        return await workspace_analytics(session, project_id, limit=limit)
+    except ExperimentOperationError as exc:
+        raise _error(exc) from exc
+
+
+@_projects_router.post("/{project_id}/analytics/stats-handoffs", status_code=status.HTTP_201_CREATED)
+async def register_stats_toolkit_handoff(
+    project_id: str,
+    payload: StatsHandoffRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        await _require_mutation_owner(request, session, resource_id=project_id)
+        if len(payload.source_resource_ids) != len(payload.source_content_digests):
+            raise ExperimentOperationError("Stats Toolkit source IDs and digests must have equal length")
+        for resource_id, digest in zip(payload.source_resource_ids, payload.source_content_digests):
+            resource = await session.get(ExperimentResource, resource_id)
+            if resource is None or resource.workspace_id not in {project_id, None} and resource.id != project_id:
+                raise ExperimentOperationError("Stats Toolkit source is not owned by this workspace")
+            if len(digest) != 64 or digest != digest.lower() or any(char not in "0123456789abcdef" for char in digest):
+                raise ExperimentOperationError("Stats Toolkit source digest must be lowercase SHA-256")
+        receipt = await register_external_entity_receipt(
+            session,
+            workspace_id=project_id,
+            store_id="stats-toolkit",
+            entity_kind="stats_toolkit_run",
+            entity_id=payload.stats_run_id,
+            generation_or_revision=payload.result_generation_or_revision,
+            content_digest=payload.result_content_digest,
+            availability="available",
+            acknowledgement={
+                "schema": "bms.experiment.stats-handoff.v1",
+                "toolkit_version": payload.toolkit_version,
+                "source_resource_ids": payload.source_resource_ids,
+                "source_content_digests": payload.source_content_digests,
+                **payload.acknowledgement,
+            },
+        )
+        await session.commit()
+        return {
+            "schema": "bms.experiment.stats-handoff.v1",
+            "receipt_id": receipt.id,
+            "project_id": project_id,
+            "workspace_id": project_id,
+            "stats_run_id": payload.stats_run_id,
+            "result_content_digest": receipt.content_digest,
+            "source_resource_ids": payload.source_resource_ids,
+            "toolkit_version": payload.toolkit_version,
+        }
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
+router = APIRouter(tags=["projects"])
+router.include_router(_projects_router)
+router.include_router(_domain_ops_router)
+
+__all__ = [
+    "router",
+    "WorkflowSetupCreateRequest",
+    "_edition_adapter",
+    "_launch_context_document",
+    "_service_error",
+    "get_core_session",
+    "list_domain_adapters",
+]
+

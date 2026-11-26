@@ -36,7 +36,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from database import Base, engine, async_session
-from routers import models, templates, user_templates, projects, project_manager, jobs, files, binder_continuation, execution_targets, molecular_dynamics, designs, experiment_workspaces, inputs, sequence_native
+from routers import models, templates, user_templates, projects, jobs, files, binder_continuation, execution_targets, molecular_dynamics, designs, inputs, sequence_native
 from test_denovo_project_http import app_for
 # Storage adapter: expose ONLY the two inventoried retained inert artifact roots.
 # This avoids treating a missing harness binding as a product download failure.
@@ -57,7 +57,7 @@ project_engine = create_experiment_engine('sqlite+aiosqlite:///' + str(ROOT / 'p
 project_sessions = create_experiment_session_factory(project_engine)
 app = app_for(project_sessions, async_session)
 for router, prefix in [(models.router,'/api/models'), (templates.router,'/api/templates'),
-        (projects.router,''), (designs.router,'/api/designs'), (experiment_workspaces.router,''),
+        (projects.router,''), (designs.router,'/api/designs'), 
         (inputs.router,'/api/inputs'), (sequence_native.router,'/api'),
         (jobs.router,'/api/jobs'), (files.router,'/api/files'),
         (binder_continuation.router,'/api/binder-continuation'),

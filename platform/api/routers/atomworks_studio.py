@@ -1,7 +1,7 @@
 """Authenticated private Studio assets and both upstream API route forms."""
 from fastapi import APIRouter, HTTPException, Request
 
-from routers.experiment_workspaces import _authenticated_principal
+from routers._project_auth import _authenticated_principal
 from http_origin import browser_mutation_origin
 from services.atomworks_studio import PREFIX, forward
 

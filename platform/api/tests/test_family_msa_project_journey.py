@@ -14,7 +14,7 @@ from database import Job, JobArtifact, current_launch_context_id, get_session
 from experiment_database import get_experiment_session
 from experiment_models import ExperimentRunAttempt
 from experiment_services import reconcile_run_group
-from routers import jobs, project_manager as pm, projects, family_msa_results
+from routers import jobs, _projects_domain_ops as pm, projects, family_msa_results
 from services import gpu_orchestrator, nextflow
 from test_project_workflow_setups import setup_store, _project_payload  # noqa: F401
 from test_native_protein_launch_authority_regression import native_core_store, policy_cache  # noqa: F401

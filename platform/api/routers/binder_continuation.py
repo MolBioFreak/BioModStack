@@ -231,7 +231,7 @@ async def launch_selected(request: SelectedRoundRequest | SelectedOperationReque
     from fastapi.encoders import jsonable_encoder
     from services.global_experiments.workflow_setups import _claim, _replay, _request_digest
     from experiment_services import ExperimentServiceError
-    from routers.project_manager import _service_error
+    from routers.projects import _service_error
     scope = f'binder-selected:{request.launch_context_id}'
     digest = _request_digest(request.model_dump(mode='json'))
     try:

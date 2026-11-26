@@ -17,7 +17,7 @@ from experiment_migrations import run_all
 from experiment_models import ExperimentAuditEvent
 from experiment_services import create_domain_experiment, create_global_experiment, create_project
 from molbio_models import MolecularOperationOutput, MolecularRevision
-from routers import molbio_golden_gate_design, project_manager, projects
+from routers import molbio_golden_gate_design, _projects_domain_ops as project_manager, projects
 from services.assembly.golden_gate_workflow import freeze_selection
 from services.assembly.golden_gate_workflow_types import SaveDesignRequest, WorkflowResult
 from test_golden_gate_design_core import A, B, request as golden_gate_request

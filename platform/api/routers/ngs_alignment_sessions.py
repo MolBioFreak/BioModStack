@@ -25,7 +25,7 @@ import rfc8785
 from database import Job, OntRawSignalRepresentation, get_session
 from experiment_database import get_experiment_session
 from molbio_ngs_database import get_molbio_ngs_session
-from routers.experiment_workspaces import _authenticated_principal, _require_mutation_owner
+from routers._project_auth import _authenticated_principal, _require_mutation_owner
 from ont_ngs_result_response import OntFastqQcResultResponse
 from services import alignment_access
 from services import ngs_alignment_sessions as service

@@ -27,7 +27,7 @@ from experiment_models import (
     ExperimentRevisionEdge,
 )
 from experiment_services import canonical_json, save_hierarchy_revision
-from routers.project_manager import router as project_manager_router
+from routers._projects_domain_ops import router as project_manager_router
 from services.frustrampnn.contracts import canonical_json_bytes
 from tests.test_project_manager_read_models import _hierarchy, read_model_store
 

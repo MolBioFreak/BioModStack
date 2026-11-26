@@ -16,7 +16,7 @@ from experiment_models import (
     ExperimentRunAttempt, ExperimentWorkflowPreparation,
 )
 from experiment_services import load_workflow_plan_authority, reconcile_run_group
-from routers import project_manager as pm
+from routers import _projects_domain_ops as pm
 from services.global_experiments import launch_contexts
 from services.global_experiments.launch_contexts import claim_launch_context, consume_launch_context
 from services.rfd4_proteina_results import publish_native_generation, read_published_generation_page

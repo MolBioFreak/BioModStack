@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from paths import get_data_root
-from routers.experiment_workspaces import _operator_principal
+from routers._project_auth import _operator_principal
 from services.payload_ownership_audit import (
     PayloadOwnershipConfigurationError,
     RetainedAuditIntegrityError,

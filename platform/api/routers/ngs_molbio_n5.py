@@ -53,7 +53,7 @@ from molbio_ngs_models import (
     MolBioNGSReferenceResource,
     MolBioNGSSample,
 )
-from routers.experiment_workspaces import _operator_principal, _require_mutation_owner
+from routers._project_auth import _operator_principal, _require_mutation_owner
 from services.ngs_molbio_capabilities import NgsMolBioCapabilityError
 from build_identity import deployed_source_identity
 from services.molbio_ngs_member_receipts import persist_member_receipt, resolve_molecular_revision_receipt

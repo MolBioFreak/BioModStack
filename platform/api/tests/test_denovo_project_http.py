@@ -18,7 +18,7 @@ import experiment_migrations
 from database import get_session, UserTemplate
 from experiment_database import get_experiment_session, create_experiment_engine, create_experiment_session_factory
 from experiment_models import ExperimentWorkflowPreparation, ExperimentWorkflowSetupContext, ExperimentRunGroup
-from routers.project_manager import router, get_core_session
+from routers._projects_domain_ops import router, get_core_session
 from routers.user_templates import router as templates_router
 from test_project_workflow_setups import _project
 

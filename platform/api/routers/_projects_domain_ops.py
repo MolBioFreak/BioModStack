@@ -99,13 +99,13 @@ from services.protein_project_capabilities import (
 )
 from services.job_control import cancel_project_run_group
 from schemas import LaunchContextCreateRequest, LaunchContextResponse
-from routers.experiment_workspaces import _require_mutation_owner
+from routers._project_auth import _require_mutation_owner
 from services.global_experiments.launch_contexts import (
     _project_bound_job,
 )
 
 
-router = APIRouter(tags=["project-manager"])
+router = APIRouter(tags=["projects"])
 
 
 class StrictRequestModel(BaseModel):

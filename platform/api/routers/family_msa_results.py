@@ -13,7 +13,7 @@ from experiment_database import get_experiment_session
 from experiment_models import ExperimentArtifact, ExperimentExternalEntityReceipt, ExperimentResource, ExperimentAggregateHead, ExperimentRevision
 from experiment_services import ExperimentServiceError, ValidationFailure, create_dataset, save_dataset_revision, sha256_text
 from molbio_database import get_molbio_session
-from routers.experiment_workspaces import _error, _operator_principal, _require_mutation_owner
+from routers._project_auth import _error, _operator_principal, _require_mutation_owner
 from services.family_msa.sources import browse_dataset_resources, freeze_dataset_resources, resolve_molecular_member, resolve_design_member
 from services.family_msa.publication import CustodyError, retained_path
 from services.family_msa.read_model import alignment_document

@@ -5,7 +5,7 @@ from httpx import ASGITransport, AsyncClient
 from fastapi import FastAPI
 from experiment_database import get_experiment_session
 from experiment_models import ExperimentWorkflowPreparation
-from routers.project_manager import router
+from routers._projects_domain_ops import router
 from services.global_experiments import workflow_setups
 from test_project_workflow_setups import setup_store, _project
 
