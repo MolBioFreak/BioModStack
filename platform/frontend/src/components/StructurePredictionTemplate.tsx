@@ -1417,56 +1417,101 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <ExecutionTargetPicker workflowRequest={workflowRequest} />
-            {continuationChains && <section className="mb-4 space-y-2 rounded-lg border border-slate-600 p-3">
-                <label className="block text-sm">Protein chain from selected candidate
-                    <select aria-label="Selected candidate protein chain" className="ml-3 rounded bg-slate-900 p-2" value={continuationChain} onChange={event => {
-                        const key = event.target.value; setContinuationChain(key);
-                        const chain = continuationChains.find(item => `${item.model_number}:${item.id}` === key);
-                        setSequence(chain?.sequence ?? '');
-                        if (chain) {
-                            setPrimaryChainId(chain.id);
-                            if (chain.component) setPrimaryChemistry(identifyProtenixComponent(structuredClone(chain.component), protenixEntityKey(primaryChemistry)));
-                            setContinuationSource(continuationCandidateSource ? { ...continuationCandidateSource, model_number: chain.model_number } : undefined);
-                        } else setContinuationSource(undefined);
-                    }}>
-                        <option value="">Select a protein chain…</option>
-                        {continuationChains.map(chain => <option key={`${chain.model_number}:${chain.id}`} value={`${chain.model_number}:${chain.id}`}>Model {chain.model_number} · author chain {chain.auth_asym_id ?? chain.id}</option>)}
-                    </select>
-                </label>
-                <p className="text-sm text-slate-300">These are the published residue sequences. Generated backbones may contain placeholder sequences; prediction does not validate a designed sequence. Edit the sequence below if needed. The generated pose is not used as conditioning.</p>
-                {continuationRecipe && <>
-                    <label className="block text-sm">Adopt whole molecular recipe with explicitly selected primary protein
-                        <select aria-label="Adopt native molecular recipe" value="" onChange={event => {
-                            const chosen = continuationRecipe.complex_components.find(c => c.id === event.target.value);
-                            const entry = continuationRecipe.entries.find(e => e.id === chosen?.id);
-                            if (!chosen || !entry) return;
-                            const selectedIds = continuationRecipe.entries.filter(e => e.model_number === entry.model_number).map(e => e.id);
-                            const all = continuationRecipe.complex_components;
-                            const components = all.flatMap((c, i) => selectedIds.includes(c.id) ? [identifyProtenixComponent(structuredClone(c), `recipe:${i}`)] : []);
-                            const selectedBonds = continuationRecipe.covalent_bonds.filter(bond =>
-                                selectedIds.includes(all[(bond.left_entity ?? bond.entity1 ?? 0) - 1]?.id) &&
-                                selectedIds.includes(all[(bond.right_entity ?? bond.entity2 ?? 0) - 1]?.id));
-                            const bonds = remapProtenixEndpoints(all.map(c => c.id), components.map(c => c.id), selectedBonds).bonds;
-                            const keys = components.map(protenixEntityKey);
-                            originalComponentIds.current = keys; setEndpointRoster(keys);
-                            setPrimaryChemistry(components.find(c => c.id === chosen.id)!);
-                            setNativeLigands(components.filter(c => c.id !== chosen.id).map(c => ({ ...c, name: c.name ?? '' })));
-                            setSequence(chosen.sequence ?? ''); setPrimaryChainId(chosen.id);
-                            setProtenixBonds(bonds);
-                            setProtenixConstraint(undefined);
-                            setSequenceAnnotationOrigins(Object.fromEntries(components.filter(c => c.sequence).map(c => [protenixEntityKey(c), c.sequence!])));
-                            setContinuationChain(`${entry.model_number}:${chosen.id}`);
-                            setContinuationSource(continuationCandidateSource ? { ...continuationCandidateSource, model_number: entry.model_number } : undefined);
+            {continuationChains && <section aria-label="Secondary verification loop" className="mb-6 space-y-4 rounded-2xl border border-slate-800 bg-[#111726] p-5 text-slate-100 shadow-lg">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <div className="mb-1 text-xs font-medium text-slate-400">Results / De Novo → Structure Verification</div>
+                        <div className="flex flex-wrap items-center gap-2.5">
+                            <h3 className="text-base font-semibold tracking-tight text-slate-100">Secondary Verification Loop</h3>
+                            <span className="rounded-full border border-slate-700/80 bg-[#151d2e] px-2.5 py-0.5 text-xs text-slate-300">
+                                {continuationRecipe ? `${continuationRecipe.complex_components.length} complex entities` : `${continuationChains.length} protein chain${continuationChains.length === 1 ? '' : 's'}`}
+                            </span>
+                        </div>
+                    </div>
+                    <button type="button" className="rounded-lg border border-slate-700 bg-[#151d2e] px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:border-slate-500 hover:bg-slate-800" onClick={() => { setContinuationSource(undefined); setContinuationChain(''); setSequence(''); }}>Clear selected source</button>
+                </div>
+                {continuationRecipe && continuationRecipe.complex_components.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-800 bg-[#151d2e] px-3.5 py-2.5 text-xs">
+                        <span className="font-medium text-slate-400">Complex entities:</span>
+                        {continuationRecipe.complex_components.map((comp, idx) => {
+                            const isNa = comp.type === 'dna' || comp.type === 'rna';
+                            const mods = Array.isArray(comp.modifications) ? comp.modifications : [];
+                            return (
+                                <span key={`${comp.id}-${idx}`} className="inline-flex items-center gap-1.5">
+                                    <span className={`rounded-full border px-2.5 py-0.5 font-semibold ${isNa ? 'border-emerald-500/35 bg-emerald-500/15 text-emerald-300' : 'border-blue-500/35 bg-blue-500/15 text-blue-300'}`}>
+                                        Chain {comp.id} · {String(comp.type ?? 'entity').toUpperCase()}{comp.sequence ? ` · ${comp.sequence.length} ${isNa ? 'nt' : 'aa'}` : ''}
+                                    </span>
+                                    {mods.map((mod, mi) => (
+                                        <span key={`${comp.id}-mod-${mi}`} className="rounded-full border border-purple-500/35 bg-purple-500/15 px-2 py-0.5 font-mono text-[10px] text-purple-200">
+                                            {'ptmType' in mod ? `${mod.ptmType}@${mod.ptmPosition}` : `${mod.modificationType}@${mod.basePosition}`}
+                                        </span>
+                                    ))}
+                                </span>
+                            );
+                        })}
+                    </div>
+                )}
+                <div className="grid gap-3 md:grid-cols-2">
+                    <label className="block rounded-xl border border-slate-800 bg-[#151d2e] p-3 text-xs font-medium text-slate-300">Protein chain from selected candidate
+                        <select aria-label="Selected candidate protein chain" className="mt-1.5 block w-full rounded-lg border border-slate-700/80 bg-[#0d1321] px-2.5 py-2 text-xs text-slate-100 focus:border-blue-500 focus:outline-none" value={continuationChain} onChange={event => {
+                            const key = event.target.value; setContinuationChain(key);
+                            const chain = continuationChains.find(item => `${item.model_number}:${item.id}` === key);
+                            setSequence(chain?.sequence ?? '');
+                            if (chain) {
+                                setPrimaryChainId(chain.id);
+                                if (chain.component) setPrimaryChemistry(identifyProtenixComponent(structuredClone(chain.component), protenixEntityKey(primaryChemistry)));
+                                setContinuationSource(continuationCandidateSource ? { ...continuationCandidateSource, model_number: chain.model_number } : undefined);
+                            } else setContinuationSource(undefined);
                         }}>
-                            <option value="">Choose primary protein and adopt…</option>
-                            {continuationChains?.map(c => <option key={`${c.model_number}:${c.id}`} value={c.id}>Whole composition · primary {c.id} · model {c.model_number}</option>)}
+                            <option value="">Select a protein chain…</option>
+                            {continuationChains.map(chain => <option key={`${chain.model_number}:${chain.id}`} value={`${chain.model_number}:${chain.id}`}>Model {chain.model_number} · author chain {chain.auth_asym_id ?? chain.id}</option>)}
                         </select>
                     </label>
-                    <details><summary>Retained molecular recipe and unresolved source evidence</summary><pre className="whitespace-pre-wrap">{JSON.stringify(continuationRecipe, null, 2)}</pre></details>
-                    <p>Only explicit molecular composition is adopted. Coordinates, generated pose restraints and templates are not prediction inputs. Unresolved observations remain visible for review.</p>
+                    {continuationRecipe && (
+                        <label className="block rounded-xl border border-slate-800 bg-[#151d2e] p-3 text-xs font-medium text-slate-300">Adopt whole molecular recipe with explicitly selected primary protein
+                            <select aria-label="Adopt native molecular recipe" className="mt-1.5 block w-full rounded-lg border border-slate-700/80 bg-[#0d1321] px-2.5 py-2 text-xs text-slate-100 focus:border-blue-500 focus:outline-none" value="" onChange={event => {
+                                const chosen = continuationRecipe.complex_components.find(c => c.id === event.target.value);
+                                const entry = continuationRecipe.entries.find(e => e.id === chosen?.id);
+                                if (!chosen || !entry) return;
+                                const selectedIds = continuationRecipe.entries.filter(e => e.model_number === entry.model_number).map(e => e.id);
+                                const all = continuationRecipe.complex_components;
+                                const components = all.flatMap((c, i) => selectedIds.includes(c.id) ? [identifyProtenixComponent(structuredClone(c), `recipe:${i}`)] : []);
+                                const selectedBonds = continuationRecipe.covalent_bonds.filter(bond =>
+                                    selectedIds.includes(all[(bond.left_entity ?? bond.entity1 ?? 0) - 1]?.id) &&
+                                    selectedIds.includes(all[(bond.right_entity ?? bond.entity2 ?? 0) - 1]?.id));
+                                const bonds = remapProtenixEndpoints(all.map(c => c.id), components.map(c => c.id), selectedBonds).bonds;
+                                const keys = components.map(protenixEntityKey);
+                                originalComponentIds.current = keys; setEndpointRoster(keys);
+                                setPrimaryChemistry(components.find(c => c.id === chosen.id)!);
+                                setNativeLigands(components.filter(c => c.id !== chosen.id).map(c => ({ ...c, name: c.name ?? '' })));
+                                setSequence(chosen.sequence ?? ''); setPrimaryChainId(chosen.id);
+                                setProtenixBonds(bonds);
+                                setProtenixConstraint(undefined);
+                                setSequenceAnnotationOrigins(Object.fromEntries(components.filter(c => c.sequence).map(c => [protenixEntityKey(c), c.sequence!])));
+                                setContinuationChain(`${entry.model_number}:${chosen.id}`);
+                                setContinuationSource(continuationCandidateSource ? { ...continuationCandidateSource, model_number: entry.model_number } : undefined);
+                            }}>
+                                <option value="">Choose primary protein and adopt…</option>
+                                {continuationChains?.map(c => <option key={`${c.model_number}:${c.id}`} value={c.id}>Whole composition · primary {c.id} · model {c.model_number}</option>)}
+                            </select>
+                        </label>
+                    )}
+                </div>
+                <div data-post-refold-slot="pytorch-frustratometer" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-purple-500/30 bg-[#151d2e] px-3.5 py-2.5">
+                    <div>
+                        <div className="flex items-center gap-2 text-xs font-semibold text-slate-100">
+                            <span>Post-Refold Analysis · PyTorch Frustratometer</span>
+                            <span className="rounded-full border border-purple-500/40 bg-purple-500/15 px-2 py-0.5 text-[10px] font-semibold text-purple-200">Slot ready</span>
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-slate-400">Local energetic frustration &amp; interface stability on refolded complexes (FrustraMPNN skipped; ready for PyTorch Frustratometer swap).</div>
+                    </div>
+                </div>
+                <p className="text-xs text-slate-400">These are the published residue sequences. Generated backbones may contain placeholder sequences; prediction does not validate a designed sequence. Edit the sequence below if needed. The generated pose is not used as conditioning.</p>
+                {continuationRecipe && <>
+                    <p className="text-xs text-slate-400">Only explicit molecular composition is adopted. Coordinates, generated pose restraints and templates are not prediction inputs. Unresolved observations remain visible for review.</p>
+                    <details className="rounded-lg border border-slate-800 bg-[#0d1321] px-3 py-2 text-xs text-slate-300"><summary className="cursor-pointer font-medium">Retained molecular recipe and unresolved source evidence</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-[11px] text-slate-400">{JSON.stringify(continuationRecipe, null, 2)}</pre></details>
                 </>}
-                {!continuationRecipe && <p>Native recipe unavailable. Retained author positions: {JSON.stringify(initialValues?._source_prepared?.author_residues ?? [])}</p>}
-                <button type="button" onClick={() => { setContinuationSource(undefined); setContinuationChain(''); setSequence(''); }}>Clear selected source</button>
+                {!continuationRecipe && <p className="text-xs text-slate-400">Native recipe unavailable. Retained author positions: {JSON.stringify(initialValues?._source_prepared?.author_residues ?? [])}</p>}
             </section>}
             {/* Header */}
             <div className="flex items-center justify-between mb-6">
@@ -2773,7 +2818,7 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
                 <div className={`sticky bottom-3 z-20 flex flex-wrap ${isBoltzApi ? 'justify-end' : 'justify-between'} items-center gap-4 rounded-xl border border-slate-700/80 bg-slate-900/95 px-4 py-3 shadow-xl backdrop-blur`}>
                     {/* Left side: managed post-prediction analysis and retry policy */}
                     {!isBoltzApi && <div className="flex flex-wrap items-start gap-5">
-                        <ModelIntegrationControl
+                        {!continuationChains && <ModelIntegrationControl
                             modelId="frustrampnn"
                             workflowId="structure_prediction"
                             checked={runFrustrampnn}
@@ -2786,7 +2831,7 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
                                     onChange={setFrustrampnnSettings}
                                 />
                             )}
-                        />
+                        />}
                         <label className="flex items-center gap-2 cursor-pointer text-slate-400 hover:text-slate-300">
                             <input
                                 type="checkbox"

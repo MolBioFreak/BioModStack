@@ -1,5 +1,6 @@
 import { loadPredictionOperationDetour } from '../lib/binderSelectedRound';
-import { isDeNovoDestination, prepareDeNovoContinuation, continuationRoleDefaults, nativeSequenceInput, sequenceDestinations, type DeNovoDestination } from '../lib/deNovoContinuation';
+import { isDeNovoDestination, prepareDeNovoContinuation, continuationRoleDefaults, nativeSequenceInput, type DeNovoDestination } from '../lib/deNovoContinuation';
+import { SequenceContinuationWorkbenchHeader } from './SequenceContinuationWorkbenchHeader';
 import { sourceResultReturn } from '../lib/sourceResultReturn';
 import { deNovoAuthoringEnvelope, deNovoEditorState } from '../lib/deNovoAuthoring';
 import { DeNovoDraftPreparationContext, type DeNovoDraftPreparation } from '../lib/deNovoDocumentCapture';
@@ -1632,15 +1633,21 @@ export function JobSubmission() {
     return (
         <Suspense fallback={<p role="status">Loading selected editor…</p>}>
         <div className="min-h-screen bg-slate-950 p-6">
-            {sourceResultReturn(searchParams.get('return_to')) && <button type="button" onClick={handleDedicatedTemplateBack} className="mb-3 rounded-lg border border-slate-600 px-3 py-2 text-sm">Back to selected result</button>}
-            {isSequenceContinuation && <label className="block p-4 text-sm">Sequence design model
-                <select aria-label="Sequence design model" value={`${selectedModelId}:${selectedModeId}`} onChange={event => {
-                    const [model, mode] = event.target.value.split(':');
-                    switchSequenceModel(model, mode);
-                }} className="ml-3 rounded border bg-[var(--bg-secondary)] p-2">
-                    {sequenceDestinations.map(([model, mode, label]) => <option key={`${model}:${mode}`} value={`${model}:${mode}`}>{label}</option>)}
-                </select>
-            </label>}
+            {!isSequenceContinuation && sourceResultReturn(searchParams.get('return_to')) && (
+                <button type="button" onClick={handleDedicatedTemplateBack} className="mb-3 rounded-lg border border-slate-700 bg-[#151d2e] px-3 py-2 text-sm font-medium text-slate-200 transition-colors hover:border-slate-500 hover:bg-slate-800">Back to selected result</button>
+            )}
+            {isSequenceContinuation && (
+                <SequenceContinuationWorkbenchHeader
+                    selectedModelId={selectedModelId ?? 'proteinmpnn'}
+                    selectedModeId={selectedModeId ?? 'design'}
+                    onSelectModelMode={(model, mode) => switchSequenceModel(model, mode)}
+                    sourceStructure={params.source_structure}
+                    chains={Array.isArray(params._continuation_chains) ? params._continuation_chains : undefined}
+                    designChain={params.design_chain ?? params.chains_to_design}
+                    targetChain={params.target_chain}
+                    onBack={sourceResultReturn(searchParams.get('return_to')) ? handleDedicatedTemplateBack : undefined}
+                />
+            )}
             {isSequenceContinuation && (sequencePreparationError || continuationQuery.error) && <p role="alert">{sequencePreparationError || String(continuationQuery.error)}</p>}
             {projectSetup.setup && <><ProjectWorkflowSetupBanner setup={projectSetup.setup}/><section className="mx-auto mb-4 mt-4 flex max-w-[104rem] flex-wrap items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-950/20 p-3"><button type="button" className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-200" disabled={projectActionBusy} onClick={async () => {
                 setProjectActionBusy(true); setProjectActionError(null);

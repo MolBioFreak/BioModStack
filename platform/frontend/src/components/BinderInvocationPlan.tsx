@@ -9,7 +9,8 @@ import { invocationSettingsFields, type InvocationCatalog as BinderRoundCatalog 
 import { invocationNames, invocationCandidateLabel, changeInvocationMode, invocationLabel, invocationPlacementLabel, invocationDrafts, invocationModes, newInvocation, type InvocationDraftStage } from '../lib/binderInvocationPlan';
 import { candidateKey, type CandidateRef, type SelectedRoundModel, type SelectedRoundStage } from '../lib/binderSelectedRound';
 
-const control = 'rounded border border-transparent p-2 bg-[var(--bg-primary)] max-w-full focus-visible:outline-2 focus-visible:outline-sky-500';
+const control = 'rounded-lg border border-slate-700/80 px-3 py-1.5 text-xs font-medium text-slate-100 bg-[#151d2e] hover:border-slate-500 max-w-full transition-colors focus-visible:outline-2 focus-visible:outline-sky-500';
+const selectControl = 'mt-1 block w-full rounded-lg border border-slate-700/80 bg-[#0d1321] px-2.5 py-2 text-xs text-slate-100 max-w-full focus:border-blue-500 focus:outline-none';
 const kinds = { sequence_design: 'Sequence design', prediction: 'Blind prediction', maturation: 'Maturation', md: 'Molecular dynamics' };
 const models = { sequence_design: ['proteinmpnn', 'fampnn', 'caliby_binder', 'caliby_experimental', 'ligandmpnn', 'protonpottsmpnn'], prediction: ['protenix', 'boltz2', 'esmfold2', 'boltz_cp_experimental'], md: ['molecular_dynamics'] };
 
@@ -46,25 +47,55 @@ export function BinderInvocationPlan({ stages: original, onChange, candidates, c
             ? { id, kind, input, model_id: 'binder_refinement', mode: 'refine', params: {} }
             : { id, kind, input, models: [] } }]);
     };
-    return <div aria-label="Invocation plan" className="binder-invocation-plan min-w-0 space-y-4 [overflow-wrap:anywhere] [&_label]:block [&_label]:space-y-1 [&_select]:block [&_input:not([type=checkbox])]:block [&_input]:max-w-full [&_select]:max-w-full [&_textarea]:max-w-full [&_button]:rounded [&_button]:border-transparent [&_button]:bg-[var(--bg-secondary)] [&_button]:px-3 [&_button]:py-2 [&_button:focus-visible]:outline-sky-500">
-        {stages.length > 1 && <p>Stages use the input chosen below; order alone does not connect them.</p>}
-        {showAdd && <div className="flex flex-wrap gap-2">{(['sequence_design', 'prediction', 'md'] as const).map(kind => <button className={control} type="button" key={kind} onClick={() => add(kind)}>Add {kinds[kind]}</button>)}</div>}
-        {stages.map((item, index) => <fieldset key={item.stage.id} className="min-w-0 border rounded p-3 space-y-3"><legend>{index + 1}. {kinds[item.stage.kind]}</legend>
-            <label><input type="checkbox" checked={item.enabled} onChange={event => patch(index, value => ({ ...value, enabled: event.target.checked }))} />Include stage {index + 1}</label>
-            <label>Input source<select aria-label={`Stage ${index + 1} input`} className={control} value={'stage_id' in item.stage.input ? `${item.stage.input.stage_id}:${item.stage.input.invocation_id ?? ''}` : ''} onChange={event => {
-                const [stage_id, invocation_id] = event.target.value.split(':');
-                patch(index, value => ({ ...value, stage: { ...value.stage, input: { ...('scope' in value.stage.input ? { scope: value.stage.input.scope, chains: value.stage.input.chains } : {}), ...(stage_id ? { stage_id, ...(invocation_id ? { invocation_id } : {}) } : { selected: true as const }) } } }));
-            }}><option value="">{selectedBinding ? 'Selected results' : 'Original generated outputs'}</option>{stages.slice(0, index).flatMap((previous, pi) => [<option key={previous.stage.id} value={`${previous.stage.id}:`}>Stage {pi + 1} · {kinds[previous.stage.kind]} · all outputs{previous.enabled ? '' : ' (OFF)'}</option>, ...(previous.stage.kind === 'maturation' ? [] : previous.stage.models.map((call, ci) => <option key={`${previous.stage.id}:${call.invocation_id}`} value={`${previous.stage.id}:${call.invocation_id}`}>Stage {pi + 1} · {invocationLabel(call, ci)}</option>))])}</select></label>
-            <p aria-label={`Stage ${index + 1} source`}>Source: {sourceLabel(item)}</p>
-            {item.enabled && sourceLabel(item).includes('Source is off') && <div role="status">
+    return <div aria-label="Invocation plan" className="binder-invocation-plan min-w-0 space-y-4 text-slate-100 [overflow-wrap:anywhere] [&_input]:max-w-full [&_select]:max-w-full [&_textarea]:max-w-full">
+        {stages.length > 1 && <p className="text-xs text-slate-400">Stages use the input chosen below; order alone does not connect them.</p>}
+        {showAdd && (
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-800 bg-[#111726] p-3">
+                <span className="mr-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Add stage:</span>
+                {(['sequence_design', 'prediction', 'md'] as const).map(kind => (
+                    <button className={control} type="button" key={kind} onClick={() => add(kind)}>Add {kinds[kind]}</button>
+                ))}
+            </div>
+        )}
+        {stages.map((item, index) => <fieldset key={item.stage.id} className="min-w-0 space-y-4 rounded-xl border border-slate-800 bg-[#111726] p-4">
+            <legend className="px-1.5 text-xs font-semibold uppercase tracking-wider text-blue-300">{index + 1}. {kinds[item.stage.kind]}</legend>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800/80 bg-[#151d2e] px-3 py-2">
+                <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-200">
+                    <input type="checkbox" className="h-4 w-4 rounded border-slate-600 bg-[#0d1321] text-emerald-500" checked={item.enabled} onChange={event => patch(index, value => ({ ...value, enabled: event.target.checked }))} />
+                    Include stage {index + 1}
+                </label>
+                <p aria-label={`Stage ${index + 1} source`} className="rounded-full border border-slate-700/80 bg-[#0d1321] px-2.5 py-0.5 text-[11px] text-slate-300">Source: {sourceLabel(item)}</p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+                <label className="block text-xs font-medium text-slate-300">Input source
+                    <select aria-label={`Stage ${index + 1} input`} className={selectControl} value={'stage_id' in item.stage.input ? `${item.stage.input.stage_id}:${item.stage.input.invocation_id ?? ''}` : ''} onChange={event => {
+                        const [stage_id, invocation_id] = event.target.value.split(':');
+                        patch(index, value => ({ ...value, stage: { ...value.stage, input: { ...('scope' in value.stage.input ? { scope: value.stage.input.scope, chains: value.stage.input.chains } : {}), ...(stage_id ? { stage_id, ...(invocation_id ? { invocation_id } : {}) } : { selected: true as const }) } } }));
+                    }}><option value="">{selectedBinding ? 'Selected results' : 'Original generated outputs'}</option>{stages.slice(0, index).flatMap((previous, pi) => [<option key={previous.stage.id} value={`${previous.stage.id}:`}>Stage {pi + 1} · {kinds[previous.stage.kind]} · all outputs{previous.enabled ? '' : ' (OFF)'}</option>, ...(previous.stage.kind === 'maturation' ? [] : previous.stage.models.map((call, ci) => <option key={`${previous.stage.id}:${call.invocation_id}`} value={`${previous.stage.id}:${call.invocation_id}`}>Stage {pi + 1} · {invocationLabel(call, ci)}</option>))])}</select>
+                </label>
+                {item.stage.kind === 'prediction' && (
+                    <label className="block text-xs font-medium text-slate-300">Prediction scope
+                        <select aria-label={`Stage ${index + 1} scope`} className={selectControl} value={item.stage.input.scope ?? 'binder'} onChange={event => patch(index, value => ({ ...value, stage: { ...value.stage, input: { ...value.stage.input, scope: event.target.value as 'binder' | 'whole_composition' } } }))}><option value="binder">Binder plus independent target</option><option value="whole_composition">Whole composition (blind)</option></select>
+                    </label>
+                )}
+            </div>
+            {item.stage.kind === 'prediction' && (
+                <label className="block text-xs font-medium text-slate-300">Selected chain IDs (empty = whole recipe)
+                    <input aria-label={`Stage ${index + 1} chains`} className={selectControl} value={item.stage.input.chains?.join(',') ?? ''} onChange={event => patch(index, value => ({ ...value, stage: { ...value.stage, input: { ...value.stage.input, chains: event.target.value ? event.target.value.split(',').map(s => s.trim()) : undefined } } }))} />
+                </label>
+            )}
+            {item.enabled && sourceLabel(item).includes('Source is off') && <div role="status" className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-950/30 p-3 text-xs text-amber-200">
                 <p>The retained dependency is off. Reconnect explicitly or turn this stage off; no source is substituted.</p>
-                <button type="button" onClick={() => patch(index, value => ({ ...value, stage: { ...value.stage, input: { selected: true, ...(value.stage.input.scope !== undefined ? { scope: value.stage.input.scope } : {}), ...(value.stage.input.chains !== undefined ? { chains: value.stage.input.chains } : {}) } } }))}>Reconnect stage {index + 1} to {selectedBinding ? 'selected results' : 'generated outputs'}</button>
-                <button type="button" onClick={() => patch(index, value => ({ ...value, enabled: false }))}>Turn stage {index + 1} off</button>
+                <div className="flex flex-wrap gap-2">
+                    <button type="button" className={control} onClick={() => patch(index, value => ({ ...value, stage: { ...value.stage, input: { selected: true, ...(value.stage.input.scope !== undefined ? { scope: value.stage.input.scope } : {}), ...(value.stage.input.chains !== undefined ? { chains: value.stage.input.chains } : {}) } } }))}>Reconnect stage {index + 1} to {selectedBinding ? 'selected results' : 'generated outputs'}</button>
+                    <button type="button" className={control} onClick={() => patch(index, value => ({ ...value, enabled: false }))}>Turn stage {index + 1} off</button>
+                </div>
             </div>}
-            {item.stage.kind === 'prediction' && <><label>Prediction scope<select aria-label={`Stage ${index + 1} scope`} value={item.stage.input.scope ?? 'binder'} onChange={event => patch(index, value => ({ ...value, stage: { ...value.stage, input: { ...value.stage.input, scope: event.target.value as 'binder' | 'whole_composition' } } }))}><option value="binder">Binder plus independent target</option><option value="whole_composition">Whole composition (blind)</option></select></label>
-                <label>Selected chain IDs (empty = whole recipe)<input aria-label={`Stage ${index + 1} chains`} value={item.stage.input.chains?.join(',') ?? ''} onChange={event => patch(index, value => ({ ...value, stage: { ...value.stage, input: { ...value.stage.input, chains: event.target.value ? event.target.value.split(',').map(s => s.trim()) : undefined } } }))} /></label></>}
             {item.stage.kind !== 'maturation' && <>
-                <div className="flex flex-wrap gap-2">{models[item.stage.kind].map(model => <button type="button" className={control} key={model} onClick={() => patch(index, value => value.stage.kind === 'maturation' ? value : ({ ...value, stage: { ...value.stage, models: [...value.stage.models, newInvocation(model, value.drafts[model])] } }))}>Add {invocationNames[model] ?? model}</button>)}</div>
+                <div className="space-y-1.5">
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Add model to stage</div>
+                    <div className="flex flex-wrap gap-2">{models[item.stage.kind].map(model => <button type="button" className={control} key={model} onClick={() => patch(index, value => value.stage.kind === 'maturation' ? value : ({ ...value, stage: { ...value.stage, models: [...value.stage.models, newInvocation(model, value.drafts[model])] } }))}>Add {invocationNames[model] ?? model}</button>)}</div>
+                </div>
                 {item.stage.models.map((call, ci) => {
                     const id = call.invocation_id!;
                     const catalog = queries[ids.indexOf(call.model_id)]?.data;
@@ -79,41 +110,91 @@ export function BinderInvocationPlan({ stages: original, onChange, candidates, c
                             drafts: { ...value.drafts, [`${id}:md:${previous.input.kind}`]: previous, [`${id}:md-active`]: next },
                             stage: { ...value.stage, models: value.stage.models.map(other => other.invocation_id === id ? { ...other, params: { ...other.params, intent: serializeMolecularDynamicsNativeDraft(next) } } : other) } }))} /> : undefined);
                     const fields = catalog ? invocationSettingsFields(catalog, call.mode) : [];
-                    return <section key={id} aria-label={`Invocation ${id}`} className="min-w-0 rounded bg-[var(--bg-secondary)] p-4 space-y-4">
-                        <h4>{invocationLabel(call, ci)}</h4><details><summary>Call identity</summary><p>Stage: {item.stage.id}</p><p>Invocation: {id}</p></details>
-                        <label><input type="checkbox" aria-label={`Enable invocation ${id}`} checked={!item.disabledInvocationIds?.includes(id)} onChange={event => patch(index, value => ({ ...value,
-                            disabledInvocationIds: event.target.checked ? value.disabledInvocationIds?.filter(key => key !== id) : [...value.disabledInvocationIds ?? [], id] }))} />Include model</label>
-                        {item.disabledInvocationIds?.includes(id) && <p>Off · settings kept</p>}
-                        {call.model_id === 'boltz2' && <label>Execution route<select aria-label={`Route ${id}`} value={call.route ?? 'job'} onChange={event => callPatch(index, id, { route: event.target.value as 'job' | 'boltz_api' })}><option value="job">Ordinary Job</option><option value="boltz_api">Paid Boltz API (explicit estimate approval)</option></select></label>}
-                        <label>Mode<select aria-label={`Mode ${id}`} value={call.mode} onChange={event => patch(index, value => changeInvocationMode(value, id, event.target.value))}>{(invocationModes[call.model_id] ?? catalog?.modes?.map(mode => mode.id) ?? []).map(mode => <option key={mode} value={mode}>{mode.replaceAll('_', ' ').replace(/^./, letter => letter.toUpperCase())}</option>)}</select></label>
-                        {specialized && <button type="button" onClick={() => setEditingCall(id)}>{invocationNames[call.model_id] ?? call.model_id} settings</button>}
-                        <details open={editingCall === id || undefined}><summary>Settings</summary>{specialized ? (editingCall === id ? <><button type="button" onClick={() => setEditingCall(undefined)}>Back to round</button>{specialized}</> : null) : <InvocationNativeSettings call={call} fields={fields} prediction={item.stage.kind === 'prediction'} onChange={params => callPatch(index, id, { params })} />}</details>
-                        {queries[ids.indexOf(call.model_id)]?.isPending && <p role="status">Loading model-owned settings…</p>}
-                        {queries[ids.indexOf(call.model_id)]?.error && <p role="status">Settings discovery failed. Saved settings remain intact. <button type="button" onClick={() => void queries[ids.indexOf(call.model_id)].refetch()}>Retry settings</button></p>}
-                        {call.model_id === 'caliby_experimental' && <div aria-label={`Ordered ensembles ${id}`}>
+                    const disabled = Boolean(item.disabledInvocationIds?.includes(id));
+                    return <section key={id} aria-label={`Invocation ${id}`} className="min-w-0 space-y-3 rounded-xl border border-slate-700/70 bg-[#0d1321] p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <h4 className="text-sm font-semibold text-slate-100">{invocationLabel(call, ci)}</h4>
+                                {disabled && <span className="rounded-full border border-slate-700 bg-[#151d2e] px-2 py-0.5 text-[11px] text-slate-400">Off · settings kept</span>}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-3">
+                                <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-slate-300">
+                                    <input type="checkbox" className="h-4 w-4 rounded border-slate-600 bg-[#151d2e] text-emerald-500" aria-label={`Enable invocation ${id}`} checked={!disabled} onChange={event => patch(index, value => ({
+                                        ...value,
+                                        disabledInvocationIds: event.target.checked ? value.disabledInvocationIds?.filter(key => key !== id) : [...value.disabledInvocationIds ?? [], id],
+                                    }))} />
+                                    Include model
+                                </label>
+                                <button type="button" aria-label={`Remove ${invocationLabel(call, ci)}`} className="rounded-lg border border-slate-700/80 bg-[#151d2e] px-2.5 py-1 text-xs text-slate-300 hover:border-red-500/50 hover:text-red-300" onClick={() => patch(index, value => value.stage.kind === 'maturation' ? value : ({ ...value, drafts: { ...value.drafts, [call.model_id]: call.params }, stage: { ...value.stage, models: value.stage.models.filter(other => other.invocation_id !== id) } }))}>Remove call</button>
+                            </div>
+                        </div>
+                        <div className="grid gap-3 md:grid-cols-2">
+                            <label className="block text-xs font-medium text-slate-300">Mode
+                                <select aria-label={`Mode ${id}`} className={selectControl} value={call.mode} onChange={event => patch(index, value => changeInvocationMode(value, id, event.target.value))}>{(invocationModes[call.model_id] ?? catalog?.modes?.map(mode => mode.id) ?? []).map(mode => <option key={mode} value={mode}>{mode.replaceAll('_', ' ').replace(/^./, letter => letter.toUpperCase())}</option>)}</select>
+                            </label>
+                            {call.model_id === 'boltz2' && <label className="block text-xs font-medium text-slate-300">Execution route
+                                <select aria-label={`Route ${id}`} className={selectControl} value={call.route ?? 'job'} onChange={event => callPatch(index, id, { route: event.target.value as 'job' | 'boltz_api' })}><option value="job">Ordinary Job</option><option value="boltz_api">Paid Boltz API (explicit estimate approval)</option></select>
+                            </label>}
+                        </div>
+                        {specialized && <button type="button" className={control} onClick={() => setEditingCall(id)}>{invocationNames[call.model_id] ?? call.model_id} settings</button>}
+                        <details open={editingCall === id || undefined} className="rounded-lg border border-slate-800 bg-[#111726] px-3 py-2">
+                            <summary className="cursor-pointer text-xs font-medium text-slate-200">Settings</summary>
+                            <div className="mt-3">
+                                {specialized ? (editingCall === id ? <><button type="button" className={control} onClick={() => setEditingCall(undefined)}>Back to round</button>{specialized}</> : null) : <InvocationNativeSettings call={call} fields={fields} prediction={item.stage.kind === 'prediction'} onChange={params => callPatch(index, id, { params })} />}
+                            </div>
+                        </details>
+                        {queries[ids.indexOf(call.model_id)]?.isPending && <p role="status" className="text-xs text-slate-400">Loading model-owned settings…</p>}
+                        {queries[ids.indexOf(call.model_id)]?.error && <p role="status" className="text-xs text-amber-300">Settings discovery failed. Saved settings remain intact. <button type="button" className={control} onClick={() => void queries[ids.indexOf(call.model_id)].refetch()}>Retry settings</button></p>}
+                        {call.model_id === 'caliby_experimental' && <div aria-label={`Ordered ensembles ${id}`} className="space-y-2 rounded-lg border border-slate-800 bg-[#111726] p-3 text-xs text-slate-300">
                             {call.mode === 'sidechain_pack' && <p>Packing requires coordinates and does not change the sequence. Design constraints are kept for ensemble design.</p>}
                             <p>The first state is primary. Add states in native order; repeated selections remain explicit.</p>
-                            {selectedBinding && 'selected' in item.stage.input ? <button type="button" onClick={() => callPatch(index, id, { input_groups: [...call.input_groups ?? [], { ensemble_id: crypto.randomUUID(), states: [] }] })}>Add ensemble</button> : <p>Each produced structure is bound independently by the native adapter. Future outputs are not pooled into an ensemble.</p>}
-                            {(call.input_groups ?? []).map((group, gi) => <fieldset key={group.ensemble_id}><legend>Ensemble {gi + 1}</legend>
-                                <select aria-label={`Add state ${gi + 1}`} value="" onChange={event => { if (event.target.value === '') return; const groups = structuredClone(call.input_groups!); groups[gi].states.push({ state_id: crypto.randomUUID(), candidate_ref: exactCandidates[Number(event.target.value)] }); callPatch(index, id, { input_groups: groups }); }}><option value="">Choose exact state</option>{exactCandidates.map((ref, ri) => <option key={candidateKey(ref)} value={ri}>{ri + 1}. {invocationCandidateLabel(ref, candidateLabels?.[candidateKey(ref)])}</option>)}</select>
-                                {group.states.map((state, si) => <div key={state.state_id}>{si === 0 ? 'Primary' : `State ${si + 1}`} · {invocationCandidateLabel(state.candidate_ref, candidateLabels?.[candidateKey(state.candidate_ref)])}<details><summary>Exact state identity</summary><code>{candidateKey(state.candidate_ref)}</code></details>
-                                    <button type="button" disabled={si === 0} onClick={() => { const groups = structuredClone(call.input_groups!); [groups[gi].states[si - 1], groups[gi].states[si]] = [groups[gi].states[si], groups[gi].states[si - 1]]; callPatch(index, id, { input_groups: groups }); }}>Move state up</button>
-                                    <button type="button" onClick={() => { const groups = structuredClone(call.input_groups!); groups[gi].states.splice(si, 1); callPatch(index, id, { input_groups: groups }); }}>Remove state</button>
-                                    {call.mode === 'ensemble_design' && (['fixed_pos_seq', 'fixed_pos_scn', 'fixed_pos_override_seq', 'pos_restrict_aatype', 'symmetry_pos'] as const).map(key => <label key={key}>{key}<input aria-label={`${state.state_id} ${key}`} value={state.settings?.[key] ?? ''} onChange={event => { const groups = structuredClone(call.input_groups!); groups[gi].states[si].settings = { ...state.settings, [key]: event.target.value }; callPatch(index, id, { input_groups: groups }); }} /></label>)}
-                                </div>)}<button type="button" onClick={() => callPatch(index, id, { input_groups: call.input_groups!.filter((_, i) => i !== gi) })}>Remove ensemble</button>
+                            {selectedBinding && 'selected' in item.stage.input ? <button type="button" className={control} onClick={() => callPatch(index, id, { input_groups: [...call.input_groups ?? [], { ensemble_id: crypto.randomUUID(), states: [] }] })}>Add ensemble</button> : <p className="text-slate-400">Each produced structure is bound independently by the native adapter. Future outputs are not pooled into an ensemble.</p>}
+                            {(call.input_groups ?? []).map((group, gi) => <fieldset key={group.ensemble_id} className="space-y-2 rounded-lg border border-slate-700/70 p-2.5"><legend className="px-1 text-xs font-semibold">Ensemble {gi + 1}</legend>
+                                <select aria-label={`Add state ${gi + 1}`} className={selectControl} value="" onChange={event => { if (event.target.value === '') return; const groups = structuredClone(call.input_groups!); groups[gi].states.push({ state_id: crypto.randomUUID(), candidate_ref: exactCandidates[Number(event.target.value)] }); callPatch(index, id, { input_groups: groups }); }}><option value="">Choose exact state</option>{exactCandidates.map((ref, ri) => <option key={candidateKey(ref)} value={ri}>{ri + 1}. {invocationCandidateLabel(ref, candidateLabels?.[candidateKey(ref)])}</option>)}</select>
+                                {group.states.map((state, si) => <div key={state.state_id} className="space-y-1.5 rounded border border-slate-800 bg-[#0d1321] p-2">{si === 0 ? 'Primary' : `State ${si + 1}`} · {invocationCandidateLabel(state.candidate_ref, candidateLabels?.[candidateKey(state.candidate_ref)])}<details><summary className="cursor-pointer text-slate-400">Exact state identity</summary><code>{candidateKey(state.candidate_ref)}</code></details>
+                                    <div className="flex flex-wrap gap-2"><button type="button" className={control} disabled={si === 0} onClick={() => { const groups = structuredClone(call.input_groups!); [groups[gi].states[si - 1], groups[gi].states[si]] = [groups[gi].states[si], groups[gi].states[si - 1]]; callPatch(index, id, { input_groups: groups }); }}>Move state up</button>
+                                    <button type="button" className={control} onClick={() => { const groups = structuredClone(call.input_groups!); groups[gi].states.splice(si, 1); callPatch(index, id, { input_groups: groups }); }}>Remove state</button></div>
+                                    {call.mode === 'ensemble_design' && (['fixed_pos_seq', 'fixed_pos_scn', 'fixed_pos_override_seq', 'pos_restrict_aatype', 'symmetry_pos'] as const).map(key => <label key={key} className="block text-[11px] text-slate-300">{key}<input aria-label={`${state.state_id} ${key}`} className={selectControl} value={state.settings?.[key] ?? ''} onChange={event => { const groups = structuredClone(call.input_groups!); groups[gi].states[si].settings = { ...state.settings, [key]: event.target.value }; callPatch(index, id, { input_groups: groups }); }} /></label>)}
+                                </div>)}<button type="button" className={control} onClick={() => callPatch(index, id, { input_groups: call.input_groups!.filter((_, i) => i !== gi) })}>Remove ensemble</button>
                             </fieldset>)}
                         </div>}
-                        <div className="space-y-2" aria-label={`Run location ${id}`}><h5>Run location</h5>
-                        <label><input type="checkbox" checked={Object.hasOwn(call, 'execution_target_id')} onChange={event => {
-                            const next = { ...call }; if (event.target.checked) next.execution_target_id = null; else delete next.execution_target_id;
-                            patch(index, value => value.stage.kind === 'maturation' ? value : ({ ...value, stage: { ...value.stage, models: value.stage.models.map(other => other.invocation_id === id ? next : other) } }));
-                        }} />Choose run location</label>
-                        <p>{invocationPlacementLabel(call)}</p>
-                        {Object.hasOwn(call, 'execution_target_id') && <ExecutionTargetPicker value={call.execution_target_id ?? null} onChange={execution_target_id => callPatch(index, id, { execution_target_id })} />}
-                        </div>
-                        <button type="button" aria-label={`Remove ${invocationLabel(call, ci)}`} onClick={() => patch(index, value => value.stage.kind === 'maturation' ? value : ({ ...value, drafts: { ...value.drafts, [call.model_id]: call.params }, stage: { ...value.stage, models: value.stage.models.filter(other => other.invocation_id !== id) } }))}>Remove call</button>
+                        <details className="rounded-lg border border-slate-800 bg-[#111726] px-3 py-2">
+                            <summary className="cursor-pointer text-xs font-medium text-slate-300">Run location · {invocationPlacementLabel(call)}</summary>
+                            <div className="mt-2.5 space-y-2" aria-label={`Run location ${id}`}>
+                                <h5 className="sr-only">Run location</h5>
+                                <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-slate-200">
+                                    <input type="checkbox" className="h-4 w-4 rounded border-slate-600 bg-[#0d1321]" checked={Object.hasOwn(call, 'execution_target_id')} onChange={event => {
+                                        const next = { ...call }; if (event.target.checked) next.execution_target_id = null; else delete next.execution_target_id;
+                                        patch(index, value => value.stage.kind === 'maturation' ? value : ({ ...value, stage: { ...value.stage, models: value.stage.models.map(other => other.invocation_id === id ? next : other) } }));
+                                    }} />Choose run location
+                                </label>
+                                <p className="text-xs text-slate-400">{invocationPlacementLabel(call)}</p>
+                                {Object.hasOwn(call, 'execution_target_id') && <ExecutionTargetPicker value={call.execution_target_id ?? null} onChange={execution_target_id => callPatch(index, id, { execution_target_id })} />}
+                            </div>
+                        </details>
+                        <details className="rounded-lg border border-slate-800/70 bg-[#111726]/60 px-3 py-1.5 text-[11px] text-slate-400">
+                            <summary className="cursor-pointer">Call identity</summary>
+                            <p className="mt-1">Stage: {item.stage.id}</p>
+                            <p>Invocation: {id}</p>
+                        </details>
                     </section>;
                 })}
+                {item.stage.kind === 'prediction' && (
+                    <div
+                        data-post-refold-slot="pytorch-frustratometer"
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-purple-500/30 bg-[#151d2e] px-3.5 py-2.5"
+                    >
+                        <div>
+                            <div className="flex items-center gap-2 text-xs font-semibold text-slate-100">
+                                <span>PyTorch Frustratometer</span>
+                                <span className="rounded-full border border-purple-500/40 bg-purple-500/15 px-2 py-0.5 text-[10px] font-semibold text-purple-200">Slot ready</span>
+                            </div>
+                            <div className="mt-0.5 text-[11px] text-slate-400">
+                                Local configurational &amp; mutational frustration on refolded complexes (ready for PyTorch Frustratometer backend).
+                            </div>
+                        </div>
+                    </div>
+                )}
             </>}
         </fieldset>)}
     </div>;

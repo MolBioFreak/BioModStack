@@ -107,11 +107,95 @@ export function InitialInvocationSettings({ draft, onChange }: {
     onChange: (draft: InitialInvocationDraft, envelope: ReturnType<typeof initialInvocationEnvelope>) => void;
 }) {
     const change = (value: InitialInvocationDraft) => onChange(value, initialInvocationEnvelope(value));
-    return <section aria-label="Optional operations" className="space-y-4">
-        <label><input type="checkbox" aria-label="Enable optional operations" checked={draft.enabled} onChange={event => change({ ...draft, enabled: event.target.checked })} />Optional operations</label>
-        {!draft.enabled && <p>OFF: generation only. Operation drafts remain saved.</p>}
-        <details open={draft.enabled || undefined}><summary>Retained operation settings</summary>
-            <BinderInvocationPlan stages={draft.stages} onChange={stages => change({ ...draft, stages })} />
-        </details>
-    </section>;
+    const stageSummary = (kind: 'sequence_design' | 'prediction' | 'md') => {
+        const matching = draft.stages.filter(item => item.enabled && item.stage.kind === kind);
+        const activeModels = matching.flatMap(item =>
+            item.stage.kind === 'maturation'
+                ? []
+                : item.stage.models
+                    .filter(call => !item.disabledInvocationIds?.includes(call.invocation_id!))
+                    .map(call => call.model_id),
+        );
+        return { count: matching.length, models: [...new Set(activeModels)] };
+    };
+    const seqInfo = stageSummary('sequence_design');
+    const predInfo = stageSummary('prediction');
+    const mdInfo = stageSummary('md');
+    const seqOn = draft.enabled && seqInfo.models.length > 0;
+    const predOn = draft.enabled && predInfo.models.length > 0;
+    const mdOn = draft.enabled && mdInfo.models.length > 0;
+
+    return (
+        <section aria-label="Optional operations" className="space-y-4 text-slate-100">
+            <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-800 bg-[#111726] p-4">
+                <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-sm font-semibold text-slate-100">Optional Post-Generation Operations</h3>
+                        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                            draft.enabled
+                                ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                                : 'border-slate-700 bg-[#151d2e] text-slate-400'
+                        }`}>
+                            {draft.enabled ? 'Enabled' : 'Off'}
+                        </span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-400">
+                        {draft.enabled
+                            ? 'Chain sequence design, structure verification, and MD onto generated outputs.'
+                            : 'OFF: generation only. Operation drafts remain saved.'}
+                    </p>
+                </div>
+                <label className="inline-flex cursor-pointer items-center gap-2.5 text-xs font-medium text-slate-200">
+                    <input
+                        type="checkbox"
+                        aria-label="Enable optional operations"
+                        className="sr-only peer"
+                        checked={draft.enabled}
+                        onChange={event => change({ ...draft, enabled: event.target.checked })}
+                    />
+                    <span
+                        aria-hidden="true"
+                        className="relative inline-flex h-5 w-9 shrink-0 rounded-full bg-slate-700 transition-colors peer-checked:bg-emerald-500 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-sky-500 after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-transform peer-checked:translate-x-0 peer-checked:after:translate-x-4"
+                    />
+                    <span>Optional operations</span>
+                </label>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2.5 rounded-xl border border-slate-800 bg-[#111726] p-3.5 md:grid-cols-4" aria-label="Post-generation pipeline overview">
+                <div className="rounded-lg border border-blue-500/50 bg-blue-500/10 px-3 py-2.5">
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-blue-300">Stage 1 · Required</div>
+                    <div className="mt-0.5 text-xs font-semibold text-slate-100">De Novo Generator</div>
+                    <div className="mt-0.5 text-[11px] text-blue-200/80">Generated backbones &amp; complexes</div>
+                </div>
+                <div className={`rounded-lg border px-3 py-2.5 ${seqOn ? 'border-emerald-500/45 bg-emerald-500/10' : 'border-slate-800 bg-[#151d2e]/70 opacity-75'}`}>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Stage 2 · {seqOn ? 'Enabled' : 'Optional'}</div>
+                    <div className="mt-0.5 text-xs font-semibold text-slate-100">Sequence Design</div>
+                    <div className={`mt-0.5 text-[11px] ${seqOn ? 'text-emerald-300' : 'text-slate-400'}`}>
+                        {seqInfo.models.length > 0 ? seqInfo.models.join(', ') : 'Add ProteinMPNN, FA-MPNN, LigandMPNN, Caliby, or ProtonPotts'}
+                    </div>
+                </div>
+                <div className={`rounded-lg border px-3 py-2.5 ${predOn ? 'border-emerald-500/45 bg-emerald-500/10' : 'border-slate-800 bg-[#151d2e]/70 opacity-75'}`}>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Stage 3 · {predOn ? 'Enabled' : 'Optional'}</div>
+                    <div className="mt-0.5 text-xs font-semibold text-slate-100">Structure Verification</div>
+                    <div className={`mt-0.5 text-[11px] ${predOn ? 'text-emerald-300' : 'text-slate-400'}`}>
+                        {predInfo.models.length > 0 ? `${predInfo.models.join(', ')} · Frustratometer slot ready` : 'Add Boltz-2, Protenix, Fold-CP, or ESMFold2'}
+                    </div>
+                </div>
+                <div className={`rounded-lg border px-3 py-2.5 ${mdOn ? 'border-emerald-500/45 bg-emerald-500/10' : 'border-slate-800 bg-[#151d2e]/70 opacity-75'}`}>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Stage 4 · {mdOn ? 'Enabled' : 'From Results'}</div>
+                    <div className="mt-0.5 text-xs font-semibold text-slate-100">MD / Refinement</div>
+                    <div className={`mt-0.5 text-[11px] ${mdOn ? 'text-emerald-300' : 'text-slate-400'}`}>
+                        {mdInfo.models.length > 0 ? 'GROMACS MD wired' : 'Launch on top winners from Results'}
+                    </div>
+                </div>
+            </div>
+
+            <details open={draft.enabled || undefined} className="rounded-xl border border-slate-800 bg-[#0d1321] p-4">
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-slate-300">Retained operation settings</summary>
+                <div className="mt-4">
+                    <BinderInvocationPlan stages={draft.stages} onChange={stages => change({ ...draft, stages })} />
+                </div>
+            </details>
+        </section>
+    );
 }
