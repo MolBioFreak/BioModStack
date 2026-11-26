@@ -99,8 +99,8 @@ async def get_md_artifacts(job_id: str, session: AsyncSession = Depends(get_sess
 @router.get("/{job_id}/md/analysis", description=f"Authorization scope: {MD_AUTHORIZATION_SCOPE}")
 async def get_md_analysis(
     job_id: str,
-    recompute: bool = False,
     session: AsyncSession = Depends(get_session),
+    recompute: bool = False,
 ) -> dict:
     try:
         job = await _job(job_id, session)
