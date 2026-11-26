@@ -308,9 +308,13 @@ def test_c05_run_tool_mock_transport_and_socket_guard(monkeypatch: pytest.Monkey
     readback = client.read_run_outputs("run_tk_1")
     assert readback == outputs
 
-    # Under the conftest socket guard, a real HTTP attempt raises StatsToolkitUnavailableError.
+    # Under the conftest socket guard, a real HTTP attempt to 18181 raises StatsToolkitUnavailableError.
+    # Under --noconftest (live pass where sockets are open and 18181 is up), probe an unreachable port.
+    import socket as _socket
     monkeypatch.delenv("BMS_STATS_TOOLKIT_URL", raising=False)
-    real_client = StatsToolkitClient(base_url="http://127.0.0.1:18181")
+    socket_guard_active = getattr(_socket.socket, "__name__", "") != "socket"
+    probe_url = "http://127.0.0.1:18181" if socket_guard_active else "http://127.0.0.1:1"
+    real_client = StatsToolkitClient(base_url=probe_url)
     with pytest.raises(StatsToolkitUnavailableError):
         real_client.run_tool("ws_existing_bms", "descriptive.summary", {"columns": {"x": [1.0, 2.0]}})
 

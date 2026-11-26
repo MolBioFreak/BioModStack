@@ -37,9 +37,12 @@ def _run_validator(
     if status_output is not None:
         command.extend(["--status-output", str(status_output)])
     command.append(marker_argument)
+    env = dict(os.environ)
+    env["BMS_STATS_TOOLKIT_URL"] = "off"
     return subprocess.run(
         command,
         cwd=tmp_path,
+        env=env,
         text=True,
         capture_output=True,
         check=False,

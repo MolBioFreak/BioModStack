@@ -24,6 +24,7 @@ def test_distributions_and_pair_denominators_are_candidate_bound(monkeypatch):
     import json, httpx
     from services.stats_toolkit_client import StatsToolkitClient
     # Without Toolkit, no local fallback computes statistics
+    monkeypatch.setenv('BMS_STATS_TOOLKIT_URL', 'off')
     unavail=scientific.summarize([projected('a',0,0.2),projected('b',0.8,None),projected('c',None,0.4)])
     assert unavail['metrics']['complex_plddt']['statistics'] is None
     assert unavail['metrics']['complex_plddt']['reason_code']=='stats_toolkit_unavailable'
