@@ -144,14 +144,14 @@ def resolve_hub_capabilities(request: Request | None) -> dict[str, bool]:
 
     configured_features: dict[str, Any] = {}
     try:
-        from routers.system import _effective_runtime_features, _install_profile_response
+        from services.runtime_features import effective_runtime_features, install_profile_snapshot
 
-        snapshot = _install_profile_response()
+        snapshot = install_profile_snapshot()
         resolved = snapshot.get("resolved") if isinstance(snapshot, Mapping) else {}
         features = resolved.get("features") if isinstance(resolved, Mapping) else {}
         if isinstance(features, Mapping):
             configured_features = (
-                _effective_runtime_features(request, features)
+                effective_runtime_features(request, features)
                 if request is not None
                 else dict(features)
             )

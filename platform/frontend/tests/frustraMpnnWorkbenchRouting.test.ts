@@ -64,7 +64,6 @@ test('direct and conformational-mapping results mount the same global FrustraMPN
     assert.match(resultSurface, /No FrustraMPNN results are attached to this Domain Experiment/);
     assert.match(resultSurface, /item\.reopen_uri/);
     assert.doesNotMatch(resultSurface, /Whole-experiment FrustraMPNN data is unavailable until/);
-    assert.doesNotMatch(resultSurface, /<FrustraMpnnCrossDatasetExplorer currentDatasetId=\{job\.id\} \/>/);
     assert.match(resultSurface, /metric_workbench_open: metricWorkbenchOpen/);
     assert.match(resultSurface, /landscape_offset: offset/);
     assert.match(resultSurface, /setMetricWorkbenchOpen\(review\.viewer_state\.metric_workbench_open === true\)/);

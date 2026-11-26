@@ -2708,6 +2708,7 @@ export const downloadDesignPdb = (designId: string, document?: DesignDocumentSel
 
 // Per-residue metrics for charts
 export interface ResidueMetrics {
+    schema_name?: string;
     design_id: string;
     design_name: string;
     residue_numbers: number[];
@@ -2716,8 +2717,8 @@ export interface ResidueMetrics {
 }
 
 // Fetch per-residue metrics for a design
-export const fetchDesignResidueMetrics = (designId: string, document?: DesignDocumentSelection) =>
-    api.get<ResidueMetrics>(`/api/designs/${designId}/residue-metrics`, { params: document });
+export const fetchDesignResidueMetrics = (designId: string, document?: DesignDocumentSelection, signal?: AbortSignal) =>
+    api.get<ResidueMetrics>(`/api/designs/${designId}/residue-metrics`, { params: document, signal });
 
 export interface ChainMetric {
     type: 'protein' | 'dna' | 'rna' | 'ligand' | 'unknown';
@@ -2752,8 +2753,8 @@ export interface FampnnPsceProfile {
 }
 
 // Fetch per-chain metrics for a design
-export const fetchChainMetrics = (designId: string, document?: DesignDocumentSelection) =>
-    api.get<unknown>(`/api/designs/${designId}/chain-metrics`, { params: document });
+export const fetchChainMetrics = (designId: string, document?: DesignDocumentSelection, signal?: AbortSignal) =>
+    api.get<unknown>(`/api/designs/${designId}/chain-metrics`, { params: document, signal });
 
 // Power control (eco mode + manual)
 export const fetchPowerProfile = () =>
@@ -4519,8 +4520,8 @@ export interface PAEData {
     confidence_file?: string | null;
 }
 
-export const fetchPAEData = (designId: string, maxSize = 1024) =>
-    api.get<unknown>(`/api/designs/${designId}/pae`, { params: { max_size: maxSize } });
+export const fetchPAEData = (designId: string, maxSize = 1024, signal?: AbortSignal) =>
+    api.get<unknown>(`/api/designs/${designId}/pae`, { params: { max_size: maxSize }, signal });
 
 // ============================================================
 // DEBUG ORCHESTRATOR OVERRIDES

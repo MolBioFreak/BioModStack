@@ -54,6 +54,7 @@ export default defineConfig({
             './tests/vitest/esmfold2SettingsMounted.test.tsx',
             './tests/vitest/launcherNativeDemandMounted.test.tsx',
             './tests/vitest/resultsDemandMounted.test.tsx',
+            './tests/vitest/resultsViewerReaderSelectionMounted.test.tsx',
             './tests/vitest/resultsOverviewSummaryDemand.test.tsx',
             './tests/vitest/cmPickerBoundedMounted.test.tsx',
             './tests/vitest/molBioDigestApiAuthority.test.tsx',

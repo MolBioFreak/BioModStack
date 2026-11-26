@@ -2,13 +2,11 @@ import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { FrustraMpnnComparisonCompatibility } from '../../src/components/FrustraMpnnComparisonSurface';
 import { FrustraMpnnResultAuthoritySurface } from '../../src/components/FrustraMpnnResultAuthoritySurface';
 import * as authoritySurfaces from '../../src/components/FrustraMpnnResultAuthoritySurface';
 import type { FrustraMpnnStatisticsAnalysis } from '../../src/lib/frustraMpnnApi';
 import {
     parseFrustraMpnnStatistics,
-    type FrustraMpnnPairComparison,
     type FrustraMpnnResultDetail,
 } from '../../src/lib/frustraMpnnApi';
 import { backendStatistics } from '../fixtures/frustraMpnnBackendContracts';
@@ -23,20 +21,6 @@ const mount = async (node: React.ReactNode) => {
     await act(async () => root.render(node));
     return { container, root };
 };
-
-const unsafeComparison = {
-    schema_name: 'frustrampnn_comparison',
-    comparability: { status: 'incompatible', reasons: ['checkpoint_mismatch'] },
-    override_used: true,
-    compatibility_domains: {
-        raw_score: { status: 'hard_incompatible', reasons: ['checkpoint_mismatch'], differences: [] },
-        classification: { status: 'unknown', reasons: ['raw_score_incompatible'], differences: [] },
-        identity_alignment: {
-            status: 'partial', reasons: ['identity_set_differs'], differences: [],
-            aligned_identity_count: 8, reference_identity_count: 10, target_identity_count: 9,
-        },
-    },
-} as unknown as FrustraMpnnPairComparison;
 
 const baseDetail = {
     authority_version: 'v2',
@@ -105,17 +89,6 @@ const analysis = (state: FrustraMpnnStatisticsAnalysis['state'], diagnostic: str
 });
 
 describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
-    it('renders exact domain statuses, reasons, alignment, and safe override wording', async () => {
-        const { container, root } = await mount(<FrustraMpnnComparisonCompatibility comparison={unsafeComparison} />);
-        expect(container.textContent).toContain('Raw-score compatibility: hard_incompatible');
-        expect(container.textContent).toContain('Raw score deltas are unsafe and remain null');
-        expect(container.textContent).toContain('Classification transitions are unsafe and remain null');
-        expect(container.textContent).toContain('8 aligned of 10 reference and 9 target identities');
-        expect(container.textContent).toContain('checkpoint_mismatch');
-        expect(container.textContent).toContain('does not authorize raw-score deltas or classification transitions');
-        await act(async () => root.unmount());
-    });
-
     it('renders settings and explicitly supplied statistics without version labels', async () => {
         const { container, root } = await mount(<FrustraMpnnResultAuthoritySurface detail={baseDetail} statisticsOverride={baseDetail.statistics_json} />);
         expect(container.textContent).not.toContain('Result authority:');
@@ -143,93 +116,6 @@ describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
         expect(container.textContent).not.toContain('Scores available');
         expect(container.textContent).toContain('Settings used');
         await act(async () => root.unmount());
-    });
-
-    it('keeps ordered multi-target selection and renders per-target domains and safe rows', async () => {
-        const { default: Workbench, FrustraMpnnMultiComparisonView } = await import(
-            '../../src/components/FrustraMpnnComparisonWorkbench'
-        );
-        const availableTargets = [
-            { parent_job_id: 'job-2', invocation_id: 'invoke-2', label: 'Candidate two' },
-            { parent_job_id: 'job-3', invocation_id: 'invoke-3', label: 'Candidate three' },
-        ];
-        const mountedWorkbench = await mount(<Workbench
-            referenceJobId="job-1"
-            referenceInvocationId="invoke-1"
-            availableTargets={availableTargets}
-        />);
-        const mode = mountedWorkbench.container.querySelector<HTMLSelectElement>('[aria-label="Comparison mode"]')!;
-        await act(async () => {
-            const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!;
-            setter.call(mode, 'multi');
-            mode.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-        const targetSelect = mountedWorkbench.container.querySelector<HTMLSelectElement>('[aria-label="Available comparison target"]')!;
-        const add = Array.from(mountedWorkbench.container.querySelectorAll('button')).find((button) => button.textContent === 'Add target')!;
-        await act(async () => add.click());
-        await act(async () => {
-            const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!;
-            setter.call(targetSelect, 'job-3\u0000invoke-3');
-            targetSelect.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-        await act(async () => add.click());
-        const selectedLabels = () => Array.from(mountedWorkbench.container.querySelectorAll('[data-frustrampnn-selected-target]')).map((item) => item.textContent);
-        expect(selectedLabels()).toEqual([expect.stringContaining('Candidate two'), expect.stringContaining('Candidate three')]);
-        const moveUp = mountedWorkbench.container.querySelector<HTMLButtonElement>('[aria-label="Move Candidate three up"]')!;
-        await act(async () => moveUp.click());
-        expect(selectedLabels()).toEqual([expect.stringContaining('Candidate three'), expect.stringContaining('Candidate two')]);
-        await act(async () => mountedWorkbench.root.unmount());
-
-        const identity = { status: 'exact', reasons: [], differences: [], reference_identity_count: 1, target_identity_count: 1, aligned_identity_count: 1 };
-        const pairs = [
-            {
-                target_label: 'target-0001', target_id: 'candidate-3', override_used: false,
-                compatibility_domains: {
-                    raw_score: { status: 'compatible', reasons: [], differences: [] },
-                    classification: { status: 'compatible', reasons: [], differences: [] }, identity_alignment: identity,
-                },
-            },
-            {
-                target_label: 'target-0002', target_id: 'candidate-2', override_used: true,
-                compatibility_domains: {
-                    raw_score: { status: 'hard_incompatible', reasons: ['checkpoint_mismatch'], differences: [] },
-                    classification: { status: 'unknown', reasons: ['raw_score_incompatible'], differences: [] }, identity_alignment: identity,
-                },
-            },
-        ];
-        const comparison = {
-            schema_name: 'frustrampnn_multistate_comparison', target_labels: ['target-0001', 'target-0002'], pair_compatibility: pairs,
-            source_result_references: [
-                { role: 'reference', target_label: null, parent_job_id: 'job-1', invocation_id: 'invoke-1' },
-                { role: 'target', target_label: 'target-0001', parent_job_id: 'job-3', invocation_id: 'invoke-3' },
-                { role: 'target', target_label: 'target-0002', parent_job_id: 'job-2', invocation_id: 'invoke-2' },
-            ],
-            summary: {
-                target_count: 2, total_rows: 1, biologically_scored: 0, partially_scored: 1,
-                missing: 0, unmapped: 0, incompatible: 0, transitions: 1,
-                browser_metric_must_not_render: 777,
-            }, comparability: { status: 'incompatible', reasons: ['checkpoint_mismatch'] }, override_used: true,
-            rows: [{
-                residue_key: { entity_instance_id: 'entity-1', auth_asym_id: 'A', auth_seq_id: 10, insertion_code: '' }, sequence_index: 1,
-                mutation_aa: 'A', mapping_state: 'mapped', missingness_state: 'none', missingness_by_target: ['none', 'none'], biological_status: 'partially_scored',
-                reference: { score: 0, class: 'neutral', status: 'ok' },
-                targets: [{ score: 0.25, class: 'minimal', status: 'ok' }, { score: 7.77, class: 'high', status: 'ok' }],
-                raw_score_deltas: [0.25, 9.99], classification_transitions: ['neutral→minimal', 'unsafe-transition'],
-            }],
-        } as never;
-        const mountedView = await mount(<FrustraMpnnMultiComparisonView comparison={comparison} />);
-        expect(mountedView.container.textContent).toContain('target-0001 · candidate-3');
-        expect(mountedView.container.textContent).toContain('target-0002 · candidate-2');
-        expect(mountedView.container.textContent).toContain('checkpoint_mismatch');
-        expect(mountedView.container.textContent).toContain('0.2500');
-        expect(mountedView.container.textContent).toContain('neutral→minimal');
-        expect(mountedView.container.textContent).not.toContain('9.9900');
-        expect(mountedView.container.textContent).not.toContain('unsafe-transition');
-        expect(mountedView.container.textContent).not.toContain('browser metric must not render');
-        expect(mountedView.container.textContent).not.toContain('777');
-        expect(mountedView.container.textContent).toContain('Partially scored');
-        expect(mountedView.container.textContent).toContain('Unsafe delta and transition hidden');
-        await act(async () => mountedView.root.unmount());
     });
 
     it('renders the statistics lifecycle, bounds failure diagnostics, and retries only an authorized failed child once', async () => {

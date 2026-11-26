@@ -13,7 +13,11 @@ import { useThemeColors } from './useThemeColors';
 import {
     buildFileDownloadUrl,
     buildFileStreamUrl,
+    fetchChainMetrics,
+    fetchDesignResidueMetrics,
+    fetchPAEData,
     fetchViewerVolumes,
+    toggleDesignFavorite,
     type ChainMetric,
     type ChainPairIptmData,
     type ContactMapData,
@@ -540,17 +544,15 @@ export default function StructureViewerPane({
     const residueQuery = useQuery({
         queryKey:['viewer-residue-metrics',selectedDesignId],
         enabled: Boolean(selectedDesignId),
-        queryFn:async ({signal}) => {
-            const response=await fetch(`/api/designs/${selectedDesignId}/residue-metrics`,{signal});
-            if (!response.ok) throw Error('Confidence request failed');
-            return response.json();
+        queryFn: async ({ signal }) => {
+            const response = await fetchDesignResidueMetrics(selectedDesignId!, undefined, signal);
+            return response.data;
         }, retry:false,
     });
     const nativeMetrics = Boolean(selectedDesign?.scientific_structure_document || residueQuery.data?.schema_name === 'core_protein_viewer_metric');
     const chainQuery = useQuery({queryKey:['viewer-native-chains',selectedDesignId],enabled:Boolean(selectedDesignId && nativeMetrics),queryFn:async ({signal})=>{
-        const response=await fetch(`/api/designs/${selectedDesignId}/chain-metrics`,{signal});
-        if(!response.ok) throw Error('Chain metric request failed');
-        return response.json();
+        const response = await fetchChainMetrics(selectedDesignId!, undefined, signal);
+        return response.data;
     },retry:false});
     const nativeDocument = selectedDesign?.id === selectedDesignId && selectedDesign.scientific_structure_document?.candidateId === selectedDesignId
         && !(colorMode === 'cdr' && antibodyStructureUrl) ? selectedDesign.scientific_structure_document : null;
@@ -582,9 +584,8 @@ export default function StructureViewerPane({
 
     const paeRun = viewerAnalyses?.paeMatrixRun ?? null;
     const directPae = useQuery({queryKey:['viewer-native-pae',selectedDesignId,nativeDocument?.contentSha256],enabled:Boolean(nativeDocument && selectedDesignId),queryFn:async ({signal})=>{
-        const response=await fetch(`/api/designs/${selectedDesignId}/pae?max_size=1024`,{signal});
-        if(!response.ok) throw Error('Native PAE request failed');
-        return response.json();
+        const response = await fetchPAEData(selectedDesignId!, 1024, signal);
+        return response.data;
     },retry:false});
     const paeRaw = directPae.data ?? viewerAnalyses?.paeMatrixData ?? null;
     const paeData = requiresBoundMetrics || nativeMetrics ? null : paeRaw as PAEData | null;
@@ -2775,7 +2776,7 @@ export default function StructureViewerPane({
             {selectedDesign && (
                 <button
                     onClick={async () => {
-                        await fetch(`/api/designs/${selectedDesign.id}/favorite`, { method: 'POST' });
+                        await toggleDesignFavorite(selectedDesign.id, !selectedDesign.is_favorite);
                     }}
                     className={`w-full py-2 rounded-lg text-sm font-medium transition-colors ${selectedDesign.is_favorite
                         ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/40'

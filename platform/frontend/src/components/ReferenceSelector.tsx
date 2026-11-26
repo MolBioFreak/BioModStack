@@ -6,7 +6,7 @@
 
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchInputPresets, fetchJobs, fetchDesigns } from '../lib/api';
+import { fetchInputPresets, fetchJobs, fetchDesigns, listCachedRcsbPdbs } from '../lib/api';
 
 export interface ReferenceStructure {
     url: string;
@@ -114,9 +114,8 @@ export function ReferenceSelector({ onSelect, selectedRef, currentDesignId }: Re
     const { data: cachedData, isLoading: cachedLoading } = useQuery({
         queryKey: ['rcsb-cached'],
         queryFn: async () => {
-            const res = await fetch('/api/rcsb');
-            if (!res.ok) throw new Error('Failed to fetch cached PDBs');
-            return res.json();
+            const res = await listCachedRcsbPdbs();
+            return res.data;
         },
     });
     const cachedPdbs: CachedPdb[] = cachedData?.cached ?? [];

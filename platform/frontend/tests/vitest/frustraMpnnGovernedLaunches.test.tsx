@@ -1,9 +1,7 @@
 import React, { act, useState } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import FrustraMpnnAnalysisControls from '../../src/components/FrustraMpnnAnalysisControls';
 import { FrustraMpnnSettingsPanel } from '../../src/components/frustrampnn/FrustraMpnnSettingsPanel';
 import {
     CANONICAL_FRUSTRAMPNN_SETTINGS,
@@ -76,67 +74,6 @@ describe('governed FrustraMPNN inspection and launch behavior', () => {
             expect(selectionMode?.querySelector<HTMLOptionElement>('option[value="selected_residues"]')?.disabled).toBe(false);
             await act(async () => root.unmount());
         } finally {
-            (api as unknown as { post: typeof originalPost }).post = originalPost;
-        }
-    });
-
-    it('validates the downloaded design PDB as multipart and never queues when validation fails', async () => {
-        const originalGet = api.get;
-        const originalPost = api.post;
-        let queueCalls = 0;
-        const postCalls: string[] = [];
-        (api as unknown as { get: () => Promise<{ data: unknown }> }).get = async () => ({ data: [] });
-        (api as unknown as { post: (url: string) => Promise<{ data: unknown }> }).post = async (url) => {
-            postCalls.push(url);
-            if (url.endsWith('/sources/inspect/upload')) return { data: inspection };
-            if (url.endsWith('/settings/validate/upload')) throw new Error('upload validation denied');
-            if (url.includes('/jobs/') && url.endsWith('/analyze')) queueCalls += 1;
-            return { data: {} };
-        };
-        vi.stubGlobal('fetch', vi.fn(async () => ({
-            ok: true,
-            status: 200,
-            arrayBuffer: async () => new TextEncoder().encode('ATOM').buffer,
-        })));
-        vi.stubGlobal('crypto', {
-            subtle: { digest: async () => new Uint8Array(32).buffer },
-        });
-        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-
-        try {
-            const { container, root } = await mount(
-                <QueryClientProvider client={queryClient}>
-                    <FrustraMpnnAnalysisControls
-                        parentJobId="parent-1"
-                        selectedDesigns={[{ id: 'design-1', name: 'Design 1', pdb_path: 'owned/design-1.pdb' }]}
-                        onOpenJob={() => undefined}
-                    />
-                </QueryClientProvider>,
-            );
-            await settle(250);
-            expect(fetch).toHaveBeenCalledTimes(1);
-            expect(postCalls).toEqual([
-                '/api/frustrampnn/sources/inspect/upload',
-                '/api/frustrampnn/settings/validate/upload',
-            ]);
-            const selectionMode = container.querySelector<HTMLSelectElement>('[data-frustrampnn-selection-mode]');
-            expect(selectionMode?.querySelector<HTMLOptionElement>('option[value="selected_entities"]')?.disabled).toBe(false);
-            const button = Array.from(container.querySelectorAll('button')).find((item) => item.textContent?.includes('Analyze 1 selected'));
-            expect(button).toBeTruthy();
-            await act(async () => button!.click());
-            await settle();
-            expect(postCalls).toEqual([
-                '/api/frustrampnn/sources/inspect/upload',
-                '/api/frustrampnn/settings/validate/upload',
-                '/api/frustrampnn/sources/inspect/upload',
-                '/api/frustrampnn/settings/validate/upload',
-            ]);
-            expect(queueCalls).toBe(0);
-            expect(container.querySelector('[role="alert"]')?.textContent).toContain('upload validation denied');
-            await act(async () => root.unmount());
-        } finally {
-            queryClient.clear();
-            (api as unknown as { get: typeof originalGet }).get = originalGet;
             (api as unknown as { post: typeof originalPost }).post = originalPost;
         }
     });

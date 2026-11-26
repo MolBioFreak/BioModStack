@@ -28,8 +28,11 @@ def _digest_without(document: dict[str, Any], field: str) -> str:
     return _canonical_sha256(value)
 
 
-def _reverse_complement(site: str) -> str:
+def reverse_complement(site: str) -> str:
     return site.translate(IUPAC_COMPLEMENT)[::-1]
+
+
+_reverse_complement = reverse_complement
 
 
 def _group_id(kind: str, value: Any) -> str:

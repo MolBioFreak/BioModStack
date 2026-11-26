@@ -5287,6 +5287,7 @@ def _compile_native_model_overrides(
     explicit_weights_root: Optional[str],
     explicit_path_defaults: Dict[str, Any],
     is_generic_sequence_command: bool,
+    definition: Any,
     _preview_only: bool,
 ):
     """Compile native-transport model overrides; returns invocation if handled, else None."""
@@ -6742,6 +6743,7 @@ def compile_nextflow_invocation(
         explicit_weights_root=explicit_weights_root,
         explicit_path_defaults=explicit_path_defaults,
         is_generic_sequence_command=is_generic_sequence_command,
+        definition=definition,
         _preview_only=_preview_only,
     )
     if native_override_result is not None:

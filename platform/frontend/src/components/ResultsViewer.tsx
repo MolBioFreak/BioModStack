@@ -6,7 +6,7 @@ import { canonicalScalars, scalarCell, scalarEvidence, NativeScalarControls, use
 import { Fragment, lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { MaturationEvidence } from './MaturationEvidence';
 import { parseScientificPae } from '../lib/scientificViewerIdentity';
-import { hashKey, useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
+import { hashKey, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams, useNavigate, useLocation } from 'react-router-dom';
 
 import { CheckpointReview } from './CheckpointReview';
@@ -2367,6 +2367,22 @@ function ResultsViewerContent() {
     const requiresClientOnlySort = useClientRenderedValueSort
         || (!SERVER_SORT_FIELDS.has(sortField as DesignSortField) && isTableColumnSortable(sortField));
     const forceBulkLoadForSorting = !nativeResults && (useClientSourcePagination || requiresClientOnlySort);
+    const selectedResultsReader = !activeJob
+        ? 'design_workbench'
+        : activeJob.model_id === 'conformational_mapping'
+            ? 'conformational_mapping'
+            : frustraMpnnSurfaceAvailable && resultSurface === 'frustrampnn'
+                ? 'frustrampnn'
+                : nativeSequenceResultKind(activeJob)
+                    ? 'native_sequence'
+                    : activeJob.model_id === 'bindcraft2'
+                        ? 'bindcraft2'
+                        : isNativeBinderGeneration(activeJob)
+                            ? 'native_binder_generation'
+                            : activeJob.model_id === 'molecular_dynamics'
+                                ? 'molecular_dynamics'
+                                : 'design_workbench';
+    const usesGenericDesignWorkbench = Boolean(activeJob) && selectedResultsReader === 'design_workbench';
     const isReviewStageJob = isStageReviewJob(activeJob);
     const designQueryFilters = useMemo<DesignFilters>(() => ({
         native: nativeResults ? nativeQuery : undefined,
@@ -2428,8 +2444,7 @@ function ResultsViewerContent() {
         queryKey: ['designs', designQueryFilters],
         queryFn: () => fetchDesigns(designQueryFilters),
         placeholderData: (previous, previousQuery) => nativeResults && hashKey([{...previousQuery?.queryKey[1] as DesignFilters, limit: undefined, offset: undefined}]) === nativeReadScope ? previous : undefined,
-        enabled: !!activeJob
-            && activeJob.model_id !== 'molecular_dynamics'
+        enabled: usesGenericDesignWorkbench
             && !reviewSelectionRequired,
     });
     // A failed retry can be paused while hidden/offline. It is not still loading.
@@ -2487,7 +2502,7 @@ function ResultsViewerContent() {
     const { data: selectedDesignDetailData, isError: selectedDesignError, isLoading: selectedDesignLoading } = useQuery({
         queryKey: ['design', selectedDesignId, selectedJobId],
         queryFn: () => (selectedDesignId ? fetchDesignById(selectedDesignId, selectedJobId).then((response) => response.data) : null),
-        enabled: !!selectedDesignId,
+        enabled: usesGenericDesignWorkbench && !!selectedDesignId,
         staleTime: 30_000,
     });
     const selectedDesign = selectedDesignError ? undefined : selectedDesignDetailData ?? designs.find(d => d.id === selectedDesignId);
@@ -2572,7 +2587,7 @@ function ResultsViewerContent() {
         queryKey: ['backboneSummary', selectedJobId, activeRfArtifactGroup],
         queryFn: () => fetchBackboneSummary(selectedJobId, activeRfArtifactGroup),
         enabled: shouldFetchBackboneSummary({
-            active: Boolean(activeJob),
+            active: usesGenericDesignWorkbench,
             showReviewWorkingSetPanel,
             reviewSelectionRequired,
         }),
@@ -5222,7 +5237,7 @@ function ResultsViewerContent() {
         && !resultModelHierarchy.some(item => item.modelId === resultSurface)) {
         return <div role="alert">Requested model {resultSurface} is unavailable in this Job lineage. {resultModelSelector}</div>;
     }
-    if (requestedDesignId && activeJob?.model_id !== 'bindcraft2' && !isNativeBinderGeneration(activeJob) && (selectedDesignError || (!selectedDesignLoading && !selectedDesign)
+    if (requestedDesignId && usesGenericDesignWorkbench && (selectedDesignError || (!selectedDesignLoading && !selectedDesign)
         || (scopedModelId && selectedDesign && selectedDesign.provenance?.producer_model_id !== scopedModelId))) {
         return <div role="alert">Requested Design {requestedDesignId} is unavailable in this Job lineage. No other candidate has been selected.</div>;
     }

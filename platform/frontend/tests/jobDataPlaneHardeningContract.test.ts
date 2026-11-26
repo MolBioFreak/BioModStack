@@ -9,8 +9,6 @@ const consumers: Record<string, RegExp> = {
   'ReferenceSelector.tsx': /fetchJobs\(\{ limit: 500, summary: true \}, undefined, signal\)/u,
   'BatchComparePane.tsx': /fetchJobs\(\{ limit: 500, summary: true(?:, include_children: nativeMetrics)? \}, undefined, signal\)/u,
   'Dashboard.tsx': /fetchJobs\(\{ limit: 100, offset,[\s\S]*?summary: true \},\s*queryClient\.getQueryData/u,
-  'LigandSelector.tsx': /fetchJobs\(\{ status: 'completed', limit: 50, summary: true \}\)/u,
-  'DesignBrowser.tsx': /fetchJobs\(\{ limit: 500, summary: true \}, undefined, signal\)/u,
   'QuickViewer.tsx': /fetchJobs\(\{ status: 'completed', limit: 100, summary: true \}, queryClient\.getQueryData/u,
   'ResultsViewer.tsx': /fetchJobs\(\{\s*include_children: true,\s*limit: 100,\s*summary: true,\s*q: debouncedJobSelectorSearch \|\| undefined,/u,
   'NGSToolkit.tsx': /fetchJobs\(\{[\s\S]*?model_ids:[\s\S]*?include_children: true,[\s\S]*?summary: true,[\s\S]*?limit: pageSize,[\s\S]*?offset: page \* pageSize,[\s\S]*?\}, queryClient\.getQueryData\(queryKey\), signal\)/u,

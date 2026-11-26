@@ -13,6 +13,7 @@ from typing import Literal, Sequence
 import rfc8785
 from pydantic import BaseModel, ConfigDict, Field
 
+from restriction_catalog_integrity import reverse_complement
 from services.restriction_catalog import (
     ANALYSIS_CACHE_MAXIMUM_ENTRIES,
     ANALYSIS_CACHE_MAXIMUM_RESULT_WEIGHT_BYTES,
@@ -68,7 +69,6 @@ _IUPAC = MappingProxyType(
         "H": frozenset("ACT"), "V": frozenset("ACG"), "N": frozenset("ACGT"),
     }
 )
-_COMPLEMENT = str.maketrans("ACGTRYSWKMBDHVN", "TGCAYRSWMKVHDBN")
 
 
 class InvalidDNAError(ValueError):
@@ -266,10 +266,6 @@ _cache_lock = threading.RLock()
 _cache: OrderedDict[tuple[str, ...], _CacheEntry] = OrderedDict()
 _compiled_lock = threading.Lock()
 _compiled: dict[str, tuple[frozenset[str], ...]] = {}
-
-
-def reverse_complement(sequence: str) -> str:
-    return sequence.translate(_COMPLEMENT)[::-1]
 
 
 def _retained_weight(value: object, seen: set[int] | None = None) -> int:

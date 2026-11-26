@@ -23,7 +23,7 @@ unchanged. Consumers keep incompatible metric cohorts separate.
 | G-05 | Each active criterion requires finite evidence in its declared domain. Retain every input disposition and computation-failure reason. | `scripts/lib/filtering`, `rf_filter_criteria.py`, `rf_filter_stage_accounting.py` |
 | G-06 | Match declared publications to persisted candidate identities. Retain deliberate rejections separately from lost results. | Existing producer manifests, `core_protein_result_contract.py`, native publication services, `result_state_integrity.py` |
 | G-07 | Paper-style interface rank requires compatible native scalar iPTM and Rosetta interface energy from the same candidate/interface. | `design_metrics.py`, existing ingestion and design response paths |
-| G-08 | Preserve ESMFold2 MSA inputs through argument construction. Display requested and effective values from retained execution receipts. | Existing ESMFold2 module, `core_protein_execution_settings.py`, `ExecutionSettingsPanel.tsx` |
+| G-08 | Preserve ESMFold2 MSA inputs through argument construction. Retain requested and effective values in persisted execution receipts (`/api/jobs/{id}/execution-settings`). | Existing ESMFold2 module, `core_protein_execution_settings.py`, `routers/job_results.py` |
 | G-09 | Bind maturation comparisons to native source-to-output correspondence. Full-domain values require complete declared coverage. | `maturation_native_adapter.py`, `maturation_correspondence.py`, existing preparation/scorer/filter paths, `MaturationEvidence.tsx` |
 | G-10 | Aggregate only compatible metric descriptors. Preserve missingness and same-candidate complete pairs. | `scientific_analytics.py`, existing analytics routes and `ScientificAnalytics.tsx` |
 

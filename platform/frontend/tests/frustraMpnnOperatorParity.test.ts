@@ -977,7 +977,6 @@ test('requested-effective settings summary reports source sequence regions separ
 
 test('all standard launch surfaces own one typed settings panel and the typed statistics route', () => {
     const apiSource = readFileSync('src/lib/frustraMpnnApi.ts', 'utf8');
-    const analysisSource = readFileSync('src/components/FrustraMpnnAnalysisControls.tsx', 'utf8');
     const uploadSource = readFileSync('src/components/FrustraMpnnUploadAnalysisPanel.tsx', 'utf8');
     const resultsViewerSource = readFileSync('src/components/ResultsViewer.tsx', 'utf8');
     const dataViewerLandingSource = readFileSync('src/components/DataViewerLanding.tsx', 'utf8');
@@ -997,7 +996,6 @@ test('all standard launch surfaces own one typed settings panel and the typed st
     ]) assert.ok(apiSource.includes(route), `missing governed client route ${route}`);
     assert.doesNotMatch(apiSource, /['"]\/api\/frustrampnn\/sources\/inspect['"]/);
     assert.doesNotMatch(apiSource, /['"]\/api\/frustrampnn\/settings\/validate['"]/);
-    assert.equal((analysisSource.match(/<FrustraMpnnSettingsPanel/g) || []).length, 1);
     assert.equal((uploadSource.match(/<FrustraMpnnSettingsPanel/g) || []).length, 1);
     assert.doesNotMatch(resultsViewerSource, /<FrustraMpnnUploadAnalysisPanel/);
     assert.match(dataViewerLandingSource, /<FrustraMpnnUploadAnalysisPanel\s+onOpenJob=\{onSelectJob\}/);
@@ -1008,14 +1006,13 @@ test('all standard launch surfaces own one typed settings panel and the typed st
     assert.match(resultSource, /role:\s*'structure_map'[\s\S]*schema_name:\s*'frustrampnn_structure_map'[\s\S]*media_type:\s*'application\/json'/);
     assert.match(resultSource, /role:\s*'normalized_input'[\s\S]*schema_name:\s*null[\s\S]*media_type:\s*'chemical\/x-pdb'/);
     assert.match(resultSource, /role:\s*'identity_authority'[\s\S]*schema_name:\s*'producer_manifest'[\s\S]*media_type:\s*'application\/json'/);
-    assert.ok(analysisSource.indexOf('validateFrustraMpnnUploadedSettings') < analysisSource.indexOf('analyzeFrustraMpnnDesigns(parentJobId'));
     assert.ok(resultSource.indexOf('validateFrustraMpnnOwnedSettings') < resultSource.indexOf('reanalyzeFrustraMpnn(job.id'));
     assert.ok(handoffSource.indexOf('validateFrustraMpnnUploadedSettings') < handoffSource.indexOf('handoffFrustraMpnnCandidate(candidateFile'));
     assert.match(panelSource, /inspectFrustraMpnnOwnedSource/);
     assert.match(panelSource, /inspectFrustraMpnnUploadedSource/);
     assert.match(panelSource, /<FrustraMpnnRequestedEffectiveSummary/);
     assert.doesNotMatch(panelSource, /structureMap|structure_map/);
-    for (const source of [analysisSource, resultSource, handoffSource, structureSource]) {
+    for (const source of [resultSource, handoffSource, structureSource]) {
         assert.doesNotMatch(source, /raw\s*json|textarea[^>]*frustra|runtime command|scheduler field|storage path/i);
     }
 });

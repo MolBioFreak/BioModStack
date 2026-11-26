@@ -123,7 +123,9 @@ async def test_initial_generation_explicit_document_selection(stores, model, mod
         db.add(job)
         await db.flush()
         await publish(job, output, db, commit=True)
-        for design in list((await db.scalars(select(Design))).all()):
+        designs = list((await db.scalars(select(Design))).all())
+        assert designs
+        for design in designs:
             before = (design.pdb_path, copy.deepcopy(design.provenance))
             declared = documents(job, design)
             assert len(declared) == 1

@@ -26,7 +26,7 @@ from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "platform/api"))
-from restriction_catalog_integrity import validate_catalog_integrity
+from restriction_catalog_integrity import reverse_complement, validate_catalog_integrity
 
 DEFAULT_CATALOG = ROOT / "platform/api/config/molbio/restriction/restriction_enzyme_catalog_v1.json"
 DEFAULT_MANIFEST = ROOT / "platform/api/config/molbio/restriction/restriction_enzyme_catalog_manifest_v1.json"
@@ -95,10 +95,6 @@ def with_digest(value: dict[str, Any], field: str) -> dict[str, Any]:
     result = copy.deepcopy(value)
     result[field] = canonical_sha256(result)
     return result
-
-
-def reverse_complement(site: str) -> str:
-    return site.translate(IUPAC_COMPLEMENT)[::-1]
 
 
 def recognition_projection(source_notation: str) -> dict[str, Any]:

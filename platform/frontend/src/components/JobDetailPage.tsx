@@ -9,7 +9,7 @@ import { useParams, Link, Navigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { sourceResultReturn } from '../lib/sourceResultReturn';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
-import type { Job } from '../lib/api';
+import { cancelJob, fetchJobById, type Job } from '../lib/api';
 import { isNgsJob, ngsResultHref } from '../lib/ngsResultRouting';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { RemoteResultsPrompt } from './RemoteResultsPrompt';
@@ -34,9 +34,8 @@ export function JobDetailPage() {
     const { data: job, isLoading: jobLoading, error: jobError } = useQuery<Job>({
         queryKey: ['job', jobId],
         queryFn: async () => {
-            const res = await fetch(`/api/jobs/${jobId}`);
-            if (!res.ok) throw new Error('Failed to fetch job');
-            return res.json();
+            const res = await fetchJobById(jobId!);
+            return res.data;
         },
         enabled: !!jobId,
         refetchInterval: (query) => {
@@ -130,12 +129,11 @@ export function JobDetailPage() {
                             <button
                                 onClick={() => {
                                     if (confirm('Are you sure you want to cancel this job?')) {
-                                        fetch(`/api/jobs/${job.id}`, { method: 'DELETE' })
-                                            .then(res => {
-                                                if (!res.ok) throw new Error('Failed to cancel');
+                                        cancelJob(job.id)
+                                            .then(() => {
                                                 window.location.reload();
                                             })
-                                            .catch(err => alert('Failed to cancel job: ' + err.message));
+                                            .catch((err: unknown) => alert('Failed to cancel job: ' + (err instanceof Error ? err.message : String(err))));
                                     }
                                 }}
                                 className="px-3 py-1 bg-red-500/10 text-red-400 border border-red-500/30 rounded-lg text-sm font-medium hover:bg-red-500/20 transition-colors"
