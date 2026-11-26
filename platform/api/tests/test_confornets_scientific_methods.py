@@ -222,32 +222,47 @@ def test_ca_rmsd_fails_closed_when_numpy_is_unavailable(tmp_path: Path, monkeypa
         runner._ca_rmsd(first, second)
 
 
-def test_classical_mds_fails_closed_when_numpy_is_unavailable(monkeypatch) -> None:
+def test_worker_has_no_mds_computation() -> None:
     runner = _load_runner()
-    real_import = builtins.__import__
-
-    def deny_numpy(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "numpy":
-            raise ImportError("numpy deliberately unavailable")
-        return real_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", deny_numpy)
-    with pytest.raises(RuntimeError, match="classical metric MDS requires numpy"):
-        runner._mds_coordinates(
-            [[0.0, 1.0, 2.0], [1.0, 0.0, 1.5], [2.0, 1.5, 0.0]]
-        )
+    assert not hasattr(runner, "_mds_coordinates")
+    assert not hasattr(runner, "_mds_coordinates_via_stats_toolkit")
 
 
 def test_classical_mds_rejects_missing_distances_explicitly() -> None:
-    runner = _load_runner()
+    from services.conformational_mapping.confornets_mds import compute_confornets_mds_via_toolkit
+
     with pytest.raises(ValueError, match="missing"):
-        runner._mds_coordinates([[0.0, None], [None, 0.0]])
+        compute_confornets_mds_via_toolkit([[0.0, None], [None, 0.0]])
 
 
-def test_classical_mds_reconstructs_a_euclidean_three_four_five_triangle() -> None:
-    runner = _load_runner()
+def test_classical_mds_reconstructs_a_euclidean_three_four_five_triangle(monkeypatch) -> None:
+    import httpx
+    from services.conformational_mapping.confornets_mds import compute_confornets_mds_via_toolkit
+    from services.stats_toolkit_client import StatsToolkitClient
+
     expected = [[0.0, 3.0, 4.0], [3.0, 0.0, 5.0], [4.0, 5.0, 0.0]]
-    coordinates = runner._mds_coordinates(expected)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/workspaces":
+            return httpx.Response(200, json={"workspaces": [{"workspace_id": "ws-1", "name": "BioModStack analyses"}]})
+        if request.url.path == "/api/v1/runs":
+            return httpx.Response(200, json={
+                "run_id": "run-mds-tri",
+                "workspace_id": "ws-1",
+                "tool_id": "multivariate.distance_clustering",
+                "status": "completed",
+                "result": {"mds_coordinates": [[0.0, 0.0], [3.0, 0.0], [0.0, 4.0]], "method_version": "1.0.0"},
+            })
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        "services.conformational_mapping.confornets_mds.get_stats_toolkit_client",
+        lambda: StatsToolkitClient(base_url="http://stats.test", transport=httpx.MockTransport(handler)),
+    )
+    payload = compute_confornets_mds_via_toolkit(expected)
+    assert payload["status"] == "available"
+    assert payload["stats_run"]["run_id"] == "run-mds-tri"
+    coordinates = payload["coordinates"]
     assert sum(point["x"] for point in coordinates) == pytest.approx(0.0, abs=2e-6)
     assert sum(point["y"] for point in coordinates) == pytest.approx(0.0, abs=2e-6)
     for left in range(3):

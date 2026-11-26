@@ -64,6 +64,8 @@ JOB_METRIC_SUMMARY_ANALYSIS = "job_metric_summary"
 JOB_CORRELATION_MATRIX_ANALYSIS = "job_correlation_matrix"
 JOB_AA_COMPOSITION_ANALYSIS = "job_aa_composition"
 JOB_CDR_LOGO_PACK_ANALYSIS = "job_cdr_logo_pack"
+MD_CONVERGENCE_DIAGNOSTICS_ANALYSIS = "md_convergence_diagnostics"
+CONFORNETS_MDS_ANALYSIS = "confornets_mds"
 SELECTION_METRIC_SUMMARY_ANALYSIS = "selection_metric_summary"
 SELECTION_BATCH_SUMMARY_ANALYSIS = "selection_batch_summary"
 
@@ -765,6 +767,24 @@ ANALYSIS_DEFINITIONS: Dict[str, AnalysisDefinition] = {
         resource_class="cpu_heavy",
         normalize_params=normalize_job_scope_params,
         build_input_signature=build_job_aa_composition_signature,
+    ),
+    MD_CONVERGENCE_DIAGNOSTICS_ANALYSIS: AnalysisDefinition(
+        analysis_type=MD_CONVERGENCE_DIAGNOSTICS_ANALYSIS,
+        subject_kind="job",
+        version="2026-11-26-v1",
+        resource_class="cpu_light",
+        normalize_params=normalize_job_scope_params,
+        build_input_signature=build_job_metric_summary_signature,
+        toolkit_backed=True,
+    ),
+    CONFORNETS_MDS_ANALYSIS: AnalysisDefinition(
+        analysis_type=CONFORNETS_MDS_ANALYSIS,
+        subject_kind="job",
+        version="2026-11-26-v1",
+        resource_class="cpu_light",
+        normalize_params=normalize_job_scope_params,
+        build_input_signature=build_job_metric_summary_signature,
+        toolkit_backed=True,
     ),
     JOB_CDR_LOGO_PACK_ANALYSIS: AnalysisDefinition(
         analysis_type=JOB_CDR_LOGO_PACK_ANALYSIS,

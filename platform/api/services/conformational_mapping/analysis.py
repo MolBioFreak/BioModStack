@@ -82,96 +82,97 @@ def _landscape_index(landscape: Mapping[str, Any]) -> dict[tuple[Any, ...], Mapp
     return index
 
 
-def _sample_variance(values: Sequence[float]) -> float | None:
-    return statistics.variance(values) if len(values) >= 2 else None
+_HIERARCHICAL_KEYS = (
+    "mean",
+    "outer_support_fraction",
+    "coordinate_support_fraction",
+    "valid_outer_count",
+    "expected_outer_count",
+    "valid_coordinate_count",
+    "expected_coordinate_count",
+    "between_variance",
+    "between_range",
+    "stratum_mean_median",
+    "stratum_mean_iqr",
+    "strata",
+)
+_HIERARCHICAL_MAX_SERIES = 5000
+_HIERARCHICAL_MAX_TOTAL_CELLS = 500_000
 
 
-def _hierarchical(
-    values: Mapping[tuple[str, str], float], expected: Mapping[str, Sequence[str]]
-) -> dict[str, Any] | None:
-    strata: dict[str, dict[str, Any]] = {}
-    stratum_means: list[float] = []
-    valid_count = 0
-    for outer, expected_inner in expected.items():
-        valid = [values[(outer, inner)] for inner in expected_inner if (outer, inner) in values]
-        valid_count += len(valid)
-        if valid:
-            mean = sum(valid) / len(valid)
-            stratum_means.append(mean)
-            strata[outer] = {
-                "expected_inner": list(expected_inner),
-                "valid_inner": [inner for inner in expected_inner if (outer, inner) in values],
-                "mean": mean,
-                "variance": _sample_variance(valid),
-                "range": [min(valid), max(valid)],
-                "median": statistics.median(valid),
-            }
+def _to_nested_grid(values: Mapping[tuple[str, str], Any]) -> dict[str, dict[str, Any]]:
+    nested: dict[str, dict[str, Any]] = {}
+    for (outer, inner), value in values.items():
+        nested.setdefault(str(outer), {})[str(inner)] = value
+    return nested
+
+
+def _normalize_hierarchical_entry(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, Mapping):
+        return None
+    if raw.get("has_valid_data") is False or raw.get("mean") is None:
+        return None
+    return {key: raw.get(key) for key in _HIERARCHICAL_KEYS}
+
+
+def _batch_hierarchical_summary(
+    series: Mapping[str, Mapping[tuple[str, str], Any]],
+    expected: Mapping[str, Sequence[str]],
+    *,
+    value_mode: str = "numeric",
+    role: str = "hierarchical_summary",
+) -> tuple[dict[str, dict[str, Any] | None] | None, list[dict[str, Any]], bool]:
+    """Run descriptive.hierarchical_summary in BioModStack Stats Toolkit only (no local fallback)."""
+    if not series or not expected:
+        return {}, [], False
+    from services.stats_toolkit_client import (
+        StatsToolkitUnavailableError,
+        get_stats_toolkit_client,
+    )
+
+    expected_payload = {str(outer): [str(inner) for inner in inners] for outer, inners in expected.items()}
+    expected_cells = max(1, sum(len(inners) for inners in expected_payload.values()))
+    max_chunk = max(1, min(_HIERARCHICAL_MAX_SERIES, _HIERARCHICAL_MAX_TOTAL_CELLS // expected_cells))
+    keys = list(series.keys())
+    client = get_stats_toolkit_client()
+    results: dict[str, dict[str, Any] | None] = {}
+    run_refs: list[dict[str, Any]] = []
+    for start in range(0, len(keys), max_chunk):
+        chunk_keys = keys[start : start + max_chunk]
+        chunk_payload = {key: _to_nested_grid(series[key]) for key in chunk_keys}
+        try:
+            run_ref, output = client.run_tool(
+                None,
+                "descriptive.hierarchical_summary",
+                {
+                    "expected": expected_payload,
+                    "series": chunk_payload,
+                    "value_mode": value_mode,
+                },
+            )
+        except StatsToolkitUnavailableError:
+            return None, run_refs, True
+        run_refs.append({"role": role, **run_ref})
+        series_results = output.get("series_results")
+        if isinstance(series_results, Mapping):
+            for key in chunk_keys:
+                results[key] = _normalize_hierarchical_entry(series_results.get(key))
+        elif len(chunk_keys) == 1:
+            results[chunk_keys[0]] = _normalize_hierarchical_entry(output)
         else:
-            strata[outer] = {
-                "expected_inner": list(expected_inner), "valid_inner": [], "mean": None,
-                "variance": None, "range": None, "median": None,
-            }
-    if not stratum_means:
-        return None
-    expected_count = sum(len(value) for value in expected.values())
-    sorted_means = sorted(stratum_means)
-    q1, q3 = (
-        statistics.quantiles(sorted_means, n=4, method="inclusive")[0],
-        statistics.quantiles(sorted_means, n=4, method="inclusive")[2],
-    ) if len(sorted_means) >= 2 else (sorted_means[0], sorted_means[0])
-    return {
-        "mean": sum(stratum_means) / len(stratum_means),
-        "strata": strata,
-        "outer_support_fraction": len(stratum_means) / len(expected),
-        "coordinate_support_fraction": valid_count / expected_count,
-        "valid_coordinate_count": valid_count,
-        "expected_coordinate_count": expected_count,
-        "between_variance": _sample_variance(stratum_means),
-        "between_range": [min(stratum_means), max(stratum_means)],
-        "stratum_mean_median": statistics.median(stratum_means),
-        "stratum_mean_iqr": q3 - q1,
-    }
+            for key in chunk_keys:
+                results[key] = None
+    return results, run_refs, False
 
 
-def _hierarchical_fraction(
-    values: Mapping[tuple[str, str], bool], expected: Mapping[str, Sequence[str]]
-) -> dict[str, Any] | None:
-    numeric = {key: 1.0 if value else 0.0 for key, value in values.items()}
-    return _hierarchical(numeric, expected)
-
-
-def _average_ranks(values: Mapping[tuple[Any, ...], float]) -> dict[tuple[Any, ...], float]:
-    ordered = sorted(values, key=lambda key: (-values[key], key))
-    ranks: dict[tuple[Any, ...], float] = {}
-    cursor = 0
-    while cursor < len(ordered):
-        end = cursor + 1
-        while end < len(ordered) and values[ordered[end]] == values[ordered[cursor]]:
-            end += 1
-        average = ((cursor + 1) + end) / 2
-        for key in ordered[cursor:end]:
-            ranks[key] = average
-        cursor = end
-    return ranks
-
-
-def _spearman(left: Mapping[tuple[Any, ...], float], right: Mapping[tuple[Any, ...], float]) -> float | None:
-    keys = sorted(set(left) & set(right))
-    if len(keys) < 3:
-        return None
-    x = [left[key] for key in keys]
-    y = [right[key] for key in keys]
-    x_mean, y_mean = statistics.mean(x), statistics.mean(y)
-    numerator = sum((a - x_mean) * (b - y_mean) for a, b in zip(x, y, strict=True))
-    denominator = math.sqrt(sum((a - x_mean) ** 2 for a in x) * sum((b - y_mean) ** 2 for b in y))
-    return numerator / denominator if denominator else None
-
-
-def _rank_stability(
+def _rank_stability_with_run(
     values_by_item: Mapping[tuple[Any, ...], Mapping[tuple[str, str], float]],
-    expected: Mapping[str, Sequence[str]], *, inner_minimum: float,
-    outer_minimum: float, common_minimum: int,
-) -> tuple[float | None, set[tuple[Any, ...]], list[dict[str, Any]], dict[str, str]]:
+    expected: Mapping[str, Sequence[str]],
+    *,
+    inner_minimum: float,
+    outer_minimum: float,
+    common_minimum: int,
+) -> tuple[float | None, set[tuple[Any, ...]], list[dict[str, Any]], dict[str, str], dict[str, Any] | None, bool]:
     rank_scores: dict[str, dict[tuple[Any, ...], float]] = {}
     excluded: dict[str, str] = {}
     for outer, inner_ids in expected.items():
@@ -187,23 +188,24 @@ def _rank_stability(
     common = set.intersection(*(set(value) for value in rank_scores.values())) if rank_scores else set()
     pairwise: list[dict[str, Any]] = []
     stability: float | None = None
+    run_ref: dict[str, Any] | None = None
+    unavailable = False
     if len(rank_scores) >= max(3, math.ceil(outer_minimum * len(expected))) and len(common) >= max(3, common_minimum):
         outer_ids = list(expected)
         ranked_outer_ids = [outer for outer in outer_ids if outer in rank_scores]
-        delegated_pairs: list[dict[str, Any]] | None = None
         if 2 <= len(ranked_outer_ids) <= 50:
+            from services.stats_toolkit_client import (
+                StatsToolkitUnavailableError,
+                get_stats_toolkit_client,
+            )
+            common_keys = sorted(common)
+            columns = {
+                outer: [float(rank_scores[outer][key]) for key in common_keys]
+                for outer in ranked_outer_ids
+            }
             try:
-                from services.stats_toolkit_client import (
-                    StatsToolkitUnavailableError,
-                    get_stats_toolkit_client,
-                    stats_toolkit_required,
-                )
-                common_keys = sorted(common)
-                columns = {
-                    outer: [float(rank_scores[outer][key]) for key in common_keys]
-                    for outer in ranked_outer_ids
-                }
-                res = get_stats_toolkit_client().execute_tool(
+                run_ref, res = get_stats_toolkit_client().run_tool(
+                    None,
                     "inference.correlation_matrix",
                     {
                         "columns": columns,
@@ -211,55 +213,58 @@ def _rank_stability(
                         "p_adjust_method": "benjamini_hochberg",
                     },
                 )
-                pair_lookup = {
-                    (str(item["var_a"]), str(item["var_b"])): item
-                    for item in (res.get("pairs") or [])
-                    if isinstance(item, Mapping)
-                }
-                delegated_pairs = []
-                for left_index, left in enumerate(ranked_outer_ids):
-                    for right in ranked_outer_ids[left_index + 1:]:
-                        info = pair_lookup.get((left, right)) or pair_lookup.get((right, left)) or {}
-                        stat = info.get("statistic")
-                        corr_val = float(stat) if stat is not None else None
-                        entry: dict[str, Any] = {
-                            "left": left,
-                            "right": right,
-                            "spearman": corr_val,
-                            "p_value": info.get("p_value"),
-                            "adjusted_p_value": info.get("adjusted_p_value"),
-                            "stats_backend": "stats_toolkit",
-                        }
-                        delegated_pairs.append(entry)
             except StatsToolkitUnavailableError:
-                if stats_toolkit_required():
-                    raise
-                delegated_pairs = None
-
-        correlations: list[float] = []
-        if delegated_pairs is not None:
-            for entry in delegated_pairs:
-                pairwise.append(entry)
-                if entry["spearman"] is None:
-                    return None, common, pairwise, excluded
-                correlations.append(float(entry["spearman"]))
-        else:
-            ranks = {outer: _average_ranks({key: scores[key] for key in common}) for outer, scores in rank_scores.items()}
+                return None, common, [], excluded, None, True
+            pair_lookup = {
+                (str(item["var_a"]), str(item["var_b"])): item
+                for item in (res.get("pairs") or [])
+                if isinstance(item, Mapping)
+            }
+            correlations: list[float] = []
             for left_index, left in enumerate(ranked_outer_ids):
                 for right in ranked_outer_ids[left_index + 1:]:
-                    correlation = _spearman(ranks[left], ranks[right])
-                    pairwise.append({"left": left, "right": right, "spearman": correlation})
-                    if correlation is None:
-                        return None, common, pairwise, excluded
-                    correlations.append(correlation)
-        if correlations and len(correlations) == len(pairwise):
-            stability = statistics.median(correlations)
+                    info = pair_lookup.get((left, right)) or pair_lookup.get((right, left)) or {}
+                    stat = info.get("statistic")
+                    corr_val = float(stat) if stat is not None else None
+                    entry: dict[str, Any] = {
+                        "left": left,
+                        "right": right,
+                        "spearman": corr_val,
+                        "p_value": info.get("p_value"),
+                        "adjusted_p_value": info.get("adjusted_p_value"),
+                        "stats_backend": "stats_toolkit",
+                        "stats_run": run_ref,
+                    }
+                    pairwise.append(entry)
+                    if corr_val is None:
+                        return None, common, pairwise, excluded, run_ref, False
+                    correlations.append(corr_val)
+            if correlations and len(correlations) == len(pairwise):
+                stability = statistics.median(correlations)
+    return stability, common, pairwise, excluded, run_ref, unavailable
+
+
+def _rank_stability(
+    values_by_item: Mapping[tuple[Any, ...], Mapping[tuple[str, str], float]],
+    expected: Mapping[str, Sequence[str]],
+    *,
+    inner_minimum: float,
+    outer_minimum: float,
+    common_minimum: int,
+) -> tuple[float | None, set[tuple[Any, ...]], list[dict[str, Any]], dict[str, str]]:
+    stability, common, pairwise, excluded, _run_ref, _unavailable = _rank_stability_with_run(
+        values_by_item,
+        expected,
+        inner_minimum=inner_minimum,
+        outer_minimum=outer_minimum,
+        common_minimum=common_minimum,
+    )
     return stability, common, pairwise, excluded
 
 
-def _matched_comparison(
+def _matched_comparison_with_runs(
     comparison: Mapping[str, Any], policy: Mapping[str, Any]
-) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], bool]:
     required = {
         "comparison_id", "ensemble_a", "ensemble_b", "landscapes_a", "landscapes_b",
         "invariant_fields_a", "invariant_fields_b", "mutated_residue_keys",
@@ -364,17 +369,44 @@ def _matched_comparison(
             })
 
     output: dict[str, dict[str, Any]] = {}
-    for key, values in context_values.items():
-        aggregate = _hierarchical(values, expected)
-        transition = _hierarchical_fraction(transition_values[key], expected)
-        if aggregate is None or transition is None:
-            continue
-        output[canonical_sha256(list(key))] = {
-            "comparison_id": comparison["comparison_id"],
-            "context_hierarchical": aggregate,
-            "context_transition": transition,
-            "switch_score": aggregate["coordinate_support_fraction"] * transition["mean"] * abs(aggregate["mean"]),
-        }
+    stats_runs: list[dict[str, Any]] = []
+    unavailable = False
+    if context_values:
+        series_key_map = {canonical_sha256(list(key)): key for key in context_values}
+        agg_by_key, agg_runs, agg_unavail = _batch_hierarchical_summary(
+            {sk: context_values[orig] for sk, orig in series_key_map.items()},
+            expected,
+            value_mode="numeric",
+            role=f"matched_comparison_context:{comparison['comparison_id']}",
+        )
+        stats_runs.extend(agg_runs)
+        trans_by_key, trans_runs, trans_unavail = _batch_hierarchical_summary(
+            {sk: transition_values[orig] for sk, orig in series_key_map.items()},
+            expected,
+            value_mode="boolean_fraction",
+            role=f"matched_comparison_transition:{comparison['comparison_id']}",
+        )
+        stats_runs.extend(trans_runs)
+        unavailable = agg_unavail or trans_unavail
+        if not unavailable and agg_by_key is not None and trans_by_key is not None:
+            for sk in series_key_map:
+                aggregate = agg_by_key.get(sk)
+                transition = trans_by_key.get(sk)
+                if aggregate is None or transition is None:
+                    continue
+                output[sk] = {
+                    "comparison_id": comparison["comparison_id"],
+                    "context_hierarchical": aggregate,
+                    "context_transition": transition,
+                    "switch_score": aggregate["coordinate_support_fraction"] * transition["mean"] * abs(aggregate["mean"]),
+                }
+    return output, pair_ledger, redistribution, stats_runs, unavailable
+
+
+def _matched_comparison(
+    comparison: Mapping[str, Any], policy: Mapping[str, Any]
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    output, pair_ledger, redistribution, _runs, _unavail = _matched_comparison_with_runs(comparison, policy)
     return output, pair_ledger, redistribution
 
 
@@ -435,14 +467,22 @@ def analyze_landscapes(
     inner_minimum = float(policy["inner_support_minimum"])
     outer_minimum = float(policy["outer_support_minimum"])
     common_minimum = int(policy["minimum_common_ranked_universe_size"])
-    rank_by_target = {
-        target: _rank_stability(
+    from services.stats_toolkit_client import STATS_TOOLKIT_UNAVAILABLE_REASON
+
+    stats_runs: list[dict[str, Any]] = []
+    any_stats_unavailable = False
+    rank_by_target: dict[str, tuple[float | None, set[tuple[Any, ...]], list[dict[str, Any]], dict[str, str], dict[str, Any] | None, bool]] = {}
+    for target, target_expected in expected_by_target.items():
+        rank_record = _rank_stability_with_run(
             {item: values for item, values in per_item_values.items() if str(item[0]) == target},
             target_expected, inner_minimum=inner_minimum,
             outer_minimum=outer_minimum, common_minimum=common_minimum,
         )
-        for target, target_expected in expected_by_target.items()
-    }
+        rank_by_target[target] = rank_record
+        if rank_record[4] is not None:
+            stats_runs.append({"role": f"rank_stability:{target}", **rank_record[4]})
+        if rank_record[5]:
+            any_stats_unavailable = True
     ranked_universe_reference_by_target = {
         target: _ranked_universe_reference(rank_record[1])
         for target, rank_record in rank_by_target.items()
@@ -459,25 +499,138 @@ def analyze_landscapes(
     pair_ledger: list[dict[str, Any]] = []
     redistribution_records: list[dict[str, Any]] = []
     if comparisons:
-        matched_switch, pair_ledger, redistribution_records = _matched_comparison(comparisons[0], policy)
-    for item in sorted(item_universe):
-        values = per_item_values[item]
-        item_expected = expected_by_target[str(item[0])]
-        rank_stability, common, pairwise, excluded_rank_strata = rank_by_target[str(item[0])]
-        aggregate = _hierarchical(values, item_expected)
-        item_wt = next(
-            str(index[item]["wt"]) for index in indexes.values() if item in index
-        )
+        matched_switch, pair_ledger, redistribution_records, matched_runs, matched_unavail = _matched_comparison_with_runs(comparisons[0], policy)
+        stats_runs.extend(matched_runs)
+        if matched_unavail:
+            any_stats_unavailable = True
+
+    sorted_items = sorted(item_universe)
+    item_identities: dict[tuple[Any, ...], dict[str, Any]] = {}
+    item_source_keys: dict[tuple[Any, ...], str] = {}
+    items_by_target: dict[str, list[tuple[Any, ...]]] = defaultdict(list)
+    for item in sorted_items:
+        item_wt = next(str(index[item]["wt"]) for index in indexes.values() if item in index)
         identity = {
             "target_id": str(item[0]), "entity_instance_id": str(item[1]),
             "auth_asym_id": str(item[2]), "auth_seq_id": int(item[3]),
             "insertion_code": str(item[4]), "sequence_index": int(item[5]),
             "validated_wt": item_wt, "substitution": str(item[-1]),
         }
-        source_key = analysis_source_row_key(identity)
+        item_identities[item] = identity
+        item_source_keys[item] = analysis_source_row_key(identity)
+        items_by_target[str(item[0])].append(item)
+
+    agg_by_key: dict[str, dict[str, Any] | None] = {}
+    abs_by_key: dict[str, dict[str, Any] | None] = {}
+    sign_by_key: dict[str, dict[str, Any] | None] = {}
+    clash_by_key: dict[str, dict[str, Any] | None] = {}
+    clash_reasons_by_key: dict[str, list[str]] = {}
+    reference_sign_by_key: dict[str, int] = {}
+    hierarchical_unavailable_targets: set[str] = set()
+
+    for target, target_items in items_by_target.items():
+        target_expected = expected_by_target[target]
+        non_empty_items = [item for item in target_items if per_item_values[item]]
+        if not non_empty_items:
+            continue
+        signed_series = {item_source_keys[item]: per_item_values[item] for item in non_empty_items}
+        abs_series = {
+            item_source_keys[item]: {coord: abs(val) for coord, val in per_item_values[item].items()}
+            for item in non_empty_items
+        }
+        signed_out, signed_runs, signed_unavail = _batch_hierarchical_summary(
+            signed_series, target_expected, value_mode="numeric", role=f"hierarchical:{target}"
+        )
+        stats_runs.extend(signed_runs)
+        if signed_unavail or signed_out is None:
+            hierarchical_unavailable_targets.add(target)
+            any_stats_unavailable = True
+            continue
+        abs_out, abs_runs, abs_unavail = _batch_hierarchical_summary(
+            abs_series, target_expected, value_mode="numeric", role=f"hierarchical_absolute:{target}"
+        )
+        stats_runs.extend(abs_runs)
+        if abs_unavail or abs_out is None:
+            hierarchical_unavailable_targets.add(target)
+            any_stats_unavailable = True
+            continue
+        sign_series: dict[str, dict[tuple[str, str], bool]] = {}
+        clash_series: dict[str, dict[tuple[str, str], bool]] = {}
+        for item in non_empty_items:
+            sk = item_source_keys[item]
+            agg_entry = signed_out.get(sk)
+            agg_by_key[sk] = agg_entry
+            abs_by_key[sk] = abs_out.get(sk)
+            if agg_entry is None:
+                continue
+            mean = agg_entry["mean"]
+            ref_sign = 0 if abs(mean) <= epsilon else (1 if mean > 0 else -1)
+            reference_sign_by_key[sk] = ref_sign
+            values = per_item_values[item]
+            sign_series[sk] = {
+                key: ref_sign != 0 and abs(value) > epsilon and (1 if value > 0 else -1) == ref_sign
+                for key, value in values.items()
+            }
+            c_values: dict[tuple[str, str], bool] = {}
+            c_reasons: list[str] = []
+            for candidate_id, coordinate in candidate_coordinate.items():
+                if coordinate not in values:
+                    continue
+                row = clash_rows.get((candidate_id, item[1:-1], item[-1]))
+                if not isinstance(row, Mapping) or not isinstance(row.get("clash_flag"), bool):
+                    c_reasons.append(f"{coordinate[0]}:{coordinate[1]}:missing clash result")
+                    continue
+                if row.get("detector_id") != policy["clash_detector_id"] or row.get("detector_version") != policy["clash_detector_version"]:
+                    c_reasons.append(f"{coordinate[0]}:{coordinate[1]}:clash detector mismatch")
+                    continue
+                if row.get("detector_sha256") != CLASH_DETECTOR_SHA256:
+                    c_reasons.append(f"{coordinate[0]}:{coordinate[1]}:clash detector hash mismatch")
+                    continue
+                c_values[coordinate] = not row["clash_flag"]
+            clash_reasons_by_key[sk] = c_reasons
+            if c_values:
+                clash_series[sk] = c_values
+        if sign_series:
+            sign_out, sign_runs, sign_unavail = _batch_hierarchical_summary(
+                sign_series, target_expected, value_mode="boolean_fraction", role=f"sign_consistency:{target}"
+            )
+            stats_runs.extend(sign_runs)
+            if sign_unavail or sign_out is None:
+                hierarchical_unavailable_targets.add(target)
+                any_stats_unavailable = True
+                continue
+            sign_by_key.update(sign_out)
+        if clash_series:
+            clash_out, clash_runs, clash_unavail = _batch_hierarchical_summary(
+                clash_series, target_expected, value_mode="boolean_fraction", role=f"clash_free:{target}"
+            )
+            stats_runs.extend(clash_runs)
+            if clash_unavail or clash_out is None:
+                hierarchical_unavailable_targets.add(target)
+                any_stats_unavailable = True
+                continue
+            clash_by_key.update(clash_out)
+
+    for item in sorted_items:
+        target = str(item[0])
+        values = per_item_values[item]
+        item_expected = expected_by_target[target]
+        rank_stability, common, pairwise, excluded_rank_strata, rank_run_ref, rank_unavail = rank_by_target[target]
+        identity = item_identities[item]
+        source_key = item_source_keys[item]
+        hier_unavail = target in hierarchical_unavailable_targets
+        aggregate = None if hier_unavail else agg_by_key.get(source_key)
         if aggregate is None:
             matched_key = canonical_sha256(list((*item[1:-1], item[-1])))
             matched = matched_switch.get(matched_key)
+            unavail_components: dict[str, Any] = {}
+            if matched:
+                unavail_components["matched_comparison"] = matched
+            if hier_unavail or rank_unavail:
+                unavail_components["stats_status"] = "unavailable"
+                unavail_components["stats_unavailable_reason"] = STATS_TOOLKIT_UNAVAILABLE_REASON
+                unavail_components["rank_stability"] = None
+                unavail_components["rank_stability_pairwise"] = []
             results.append(
                 {
                     "source_row_key": source_key, "identity": identity,
@@ -486,8 +639,11 @@ def analyze_landscapes(
                     "outer_support_fraction": 0.0, "coordinate_support_fraction": 0.0,
                     "hierarchical_mean": None, "hotspot_score": None,
                     "switch_score": None,
-                    "failure_reason": "no finite substitution differences",
-                    "components": {"matched_comparison": matched} if matched else {},
+                    "failure_reason": (
+                        f"{STATS_TOOLKIT_UNAVAILABLE_REASON}: hierarchical summary unavailable"
+                        if hier_unavail else "no finite substitution differences"
+                    ),
+                    "components": unavail_components,
                     "sort_keys": {
                         "switch_score": None,
                         "entity_instance_id": item[1], "sequence_index": item[5],
@@ -495,32 +651,15 @@ def analyze_landscapes(
                     },
                 }
             )
+            if hier_unavail or rank_unavail:
+                support_records.append({"source_row_key": source_key, **unavail_components})
             continue
-        absolute = _hierarchical({key: abs(value) for key, value in values.items()}, item_expected)
+        absolute = abs_by_key.get(source_key)
         mean = aggregate["mean"]
-        reference_sign = 0 if abs(mean) <= epsilon else (1 if mean > 0 else -1)
-        sign_values = {
-            key: reference_sign != 0 and abs(value) > epsilon and (1 if value > 0 else -1) == reference_sign
-            for key, value in values.items()
-        }
-        sign = _hierarchical_fraction(sign_values, item_expected)
-        clash_values: dict[tuple[str, str], bool] = {}
-        clash_reasons: list[str] = []
-        for candidate_id, coordinate in candidate_coordinate.items():
-            if coordinate not in values:
-                continue
-            row = clash_rows.get((candidate_id, item[1:-1], item[-1]))
-            if not isinstance(row, Mapping) or not isinstance(row.get("clash_flag"), bool):
-                clash_reasons.append(f"{coordinate[0]}:{coordinate[1]}:missing clash result")
-                continue
-            if row.get("detector_id") != policy["clash_detector_id"] or row.get("detector_version") != policy["clash_detector_version"]:
-                clash_reasons.append(f"{coordinate[0]}:{coordinate[1]}:clash detector mismatch")
-                continue
-            if row.get("detector_sha256") != CLASH_DETECTOR_SHA256:
-                clash_reasons.append(f"{coordinate[0]}:{coordinate[1]}:clash detector hash mismatch")
-                continue
-            clash_values[coordinate] = not row["clash_flag"]
-        clash = _hierarchical_fraction(clash_values, item_expected)
+        reference_sign = reference_sign_by_key[source_key]
+        sign = sign_by_key.get(source_key)
+        clash_reasons = clash_reasons_by_key.get(source_key, [])
+        clash = clash_by_key.get(source_key)
         insufficient = []
         if aggregate["outer_support_fraction"] < outer_minimum:
             insufficient.append("outer substitution support below minimum")
@@ -636,6 +775,9 @@ def analyze_landscapes(
         "clash_records": [
             dict(clash_rows[key]) for key in sorted(clash_rows, key=_clash_key_sort_bytes)
         ],
+        "stats_status": "unavailable" if any_stats_unavailable else "available",
+        "stats_unavailable_reason": STATS_TOOLKIT_UNAVAILABLE_REASON if any_stats_unavailable else None,
+        "stats_runs": stats_runs,
     }
     validate_schema("cm_analysis_v1", analysis)
     return analysis

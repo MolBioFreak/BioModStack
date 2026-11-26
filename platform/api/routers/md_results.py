@@ -11,13 +11,26 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Job, get_session
+from database import AnalysisRun, Job, get_session
+from datetime import datetime, timezone
+import uuid
 from routers.files import _guess_media_type, _parse_byte_range
 from schemas import JobCreate
 from scripts.bms_md.aggregate_children import publish_json_immutable
 from scripts.bms_md.spawn_analysis import QUALIFIED_RUNTIME_SHA256
 from services.md.lifecycle import reconcile_md_analysis_parent
-from services.md.results import MDResultError, analysis_report, artifact_inventory, open_verified_artifact, result_record, summary
+from services.md.results import (
+    MDResultError,
+    _compute_replica_convergence_diagnostics,
+    _extract_eligible_md_convergence_series,
+    analysis_report,
+    artifact_inventory,
+    md_convergence_input_signature,
+    open_verified_artifact,
+    read_persisted_md_convergence_diagnostics,
+    result_record,
+    summary,
+)
 
 from services.remote_execution.executor import _joined_thread, _join_mutation
 
@@ -84,10 +97,92 @@ async def get_md_artifacts(job_id: str, session: AsyncSession = Depends(get_sess
 
 
 @router.get("/{job_id}/md/analysis", description=f"Authorization scope: {MD_AUTHORIZATION_SCOPE}")
-async def get_md_analysis(job_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+async def get_md_analysis(
+    job_id: str,
+    recompute: bool = False,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
     try:
         job = await _job(job_id, session)
-        report = await _joined_thread(analysis_report, result_record(job))
+        report = await _joined_thread(analysis_report, result_record(job), include_convergence=False)
+        completed_reports = [
+            item for item in (report.get("reports") or [])
+            if isinstance(item, dict)
+            and item.get("status") == "completed"
+            and item.get("method") == "md_backbone_rmsd_v1"
+            and isinstance(item.get("summary"), dict)
+        ]
+        if _extract_eligible_md_convergence_series(completed_reports):
+            sig = md_convergence_input_signature(completed_reports)
+            existing_run = (
+                await session.execute(
+                    select(AnalysisRun)
+                    .where(
+                        AnalysisRun.subject_kind == "job",
+                        AnalysisRun.subject_id == job_id,
+                        AnalysisRun.analysis_type == "md_convergence_diagnostics",
+                        AnalysisRun.status == "completed",
+                    )
+                    .order_by(AnalysisRun.queued_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if (
+                existing_run is not None
+                and not recompute
+                and existing_run.input_signature == sig
+                and isinstance(existing_run.summary_json, dict)
+                and existing_run.summary_json.get("replica_runs")
+            ):
+                conv = await _joined_thread(read_persisted_md_convergence_diagnostics, existing_run.summary_json)
+                conv["analysis_run_id"] = existing_run.id
+                conv["stale"] = False
+                report["convergence_diagnostics"] = conv
+            else:
+                idem_prefix = None if recompute else f"bms:md-conv:{job_id}:{sig[:16]}"
+                conv = await _joined_thread(
+                    _compute_replica_convergence_diagnostics,
+                    completed_reports,
+                    idempotency_prefix=idem_prefix,
+                )
+                if conv is not None:
+                    if conv.get("status") == "available" and conv.get("stats_run"):
+                        now = datetime.now(timezone.utc)
+                        _params_obj = {"recompute": bool(recompute)}
+                        _params_hash = hashlib.sha256(json.dumps(_params_obj, sort_keys=True).encode("utf-8")).hexdigest()
+                        _code_ver = str(conv.get("stats_method_version") or "1.0.0")
+                        _cache_key = hashlib.sha256(f"md_convergence_diagnostics:{job_id}:{sig}:{_params_hash}:{_code_ver}".encode("utf-8")).hexdigest()
+                        run_row = AnalysisRun(
+                            id=str(uuid.uuid4()),
+                            subject_kind="job",
+                            subject_id=job_id,
+                            analysis_type="md_convergence_diagnostics",
+                            input_signature=sig,
+                            params_json=_params_obj,
+                            params_hash=_params_hash,
+                            code_version=_code_ver,
+                            cache_key=_cache_key,
+                            status="completed",
+                            supersedes_run_id=existing_run.id if existing_run is not None else None,
+                            summary_json={
+                                "stats_run": conv["stats_run"],
+                                "stats_runs": conv.get("stats_runs") or [],
+                                "stats_method_version": conv.get("stats_method_version"),
+                                "replica_runs": [
+                                    {"replica": r.get("replica"), "stats_run": r.get("stats_run")}
+                                    for r in conv.get("replicas") or []
+                                ],
+                            },
+                            result_inline_json=None,
+                            queued_at=now,
+                            started_at=now,
+                            completed_at=now,
+                        )
+                        session.add(run_row)
+                        await session.commit()
+                        conv["analysis_run_id"] = run_row.id
+                        conv["stale"] = False
+                    report["convergence_diagnostics"] = conv
         children = list(
             (
                 await session.execute(

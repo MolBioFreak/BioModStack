@@ -128,6 +128,10 @@ export default function MDResultsPane({ jobId, returnTo }: { jobId: string; retu
             ]);
         },
     });
+    const recomputeConvergence = useMutation({
+        mutationFn: () => fetchMDAnalysis(jobId, { recompute: true }),
+        onSuccess: (response) => { queryClient.setQueryData(['md-analysis', jobId], response); },
+    });
     const failedLaunchCommand = useMutation({
         mutationFn: async (action: 'reorchestrate' | 'delete_failed_launch') => {
             if (!lifecycleReady || !lifecycle.data) throw new Error('Refresh lifecycle state before issuing commands.');
@@ -373,9 +377,66 @@ export default function MDResultsPane({ jobId, returnTo }: { jobId: string; retu
             <details className="rounded-xl border border-slate-700 bg-slate-900/60 p-3"><summary className="cursor-pointer text-sm font-medium">Native artifacts and analysis evidence</summary>
                 <div className="mt-2 space-y-2">
                 {(artifacts.isError ? [] : artifacts.data?.data.artifacts ?? []).map(item => <a key={item.id} href={item.content_url} className="block text-xs text-cyan-300 underline">{item.name} · {item.id}</a>)}
-                {reports.map((report, index) => <details key={index} className="rounded border border-slate-800 p-2"><summary className="cursor-pointer text-xs font-medium">Replica {report.replica ?? 'unknown'} · {report.status} · block statistics</summary>
-                    {report.block_statistics?.length ? <table className="mt-2 text-xs"><thead><tr><th>Block</th><th>Frames</th><th>Mean RMSD (Å)</th><th>Mean Rg (Å)</th></tr></thead><tbody>{report.block_statistics.map(block => <tr key={block.block}><td>{block.block}</td><td>{block.count}</td><td>{block.mean_rmsd_angstrom}</td><td>{block.mean_radius_of_gyration_angstrom}</td></tr>)}</tbody></table> : <p className="mt-1 text-xs text-slate-400">No native block statistics published.</p>}
-                    </details>)}
+                {analysisData?.convergence_diagnostics && (
+                    <div className="mt-3 rounded-lg border border-slate-700/80 bg-slate-950/60 p-3" data-bms-md-convergence="true">
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                            <div className="text-xs font-semibold text-slate-200">Convergence diagnostics (Stats Toolkit)</div>
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
+                                {analysisData.convergence_diagnostics.stale && <span className="rounded border border-amber-400/50 bg-amber-500/10 px-1.5 py-0.5 text-amber-200">stale</span>}
+                                {analysisData.convergence_diagnostics.stats_run?.run_id && (
+                                    <a
+                                        href={`/stats?run_id=${encodeURIComponent(analysisData.convergence_diagnostics.stats_run.run_id)}`}
+                                        className="rounded border border-cyan-400/40 bg-cyan-500/10 px-2 py-0.5 text-cyan-200 hover:bg-cyan-500/20"
+                                    >
+                                        Open in Stats
+                                    </a>
+                                )}
+                                <button
+                                    type="button"
+                                    disabled={recomputeConvergence.isPending}
+                                    onClick={() => recomputeConvergence.mutate()}
+                                    className="rounded border border-slate-600 bg-slate-900 px-2 py-0.5 text-slate-200 hover:border-cyan-400/50 disabled:opacity-50"
+                                >
+                                    {recomputeConvergence.isPending ? 'Recomputing…' : 'Recompute'}
+                                </button>
+                            </div>
+                        </div>
+                        {analysisData.convergence_diagnostics.status === 'unavailable' ? (
+                            <p className="text-xs text-amber-200" data-bms-stats-unavailable="true">Stats Toolkit convergence diagnostics unavailable.</p>
+                        ) : analysisData.convergence_diagnostics.replicas.length > 0 ? (
+                            <table className="w-full text-left text-xs text-slate-200">
+                                <thead>
+                                    <tr className="border-b border-slate-700 text-slate-400">
+                                        <th className="py-1 pr-2">Replica</th>
+                                        <th className="py-1 pr-2">Block SEM (Å)</th>
+                                        <th className="py-1 pr-2">Naive SEM (Å)</th>
+                                        <th className="py-1 pr-2">ESS</th>
+                                        <th className="py-1 pr-2">τ_int</th>
+                                        <th className="py-1 pr-2">Equilibration</th>
+                                        <th className="py-1 pr-2">Geweke z (p)</th>
+                                        <th className="py-1">Converged</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {analysisData.convergence_diagnostics.replicas.map((row, idx) => (
+                                        <tr key={row.replica ?? idx} className="border-b border-slate-800/80">
+                                            <td className="py-1 pr-2">{row.replica ?? idx}</td>
+                                            <td className="py-1 pr-2">{typeof row.block_sem === 'number' ? row.block_sem.toFixed(4) : 'n/a'}</td>
+                                            <td className="py-1 pr-2">{typeof row.naive_sem === 'number' ? row.naive_sem.toFixed(4) : 'n/a'}</td>
+                                            <td className="py-1 pr-2">{typeof row.effective_sample_size === 'number' ? row.effective_sample_size.toFixed(1) : 'n/a'}</td>
+                                            <td className="py-1 pr-2">{typeof row.tau_int === 'number' ? row.tau_int.toFixed(2) : 'n/a'}</td>
+                                            <td className="py-1 pr-2">{row.changepoint_time_ps != null ? `${Number(row.changepoint_time_ps).toFixed(1)} ps` : (row.equilibrated_after_index != null ? `idx ${row.equilibrated_after_index}` : 'n/a')}</td>
+                                            <td className="py-1 pr-2">{typeof row.geweke_z === 'number' ? `${row.geweke_z.toFixed(2)} (${typeof row.geweke_p_value === 'number' ? row.geweke_p_value.toFixed(3) : 'n/a'})` : 'n/a'}</td>
+                                            <td className="py-1">{row.converged == null ? 'n/a' : (row.converged ? 'yes' : 'no')}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        ) : (
+                            <p className="text-xs text-slate-400">No convergence diagnostics published.</p>
+                        )}
+                    </div>
+                )}
                 </div>
             </details>
         </section>

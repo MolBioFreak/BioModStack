@@ -341,6 +341,37 @@ export interface MDAnalysisReplicaReport {
     inputs: { manifest_sha256: string | null; topology_sha256?: string; trajectory_sha256?: string; atom_order_identity?: string };
 }
 
+export interface MDConvergenceReplica {
+    replica: number | null;
+    n_frames?: number | null;
+    tau_int?: number | null;
+    statistical_inefficiency?: number | null;
+    effective_sample_size?: number | null;
+    block_sem?: number | null;
+    naive_sem?: number | null;
+    geweke_z?: number | null;
+    geweke_p_value?: number | null;
+    changepoint_time_ps?: number | null;
+    equilibrated_after_index?: number | null;
+    drift_slope_angstrom_per_ps?: number | null;
+    drift_p_value?: number | null;
+    converged?: boolean | null;
+    stats_run?: StatsRunRef | null;
+}
+
+export interface MDConvergenceDiagnostics {
+    status?: 'available' | 'unavailable';
+    reason?: string | null;
+    stats_backend?: string;
+    stats_tool_id?: string;
+    stats_method_version?: string | null;
+    stats_run?: StatsRunRef | null;
+    stats_runs?: StatsRunRef[];
+    analysis_run_id?: string | null;
+    stale?: boolean;
+    replicas: MDConvergenceReplica[];
+}
+
 export interface MDAnalysisReportSet {
     schema: 'bms.md.analysis-report-set.v1';
     job_id: string;
@@ -360,6 +391,7 @@ export interface MDAnalysisReportSet {
         mean_of_replica_final_rmsd_angstrom: number | null;
         sample_stdev_of_replica_final_rmsd_angstrom: number | null;
     };
+    convergence_diagnostics?: MDConvergenceDiagnostics | null;
     evidence: { status: 'insufficient_evidence'; reason: string; frames_are_independent_replicates: false };
     retry: { eligible: boolean; active: boolean; reason: string };
 }
@@ -418,8 +450,8 @@ export function parseMDAnalysisReportSet(value: unknown): MDAnalysisReportSet {
 
 export const fetchMDSummary = (jobId: string) => api.get<MDSummary>(`/api/jobs/${jobId}/md/summary`);
 export const fetchMDArtifacts = (jobId: string) => api.get<{ schema: string; job_id: string; source: string; bounded: true; analysis_error?: { code: string; message: string } | null; artifacts: MDArtifact[] }>(`/api/jobs/${jobId}/md/artifacts`);
-export const fetchMDAnalysis = async (jobId: string) => {
-    const response = await api.get<unknown>(`/api/jobs/${jobId}/md/analysis`);
+export const fetchMDAnalysis = async (jobId: string, options?: { recompute?: boolean }) => {
+    const response = await api.get<unknown>(`/api/jobs/${jobId}/md/analysis`, options?.recompute ? { params: { recompute: true } } : undefined);
     return { ...response, data: parseMDAnalysisReportSet(response.data) };
 };
 export const retryMDAnalysis = (jobId: string) => api.post<{ schema: 'bms.md.analysis-retry.v1'; status: string; created_child_ids: string[] }>(`/api/jobs/${jobId}/md/analysis/retry`);

@@ -5,15 +5,17 @@ from pathlib import Path
 
 import pytest
 
+import httpx
+from services.conformational_mapping import analysis as cm_analysis
 from services.conformational_mapping.analysis import (
     ConformationalAnalysisError,
-    _average_ranks,
+    _batch_hierarchical_summary,
     _clash_key_sort_bytes,
-    _hierarchical,
     _matched_comparison,
     _ranked_universe_reference,
     _rank_stability,
 )
+from services.stats_toolkit_client import StatsToolkitClient
 from services.conformational_mapping.contracts import hotspot_score, switch_score
 
 
@@ -63,9 +65,55 @@ def test_cm8_003_redistribution_included_residues() -> None:
     assert '"included_residues"' in text and '"excluded_residues"' in text
 
 
-def test_cm8_004_hierarchical_weighting() -> None:
+def _mock_cm_toolkit(monkeypatch: pytest.MonkeyPatch, result_by_tool: dict) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/workspaces":
+            return httpx.Response(200, json={"workspaces": [{"workspace_id": "ws-cm", "name": "BioModStack analyses"}]})
+        if request.url.path == "/api/v1/runs":
+            body = json.loads(request.content.decode())
+            tool_id = body["tool_id"]
+            res = result_by_tool[tool_id](body["inputs"])
+            return httpx.Response(200, json={
+                "run_id": f"run-{tool_id}",
+                "workspace_id": "ws-cm",
+                "tool_id": tool_id,
+                "status": "completed",
+                "result": res,
+            })
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        "services.stats_toolkit_client.get_stats_toolkit_client",
+        lambda **_: StatsToolkitClient(base_url="http://stats.test", transport=httpx.MockTransport(handler)),
+    )
+
+
+def test_cm8_004_hierarchical_weighting(monkeypatch: pytest.MonkeyPatch) -> None:
     expected = {"seed1": ["0", "1"], "seed2": ["0"]}
-    result = _hierarchical({("seed1", "0"): 0.0, ("seed1", "1"): 2.0, ("seed2", "0"): 9.0}, expected)
+    _mock_cm_toolkit(monkeypatch, {
+        "descriptive.hierarchical_summary": lambda inputs: {
+            "series_results": {
+                "s1": {
+                    "has_valid_data": True,
+                    "mean": 5.0,
+                    "outer_support_fraction": 1.0,
+                    "coordinate_support_fraction": 1.0,
+                    "valid_outer_count": 2,
+                    "expected_outer_count": 2,
+                    "valid_coordinate_count": 3,
+                    "expected_coordinate_count": 3,
+                    "between_variance": 32.0,
+                    "between_range": [1.0, 9.0],
+                    "stratum_mean_median": 5.0,
+                    "stratum_mean_iqr": 4.0,
+                    "strata": {},
+                }
+            }
+        }
+    })
+    out, runs, unavailable = _batch_hierarchical_summary({"s1": {("seed1", "0"): 0.0, ("seed1", "1"): 2.0, ("seed2", "0"): 9.0}}, expected)
+    assert not unavailable and out is not None and len(runs) == 1
+    result = out["s1"]
     assert result is not None
     assert result["mean"] == 5.0
     assert result["mean"] != pytest.approx(11 / 3)
@@ -80,15 +128,47 @@ def test_cm8_006_switch_formula() -> None:
     assert switch_score(0.5, 0.25, -4.0) == 0.5
 
 
-def test_cm8_007_support_and_missingness() -> None:
-    result = _hierarchical({("a", "0"): 2.0}, {"a": ["0", "1"], "b": ["0"]})
+def test_cm8_007_support_and_missingness(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_cm_toolkit(monkeypatch, {
+        "descriptive.hierarchical_summary": lambda inputs: {
+            "series_results": {
+                "s1": {
+                    "has_valid_data": True,
+                    "mean": 2.0,
+                    "outer_support_fraction": 0.5,
+                    "coordinate_support_fraction": 1 / 3,
+                    "valid_outer_count": 1,
+                    "expected_outer_count": 2,
+                    "valid_coordinate_count": 1,
+                    "expected_coordinate_count": 3,
+                    "between_variance": None,
+                    "between_range": [2.0, 2.0],
+                    "stratum_mean_median": 2.0,
+                    "stratum_mean_iqr": 0.0,
+                    "strata": {"a": {"valid_inner": ["0"]}, "b": {"valid_inner": []}},
+                }
+            }
+        }
+    })
+    out, _runs, unavailable = _batch_hierarchical_summary({"s1": {("a", "0"): 2.0}}, {"a": ["0", "1"], "b": ["0"]})
+    assert not unavailable and out is not None
+    result = out["s1"]
     assert result is not None
     assert result["outer_support_fraction"] == 0.5
     assert result["coordinate_support_fraction"] == pytest.approx(1 / 3)
     assert result["strata"]["b"]["valid_inner"] == []
 
 
-def test_cm8_008_rank_stability() -> None:
+def test_cm8_008_rank_stability(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_cm_toolkit(monkeypatch, {
+        "inference.correlation_matrix": lambda inputs: {
+            "pairs": [
+                {"var_a": "1", "var_b": "2", "statistic": 1.0, "p_value": 0.0, "adjusted_p_value": 0.0},
+                {"var_a": "1", "var_b": "3", "statistic": 1.0, "p_value": 0.0, "adjusted_p_value": 0.0},
+                {"var_a": "2", "var_b": "3", "statistic": 1.0, "p_value": 0.0, "adjusted_p_value": 0.0},
+            ]
+        }
+    })
     items = {("t", index): {(seed, "0"): float(10 - index) for seed in ("1", "2", "3")} for index in range(3)}
     stability, common, pairwise, excluded = _rank_stability(
         items, {seed: ["0"] for seed in ("1", "2", "3")},
@@ -98,10 +178,9 @@ def test_cm8_008_rank_stability() -> None:
     assert len(common) == 3 and len(pairwise) == 3 and not excluded
 
 
-def test_cm8_009_deterministic_tie_break() -> None:
-    ranks = _average_ranks({("b",): 1.0, ("a",): 1.0, ("c",): 0.0})
-    assert ranks[("a",)] == ranks[("b",)] == 1.5
-    assert list(_average_ranks({("c",): 0.0, ("a",): 1.0, ("b",): 1.0})) == list(ranks)
+def test_cm8_009_local_math_helpers_deleted() -> None:
+    for deleted in ("_sample_variance", "_hierarchical", "_hierarchical_fraction", "_average_ranks", "_spearman"):
+        assert not hasattr(cm_analysis, deleted)
 
 
 def test_cm8_010_persisted_components_reconstruct_rank() -> None:

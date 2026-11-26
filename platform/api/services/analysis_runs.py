@@ -646,6 +646,27 @@ def _assemble_toolkit_analysis_result(run: AnalysisRun, raw_outputs: Any) -> Any
             "stats_run": stats_run,
         }
 
+    if run.analysis_type == "md_convergence_diagnostics":
+        from services.md.results import read_persisted_md_convergence_diagnostics
+
+        return read_persisted_md_convergence_diagnostics(summary, primary_outputs=raw_outputs)
+
+    if run.analysis_type == "confornets_mds":
+        from services.conformational_mapping.confornets_mds import format_confornets_mds_coordinates
+
+        sample_ids = summary.get("sample_ids") if isinstance(summary.get("sample_ids"), list) else None
+        coords = format_confornets_mds_coordinates(raw_outputs.get("mds_coordinates"), sample_ids=sample_ids)
+        return {
+            **raw_outputs,
+            "status": "available",
+            "stats_backend": "stats_toolkit",
+            "stats_tool_id": "multivariate.distance_clustering",
+            "stats_run": stats_run,
+            "sample_ids": sample_ids or [c["sample_id"] for c in coords],
+            "coordinates": coords,
+            "source_pairwise_rmsd_sha256": summary.get("source_pairwise_rmsd_sha256"),
+        }
+
     return raw_outputs
 
 

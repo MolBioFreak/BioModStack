@@ -3842,6 +3842,15 @@ async def _ingest_job_results(
             result_root=result_root,
             commit=False,
         )
+        if cm_request.backend == "confornets":
+            from .conformational_mapping.confornets_mds import ingest_confornets_mds_for_job
+
+            await ingest_confornets_mds_for_job(
+                session,
+                current_job,
+                result_root=result_root,
+                output_path=output_path,
+            )
         return len(ensemble["candidates"])
     # These newly connected public callers have one native, byte-bound
     # sequence-only collection. Do not treat preparation files, retained raw

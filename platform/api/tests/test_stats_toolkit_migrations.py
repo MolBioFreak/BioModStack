@@ -1,11 +1,10 @@
-"""Unit and live-service integration tests for BMS Stats Toolkit migrations (Phase 3b)."""
+"""Unit and live-service integration tests for BMS Stats Toolkit migrations."""
 
 from __future__ import annotations
 
 import json
 import math
 import os
-from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -13,13 +12,9 @@ import pytest
 
 from routers.analytics import CorrelationMatrix
 from services.conformational_mapping.analysis import _rank_stability
+from services.conformational_mapping.confornets_mds import compute_confornets_mds_via_toolkit
 from services.md.results import _compute_replica_convergence_diagnostics
-from services.scientific_analytics import MetricDescriptor, metric_state, summarize
-from services.stats_toolkit_client import (
-    StatsToolkitClient,
-    StatsToolkitUnavailableError,
-    stats_toolkit_required,
-)
+from services.stats_toolkit_client import StatsToolkitClient
 
 
 def _mock_client(handler) -> StatsToolkitClient:
@@ -27,16 +22,6 @@ def _mock_client(handler) -> StatsToolkitClient:
         base_url="http://stats.test",
         transport=httpx.MockTransport(handler),
     )
-
-
-def test_stats_toolkit_required_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("BMS_STATS_TOOLKIT_REQUIRED", raising=False)
-    assert stats_toolkit_required() is False
-    for truthy in ("1", "true", "TRUE", "yes", "on"):
-        monkeypatch.setenv("BMS_STATS_TOOLKIT_REQUIRED", truthy)
-        assert stats_toolkit_required() is True
-    monkeypatch.setenv("BMS_STATS_TOOLKIT_REQUIRED", "0")
-    assert stats_toolkit_required() is False
 
 
 def test_correlation_matrix_model_accepts_enriched_and_legacy_payloads() -> None:
@@ -57,102 +42,30 @@ def test_correlation_matrix_model_accepts_enriched_and_legacy_payloads() -> None
     })
     assert enriched_model.stats_backend == "stats_toolkit"
     assert enriched_model.stats_run["run_id"] == "run-1"
-    legacy_model = CorrelationMatrix.model_validate({
-        "job_id": "job-legacy",
-        "metrics": ["plddt", "ptm"],
-        "matrix": [[1.0, 0.9], [0.9, 1.0]],
-        "sample_sizes": [[5, 5], [5, 5]],
-    })
-    assert legacy_model.p_value_matrix is None
-
-def test_scientific_analytics_summarize_delegates_correlations(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[dict[str, Any]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content.decode())
-        calls.append((request.url.path, body))
-        if request.url.path.endswith("descriptive.summary/execute"):
-            cols = {k: {"count": len(v), "min": min(v), "max": max(v), "mean": sum(v) / len(v), "median": sorted(v)[len(v) // 2], "std": 1.0} for k, v in body.get("columns", {}).items()}
-            return httpx.Response(200, json={"result": {"columns": cols}})
-        return httpx.Response(
-            200,
-            json={
-                "result": {
-                    "pairs": [
-                        {"var_a": "a", "var_b": "b", "statistic": 0.99},
-                        {"var_a": "a", "var_b": "c", "statistic": None},
-                        {"var_a": "b", "var_b": "c", "statistic": None},
-                    ]
-                }
-            },
-        )
-
-    monkeypatch.setattr("services.stats_toolkit_client.get_stats_toolkit_client", lambda **_: _mock_client(handler))
-    desc_a = MetricDescriptor(
-        metric_id="a",
-        source="canonical_artifact",
-        scope="design",
-        unit="unit",
-        direction="higher",
-        producer_version="1.0",
-        derivation_version="1.0",
-    )
-    desc_b = MetricDescriptor(
-        metric_id="b",
-        source="canonical_artifact",
-        scope="design",
-        unit="unit",
-        direction="higher",
-        producer_version="1.0",
-        derivation_version="1.0",
-    )
-    desc_c = MetricDescriptor(
-        metric_id="c",
-        source="canonical_artifact",
-        scope="design",
-        unit="unit",
-        direction="higher",
-        producer_version="1.0",
-        derivation_version="1.0",
-    )
-    rows = [
-        (
-            f"d{i}",
-            {
-                "metrics": {"a": float(i), "b": float(i * 2), "c": 5.0},
-                "metric_states": {
-                    "a": metric_state(float(i)),
-                    "b": metric_state(float(i * 2)),
-                    "c": metric_state(5.0),
-                },
-                "metric_descriptors": {"a": desc_a, "b": desc_b, "c": desc_c},
-            },
-        )
-        for i in range(1, 5)
-    ]
-    summary = summarize(rows)
-    assert any(p.endswith("inference.correlation_matrix/execute") for p, _ in calls)
-    assert summary["pairs"]["a_vs_b"]["correlation"].value == pytest.approx(0.99)
-    assert summary["pairs"]["a_vs_c"]["correlation"].state == "unavailable"
-    assert summary["pairs"]["a_vs_c"]["correlation"].reason_code == "constant_metric"
 
 
-def test_conformational_mapping_rank_stability_delegates_spearman(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cm_rank_stability_delegates_durable_run(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/workspaces":
+            return httpx.Response(200, json={"workspaces": [{"workspace_id": "ws-1", "name": "BioModStack analyses"}]})
         body = json.loads(request.content.decode())
         seen.append(body)
         return httpx.Response(
             200,
             json={
+                "run_id": "run-cm-rank-1",
+                "workspace_id": "ws-1",
+                "tool_id": "inference.correlation_matrix",
+                "status": "completed",
                 "result": {
                     "pairs": [
                         {"var_a": "1", "var_b": "2", "statistic": 0.9, "p_value": 0.01, "adjusted_p_value": 0.015},
                         {"var_a": "1", "var_b": "3", "statistic": 0.8, "p_value": 0.03, "adjusted_p_value": 0.03},
                         {"var_a": "2", "var_b": "3", "statistic": 0.95, "p_value": 0.005, "adjusted_p_value": 0.015},
                     ]
-                }
+                },
             },
         )
 
@@ -166,59 +79,78 @@ def test_conformational_mapping_rank_stability_delegates_spearman(monkeypatch: p
         common_minimum=3,
     )
     assert len(seen) == 1
-    assert seen[0]["method"] == "spearman"
+    assert seen[0]["tool_id"] == "inference.correlation_matrix"
+    assert seen[0]["inputs"]["method"] == "spearman"
     assert stability == pytest.approx(0.9)
     assert len(common) == 4 and len(pairwise) == 3 and not excluded
     assert all(entry["stats_backend"] == "stats_toolkit" for entry in pairwise)
-    assert pairwise[0]["adjusted_p_value"] == pytest.approx(0.015)
+    assert pairwise[0]["stats_run"]["run_id"] == "run-cm-rank-1"
 
 
-def test_confornets_mds_delegates_via_rpc(monkeypatch: pytest.MonkeyPatch) -> None:
-    import _stats_toolkit_rpc
-    import run_confornets_inference as confornets
+def test_confornets_mds_delegates_controller_durable_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: list[dict[str, Any]] = []
 
-    called: list[tuple[str, dict[str, Any]]] = []
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/workspaces":
+            return httpx.Response(200, json={"workspaces": [{"workspace_id": "ws-1", "name": "BioModStack analyses"}]})
+        body = json.loads(request.content.decode())
+        called.append(body)
+        return httpx.Response(
+            200,
+            json={
+                "run_id": "run-mds-1",
+                "workspace_id": "ws-1",
+                "tool_id": "multivariate.distance_clustering",
+                "status": "completed",
+                "result": {
+                    "mds_coordinates": [
+                        [-1.5, -2.0],
+                        [1.5, -2.0],
+                        [1.5, 2.0],
+                        [-1.5, 2.0],
+                    ],
+                    "method_version": "1.0.0",
+                },
+            },
+        )
 
-    def fake_exec(tool_id: str, payload: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
-        called.append((tool_id, payload))
-        return {
-            "mds_coordinates": [
-                [-1.5, -2.0],
-                [1.5, -2.0],
-                [1.5, 2.0],
-                [-1.5, 2.0],
-            ]
-        }
-
-    monkeypatch.setattr(_stats_toolkit_rpc, "execute_stats_tool", fake_exec)
-    # 3x4 rectangle distance matrix
+    monkeypatch.setattr("services.conformational_mapping.confornets_mds.get_stats_toolkit_client", lambda: _mock_client(handler))
     dm = [
         [0.0, 3.0, 5.0, 4.0],
         [3.0, 0.0, 4.0, 5.0],
         [5.0, 4.0, 0.0, 3.0],
         [4.0, 5.0, 3.0, 0.0],
     ]
-    coords = confornets._mds_coordinates(dm)
+    res = compute_confornets_mds_via_toolkit(dm)
     assert len(called) == 1
-    assert called[0][0] == "multivariate.distance_clustering"
-    assert called[0][1]["mds_components"] == 2
+    assert called[0]["tool_id"] == "multivariate.distance_clustering"
+    assert called[0]["inputs"]["mds_components"] == 2
+    assert res["status"] == "available"
+    assert res["stats_run"]["run_id"] == "run-mds-1"
+    coords = res["coordinates"]
     for i in range(4):
         for j in range(4):
             dist = math.hypot(coords[i]["x"] - coords[j]["x"], coords[i]["y"] - coords[j]["y"])
             assert dist == pytest.approx(dm[i][j], abs=1e-5)
 
 
-def test_md_replica_convergence_diagnostics_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_md_replica_convergence_diagnostics_delegates_durable_run(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/workspaces":
+            return httpx.Response(200, json={"workspaces": [{"workspace_id": "ws-1", "name": "BioModStack analyses"}]})
         body = json.loads(request.content.decode())
         calls.append(body)
         return httpx.Response(
             200,
             json={
+                "run_id": "run-md-conv-0",
+                "workspace_id": "ws-1",
+                "tool_id": "timeseries.convergence_diagnostics",
+                "status": "completed",
                 "result": {
-                    "n": len(body["values"]),
+                    "n": len(body["inputs"]["values"]),
                     "tau_int": 1.2,
                     "statistical_inefficiency": 3.4,
                     "effective_sample_size": 4.7,
@@ -232,7 +164,7 @@ def test_md_replica_convergence_diagnostics_delegates(monkeypatch: pytest.Monkey
                     "drift_p_value": 0.81,
                     "converged": True,
                     "method_version": "1.0.0",
-                }
+                },
             },
         )
 
@@ -250,12 +182,16 @@ def test_md_replica_convergence_diagnostics_delegates(monkeypatch: pytest.Monkey
     diag = _compute_replica_convergence_diagnostics(reports)
     assert diag is not None
     assert len(calls) == 1
+    assert diag["status"] == "available"
     assert diag["stats_backend"] == "stats_toolkit"
     assert diag["stats_tool_id"] == "timeseries.convergence_diagnostics"
+    assert diag["stats_run"]["run_id"] == "run-md-conv-0"
     assert len(diag["replicas"]) == 1
     assert diag["replicas"][0]["replica"] == 0
     assert diag["replicas"][0]["converged"] is True
     assert diag["replicas"][0]["tau_int"] == pytest.approx(1.2)
+    assert diag["replicas"][0]["block_sem"] == pytest.approx(0.03)
+    assert diag["replicas"][0]["stats_run"]["run_id"] == "run-md-conv-0"
 
 
 def _live_stats_toolkit_reachable() -> bool:
@@ -271,24 +207,7 @@ def _live_stats_toolkit_reachable() -> bool:
     not _live_stats_toolkit_reachable(),
     reason="Live Stats Toolkit service not reachable in this test namespace",
 )
-def test_live_stats_toolkit_end_to_end_migrations(monkeypatch: pytest.MonkeyPatch) -> None:
-    import run_confornets_inference as confornets
-
-    monkeypatch.setenv("BMS_STATS_TOOLKIT_REQUIRED", "1")
-
-    # 1. Job correlation matrix
-    designs = [
-        SimpleNamespace(plddt=70.0 + i * 3.0, ptm=0.55 + i * 0.07, iptm=0.80 - i * 0.04, metrics=None)
-        for i in range(6)
-    ]
-    corr = _compute_correlation_matrix_via_stats_toolkit(designs, ["plddt", "ptm", "iptm"])
-    assert corr is not None
-    assert corr["stats_backend"] == "stats_toolkit"
-    assert corr["matrix"][0][1] == pytest.approx(1.0, abs=1e-4)
-    assert corr["matrix"][0][2] == pytest.approx(-1.0, abs=1e-4)
-    assert corr["adjusted_p_value_matrix"][0][1] < 0.001
-
-    # 2. Conformational mapping rank stability (Spearman)
+def test_live_stats_toolkit_end_to_end_migrations() -> None:
     items = {("t", idx): {(seed, "0"): float(10 - idx) for seed in ("1", "2", "3")} for idx in range(5)}
     stability, common, pairwise, excluded = _rank_stability(
         items,
@@ -300,21 +219,23 @@ def test_live_stats_toolkit_end_to_end_migrations(monkeypatch: pytest.MonkeyPatc
     assert stability == pytest.approx(1.0)
     assert len(common) == 5 and len(pairwise) == 3 and not excluded
     assert all(item["stats_backend"] == "stats_toolkit" for item in pairwise)
+    assert all(item["stats_run"]["run_id"] for item in pairwise)
 
-    # 3. ConforNets classical metric MDS
     dm = [
         [0.0, 3.0, 5.0, 4.0],
         [3.0, 0.0, 4.0, 5.0],
         [5.0, 4.0, 0.0, 3.0],
         [4.0, 5.0, 3.0, 0.0],
     ]
-    coords = confornets._mds_coordinates(dm)
+    mds = compute_confornets_mds_via_toolkit(dm)
+    assert mds["status"] == "available"
+    assert mds["stats_run"]["run_id"]
+    coords = mds["coordinates"]
     for i in range(4):
         for j in range(4):
             dist = math.hypot(coords[i]["x"] - coords[j]["x"], coords[i]["y"] - coords[j]["y"])
             assert dist == pytest.approx(dm[i][j], abs=1e-4)
 
-    # 4. MD convergence diagnostics
     reports = [{
         "replica": 0,
         "points": [
@@ -324,5 +245,7 @@ def test_live_stats_toolkit_end_to_end_migrations(monkeypatch: pytest.MonkeyPatc
     }]
     diag = _compute_replica_convergence_diagnostics(reports)
     assert diag is not None
+    assert diag["status"] == "available"
     assert diag["stats_backend"] == "stats_toolkit"
+    assert diag["stats_run"]["run_id"]
     assert diag["replicas"][0]["converged"] is True

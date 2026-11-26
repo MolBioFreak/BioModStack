@@ -595,7 +595,7 @@ def _wham_report(root: Path, aggregate: Mapping[str, Any], job: MDJobRecord):
     return result
 
 
-def analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict[str, Any]:
+def analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None, include_convergence: bool = True) -> dict[str, Any]:
     if not optional_analysis((job.params or {}).get("md_job_spec")):
         return _analysis_report(job, _inventory=_inventory, _digests=_digests)
     # Dynamics inventory errors remain dynamics errors, outside optional parsing.
@@ -614,7 +614,7 @@ def analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict
                             f"Optional MD analysis could not be read: {type(exc).__name__}: {exc}", 409) from exc
 
 
-def _analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict[str, Any]:
+def _analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None, include_convergence: bool = True) -> dict[str, Any]:
     digests = _digests if _digests is not None else {}
     root, aggregate, inventory = (_inventory if _inventory is not None
         else _load_inventory(job, _digests=digests))
@@ -739,7 +739,7 @@ def _analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dic
     if ((wham and wham.get("status") == "failed")
             or any(report.get("pull_error") or any(item.get("status") == "failed" for item in report.get("specialized_analyzers", [])) for report in reports)):
         overall = "partial" if reports and overall != "failed" else "failed"
-    convergence_diagnostics = _compute_replica_convergence_diagnostics(completed_reports)
+    convergence_diagnostics = _compute_replica_convergence_diagnostics(completed_reports) if include_convergence else None
     payload = {
         "schema": "bms.md.analysis-report-set.v1", "job_id": job.id,
         "source": "validated_job_owned_analysis_reports", "status": overall,
@@ -758,19 +758,50 @@ def _analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dic
     return payload
 
 
-def _compute_replica_convergence_diagnostics(completed_reports: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Compute per-replica RMSD convergence diagnostics via BioModStack Stats Toolkit when reachable."""
-    if not completed_reports:
-        return None
-    from services.stats_toolkit_client import (
-        StatsToolkitError,
-        StatsToolkitUnavailableError,
-        get_stats_toolkit_client,
-        stats_toolkit_required,
-    )
-    client = get_stats_toolkit_client()
-    per_replica: list[dict[str, Any]] = []
-    tool_version: str | None = None
+def md_convergence_input_signature(completed_reports: list[dict[str, Any]]) -> str:
+    """Stable digest binding persisted MD convergence runs to current replica trajectories."""
+    descriptor = []
+    for report in completed_reports:
+        inputs = report.get("inputs") if isinstance(report.get("inputs"), Mapping) else {}
+        points = report.get("points") if isinstance(report.get("points"), list) else []
+        descriptor.append({
+            "replica": report.get("replica"),
+            "manifest_sha256": inputs.get("manifest_sha256"),
+            "trajectory_sha256": inputs.get("trajectory_sha256"),
+            "n_points": len(points),
+        })
+    raw = json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _format_convergence_replica(
+    replica: Any,
+    diag: Mapping[str, Any],
+    stats_run: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "replica": replica,
+        "n_frames": diag.get("n"),
+        "tau_int": diag.get("tau_int"),
+        "statistical_inefficiency": diag.get("statistical_inefficiency"),
+        "effective_sample_size": diag.get("effective_sample_size"),
+        "block_sem": diag.get("block_sem"),
+        "naive_sem": diag.get("naive_sem"),
+        "geweke_z": diag.get("geweke_z"),
+        "geweke_p_value": diag.get("geweke_p_value"),
+        "changepoint_time_ps": diag.get("changepoint_time"),
+        "equilibrated_after_index": diag.get("equilibrated_after_index"),
+        "drift_slope_angstrom_per_ps": diag.get("drift_slope"),
+        "drift_p_value": diag.get("drift_p_value"),
+        "converged": diag.get("converged"),
+        "stats_run": stats_run,
+    }
+
+
+def _extract_eligible_md_convergence_series(
+    completed_reports: list[dict[str, Any]],
+) -> list[tuple[Any, list[float], list[float]]]:
+    eligible: list[tuple[Any, list[float], list[float]]] = []
     for report in completed_reports:
         points = report.get("points")
         if not isinstance(points, list) or len(points) < 8:
@@ -789,42 +820,137 @@ def _compute_replica_convergence_diagnostics(completed_reports: list[dict[str, A
                 break
             times.append(float(t_val))
             values.append(float(r_val))
-        if not valid or len(values) < 8:
-            continue
+        if valid and len(values) >= 8:
+            eligible.append((report.get("replica"), values, times))
+    return eligible
+
+
+def _compute_replica_convergence_diagnostics(
+    completed_reports: list[dict[str, Any]],
+    *,
+    idempotency_prefix: str | None = None,
+) -> dict[str, Any] | None:
+    """Compute per-replica RMSD convergence diagnostics as durable BioModStack Stats Toolkit runs."""
+    if not completed_reports:
+        return None
+    eligible = _extract_eligible_md_convergence_series(completed_reports)
+    if not eligible:
+        return None
+    from services.stats_toolkit_client import (
+        STATS_TOOLKIT_UNAVAILABLE_REASON,
+        StatsToolkitError,
+        StatsToolkitUnavailableError,
+        get_stats_toolkit_client,
+    )
+    client = get_stats_toolkit_client()
+    per_replica: list[dict[str, Any]] = []
+    stats_runs: list[dict[str, Any]] = []
+    tool_version: str | None = None
+    for replica, values, times in eligible:
+        idem = f"{idempotency_prefix}:r{replica}" if idempotency_prefix else None
         try:
-            diag = client.execute_tool(
+            run_ref, diag = client.run_tool(
+                None,
                 "timeseries.convergence_diagnostics",
                 {"values": values, "times": times},
+                idempotency_key=idem,
             )
         except StatsToolkitUnavailableError:
-            if stats_toolkit_required():
-                raise
-            return None
+            return {
+                "status": "unavailable",
+                "reason": STATS_TOOLKIT_UNAVAILABLE_REASON,
+                "stats_backend": "stats_toolkit",
+                "stats_tool_id": "timeseries.convergence_diagnostics",
+                "stats_method_version": None,
+                "stats_run": None,
+                "stats_runs": [],
+                "replicas": [],
+            }
         except StatsToolkitError:
             continue
-        tool_version = tool_version or diag.get("method_version")
-        per_replica.append({
-            "replica": report.get("replica"),
-            "n_frames": diag.get("n"),
-            "tau_int": diag.get("tau_int"),
-            "statistical_inefficiency": diag.get("statistical_inefficiency"),
-            "effective_sample_size": diag.get("effective_sample_size"),
-            "block_sem": diag.get("block_sem"),
-            "naive_sem": diag.get("naive_sem"),
-            "geweke_z": diag.get("geweke_z"),
-            "geweke_p_value": diag.get("geweke_p_value"),
-            "changepoint_time_ps": diag.get("changepoint_time"),
-            "equilibrated_after_index": diag.get("equilibrated_after_index"),
-            "drift_slope_angstrom_per_ps": diag.get("drift_slope"),
-            "drift_p_value": diag.get("drift_p_value"),
-            "converged": diag.get("converged"),
-        })
+        tool_version = tool_version or run_ref.get("method_version") or diag.get("method_version")
+        stats_runs.append(run_ref)
+        per_replica.append(_format_convergence_replica(replica, diag, run_ref))
     if not per_replica:
         return None
     return {
+        "status": "available",
         "stats_backend": "stats_toolkit",
         "stats_tool_id": "timeseries.convergence_diagnostics",
         "stats_method_version": tool_version,
+        "stats_run": stats_runs[0],
+        "stats_runs": stats_runs,
+        "replicas": per_replica,
+    }
+
+
+def read_persisted_md_convergence_diagnostics(
+    summary_json: Mapping[str, Any],
+    *,
+    primary_outputs: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Read persisted MD convergence diagnostics from durable Toolkit runs without creating new runs."""
+    from services.stats_toolkit_client import (
+        STATS_TOOLKIT_UNAVAILABLE_REASON,
+        StatsToolkitError,
+        StatsToolkitUnavailableError,
+        get_stats_toolkit_client,
+    )
+    replica_runs = summary_json.get("replica_runs")
+    primary_ref = summary_json.get("stats_run") if isinstance(summary_json.get("stats_run"), dict) else None
+    all_refs = [r for r in (summary_json.get("stats_runs") or []) if isinstance(r, dict)]
+    if not isinstance(replica_runs, list) or not replica_runs:
+        if primary_ref is not None:
+            replica_runs = [{"replica": 0, "stats_run": primary_ref}]
+        else:
+            return {
+                "status": "unavailable",
+                "reason": STATS_TOOLKIT_UNAVAILABLE_REASON,
+                "stats_backend": "stats_toolkit",
+                "stats_tool_id": "timeseries.convergence_diagnostics",
+                "stats_method_version": summary_json.get("stats_method_version"),
+                "stats_run": primary_ref,
+                "stats_runs": all_refs,
+                "replicas": [],
+            }
+    client = get_stats_toolkit_client()
+    per_replica: list[dict[str, Any]] = []
+    tool_version = summary_json.get("stats_method_version")
+    primary_id = str(primary_ref.get("run_id")) if primary_ref and primary_ref.get("run_id") else None
+    for entry in replica_runs:
+        if not isinstance(entry, Mapping):
+            continue
+        run_ref = entry.get("stats_run") if isinstance(entry.get("stats_run"), dict) else None
+        run_id = str(run_ref.get("run_id") or "").strip() if run_ref else ""
+        if not run_id:
+            continue
+        try:
+            if primary_outputs is not None and primary_id and run_id == primary_id:
+                diag = primary_outputs
+            else:
+                diag = client.read_run_outputs(run_id)
+        except StatsToolkitUnavailableError:
+            return {
+                "status": "unavailable",
+                "reason": STATS_TOOLKIT_UNAVAILABLE_REASON,
+                "stats_backend": "stats_toolkit",
+                "stats_tool_id": "timeseries.convergence_diagnostics",
+                "stats_method_version": tool_version,
+                "stats_run": primary_ref,
+                "stats_runs": all_refs,
+                "replicas": [],
+            }
+        except StatsToolkitError:
+            continue
+        tool_version = tool_version or (run_ref.get("method_version") if run_ref else None) or diag.get("method_version")
+        per_replica.append(_format_convergence_replica(entry.get("replica"), diag, run_ref))
+    return {
+        "status": "available" if per_replica else "unavailable",
+        "stats_backend": "stats_toolkit",
+        "stats_tool_id": "timeseries.convergence_diagnostics",
+        "stats_method_version": tool_version,
+        "stats_run": primary_ref or (all_refs[0] if all_refs else None),
+        "stats_runs": all_refs,
         "replicas": per_replica,
     }
 

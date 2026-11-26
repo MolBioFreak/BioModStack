@@ -43,12 +43,6 @@ def clear_workspace_cache() -> None:
         _WORKSPACE_ID_CACHE.clear()
 
 
-def stats_toolkit_required() -> bool:
-    """Return True when BMS_STATS_TOOLKIT_REQUIRED forbids local fallback on unavailable service."""
-    raw = (os.environ.get("BMS_STATS_TOOLKIT_REQUIRED") or "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
-
-
 def _resolve_base_url(base_url: str | None = None) -> str:
     raw = (base_url or os.environ.get("BMS_STATS_TOOLKIT_URL") or DEFAULT_STATS_TOOLKIT_URL).strip()
     return raw.rstrip("/")
@@ -378,5 +372,4 @@ __all__ = [
     "clear_workspace_cache",
     "get_stats_toolkit_client",
     "resolve_stats_toolkit_workspace_id",
-    "stats_toolkit_required",
 ]
