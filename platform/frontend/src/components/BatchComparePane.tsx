@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { fetchJobs, fetchBatchAnalytics, fetchJobDesignMetrics } from '../lib/api';
 import { ScientificAnalytics } from './ScientificAnalytics';
+import { StatsPanelControls } from './StatsPanelControls';
 import type { ScientificPoint } from '../lib/scientificAnalytics';
 import type { Job } from '../lib/api';
 import { isNgsJob } from '../lib/ngsResultRouting';
@@ -141,7 +142,7 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
                             {canonicalJobIds.length > 0 && (points.isError ? <p role="alert">Native comparison measurements could not be loaded.</p>
                                 : points.isPending ? <p>Loading native measurements…</p>
                                 : points.data.length ? <>
-                                    <ScientificAnalytics points={points.data} cohorts={comparison?.scientific_cohorts ?? []} />
+                                    <ScientificAnalytics points={points.data} cohorts={comparison?.scientific_cohorts ?? []} statsRunId={comparison?.stats_run?.run_id} statsStatus={comparison?.stats_status} statsReason={comparison?.reason} />
                                     <details><summary>Retained native records and producer scopes</summary><div className="overflow-auto"><table className="text-left text-xs"><thead><tr><th>Design / owning Job</th><th>Producer version / scope / unit</th><th>Availability</th></tr></thead><tbody>
                                         {points.data.map(point => <tr key={`${point.source_job_id}:${point.id}`}><td className="p-2">{point.name} ({point.id})<br />{point.source_job_id}</td>
                                             <td>{[...new Set(Object.values(point.metric_descriptors).map(d => `${d.producer_version} / ${d.scope} / ${d.unit}`))].join('; ') || 'Unavailable'}</td>
@@ -153,7 +154,10 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
                         {!useNative && <>
                         {/* Summary Table */}
                         <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700/50">
-                            <h3 className="text-lg font-semibold text-white mb-4">Summary Statistics</h3>
+                            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                                <h3 className="text-lg font-semibold text-white">Summary Statistics</h3>
+                                <StatsPanelControls kind="summary" statsRunId={comparison?.stats_run?.run_id} status={comparison?.stats_status} reason={comparison?.reason} />
+                            </div>
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <thead>

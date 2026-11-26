@@ -3,6 +3,8 @@ import { StructurePredictionResults, isStandaloneStructurePrediction } from './S
 import { ScientificAnalytics } from './ScientificAnalytics';
 import { PlotlyLab } from './PlotlyLab';
 import { CohortAnalytics } from './CohortAnalytics';
+import { histogramTraceFromStored } from '../lib/cohortAnalytics';
+import { StatsPanelControls, type CorrelationRecomputeOptions, type SummaryRecomputeOptions } from './StatsPanelControls';
 import type { ComponentProps } from 'react';
 import { parseScientificPoint } from '../lib/scientificAnalytics';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -13,6 +15,10 @@ import type { Annotations, Data, Layout, Shape } from 'plotly.js';
 import {
     fetchDesignAnalysis,
     fetchDesignPlotlyMetrics,
+    fetchJobAnalytics,
+    fetchJobAnalysis,
+    triggerJobAnalysis,
+    type CorrelationMatrix,
     triggerDesignAnalysis,
     type ChainMetric,
     type Design,
@@ -413,31 +419,6 @@ function pickAvailableMetric(candidates: string[], availableMetricKeys: string[]
     return availableMetricKeys[Math.min(fallbackIndex, availableMetricKeys.length - 1)] || '';
 }
 
-function pearson(valuesX: number[], valuesY: number[]): number {
-    const length = Math.min(valuesX.length, valuesY.length);
-    if (length < 2) return 0;
-
-    const xs = valuesX.slice(0, length);
-    const ys = valuesY.slice(0, length);
-    const meanX = xs.reduce((sum, value) => sum + value, 0) / length;
-    const meanY = ys.reduce((sum, value) => sum + value, 0) / length;
-
-    let numerator = 0;
-    let deltaX = 0;
-    let deltaY = 0;
-
-    for (let index = 0; index < length; index += 1) {
-        const centeredX = xs[index] - meanX;
-        const centeredY = ys[index] - meanY;
-        numerator += centeredX * centeredY;
-        deltaX += centeredX * centeredX;
-        deltaY += centeredY * centeredY;
-    }
-
-    const denominator = Math.sqrt(deltaX * deltaY);
-    return denominator === 0 ? 0 : numerator / denominator;
-}
-
 export function AnalyticsDashboard(props: AnalyticsDashboardProps & { nativeCohort?: ComponentProps<typeof CohortAnalytics> }) {
     // Native publications already carry their metric authority. Do not query or
     // reinterpret them through the legacy binder Design score adapter.
@@ -506,6 +487,48 @@ function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLe
     const [custom3dColor, setCustom3dColor] = useState<string>('conf_score');
     const analyticsDesignIds = useMemo(() => designs.map((design) => design.id), [designs]);
     const analyticsDesignIdsKey = useMemo(() => analyticsDesignIds.join(','), [analyticsDesignIds]);
+
+    const { data: jobAnalyticsData, isError: jobAnalyticsError } = useQuery({
+        queryKey: ['job-analytics', jobId],
+        queryFn: () => (jobId ? fetchJobAnalytics(jobId).then((response) => response.data) : null),
+        enabled: Boolean(jobId),
+        retry: false,
+        staleTime: 30_000,
+    });
+
+    const { data: storedCorrelationRun, isError: correlationRunError } = useQuery({
+        queryKey: ['job-analysis', jobId, 'job_correlation_matrix'],
+        queryFn: () => (jobId ? fetchJobAnalysis<CorrelationMatrix>(jobId, 'job_correlation_matrix', { include_children: true }).then((response) => response.data) : null),
+        enabled: Boolean(jobId && showAdvancedCharts),
+        retry: false,
+        staleTime: 30_000,
+    });
+
+    const recomputeJobSummary = useMutation({
+        mutationFn: (options: SummaryRecomputeOptions) =>
+            triggerJobAnalysis(jobId!, 'job_metric_summary', {
+                include_children: true,
+                histogram_bins: options.histogram_bins,
+                shared_bins: options.shared_bins,
+            }, true).then((response) => response.data),
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: ['job-analytics', jobId] });
+            void queryClient.invalidateQueries({ queryKey: ['job-analysis', jobId, 'job_metric_summary'] });
+        },
+    });
+
+    const recomputeJobCorrelation = useMutation({
+        mutationFn: (options: CorrelationRecomputeOptions) =>
+            triggerJobAnalysis<CorrelationMatrix>(jobId!, 'job_correlation_matrix', {
+                include_children: true,
+                method: options.method,
+                p_adjust_method: options.p_adjust_method,
+            }, true).then((response) => response.data),
+        onSuccess: (updated) => {
+            queryClient.setQueryData(['job-analysis', jobId, 'job_correlation_matrix'], updated);
+            void queryClient.invalidateQueries({ queryKey: ['job-analysis', jobId, 'job_correlation_matrix'] });
+        },
+    });
 
     const { data: plotlyMetricsData } = useQuery({
         queryKey: ['analytics-plotly-metrics', jobId, analyticsDesignIdsKey],
@@ -635,10 +658,6 @@ function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLe
 
     const hasMetricData = useCallback((key: string | null | undefined): key is string => !!key && (metricCounts.get(key) || 0) > 0, [metricCounts]);
     const getMetricLabel = (key: string) => metricLookup.get(key)?.label || toMetricLabel(key);
-    const extractValues = (key: string) =>
-        designs
-            .map((design) => getMetricValue(design, key))
-            .filter((value): value is number => value != null && Number.isFinite(value));
     const designLensById = useMemo(
         () => new Map(
             baseSortedDesigns.map((design) => {
@@ -1179,22 +1198,18 @@ function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLe
     const buildHistogram = (key: string): Data[] => {
         const cached = histogramCache.get(key);
         if (cached) return cached;
-        const values = extractValues(key);
-        if (!values.length) {
+        const dist = jobAnalyticsData?.metrics?.[key];
+        if (!dist || !dist.histogram_bins?.length || !dist.histogram_counts?.length) {
             histogramCache.set(key, []);
             return [];
         }
-        const result = [{
-            type: 'histogram',
-            x: values,
-            nbinsx: Math.min(30, Math.max(10, Math.floor(Math.sqrt(values.length)))),
-            marker: {
-                color: metricLookup.get(key)?.color || '#60a5fa',
-                line: { color: '#ffffff18', width: 1 },
-                opacity: 0.88,
-            },
-            hovertemplate: `${getMetricLabel(key)}: %{x:.3f}<br>Count: %{y}<extra></extra>`,
-        } as Data];
+        const result = histogramTraceFromStored(dist.histogram_bins, dist.histogram_counts, {
+            label: getMetricLabel(key),
+            color: metricLookup.get(key)?.color || '#60a5fa',
+            lineColor: '#ffffff18',
+            opacity: 0.88,
+            hoverUnit: 'Count',
+        });
         histogramCache.set(key, result);
         return result;
     };
@@ -1203,25 +1218,20 @@ function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLe
         const cacheKey = keys.join('::');
         const cached = correlationCache.get(cacheKey);
         if (cached !== undefined) return cached;
-        const activeKeys = keys.filter((key, index) => keys.indexOf(key) === index && hasMetricData(key));
-        if (activeKeys.length < 2) {
+        const stored = storedCorrelationRun?.result;
+        if (!stored || !Array.isArray(stored.metrics) || !Array.isArray(stored.matrix)) {
             correlationCache.set(cacheKey, null);
             return null;
         }
-
-        const matrix = activeKeys.map((xKey) => activeKeys.map((yKey) => {
-            const pairs = designs
-                .map((design) => [getMetricValue(design, xKey), getMetricValue(design, yKey)] as const)
-                .filter((pair): pair is readonly [number, number] => pair[0] != null && pair[1] != null);
-            if (pairs.length < 2) return 0;
-            return pearson(
-                pairs.map(([x]) => x),
-                pairs.map(([, y]) => y),
-            );
-        }));
-
+        const uniqueKeys = keys.filter((key, index) => keys.indexOf(key) === index && stored.metrics.includes(key));
+        if (uniqueKeys.length < 2) {
+            correlationCache.set(cacheKey, null);
+            return null;
+        }
+        const indices = uniqueKeys.map((key) => stored.metrics.indexOf(key));
+        const matrix = indices.map((ix) => indices.map((iy) => stored.matrix[ix]?.[iy] ?? 0));
         const result = {
-            labels: activeKeys.map((key) => getMetricLabel(key)),
+            labels: uniqueKeys.map((key) => getMetricLabel(key)),
             matrix,
         };
         correlationCache.set(cacheKey, result);
@@ -1388,6 +1398,32 @@ function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLe
                         </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
+                        {jobId && (
+                            <StatsPanelControls
+                                kind="summary"
+                                statsRunId={jobAnalyticsData?.stats_run?.run_id}
+                                stale={Boolean(jobAnalyticsData?.stale)}
+                                status={jobAnalyticsError ? 'unavailable' : jobAnalyticsData?.stats_status}
+                                reason={jobAnalyticsData?.reason}
+                                histogramBins={jobAnalyticsData?.histogram_bins}
+                                sharedBins={jobAnalyticsData?.shared_bins}
+                                onRecompute={(opts) => recomputeJobSummary.mutate(opts)}
+                                isRecomputing={recomputeJobSummary.isPending}
+                            />
+                        )}
+                        {jobId && showAdvancedCharts && (
+                            <StatsPanelControls
+                                kind="correlation"
+                                statsRunId={storedCorrelationRun?.stats_run?.run_id}
+                                stale={Boolean(storedCorrelationRun?.stale)}
+                                status={correlationRunError ? 'unavailable' : storedCorrelationRun?.status}
+                                reason={storedCorrelationRun?.reason}
+                                method={storedCorrelationRun?.result?.method ?? (storedCorrelationRun?.params?.method as string | undefined)}
+                                pAdjustMethod={storedCorrelationRun?.result?.p_adjust_method ?? (storedCorrelationRun?.params?.p_adjust_method as string | undefined)}
+                                onRecompute={(opts) => recomputeJobCorrelation.mutate(opts)}
+                                isRecomputing={recomputeJobCorrelation.isPending}
+                            />
+                        )}
                         <button type="button" className="rounded-lg border px-3 py-2 text-sm" aria-expanded={showPlotlyLab} onClick={() => setShowPlotlyLab(value => !value)}>{showPlotlyLab ? 'Close custom charts' : 'Open custom charts'}</button>
                         <button
                             type="button"

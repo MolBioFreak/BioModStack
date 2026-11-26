@@ -538,6 +538,19 @@ class PlotlyMetricsResponse(BaseModel):
     total: int
     metric_metadata: Dict[str, PlotlyMetricMetadata] = {}
     chart_suggestions: List[PlotlyChartSuggestion] = []
+    analysis_run_id: Optional[str] = None
+    stats_run: Optional[Dict[str, Any]] = None
+    stats_status: Optional[str] = None
+    stale: bool = False
+    reason: Optional[str] = None
+    histogram_bins: Optional[int] = None
+    shared_bins: Optional[bool] = None
+    correlation_run_id: Optional[str] = None
+    correlation_stats_run: Optional[Dict[str, Any]] = None
+    correlation_status: Optional[str] = None
+    correlation_stale: bool = False
+    correlation_method: Optional[str] = None
+    correlation_p_adjust_method: Optional[str] = None
 
 
 class PlotlyMetricsRequest(BaseModel):
@@ -2299,15 +2312,136 @@ async def _collect_plotly_metrics(
             )
         )
 
+    from services.analysis_registry import JOB_CORRELATION_MATRIX_ANALYSIS, JOB_METRIC_SUMMARY_ANALYSIS
+    from services.analysis_runs import (
+        extract_stats_run,
+        get_latest_job_analysis_run_for_scope,
+        is_stats_toolkit_unavailable_run,
+        load_analysis_result,
+    )
+    from services.scientific_analytics import (
+        MetricState,
+        assemble_cohort_from_toolkit,
+        metric_state,
+        partition_rows,
+    )
+    from services.stats_toolkit_client import STATS_TOOLKIT_UNAVAILABLE_REASON, StatsToolkitUnavailableError
+
+    _, grouped_cohorts = await partition_rows(designs, owners, session)
+    scope_params = {"include_children": include_children, "design_ids": clean_design_ids}
+
+    summary_run, _sdef, _sparams, _skey, summary_stale = await get_latest_job_analysis_run_for_scope(
+        session,
+        job,
+        JOB_METRIC_SUMMARY_ANALYSIS,
+        raw_params=scope_params,
+    )
+    corr_run, _cdef, _cparams, _ckey, corr_stale = await get_latest_job_analysis_run_for_scope(
+        session,
+        job,
+        JOB_CORRELATION_MATRIX_ANALYSIS,
+        raw_params=scope_params,
+    )
+
+    summary_columns: dict[str, dict] = {}
+    stats_status: Optional[str] = "not_computed"
+    stats_reason: Optional[str] = None
+    stats_run_ref: Optional[Dict[str, Any]] = None
+    summary_run_id: Optional[str] = None
+    summary_bins: Optional[int] = None
+    summary_shared_bins: Optional[bool] = None
+    summary_unavailable_reason = "not_computed"
+    if summary_run is not None:
+        summary_run_id = summary_run.id
+        stats_run_ref = extract_stats_run(summary_run)
+        sparams_saved = summary_run.params_json or {}
+        summary_bins = sparams_saved.get("histogram_bins")
+        summary_shared_bins = sparams_saved.get("shared_bins")
+        if is_stats_toolkit_unavailable_run(summary_run):
+            stats_status = "unavailable"
+            stats_reason = STATS_TOOLKIT_UNAVAILABLE_REASON
+            summary_unavailable_reason = STATS_TOOLKIT_UNAVAILABLE_REASON
+        elif summary_run.status != "completed":
+            stats_status = summary_run.status
+            summary_unavailable_reason = summary_run.status
+        else:
+            try:
+                s_payload = load_analysis_result(summary_run)
+                if isinstance(s_payload, dict) and isinstance(s_payload.get("columns"), dict):
+                    summary_columns = s_payload["columns"]
+                stats_status = "completed"
+            except StatsToolkitUnavailableError:
+                stats_status = "unavailable"
+                stats_reason = STATS_TOOLKIT_UNAVAILABLE_REASON
+                summary_unavailable_reason = STATS_TOOLKIT_UNAVAILABLE_REASON
+
+    corr_lookup: dict[tuple[str, str], MetricState] | None = None
+    corr_status: Optional[str] = "not_computed"
+    corr_run_id: Optional[str] = None
+    corr_stats_run_ref: Optional[Dict[str, Any]] = None
+    corr_method: Optional[str] = None
+    corr_p_adjust: Optional[str] = None
+    if corr_run is not None:
+        corr_run_id = corr_run.id
+        corr_stats_run_ref = extract_stats_run(corr_run)
+        cparams_saved = corr_run.params_json or {}
+        corr_method = cparams_saved.get("method")
+        corr_p_adjust = cparams_saved.get("p_adjust_method")
+        if is_stats_toolkit_unavailable_run(corr_run):
+            corr_status = "unavailable"
+        elif corr_run.status != "completed":
+            corr_status = corr_run.status
+        else:
+            try:
+                c_payload = load_analysis_result(corr_run)
+                corr_status = "completed"
+                if isinstance(c_payload, dict):
+                    corr_lookup = {}
+                    for item in (c_payload.get("pairs") or []):
+                        if isinstance(item, dict) and item.get("var_a") and item.get("var_b"):
+                            stat = item.get("statistic")
+                            corr_lookup[(str(item["var_a"]), str(item["var_b"]))] = (
+                                metric_state(float(stat))
+                                if stat is not None
+                                else MetricState(state="unavailable", value=None, reason_code="constant_metric")
+                            )
+            except StatsToolkitUnavailableError:
+                corr_status = "unavailable"
+
+    scientific_cohorts = [
+        assemble_cohort_from_toolkit(
+            key,
+            rows,
+            summary_columns=summary_columns,
+            correlation_lookup=corr_lookup,
+            include_pairs=True,
+            unavailable_reason=summary_unavailable_reason,
+        )
+        for key, rows in sorted(grouped_cohorts.items())
+    ]
+
     sorted_metric_keys = sorted(metric_keys)
     return PlotlyMetricsResponse(
         job_id=job_id,
         metric_keys=sorted_metric_keys,
         points=points,
-        scientific_cohorts=(await partition(designs, owners, session))[1],
+        scientific_cohorts=scientific_cohorts,
         total=int(total),
         metric_metadata=_build_plotly_metric_metadata(sorted_metric_keys),
         chart_suggestions=_build_plotly_chart_suggestions(sorted_metric_keys),
+        analysis_run_id=summary_run_id,
+        stats_run=stats_run_ref,
+        stats_status=stats_status,
+        stale=bool(summary_stale) if stats_status in {"completed", "unavailable"} else False,
+        reason=stats_reason,
+        histogram_bins=summary_bins,
+        shared_bins=summary_shared_bins,
+        correlation_run_id=corr_run_id,
+        correlation_stats_run=corr_stats_run_ref,
+        correlation_status=corr_status,
+        correlation_stale=bool(corr_stale) if corr_status in {"completed", "unavailable"} else False,
+        correlation_method=corr_method,
+        correlation_p_adjust_method=corr_p_adjust,
     )
 
 
@@ -2383,7 +2517,7 @@ async def _native_design_list(query, native, output, limit, offset, model_counts
     import io
     from fastapi.encoders import jsonable_encoder
     from fastapi.responses import JSONResponse, Response
-    from services.scientific_analytics import bulk_scalar_projections, summarize
+    from services.scientific_analytics import bulk_scalar_projections
 
     compact = query.with_only_columns(Design.id, Design.job_id, Design.name, Design.confidence_metrics,
         Design.provenance, Design.pdb_path, Design.json_path, Design.source_stage, Design.producer_model_id)
@@ -2434,14 +2568,35 @@ async def _native_design_list(query, native, output, limit, offset, model_counts
         matching.sort(key=key)
     unread_ids = [id for id, p in projections.items() if p['publication_state'] is not None and p['publication_state'].reason_code == 'scalar_read_failed']
     matched_ids = {d.id for d in matching} - set(unread_ids)
-    summaries = {key: summarize([(id, p) for id, p in rows if id in matched_ids], include_pairs=False)['metrics']
-                 for key, rows in grouped.items() if any(id in matched_ids for id, _ in rows)}
     identity = hashlib.sha256(json.dumps(jsonable_encoder([
         (d.id, projections.get(d.id)) for d in designs]), sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    selection_design_ids = sorted(matched_ids)
+    selection_signature = hashlib.sha256(json.dumps(
+        {'design_ids': selection_design_ids, 'read_identity': identity},
+        sort_keys=True, separators=(',', ':'),
+    ).encode()).hexdigest()
+    from services.analysis_registry import SELECTION_METRIC_SUMMARY_ANALYSIS
+    from services.analysis_runs import extract_stats_run, get_matching_selection_analysis_run
+    saved_run, *_ = await get_matching_selection_analysis_run(
+        session,
+        selection_signature,
+        SELECTION_METRIC_SUMMARY_ANALYSIS,
+        raw_params={'design_ids': selection_design_ids},
+    )
+    summary_run = (
+        {
+            'run_id': saved_run.id,
+            'status': saved_run.status,
+            'stats_run': extract_stats_run(saved_run),
+        }
+        if saved_run is not None
+        else None
+    )
     unresolved_ids = sorted(set(scope.get('design_ids') or []) - {d.id for d in designs})
     scientific = dict(query=native.model_dump(), scope=scope, unresolved_ids=unresolved_ids, population_count=len(designs), evaluated_count=len(projections) - len(unread_ids),
         unread_ids=unread_ids, count_exact=not unread_ids,
-        matching_count=len(matching), read_identity=identity, cohorts=cohorts, summaries=summaries,
+        matching_count=len(matching), read_identity=identity, cohorts=cohorts,
+        selection_signature=selection_signature, summary_run=summary_run,
         verification='scalar_bytes_and_persisted_document_binding; coordinates_not_rehashed',
         ids=[d.id for d in matching])
     page = matching[offset:offset + limit] if output == 'page' else matching

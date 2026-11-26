@@ -7,19 +7,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from sqlalchemy.orm import defer
 from typing import List, Dict, Any, Optional
-import numpy as np
+import hashlib
+import json
 from pydantic import BaseModel
 
 from services.scientific_analytics import MetricState, MetricDescriptor, MetricSource, ScientificCohort, owning_jobs, projection, persisted_projection, revision_for_job, partition, native_scalar_owner
 from database import get_session, Job, Design
+from services.analysis_registry import (
+    JOB_CORRELATION_MATRIX_ANALYSIS,
+    JOB_METRIC_SUMMARY_ANALYSIS,
+    SELECTION_BATCH_SUMMARY_ANALYSIS,
+    SELECTION_METRIC_SUMMARY_ANALYSIS,
+)
 from services.analysis_runs import (
     extract_stats_run,
     get_latest_job_analysis_run_for_scope,
     get_matching_job_analysis_run,
     is_stats_toolkit_unavailable_run,
     load_analysis_result,
+    request_selection_analysis,
+    serialize_analysis_run,
     validate_job_analysis_request,
 )
+from services.stats_toolkit_client import STATS_TOOLKIT_UNAVAILABLE_REASON, StatsToolkitUnavailableError
 from services.result_contracts import resolve_result_contract
 from schemas import JobResponse
 
@@ -32,9 +42,13 @@ class MetricDistribution(BaseModel):
     max: float
     avg: float
     median: float
-    std_dev: float
-    histogram_bins: List[float]
-    histogram_counts: List[int]
+    std_dev: Optional[float] = None
+    q1: Optional[float] = None
+    q3: Optional[float] = None
+    iqr: Optional[float] = None
+    count: Optional[int] = None
+    histogram_bins: List[float] = []
+    histogram_counts: List[int] = []
 
 class ScatterPoint(BaseModel):
     x: float
@@ -48,6 +62,13 @@ class JobAnalytics(BaseModel):
     metrics: Dict[str, Optional[MetricDistribution]] | None
     correlations: Dict[str, List[ScatterPoint]] | None
     pipeline_summary: Dict[str, Any]
+    analysis_run_id: Optional[str] = None
+    stats_run: Optional[Dict[str, Any]] = None
+    stats_status: Optional[str] = None
+    stale: bool = False
+    reason: Optional[str] = None
+    histogram_bins: Optional[int] = None
+    shared_bins: Optional[bool] = None
 
 class DesignMetricPoint(BaseModel):
     model_config = {"extra": "forbid"}
@@ -67,27 +88,22 @@ class BatchAnalytics(BaseModel):
     job_ids: List[str]
     metrics_summary: Dict[str, Dict[str, float]]  # metric -> {job_id -> avg}
     common_metrics: List[str]
+    run_id: Optional[str] = None
+    selection_signature: Optional[str] = None
+    stats_run: Optional[Dict[str, Any]] = None
+    stats_status: Optional[str] = None
+    reason: Optional[str] = None
+
+class SelectionSummaryRequest(BaseModel):
+    design_ids: List[str] = []
+    job_ids: List[str] = []
+    selection_signature: Optional[str] = None
+    histogram_bins: int = 10
+    shared_bins: bool = False
+    force_refresh: bool = False
 
 
 # --- Helpers ---
-
-def calculate_distribution(values: List[float], bins: int = 10) -> MetricDistribution:
-    """Calculate statistical distribution for a list of values."""
-    if not values:
-        return None
-    
-    arr = np.array(values)
-    hist, bin_edges = np.histogram(arr, bins=bins)
-    
-    return MetricDistribution(
-        min=float(np.min(arr)),
-        max=float(np.max(arr)),
-        avg=float(np.mean(arr)),
-        median=float(np.median(arr)),
-        std_dev=float(np.std(arr)),
-        histogram_bins=[float(b) for b in bin_edges],
-        histogram_counts=[int(c) for c in hist]
-    )
 
 def extract_metrics(designs: List[Design]) -> Dict[str, List[float]]:
     """Extract all available numerical metrics from designs."""
@@ -199,46 +215,160 @@ async def get_job_analytics(
     include_children: bool = Query(True, description="Include child-job designs for parent jobs"),
     session: AsyncSession = Depends(get_session)
 ):
-    """Get aggregated analytics for a single job."""
+    """Get aggregated analytics for a single job from its stored durable Toolkit run (R11)."""
+    job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
     designs = await _load_designs_for_job(session, job_id, include_children=include_children)
-    
+
     if not designs:
         return JobAnalytics(
             job_id=job_id,
             design_count=0,
             metrics=None,
             correlations=None,
-            pipeline_summary={}
+            pipeline_summary={},
+            stats_status="not_computed",
         )
 
-    # Legacy meanings remain in the original fields; revision-one cohorts are separate.
-    legacy, cohorts = await partition(designs, await owning_jobs(session, designs), session)
-    raw_metrics = extract_metrics(legacy)
-    
-    # Calculate distributions
-    analyzed_metrics = {}
-    for name, values in raw_metrics.items():
-        if values:
-            analyzed_metrics[name] = calculate_distribution(values)
-            
-    # Calculate correlations for scatter plots (e.g. pLDDT vs PAE)
-    correlations = {}
-    if raw_metrics["plddt_overall"] and raw_metrics["pae_overall"]:
-        correlations["plddt_vs_pae"] = [
-            ScatterPoint(x=d.plddt_overall, y=d.pae_overall, id=d.id)
-            for d in legacy if d.plddt_overall is not None and d.pae_overall is not None
-        ]
+    from services.scientific_analytics import assemble_cohort_from_toolkit, partition_rows
+    owners = await owning_jobs(session, designs)
+    legacy, grouped_cohorts = await partition_rows(designs, owners, session)
 
+    # Raw scatter coordinates (not statistical aggregation)
+    correlations: Dict[str, List[ScatterPoint]] = {}
+    plddt_pae = [
+        ScatterPoint(x=d.plddt_overall, y=d.pae_overall, id=d.id)
+        for d in legacy if d.plddt_overall is not None and d.pae_overall is not None
+    ]
+    if plddt_pae:
+        correlations["plddt_vs_pae"] = plddt_pae
+
+    pipeline_summary = {
+        "total_designs": len(designs),
+        "favorites": sum(1 for d in designs if d.is_favorite),
+    }
+
+    run, _definition, _params, _cache_key, is_stale = await get_latest_job_analysis_run_for_scope(
+        session,
+        job,
+        JOB_METRIC_SUMMARY_ANALYSIS,
+        raw_params={"include_children": include_children},
+    )
+    if run is None:
+        uncomputed_cohorts = [
+            assemble_cohort_from_toolkit(
+                key, rows, summary_columns={}, include_pairs=True, unavailable_reason="not_computed"
+            )
+            for key, rows in sorted(grouped_cohorts.items())
+        ]
+        return JobAnalytics(
+            job_id=job_id,
+            design_count=len(designs),
+            scientific_cohorts=uncomputed_cohorts,
+            metrics=None,
+            correlations=correlations,
+            pipeline_summary=pipeline_summary,
+            stats_status="not_computed",
+            stale=False,
+        )
+
+    stats_run = extract_stats_run(run)
+    run_params = run.params_json or {}
+    if is_stats_toolkit_unavailable_run(run):
+        unavailable_cohorts = [
+            assemble_cohort_from_toolkit(
+                key, rows, summary_columns={}, include_pairs=True, unavailable_reason=STATS_TOOLKIT_UNAVAILABLE_REASON
+            )
+            for key, rows in sorted(grouped_cohorts.items())
+        ]
+        return JobAnalytics(
+            job_id=job_id,
+            design_count=len(designs),
+            scientific_cohorts=unavailable_cohorts,
+            metrics=None,
+            correlations=correlations,
+            pipeline_summary=pipeline_summary,
+            analysis_run_id=run.id,
+            stats_run=stats_run,
+            stats_status="unavailable",
+            stale=False,
+            reason=STATS_TOOLKIT_UNAVAILABLE_REASON,
+            histogram_bins=run_params.get("histogram_bins"),
+            shared_bins=run_params.get("shared_bins"),
+        )
+
+    if run.status != "completed":
+        pending_cohorts = [
+            assemble_cohort_from_toolkit(
+                key, rows, summary_columns={}, include_pairs=True, unavailable_reason=run.status
+            )
+            for key, rows in sorted(grouped_cohorts.items())
+        ]
+        return JobAnalytics(
+            job_id=job_id,
+            design_count=len(designs),
+            scientific_cohorts=pending_cohorts,
+            metrics=None,
+            correlations=correlations,
+            pipeline_summary=pipeline_summary,
+            analysis_run_id=run.id,
+            stats_run=stats_run,
+            stats_status=run.status,
+            stale=False,
+            histogram_bins=run_params.get("histogram_bins"),
+            shared_bins=run_params.get("shared_bins"),
+        )
+
+    try:
+        payload = load_analysis_result(run)
+    except StatsToolkitUnavailableError:
+        unavailable_cohorts = [
+            assemble_cohort_from_toolkit(
+                key, rows, summary_columns={}, include_pairs=True, unavailable_reason=STATS_TOOLKIT_UNAVAILABLE_REASON
+            )
+            for key, rows in sorted(grouped_cohorts.items())
+        ]
+        return JobAnalytics(
+            job_id=job_id,
+            design_count=len(designs),
+            scientific_cohorts=unavailable_cohorts,
+            metrics=None,
+            correlations=correlations,
+            pipeline_summary=pipeline_summary,
+            analysis_run_id=run.id,
+            stats_run=stats_run,
+            stats_status="unavailable",
+            stale=bool(is_stale),
+            reason=STATS_TOOLKIT_UNAVAILABLE_REASON,
+            histogram_bins=run_params.get("histogram_bins"),
+            shared_bins=run_params.get("shared_bins"),
+        )
+
+    payload_dict = payload if isinstance(payload, dict) else {}
+    analyzed_metrics = {
+        name: MetricDistribution.model_validate(dist)
+        for name, dist in (payload_dict.get("metrics") or {}).items()
+        if isinstance(dist, dict)
+    }
+    cohorts = [
+        ScientificCohort.model_validate(item)
+        for item in (payload_dict.get("scientific_cohorts") or [])
+        if isinstance(item, dict)
+    ]
     return JobAnalytics(
         job_id=job_id,
         design_count=len(designs),
         scientific_cohorts=cohorts,
         metrics=analyzed_metrics,
         correlations=correlations,
-        pipeline_summary={
-            "total_designs": len(designs),
-            "favorites": sum(1 for d in designs if d.is_favorite)
-        }
+        pipeline_summary=pipeline_summary,
+        analysis_run_id=run.id,
+        stats_run=stats_run,
+        stats_status="completed",
+        stale=bool(is_stale),
+        histogram_bins=run_params.get("histogram_bins"),
+        shared_bins=run_params.get("shared_bins"),
     )
 
 @router.get("/job/{job_id}/designs", response_model=List[DesignMetricPoint])
@@ -315,35 +445,148 @@ async def get_batch_analytics(
     job_ids: List[str],
     session: AsyncSession = Depends(get_session)
 ):
-    """Compare metrics across multiple jobs."""
-    summary = {}
-    cohorts = []
-    
-    # Simple loop for now - optimal would be single query with group_by
-    for jid in job_ids:
-        query = _scalar_design_query().where(Design.job_id == jid)
-        result = await session.execute(query)
-        designs = result.scalars().all()
-        
-        if not designs:
-            continue
-            
-        legacy, new_cohorts = await partition(designs, await owning_jobs(session, designs), session)
-        cohorts.extend(new_cohorts)
-        metrics = extract_metrics(legacy)
-        
-        # Calculate averages for comparison
-        for m_name, values in metrics.items():
-            if values:
-                if m_name not in summary:
-                    summary[m_name] = {}
-                summary[m_name][jid] = float(np.mean(values))
-                
+    """Compare metrics across multiple jobs via a saved durable selection run (R13/C15)."""
+    from services.analysis_subprocess import execute_analysis_run_in_session
+
+    normalized_job_ids = sorted({str(jid).strip() for jid in job_ids if str(jid).strip()})
+    if not normalized_job_ids:
+        return BatchAnalytics(
+            job_ids=[],
+            scientific_cohorts=[],
+            metrics_summary={},
+            common_metrics=[],
+            stats_status="not_computed",
+        )
+
+    design_rows = list(
+        (await session.execute(
+            select(Design.id, Design.job_id)
+            .where(Design.job_id.in_(normalized_job_ids))
+            .order_by(Design.job_id.asc(), Design.id.asc())
+        )).all()
+    )
+    selection_signature = hashlib.sha256(
+        json.dumps(
+            {
+                "kind": "batch",
+                "job_ids": normalized_job_ids,
+                "designs": [[str(r[0]), str(r[1])] for r in design_rows],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+    run, _cache_hit = await request_selection_analysis(
+        session,
+        selection_signature,
+        SELECTION_BATCH_SUMMARY_ANALYSIS,
+        raw_params={"job_ids": normalized_job_ids},
+        requested_by="ui",
+    )
+    if run.status in {"queued", "failed"}:
+        await execute_analysis_run_in_session(session, run.id)
+        await session.refresh(run)
+
+    stats_run = extract_stats_run(run)
+    if is_stats_toolkit_unavailable_run(run):
+        return BatchAnalytics(
+            job_ids=normalized_job_ids,
+            scientific_cohorts=[],
+            metrics_summary={},
+            common_metrics=[],
+            run_id=run.id,
+            selection_signature=selection_signature,
+            stats_run=stats_run,
+            stats_status="unavailable",
+            reason=STATS_TOOLKIT_UNAVAILABLE_REASON,
+        )
+    if run.status != "completed":
+        return BatchAnalytics(
+            job_ids=normalized_job_ids,
+            scientific_cohorts=[],
+            metrics_summary={},
+            common_metrics=[],
+            run_id=run.id,
+            selection_signature=selection_signature,
+            stats_run=stats_run,
+            stats_status=run.status,
+        )
+    try:
+        payload = load_analysis_result(run)
+    except StatsToolkitUnavailableError:
+        return BatchAnalytics(
+            job_ids=normalized_job_ids,
+            scientific_cohorts=[],
+            metrics_summary={},
+            common_metrics=[],
+            run_id=run.id,
+            selection_signature=selection_signature,
+            stats_run=stats_run,
+            stats_status="unavailable",
+            reason=STATS_TOOLKIT_UNAVAILABLE_REASON,
+        )
+    payload_dict = payload if isinstance(payload, dict) else {}
+    cohorts = [
+        ScientificCohort.model_validate(item)
+        for item in (payload_dict.get("scientific_cohorts") or [])
+        if isinstance(item, dict)
+    ]
+    metrics_summary = payload_dict.get("metrics_summary") or {}
     return BatchAnalytics(
-        job_ids=job_ids,
+        job_ids=normalized_job_ids,
         scientific_cohorts=cohorts,
-        metrics_summary=summary,
-        common_metrics=list(summary.keys())
+        metrics_summary=metrics_summary,
+        common_metrics=list(payload_dict.get("common_metrics") or sorted(metrics_summary.keys())),
+        run_id=run.id,
+        selection_signature=selection_signature,
+        stats_run=stats_run,
+        stats_status="completed",
+    )
+
+
+@router.post("/selection-summary")
+async def request_selection_metric_summary(
+    request: SelectionSummaryRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Compute or reuse a saved durable descriptive summary for a design selection (R13)."""
+    from services.analysis_subprocess import execute_analysis_run_in_session
+
+    design_ids = sorted({str(d).strip() for d in request.design_ids if str(d).strip()})
+    job_ids = sorted({str(j).strip() for j in request.job_ids if str(j).strip()})
+    selection_signature = request.selection_signature or hashlib.sha256(
+        json.dumps(
+            {"design_ids": design_ids, "job_ids": job_ids},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    run, cache_hit = await request_selection_analysis(
+        session,
+        selection_signature,
+        SELECTION_METRIC_SUMMARY_ANALYSIS,
+        raw_params={
+            "design_ids": design_ids,
+            "job_ids": job_ids,
+            "histogram_bins": request.histogram_bins,
+            "shared_bins": request.shared_bins,
+        },
+        force_refresh=request.force_refresh,
+        requested_by="ui",
+    )
+    if run.status in {"queued", "failed"}:
+        await execute_analysis_run_in_session(session, run.id)
+        await session.refresh(run)
+        cache_hit = False
+    return serialize_analysis_run(
+        run,
+        analysis_type=run.analysis_type,
+        subject_kind="selection",
+        subject_id=selection_signature,
+        params=run.params_json or {},
+        cache_hit=cache_hit,
+        include_result=True,
     )
 
 
@@ -369,6 +612,7 @@ class CorrelationMatrix(BaseModel):
     stats_backend: Optional[str] = None
     stats_tool_id: Optional[str] = None
     stats_method_version: Optional[str] = None
+    analysis_run_id: Optional[str] = None
     stats_run: Optional[Dict[str, Any]] = None
     stale: bool = False
 
@@ -403,40 +647,6 @@ class CDRAnalysisResponse(BaseModel):
     logos: List[SequenceLogoData]
 
 
-def pearson_r(x: List[float], y: List[float]) -> float:
-    """Calculate Pearson correlation coefficient via Stats Toolkit with local numpy fallback."""
-    if len(x) < 3 or len(y) < 3:
-        return 0.0
-    x_arr = np.array(x, dtype=float)
-    y_arr = np.array(y, dtype=float)
-    mask = ~(np.isnan(x_arr) | np.isnan(y_arr))
-    x_arr = x_arr[mask]
-    y_arr = y_arr[mask]
-    if len(x_arr) < 3:
-        return 0.0
-    try:
-        from services.stats_toolkit_client import (
-            StatsToolkitUnavailableError,
-            get_stats_toolkit_client,
-            stats_toolkit_required,
-        )
-        res = get_stats_toolkit_client().execute_tool(
-            "inference.correlation_matrix",
-            {
-                "columns": {"x": x_arr.tolist(), "y": y_arr.tolist()},
-                "method": "pearson",
-                "p_adjust_method": "none",
-            },
-        )
-        stat = (res.get("pairs") or [{}])[0].get("statistic")
-        return float(stat) if stat is not None else 0.0
-    except StatsToolkitUnavailableError:
-        if stats_toolkit_required():
-            raise
-    val = float(np.corrcoef(x_arr, y_arr)[0, 1])
-    return 0.0 if val != val else val
-
-
 STANDARD_AAs = "ACDEFGHIKLMNPQRSTVWY"
 
 
@@ -447,11 +657,15 @@ async def _get_cached_job_analysis_payload(
     *,
     include_children: bool = True,
     design_ids: Optional[list[str]] = None,
+    extra_params: Optional[dict[str, Any]] = None,
+    explicit_option_keys: frozenset[str] = frozenset(),
 ) -> Any:
-    params = {
+    params: dict[str, Any] = {
         "include_children": include_children,
         "design_ids": design_ids or [],
     }
+    if extra_params:
+        params.update(extra_params)
     try:
         await validate_job_analysis_request(session, job, analysis_type, params)
         run, _definition, _params, _cache_key, is_stale = await get_latest_job_analysis_run_for_scope(
@@ -459,6 +673,7 @@ async def _get_cached_job_analysis_payload(
             job,
             analysis_type,
             raw_params=params,
+            explicit_option_keys=explicit_option_keys,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -470,11 +685,15 @@ async def _get_cached_job_analysis_payload(
     if run.status != "completed":
         raise HTTPException(status_code=409, detail=f"{analysis_type} status is {run.status}")
 
-    payload = load_analysis_result(run)
+    try:
+        payload = load_analysis_result(run)
+    except StatsToolkitUnavailableError:
+        raise HTTPException(status_code=503, detail=STATS_TOOLKIT_UNAVAILABLE_REASON)
     if payload is None:
         raise HTTPException(status_code=500, detail=f"Cached {analysis_type} payload is unavailable")
     if isinstance(payload, dict) and _definition.toolkit_backed:
         enriched = dict(payload)
+        enriched["analysis_run_id"] = run.id
         stats_run = extract_stats_run(run)
         if stats_run is not None:
             enriched.setdefault("stats_run", stats_run)

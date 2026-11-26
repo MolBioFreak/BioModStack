@@ -2,7 +2,6 @@
 import hashlib
 import json
 import math
-import statistics
 from itertools import combinations
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, model_validator
@@ -51,7 +50,12 @@ class DistributionStatistics(ClosedModel):
     max: StrictFloat | StrictInt
     avg: StrictFloat | StrictInt
     median: StrictFloat | StrictInt
-    std_dev: StrictFloat | StrictInt
+    std_dev: StrictFloat | StrictInt | None = None
+    q1: StrictFloat | StrictInt | None = None
+    q3: StrictFloat | StrictInt | None = None
+    iqr: StrictFloat | StrictInt | None = None
+    histogram_bins: list[StrictFloat | StrictInt] | None = None
+    histogram_counts: list[StrictInt] | None = None
 
 
 class DistributionSummary(ClosedModel):
@@ -331,42 +335,192 @@ async def bulk_scalar_projections(designs, owners, session):
     return result
 
 
-def summarize(rows, *, include_pairs=True):
-    """Rows are (Design ID, verified projection) pairs from one descriptor cohort."""
+def distribution_statistics_from_toolkit(column: dict | None) -> DistributionStatistics | None:
+    if not isinstance(column, dict) or not column.get('count'):
+        return None
+    hist = column.get('histogram') if isinstance(column.get('histogram'), dict) else None
+    return DistributionStatistics(
+        min=float(column['min']),
+        max=float(column['max']),
+        avg=float(column['mean']),
+        median=float(column['median']),
+        std_dev=float(column['std']) if column.get('std') is not None else None,
+        q1=float(column['q1']) if column.get('q1') is not None else None,
+        q3=float(column['q3']) if column.get('q3') is not None else None,
+        iqr=float(column['iqr']) if column.get('iqr') is not None else None,
+        histogram_bins=[float(x) for x in hist['edges']] if hist and hist.get('edges') is not None else None,
+        histogram_counts=[int(x) for x in hist['counts']] if hist and hist.get('counts') is not None else None,
+    )
+
+
+def cohort_structure(rows, *, include_pairs=True):
+    """Extract cohort descriptors, observed counts, raw finite columns, and scatter pairs without computing stats."""
     ids = [identity for identity, _ in rows]
     if len(set(ids)) != len(ids):
         raise ValueError('duplicate analytics candidate')
-    metrics = {}
-    for key in sorted({key for _, p in rows for key in p['metric_states']}):
-        descriptors = [p['metric_descriptors'][key] for _,p in rows]
+    metrics_meta = {}
+    columns: dict[str, list[float]] = {}
+    for key in sorted({key for _, proj in rows for key in proj['metric_states']}):
+        descriptors = [proj['metric_descriptors'][key] for _, proj in rows]
         if any(d != descriptors[0] for d in descriptors):
             raise ValueError('incompatible metric descriptors')
-        states = [p['metric_states'][key] for _,p in rows]
-        values = [s.value for s in states if s.state == 'ok']
-        metrics[key] = dict(observed_count=len(values),
+        states = [proj['metric_states'][key] for _, proj in rows]
+        values = [float(s.value) for s in states if s.state == 'ok']
+        metrics_meta[key] = dict(
+            observed_count=len(values),
             unavailable_count=sum(s.state == 'unavailable' for s in states),
-            invalid_count=sum(s.state == 'invalid' for s in states), descriptor=descriptors[0],
-            statistics=dict(min=min(values), max=max(values), avg=statistics.mean(values),
-                median=statistics.median(values), std_dev=statistics.pstdev(values)) if values else None,
-            reason_code=None if values else 'no_observed_values')
-    metric_keys = sorted(metrics) if include_pairs else []
+            invalid_count=sum(s.state == 'invalid' for s in states),
+            descriptor=descriptors[0],
+            reason_code=None if values else 'no_observed_values',
+        )
+        if values:
+            columns[key] = values
+    metric_keys = sorted(metrics_meta) if include_pairs else []
     pair_specs = []
     for x, y in combinations(metric_keys, 2):
-        points = [dict(id=id, x=p['metrics'][x], y=p['metrics'][y])
-            for id, p in rows if x in p['metrics'] and y in p['metrics']]
+        points = [
+            dict(id=row_id, x=proj['metrics'][x], y=proj['metrics'][y])
+            for row_id, proj in rows if x in proj['metrics'] and y in proj['metrics']
+        ]
         pair_specs.append((x, y, points))
+    return dict(ids=ids, metrics_meta=metrics_meta, columns=columns, pair_specs=pair_specs)
 
-    toolkit_correlations: dict[tuple[str, str], MetricState] | None = None
-    eligible_specs = [(x, y, pts) for x, y, pts in pair_specs if len(pts) >= 3]
-    if eligible_specs:
+
+def serialize_cohort_metadata(cohort_key: str, rows, *, include_pairs=True) -> dict:
+    struct = cohort_structure(rows, include_pairs=include_pairs)
+    metrics_meta = {}
+    for key, meta in struct['metrics_meta'].items():
+        desc = meta['descriptor']
+        metrics_meta[key] = {
+            'observed_count': meta['observed_count'],
+            'unavailable_count': meta['unavailable_count'],
+            'invalid_count': meta['invalid_count'],
+            'descriptor': desc.model_dump(mode='json') if hasattr(desc, 'model_dump') else dict(desc),
+            'reason_code': meta['reason_code'],
+        }
+    pairs_meta = []
+    ids = struct['ids']
+    for x, y, points in struct['pair_specs']:
+        included = {pt['id'] for pt in points}
+        pairs_meta.append({
+            'x_metric': x,
+            'y_metric': y,
+            'points': points,
+            'pair_count': len(points),
+            'excluded_count': len(rows) - len(points),
+            'excluded_ids': [row_id for row_id in ids if row_id not in included],
+        })
+    return {
+        'cohort_key': cohort_key,
+        'design_ids': ids,
+        'metrics_meta': metrics_meta,
+        'pairs_meta': pairs_meta,
+    }
+
+
+def assemble_cohort_from_metadata(
+    cohort_meta: dict,
+    *,
+    summary_columns: dict[str, dict] | None = None,
+    correlation_lookup: dict[tuple[str, str], MetricState] | None = None,
+    column_prefix: str = '',
+    unavailable_reason: str = 'stats_toolkit_unavailable',
+) -> ScientificCohort:
+    cohort_key = str(cohort_meta['cohort_key'])
+    col_map = summary_columns if isinstance(summary_columns, dict) else {}
+    metrics = {}
+    for key, meta in (cohort_meta.get('metrics_meta') or {}).items():
+        prefixed = f'{column_prefix}cohort::{cohort_key}::{key}'
+        col = col_map.get(prefixed)
+        if col is None and not column_prefix:
+            col = col_map.get(key)
+        stats = distribution_statistics_from_toolkit(col) if meta['observed_count'] else None
+        reason = meta['reason_code']
+        if meta['observed_count'] and stats is None:
+            reason = unavailable_reason
+        desc = meta['descriptor']
+        if not isinstance(desc, MetricDescriptor):
+            desc = MetricDescriptor.model_validate(desc)
+        metrics[key] = DistributionSummary(
+            observed_count=meta['observed_count'],
+            unavailable_count=meta['unavailable_count'],
+            invalid_count=meta['invalid_count'],
+            descriptor=desc,
+            statistics=stats,
+            reason_code=reason,
+        )
+    pairs = {}
+    for pmeta in (cohort_meta.get('pairs_meta') or []):
+        x, y = pmeta['x_metric'], pmeta['y_metric']
+        if pmeta['pair_count'] < 3:
+            correlation = MetricState(state='unavailable', value=None, reason_code='insufficient_pairs')
+        elif correlation_lookup is not None and (x, y) in correlation_lookup:
+            correlation = correlation_lookup[(x, y)]
+        elif correlation_lookup is not None and (y, x) in correlation_lookup:
+            correlation = correlation_lookup[(y, x)]
+        else:
+            correlation = MetricState(state='unavailable', value=None, reason_code=unavailable_reason)
+        pairs[f'{x}_vs_{y}'] = PairSummary(
+            x_metric=x,
+            y_metric=y,
+            points=pmeta['points'],
+            pair_count=pmeta['pair_count'],
+            excluded_count=pmeta['excluded_count'],
+            excluded_ids=pmeta['excluded_ids'],
+            correlation=correlation,
+        )
+    return ScientificCohort(
+        cohort_key=cohort_key,
+        design_ids=list(cohort_meta.get('design_ids') or []),
+        metrics=metrics,
+        pairs=pairs,
+    )
+
+
+def assemble_cohort_from_toolkit(
+    cohort_key: str,
+    rows,
+    *,
+    summary_columns: dict[str, dict] | None = None,
+    correlation_lookup: dict[tuple[str, str], MetricState] | None = None,
+    include_pairs: bool = True,
+    unavailable_reason: str = 'stats_toolkit_unavailable',
+) -> ScientificCohort:
+    meta = serialize_cohort_metadata(cohort_key, rows, include_pairs=include_pairs)
+    return assemble_cohort_from_metadata(
+        meta,
+        summary_columns=summary_columns,
+        correlation_lookup=correlation_lookup,
+        unavailable_reason=unavailable_reason,
+    )
+
+
+def summarize(rows, *, include_pairs=True, summary_columns=None, correlation_lookup=None):
+    """Assemble cohort summary from Stats Toolkit outputs (no local statistical computation)."""
+    struct = cohort_structure(rows, include_pairs=include_pairs)
+    columns = struct['columns']
+    pair_specs = struct['pair_specs']
+    resolved_columns = summary_columns
+    resolved_corrs = correlation_lookup
+
+    if resolved_columns is None and columns:
+        from services.stats_toolkit_client import StatsToolkitUnavailableError, get_stats_toolkit_client
         try:
-            from services.stats_toolkit_client import (
-                StatsToolkitUnavailableError,
-                get_stats_toolkit_client,
-                stats_toolkit_required,
+            res = get_stats_toolkit_client().execute_tool(
+                'descriptive.summary',
+                {'columns': columns, 'histogram_bins': 10, 'shared_bins': False},
             )
+            resolved_columns = res.get('columns') or {}
+        except StatsToolkitUnavailableError:
+            resolved_columns = {}
+
+    eligible_specs = [(x, y, pts) for x, y, pts in pair_specs if len(pts) >= 3]
+    if resolved_corrs is None and eligible_specs:
+        from services.stats_toolkit_client import StatsToolkitUnavailableError, get_stats_toolkit_client
+        try:
             client = get_stats_toolkit_client()
-            complete_rows = [p for _, p in rows if all(k in p['metrics'] for k in metric_keys)]
+            metric_keys = sorted(struct['metrics_meta'])
+            complete_rows = [proj for _, proj in rows if all(k in proj['metrics'] for k in metric_keys)]
             if (
                 len(metric_keys) >= 2
                 and len(metric_keys) <= 50
@@ -376,7 +530,7 @@ def summarize(rows, *, include_pairs=True):
                 res = client.execute_tool(
                     'inference.correlation_matrix',
                     {
-                        'columns': {k: [float(p['metrics'][k]) for p in complete_rows] for k in metric_keys},
+                        'columns': {k: [float(proj['metrics'][k]) for proj in complete_rows] for k in metric_keys},
                         'method': 'pearson',
                         'p_adjust_method': 'benjamini_hochberg',
                     },
@@ -386,18 +540,18 @@ def summarize(rows, *, include_pairs=True):
                     for item in (res.get('pairs') or [])
                     if isinstance(item, dict)
                 }
-                toolkit_correlations = {}
+                resolved_corrs = {}
                 for x, y, _pts in eligible_specs:
                     stat = lookup.get((x, y))
                     if stat is None:
                         stat = lookup.get((y, x))
-                    toolkit_correlations[(x, y)] = (
+                    resolved_corrs[(x, y)] = (
                         metric_state(float(stat))
                         if stat is not None
                         else MetricState(state='unavailable', value=None, reason_code='constant_metric')
                     )
             else:
-                toolkit_correlations = {}
+                resolved_corrs = {}
                 for x, y, pts in eligible_specs:
                     res = client.execute_tool(
                         'inference.correlation_matrix',
@@ -408,34 +562,46 @@ def summarize(rows, *, include_pairs=True):
                         },
                     )
                     stat = (res.get('pairs') or [{}])[0].get('statistic')
-                    toolkit_correlations[(x, y)] = (
+                    resolved_corrs[(x, y)] = (
                         metric_state(float(stat))
                         if stat is not None
                         else MetricState(state='unavailable', value=None, reason_code='constant_metric')
                     )
         except StatsToolkitUnavailableError:
-            if stats_toolkit_required():
-                raise
-            toolkit_correlations = None
+            resolved_corrs = {}
 
-    pairs = {}
-    for x, y, points in pair_specs:
-        included = {p['id'] for p in points}
-        correlation = MetricState(state='unavailable', value=None, reason_code='insufficient_pairs')
-        if len(points) >= 3:
-            if toolkit_correlations is not None and (x, y) in toolkit_correlations:
-                correlation = toolkit_correlations[(x, y)]
-            else:
-                try:
-                    correlation = metric_state(statistics.correlation([p['x'] for p in points], [p['y'] for p in points]))
-                except statistics.StatisticsError:
-                    correlation = MetricState(state='unavailable', value=None, reason_code='constant_metric')
-        pairs[f'{x}_vs_{y}'] = dict(x_metric=x, y_metric=y, points=points, pair_count=len(points),
-            excluded_count=len(rows)-len(points), excluded_ids=[i for i in ids if i not in included], correlation=correlation)
-    return dict(metrics=metrics, pairs=pairs)
+    cohort = assemble_cohort_from_toolkit(
+        '',
+        rows,
+        summary_columns=resolved_columns or {},
+        correlation_lookup=resolved_corrs,
+        include_pairs=include_pairs,
+    )
+    metrics_out = {}
+    for k, v in cohort.metrics.items():
+        metrics_out[k] = {
+            'observed_count': v.observed_count,
+            'unavailable_count': v.unavailable_count,
+            'invalid_count': v.invalid_count,
+            'descriptor': v.descriptor,
+            'statistics': v.statistics.model_dump() if v.statistics is not None else None,
+            'reason_code': v.reason_code,
+        }
+    pairs_out = {}
+    for k, v in cohort.pairs.items():
+        pairs_out[k] = {
+            'x_metric': v.x_metric,
+            'y_metric': v.y_metric,
+            'points': [pt.model_dump() for pt in v.points],
+            'pair_count': v.pair_count,
+            'excluded_count': v.excluded_count,
+            'excluded_ids': list(v.excluded_ids),
+            'correlation': v.correlation,
+        }
+    return dict(metrics=metrics_out, pairs=pairs_out)
 
 
-async def partition(designs, owners, session, projections=None):
+async def partition_rows(designs, owners, session, projections=None):
     if projections is None:
         projections = await bulk_scalar_projections(designs, owners, session)
     legacy, grouped = [], {}
@@ -445,8 +611,26 @@ async def partition(designs, owners, session, projections=None):
         else:
             value = projections[design.id] if projections is not None else await persisted_projection(design, session)
             grouped.setdefault(value['cohort_key'], []).append((design.id, value))
-    return legacy, [ScientificCohort(cohort_key=key, design_ids=[id for id,_ in rows], **summarize(rows))
-        for key, rows in grouped.items()]
+    return legacy, grouped
+
+
+async def partition(designs, owners, session, projections=None, *, summary_columns=None, correlation_lookup=None, include_pairs=True):
+    legacy, grouped = await partition_rows(designs, owners, session, projections=projections)
+    if summary_columns is not None:
+        return legacy, [
+            assemble_cohort_from_toolkit(
+                key,
+                rows,
+                summary_columns=summary_columns,
+                correlation_lookup=correlation_lookup,
+                include_pairs=include_pairs,
+            )
+            for key, rows in grouped.items()
+        ]
+    return legacy, [
+        ScientificCohort(cohort_key=key, design_ids=[row_id for row_id, _ in rows], **summarize(rows, include_pairs=include_pairs))
+        for key, rows in grouped.items()
+    ]
 
 
 async def owning_jobs(session, designs):

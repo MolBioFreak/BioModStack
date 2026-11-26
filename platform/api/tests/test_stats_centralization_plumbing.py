@@ -110,7 +110,7 @@ class _FakeToolkitServer:
                         "non_finite_count": 0,
                         "mean": mean,
                         "median": sorted(vals)[n // 2],
-                        "sd": 1.0 if n > 1 else None,
+                        "std": 1.0 if n > 1 else None,
                         "min": min(vals),
                         "max": max(vals),
                         "q1": min(vals),
@@ -126,6 +126,67 @@ class _FakeToolkitServer:
                     "columns": cols_out,
                     "histogram_bins": inputs.get("histogram_bins", 10),
                     "method_version": "descriptive.summary.v1",
+                }
+            elif tool_id == "inference.correlation_matrix":
+                import math
+                cols = inputs["columns"]
+                variables = list(cols.keys())
+                m = len(variables)
+                n = len(next(iter(cols.values()))) if variables else 0
+                method = inputs.get("method", "pearson")
+                p_adjust = inputs.get("p_adjust_method", "fdr_bh")
+                def _ranks(xs):
+                    indexed = sorted(enumerate(xs), key=lambda t: t[1])
+                    ranks = [0.0] * len(xs)
+                    i = 0
+                    while i < len(xs):
+                        j = i
+                        while j + 1 < len(xs) and indexed[j + 1][1] == indexed[i][1]:
+                            j += 1
+                        avg = (i + j) / 2.0 + 1.0
+                        for k in range(i, j + 1):
+                            ranks[indexed[k][0]] = avg
+                        i = j + 1
+                    return ranks
+                def _corr(xs, ys):
+                    a = _ranks(xs) if method == "spearman" else xs
+                    b = _ranks(ys) if method == "spearman" else ys
+                    ma = sum(a) / len(a)
+                    mb = sum(b) / len(b)
+                    num = sum((x - ma) * (y - mb) for x, y in zip(a, b))
+                    da = math.sqrt(sum((x - ma) ** 2 for x in a))
+                    db = math.sqrt(sum((y - mb) ** 2 for y in b))
+                    if da == 0.0 or db == 0.0:
+                        return None
+                    return num / (da * db)
+                matrix = [[1.0 if i == j else None for j in range(m)] for i in range(m)]
+                pvals = [[0.0 if i == j else None for j in range(m)] for i in range(m)]
+                pairs = []
+                for i in range(m):
+                    for j in range(i + 1, m):
+                        r = _corr(cols[variables[i]], cols[variables[j]]) if n >= 2 else None
+                        matrix[i][j] = r
+                        matrix[j][i] = r
+                        p_v = 0.01 if r is not None else None
+                        pvals[i][j] = p_v
+                        pvals[j][i] = p_v
+                        pairs.append({
+                            "var_a": variables[i],
+                            "var_b": variables[j],
+                            "statistic": r,
+                            "p_value": p_v,
+                            "adjusted_p_value": p_v,
+                        })
+                result = {
+                    "variables": variables,
+                    "correlation_matrix": matrix,
+                    "p_value_matrix": pvals,
+                    "adjusted_p_value_matrix": pvals,
+                    "pairs": pairs,
+                    "n": n,
+                    "method": method,
+                    "p_adjust_method": p_adjust,
+                    "method_version": "inference.correlation_matrix.v1",
                 }
             else:
                 result = {
@@ -238,7 +299,6 @@ async def test_c07_c08_storage_reference_and_stale_fallback(tmp_path: Path, monk
     monkeypatch.delenv("BMS_STATS_TOOLKIT_WORKSPACE_ID", raising=False)
     server = _FakeToolkitServer(existing_workspace=True)
     monkeypatch.setattr("services.stats_toolkit_client.get_stats_toolkit_client", lambda **_: server.client("http://stats-c07.test"))
-    monkeypatch.setattr("services.analysis_runs.get_stats_toolkit_client", lambda **_: server.client("http://stats-c07.test"))
 
     factory, engine = await _setup_db(tmp_path)
     _bind_cache(monkeypatch, tmp_path, factory)
@@ -303,7 +363,6 @@ async def test_c09_recompute_with_options_supersedes_and_preserves_prior(tmp_pat
     monkeypatch.delenv("BMS_STATS_TOOLKIT_WORKSPACE_ID", raising=False)
     server = _FakeToolkitServer(existing_workspace=True)
     monkeypatch.setattr("services.stats_toolkit_client.get_stats_toolkit_client", lambda **_: server.client("http://stats-c09.test"))
-    monkeypatch.setattr("services.analysis_runs.get_stats_toolkit_client", lambda **_: server.client("http://stats-c09.test"))
 
     factory, engine = await _setup_db(tmp_path)
     _bind_cache(monkeypatch, tmp_path, factory)
@@ -516,7 +575,6 @@ async def test_selection_subject_reuse_and_read_by_run_id(tmp_path: Path, monkey
     clear_workspace_cache()
     server = _FakeToolkitServer(existing_workspace=True)
     monkeypatch.setattr("services.stats_toolkit_client.get_stats_toolkit_client", lambda **_: server.client("http://stats-sel.test"))
-    monkeypatch.setattr("services.analysis_runs.get_stats_toolkit_client", lambda **_: server.client("http://stats-sel.test"))
 
     factory, engine = await _setup_db(tmp_path)
     _bind_cache(monkeypatch, tmp_path, factory)

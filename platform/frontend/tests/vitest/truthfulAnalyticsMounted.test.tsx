@@ -24,9 +24,33 @@ async function mount(points: any[], designs = points, extra = {}, loadedDesignCo
     const requests: string[] = [];
     api.defaults.adapter = async config => {
         requests.push(config.url!);
+        const metricKeys = [...new Set(points.flatMap(point => Object.keys(point.metrics ?? {})))];
         const data = config.url!.endsWith('/plotly-metrics')
-            ? { job_id: 'j', metric_keys: [...new Set(points.flatMap(point => Object.keys(point.metrics)))], points, total: points.length, scientific_cohorts: [], ...extra }
-            : { metrics: {}, available_analyses: [], analyses: [] };
+            ? { job_id: 'j', metric_keys: metricKeys, points, total: points.length, scientific_cohorts: [], ...extra }
+            : config.url!.endsWith('/analyses/job_metric_summary')
+                ? {
+                    run_id: 'ar-j-summary', status: 'completed', stale: false,
+                    stats_run: { run_id: 'sr-j-summary', tool_id: 'descriptive.summary' },
+                    result: {
+                        columns: Object.fromEntries(metricKeys.map(key => [key, {
+                            count: points.filter(point => typeof point.metrics?.[key] === 'number').length,
+                            min: 0, max: 5, mean: 2.5, median: 2, q1: 1, q3: 4, std: 1.5,
+                            histogram: { edges: [0, 2.5, 5], counts: [2, 1] },
+                        }])),
+                    },
+                }
+                : config.url!.endsWith('/analyses/job_correlation_matrix')
+                    ? {
+                        run_id: 'ar-j-corr', status: 'completed', stale: false,
+                        stats_run: { run_id: 'sr-j-corr', tool_id: 'inference.correlation_matrix' },
+                        result: {
+                            metrics: metricKeys,
+                            matrix: metricKeys.map((_, r) => metricKeys.map((__, c) => r === c ? 1 : 0.6)),
+                            sample_sizes: metricKeys.map(() => metricKeys.map(() => points.length)),
+                            method: 'pearson', p_adjust_method: 'benjamini_hochberg', pairs: [],
+                        },
+                    }
+                    : { metrics: {}, available_analyses: [], analyses: [] };
         return { config, status: 200, statusText: 'OK', headers: {}, data };
     };
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
@@ -42,7 +66,8 @@ test('canonical observations use real Custom charts, histogram and heatmap with 
     expect(host.querySelector('[aria-label="Custom charts"]')).not.toBeNull();
     expect(scatter(host).data[0].x).toEqual([0, 0, 0]);
     expect(scatter(host).data[0].y).toEqual([2, 2, 2]);
-    expect(plots(host).some(plot => plot.data[0].type === 'histogram')).toBe(true);
+    expect(plots(host).some(plot => plot.data[0].type === 'bar' && plot.layout?.yaxis?.title?.text === 'Candidate count')).toBe(true);
+    expect(plots(host).some(plot => plot.data[0].type === 'histogram')).toBe(false);
     expect(plots(host).some(plot => plot.data[0].type === 'heatmap')).toBe(true);
     expect(host.textContent).toContain('1 of 3 records have unavailable measurements');
     await change(host, '2D Y metric', 'rmsd_overall');
@@ -93,7 +118,7 @@ test('complete Protenix native scalar contract reaches charts without Design ali
         });
     });
     const { host, requests } = await mount(points, points.map(point => ({ ...point, plddt_overall: 999, ptm: 999 })));
-    expect(requests).toEqual(['/api/designs/by-job/j/plotly-metrics']);
+    expect(requests).toEqual(['/api/designs/by-job/j/plotly-metrics', '/api/jobs/j/analyses/job_metric_summary', '/api/jobs/j/analyses/job_correlation_matrix']);
     expect(scatter(host).data[0].x).toEqual(points.map(point => point.metrics.plddt));
     expect(scatter(host).data[0].y).toEqual(points.map(point => point.metrics.ptm));
     expect(scatter(host).layout.xaxis.title.text).toContain('(percent)');

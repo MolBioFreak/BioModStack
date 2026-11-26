@@ -1,10 +1,10 @@
 import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { materializeExactStructure, type StructureSourceSelection } from '../lib/api';
+import { fetchJobAnalysis, materializeExactStructure, type StructureSourceSelection } from '../lib/api';
 import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
-import { metricKeys, numericMetricKeys, formatMetric, summarizeMetric, type CohortRow } from '../lib/cohortAnalytics';
+import { metricKeys, numericMetricKeys, formatMetric, storedMetricSummary, type CohortRow, type StoredToolkitColumn } from '../lib/cohortAnalytics';
 import { fetchNativeBinderGeneration, nativeCandidateRoute, nativeDocumentLabel, nativeGenerationMetrics, nativeGenerationMetricDetail, nativeGenerationMetricUnit, nativeGenerationExport, type NativeGenerationPage, type NativeGenerationRecord, type NativeGenerationDocument } from '../lib/nativeBinderResults';
 
 import { readBinderSelection, writeBinderSelection, readBinderNativeSources, writeBinderNativeSources, type NativeCandidateSource } from '../lib/binderContinuation';
@@ -381,8 +381,19 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         metric_columns: keys, records: exportedRecords.map(({ native_record: _raw, record: _record, ...identity }, index) => ({ csv_row: index + 2, ...identity,
             native_metrics: exportRows[index].native_metrics ?? null, metric_descriptors: exportRows[index].metric_descriptors ?? null })) }, null, 2);
     const initialMetrics = adapter?.initialMetrics?.(numericKeys);
+    const summaryQuery = useQuery({
+        queryKey: ['job-analysis', jobId, 'job_metric_summary'],
+        queryFn: () => fetchJobAnalysis<{ columns?: Record<string, StoredToolkitColumn>; metrics?: Record<string, StoredToolkitColumn> }>(jobId, 'job_metric_summary', { include_children: true }).then((res) => res.data),
+        enabled: Boolean(jobId && rows.length > 0),
+        retry: false,
+        staleTime: 30_000,
+    });
     const headlineKeys = (initialMetrics?.headline?.length ? initialMetrics.headline : adapter ? ['duration_seconds', ...numericKeys] : ['seq_length', 'dsasa', ...numericKeys]).filter((key, i, all) => numericKeys.includes(key) && all.indexOf(key) === i).slice(0, 2);
-    const headlineMetrics = headlineKeys.map(key => ({ key, ...summarizeMetric(matched, key) }));
+    const headlineMetrics = headlineKeys.map(key => {
+        const cols = summaryQuery.data?.result?.columns;
+        const stored = cols?.[key] ?? summaryQuery.data?.result?.metrics?.[key] ?? (cols ? Object.entries(cols).find(([colKey]) => colKey.endsWith(`::${key}`))?.[1] : undefined);
+        return { key, ...storedMetricSummary(stored, matched, key) };
+    });
     const candidateRef = (item: NativeGenerationRecord): CandidateRef | undefined => {
         if (item.candidate_ref) return candidateIdentity(item.candidate_ref);
         if (item.design_id) return { kind: 'design', job_id: jobId, design_id: item.design_id };
@@ -425,7 +436,6 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const [showSavedMolecules, setShowSavedMolecules] = useState(false);
     const [showTable, setShowTable] = useState(false);
     const [showFilters, setShowFilters] = useState(false);
-    const compact = Boolean(adapter?.compact || rfd4);
     const cardMetrics = tableKeys.slice(0, 3);
     const continuationNav = document?.artifact_id ? (
         <div className={`${panel} p-3`}>
@@ -557,7 +567,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
             <div hidden={view === 'analytics' || view === 'structure'}>{adapter?.summary?.(matched.map(entry => byId.get(entry.id)!))}</div>
             {page.total === 0 ? <div className={`${panel} p-5`}><p>No native candidate records were emitted. This published zero-yield result remains available for review.</p><Download name={`${jobId}-native-${exportScope}.json`} content={exportJson} mime="application/json">Native JSON</Download><Download name={`${jobId}-native-${exportScope}.csv`} content={csv} mime="text/csv;charset=utf-8">Metrics CSV</Download><Download name={`${jobId}-native-${exportScope}.metadata.json`} content={exportCsvMetadata} mime="application/json">CSV scope metadata</Download></div> : <>
                 {view === 'dashboard' && matched.length !== rows.length && <p className="text-sm text-[var(--text-secondary)]">Showing {matched.length} of {rows.length} records after filtering. <button type="button" className="underline" onClick={() => setView('table')}>Adjust filters</button></p>}
-                <div hidden={view !== 'dashboard' && view !== 'analytics'}>{(analyticsOpened || view === 'dashboard' || view === 'analytics') && <Suspense fallback={<p role="status">Loading cohort charts…</p>}><CohortAnalytics getMetricLabel={label} getMetricDescription={key => describeCohortMetric(key, keys).description} renderMetricPicker={props => <CohortMetricPicker {...props} />} initialMetrics={initialMetrics} rows={matched} selectedIds={selectedCohortIds} activeId={activeId} mode={view === 'analytics' ? 'analytics' : 'dashboard'} onInspect={id => { const item = byId.get(id); if (item) inspect(item); }} onSelect={ids => changeSelection(designIds(matched.filter(entry => ids.includes(entry.id))), true)} /></Suspense>}</div>
+                <div hidden={view !== 'dashboard' && view !== 'analytics'}>{(analyticsOpened || view === 'dashboard' || view === 'analytics') && <Suspense fallback={<p role="status">Loading cohort charts…</p>}><CohortAnalytics jobId={jobId} getMetricLabel={label} getMetricDescription={key => describeCohortMetric(key, keys).description} renderMetricPicker={props => <CohortMetricPicker {...props} />} initialMetrics={initialMetrics} rows={matched} selectedIds={selectedCohortIds} activeId={activeId} mode={view === 'analytics' ? 'analytics' : 'dashboard'} onInspect={id => { const item = byId.get(id); if (item) inspect(item); }} onSelect={ids => changeSelection(designIds(matched.filter(entry => ids.includes(entry.id))), true)} /></Suspense>}</div>
 
                 {view === 'table' && table}
 

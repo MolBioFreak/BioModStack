@@ -19,10 +19,10 @@ from services.analysis_registry import (
     get_analysis_definition,
 )
 from services.result_contracts import resolve_result_contract, validate_design_analysis_request
+from services import stats_toolkit_client
 from services.stats_toolkit_client import (
     STATS_TOOLKIT_UNAVAILABLE_REASON,
     StatsToolkitUnavailableError,
-    get_stats_toolkit_client,
 )
 
 
@@ -504,10 +504,156 @@ def _resolve_artifact_path(run: AnalysisRun, key: str) -> Path | None:
         return None
 
 
+def _distribution_from_toolkit_column(col: dict[str, Any]) -> dict[str, Any]:
+    hist = col.get("histogram") if isinstance(col.get("histogram"), dict) else {}
+    return {
+        "min": float(col["min"]),
+        "max": float(col["max"]),
+        "avg": float(col["mean"]),
+        "median": float(col["median"]),
+        "std_dev": float(col["std"]) if col.get("std") is not None else None,
+        "q1": float(col["q1"]) if col.get("q1") is not None else None,
+        "q3": float(col["q3"]) if col.get("q3") is not None else None,
+        "iqr": float(col["iqr"]) if col.get("iqr") is not None else None,
+        "count": int(col["count"]),
+        "histogram_bins": [float(x) for x in (hist.get("edges") or [])],
+        "histogram_counts": [int(x) for x in (hist.get("counts") or [])],
+    }
+
+
+def _assemble_toolkit_analysis_result(run: AnalysisRun, raw_outputs: Any) -> Any:
+    if not isinstance(raw_outputs, dict):
+        return raw_outputs
+    from services.analysis_registry import (
+        JOB_CORRELATION_MATRIX_ANALYSIS,
+        JOB_METRIC_SUMMARY_ANALYSIS,
+        SELECTION_BATCH_SUMMARY_ANALYSIS,
+        SELECTION_METRIC_SUMMARY_ANALYSIS,
+    )
+    from services.scientific_analytics import MetricState, assemble_cohort_from_metadata, metric_state
+
+    summary_outer = load_analysis_summary(run)
+    summary_inner = summary_outer.get("summary") if isinstance(summary_outer, dict) and isinstance(summary_outer.get("summary"), dict) else (summary_outer if isinstance(summary_outer, dict) else {})
+    stats_run = extract_stats_run(run)
+
+    if run.analysis_type in {JOB_METRIC_SUMMARY_ANALYSIS, SELECTION_METRIC_SUMMARY_ANALYSIS}:
+        raw_cols = raw_outputs.get("columns") if isinstance(raw_outputs.get("columns"), dict) else {}
+        metrics = {
+            key: _distribution_from_toolkit_column(col)
+            for key, col in raw_cols.items()
+            if not str(key).startswith("cohort::") and isinstance(col, dict) and col.get("count")
+        }
+        cohorts = [
+            assemble_cohort_from_metadata(cmeta, summary_columns=raw_cols).model_dump(mode="json")
+            for cmeta in (summary_inner.get("cohort_metadata") or [])
+            if isinstance(cmeta, dict)
+        ]
+        return {
+            **raw_outputs,
+            "metrics": metrics,
+            "scientific_cohorts": cohorts,
+            "stats_run": stats_run,
+        }
+
+    if run.analysis_type == JOB_CORRELATION_MATRIX_ANALYSIS:
+        metrics = list(summary_inner.get("metrics") or raw_outputs.get("variables") or [])
+        m = len(metrics)
+        raw_corr = raw_outputs.get("correlation_matrix") or []
+        matrix = [
+            [
+                1.0 if i == j else (
+                    round(float(raw_corr[i][j]), 4)
+                    if i < len(raw_corr) and j < len(raw_corr[i]) and raw_corr[i][j] is not None
+                    else 0.0
+                )
+                for j in range(m)
+            ]
+            for i in range(m)
+        ]
+        sample_sizes = summary_inner.get("sample_sizes") or [[int(raw_outputs.get("n") or 0)] * m for _ in range(m)]
+        corr_lookup: dict[tuple[str, str], MetricState] = {}
+        for item in (raw_outputs.get("pairs") or []):
+            if isinstance(item, dict) and item.get("var_a") and item.get("var_b"):
+                stat = item.get("statistic")
+                corr_lookup[(str(item["var_a"]), str(item["var_b"]))] = (
+                    metric_state(float(stat))
+                    if stat is not None
+                    else MetricState(state="unavailable", value=None, reason_code="constant_metric")
+                )
+        cohort_scope = summary_inner.get("cohort_correlation_scope") or {}
+        cohorts = []
+        for cmeta in (summary_inner.get("cohort_metadata") or []):
+            if not isinstance(cmeta, dict):
+                continue
+            use_lookup = corr_lookup if cohort_scope.get("cohort_key") == cmeta.get("cohort_key") else None
+            cohorts.append(
+                assemble_cohort_from_metadata(
+                    cmeta,
+                    summary_columns=None,
+                    correlation_lookup=use_lookup,
+                ).model_dump(mode="json")
+            )
+        return {
+            **raw_outputs,
+            "job_id": str(summary_inner.get("job_id") or run.subject_id),
+            "metrics": metrics,
+            "matrix": matrix,
+            "sample_sizes": sample_sizes,
+            "p_value_matrix": raw_outputs.get("p_value_matrix"),
+            "adjusted_p_value_matrix": raw_outputs.get("adjusted_p_value_matrix"),
+            "pairs": raw_outputs.get("pairs"),
+            "method": raw_outputs.get("method") or summary_inner.get("method"),
+            "p_adjust_method": raw_outputs.get("p_adjust_method") or summary_inner.get("p_adjust_method"),
+            "scientific_cohorts": cohorts,
+            "stats_backend": "stats_toolkit",
+            "stats_tool_id": "inference.correlation_matrix",
+            "stats_method_version": raw_outputs.get("method_version"),
+            "stats_run": stats_run,
+        }
+
+    if run.analysis_type == SELECTION_BATCH_SUMMARY_ANALYSIS:
+        raw_cols = raw_outputs.get("columns") if isinstance(raw_outputs.get("columns"), dict) else {}
+        job_ids = list(summary_inner.get("job_ids") or [])
+        metrics_summary: dict[str, dict[str, float]] = {}
+        for jid in job_ids:
+            prefix = f"job::{jid}::"
+            for key, col in raw_cols.items():
+                if not str(key).startswith(prefix):
+                    continue
+                rest = str(key)[len(prefix):]
+                if rest.startswith("cohort::"):
+                    continue
+                if isinstance(col, dict) and col.get("mean") is not None:
+                    metrics_summary.setdefault(rest, {})[jid] = float(col["mean"])
+        cohorts = []
+        cmeta_by_job = summary_inner.get("cohort_metadata_by_job") or {}
+        for jid in job_ids:
+            for cmeta in (cmeta_by_job.get(jid) or []):
+                if isinstance(cmeta, dict):
+                    cohorts.append(
+                        assemble_cohort_from_metadata(
+                            cmeta,
+                            summary_columns=raw_cols,
+                            column_prefix=f"job::{jid}::",
+                        ).model_dump(mode="json")
+                    )
+        return {
+            **raw_outputs,
+            "job_ids": job_ids,
+            "metrics_summary": metrics_summary,
+            "common_metrics": sorted(metrics_summary.keys()),
+            "scientific_cohorts": cohorts,
+            "stats_run": stats_run,
+        }
+
+    return raw_outputs
+
+
 def load_analysis_result(run: AnalysisRun) -> Any:
     stats_run = extract_stats_run(run)
     if stats_run is not None:
-        return get_stats_toolkit_client().read_run_outputs(str(stats_run["run_id"]))
+        raw_outputs = stats_toolkit_client.get_stats_toolkit_client().read_run_outputs(str(stats_run["run_id"]))
+        return _assemble_toolkit_analysis_result(run, raw_outputs)
     if run.result_inline_json is not None:
         return run.result_inline_json
     result_path = _resolve_artifact_path(run, "result_json")

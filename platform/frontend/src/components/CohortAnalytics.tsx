@@ -1,10 +1,41 @@
 import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PlotlyLab, type MetricPickerProps } from './PlotlyLab';
 import Plot from 'react-plotly.js';
 import type { Config, Data, Layout, PlotMouseEvent, PlotSelectionEvent } from 'plotly.js';
-import { correlateMetrics, formatMetric, isFiniteMetric, metricKeys, metricLabel, numericMetricKeys, secondaryStructureComposition, summarizeMetric, type CohortRow } from '../lib/cohortAnalytics';
+import {
+    formatMetric,
+    histogramTraceFromStored,
+    isFiniteMetric,
+    metricKeys,
+    metricLabel,
+    numericMetricKeys,
+    secondaryStructureComposition,
+    storedMetricSummary,
+    type CohortRow,
+    type CorrelationSummary,
+    type StoredToolkitColumn,
+} from '../lib/cohortAnalytics';
+import {
+    fetchJobAnalysis,
+    triggerJobAnalysis,
+    type CorrelationMatrix,
+    type PersistedAnalysisRun,
+} from '../lib/api';
+import type { ScientificCohort } from '../lib/scientificAnalytics';
+import {
+    StatsPanelControls,
+    type CorrelationRecomputeOptions,
+    type SummaryRecomputeOptions,
+} from './StatsPanelControls';
 
 export interface CohortInitialMetrics { x?: string; y?: string; distribution?: string; headline?: string[] }
+
+interface StoredSummaryResult {
+    columns?: Record<string, StoredToolkitColumn>;
+    metrics?: Record<string, StoredToolkitColumn>;
+    scientific_cohorts?: ScientificCohort[];
+}
 
 interface Props {
     initialMetrics?: CohortInitialMetrics;
@@ -19,6 +50,13 @@ interface Props {
     getMetricDescription?: (key: string) => string;
     renderMetricPicker?: (props: MetricPickerProps) => ReactNode;
     inspectionHint?: string;
+    jobId?: string;
+    cohortKey?: string;
+    storedCohort?: ScientificCohort;
+    statsRunId?: string | null;
+    statsStatus?: string | null;
+    statsReason?: string | null;
+    statsStale?: boolean;
 }
 const CONFIG: Partial<Config> = {
     responsive: true, displayModeBar: true, displaylogo: false,
@@ -70,7 +108,97 @@ export function CohortPlot({ label, data, layout, onClick, onSelected, height = 
     </div>;
 }
 
-export function CohortAnalytics({ retentionKey, rows, selectedIds, activeId, onInspect, onSelect, mode, initialMetrics, getMetricLabel = metricLabel, getMetricDescription, renderMetricPicker, inspectionHint = 'click a point to inspect its exact native document' }: Props): JSX.Element {
+function lookupStoredColumn(
+    run: PersistedAnalysisRun<StoredSummaryResult> | undefined,
+    cohortKey: string | undefined,
+    storedCohort: ScientificCohort | undefined,
+    key: string,
+): StoredToolkitColumn | null {
+    const result = run?.result;
+    const columns = result?.columns;
+    if (columns && typeof columns === 'object') {
+        if (cohortKey && columns[`cohort::${cohortKey}::${key}`]) {
+            return columns[`cohort::${cohortKey}::${key}`];
+        }
+        if (columns[key]) {
+            return columns[key];
+        }
+        const suffix = `::${key}`;
+        const matched = Object.entries(columns).find(([colKey]) => colKey.endsWith(suffix));
+        if (matched) return matched[1];
+    }
+    if (result?.metrics && result.metrics[key]) {
+        return result.metrics[key];
+    }
+    const cohortMetric = storedCohort?.metrics?.[key];
+    if (cohortMetric?.statistics) {
+        return {
+            count: cohortMetric.observed_count,
+            ...cohortMetric.statistics,
+        };
+    }
+    return null;
+}
+
+function lookupStoredCorrelation(
+    corrRun: PersistedAnalysisRun<CorrelationMatrix> | undefined,
+    storedCohort: ScientificCohort | undefined,
+    xKey: string,
+    yKey: string,
+    unavailable: boolean,
+): CorrelationSummary {
+    const result = corrRun?.result;
+    if (xKey === yKey) {
+        if (result?.metrics) {
+            const idx = result.metrics.indexOf(xKey);
+            if (idx >= 0) {
+                const n = result.sample_sizes?.[idx]?.[idx] ?? 0;
+                return { pairs: n, r: 1, reason: null };
+            }
+        }
+        return { pairs: 0, r: null, reason: unavailable ? 'stats_toolkit_unavailable' : 'not_computed' };
+    }
+    if (result?.pairs) {
+        const pair = result.pairs.find(
+            (item) => (item.var_a === xKey && item.var_b === yKey) || (item.var_a === yKey && item.var_b === xKey),
+        );
+        if (pair) {
+            return {
+                pairs: typeof pair.n === 'number' ? pair.n : 0,
+                r: isFiniteMetric(pair.statistic) ? pair.statistic : null,
+                reason: isFiniteMetric(pair.statistic) ? null : 'undefined',
+            };
+        }
+    }
+    if (result?.metrics && Array.isArray(result.matrix)) {
+        const ix = result.metrics.indexOf(xKey);
+        const iy = result.metrics.indexOf(yKey);
+        if (ix >= 0 && iy >= 0) {
+            const value = result.matrix[ix]?.[iy];
+            const n = result.sample_sizes?.[ix]?.[iy] ?? 0;
+            if (isFiniteMetric(value)) {
+                return { pairs: n, r: value, reason: null };
+            }
+            return { pairs: n, r: null, reason: 'undefined' };
+        }
+    }
+    const pairFromCohort = storedCohort?.pairs?.[`${xKey}_vs_${yKey}`] ?? storedCohort?.pairs?.[`${yKey}_vs_${xKey}`];
+    if (pairFromCohort) {
+        if (pairFromCohort.correlation.state === 'ok') {
+            return { pairs: pairFromCohort.pair_count, r: pairFromCohort.correlation.value, reason: null };
+        }
+        return { pairs: pairFromCohort.pair_count, r: null, reason: pairFromCohort.correlation.reason_code };
+    }
+    return { pairs: 0, r: null, reason: unavailable ? 'stats_toolkit_unavailable' : 'not_computed' };
+}
+
+export function CohortAnalytics({
+    retentionKey, rows, selectedIds, activeId, onInspect, onSelect, mode, initialMetrics,
+    getMetricLabel = metricLabel, getMetricDescription, renderMetricPicker,
+    inspectionHint = 'click a point to inspect its exact native document',
+    jobId, cohortKey, storedCohort, statsRunId, statsStatus, statsReason, statsStale,
+}: Props): JSX.Element {
+    const queryClient = useQueryClient();
     const caption = getMetricLabel;
     const description = (key: string) => getMetricDescription?.(key) || `${caption(key)}: recorded value; missing values are omitted.`;
     // Settings are browser-session UI state, not scientific data or workspace selection.
@@ -102,6 +230,66 @@ export function CohortAnalytics({ retentionKey, rows, selectedIds, activeId, onI
         try { sessionStorage.setItem(`${retentionKey}:settings`, JSON.stringify({ palette, reverse, xChoice, yChoice, distributionChoice, colorChoice, dragMode, heatChoice, heatAdd, labDimension, metricSearch, metricPage, zChoice, color3dChoice, barChoice })); }
         catch { /* Unavailable session storage must not stop chart interaction. */ }
     }, [retentionKey, palette, reverse, xChoice, yChoice, distributionChoice, colorChoice, dragMode, heatChoice, heatAdd, labDimension, metricSearch, metricPage, zChoice, color3dChoice, barChoice]);
+
+    const summaryQuery = useQuery({
+        queryKey: ['job-analysis', jobId, 'job_metric_summary'],
+        queryFn: () => fetchJobAnalysis<StoredSummaryResult>(jobId!, 'job_metric_summary', { include_children: true }).then((res) => res.data),
+        enabled: Boolean(jobId),
+        retry: false,
+        staleTime: 30_000,
+    });
+
+    const correlationQuery = useQuery({
+        queryKey: ['job-analysis', jobId, 'job_correlation_matrix'],
+        queryFn: () => fetchJobAnalysis<CorrelationMatrix>(jobId!, 'job_correlation_matrix', { include_children: true }).then((res) => res.data),
+        enabled: Boolean(jobId && mode === 'analytics'),
+        retry: false,
+        staleTime: 30_000,
+    });
+
+    const recomputeSummary = useMutation({
+        mutationFn: (options: SummaryRecomputeOptions) =>
+            triggerJobAnalysis<StoredSummaryResult>(jobId!, 'job_metric_summary', {
+                include_children: true,
+                histogram_bins: options.histogram_bins,
+                shared_bins: options.shared_bins,
+            }, true).then((res) => res.data),
+        onSuccess: (updated) => {
+            queryClient.setQueryData(['job-analysis', jobId, 'job_metric_summary'], updated);
+            void queryClient.invalidateQueries({ queryKey: ['job-analysis', jobId, 'job_metric_summary'] });
+            void queryClient.invalidateQueries({ queryKey: ['job-analytics', jobId] });
+        },
+    });
+
+    const recomputeCorrelation = useMutation({
+        mutationFn: (options: CorrelationRecomputeOptions) =>
+            triggerJobAnalysis<CorrelationMatrix>(jobId!, 'job_correlation_matrix', {
+                include_children: true,
+                method: options.method,
+                p_adjust_method: options.p_adjust_method,
+            }, true).then((res) => res.data),
+        onSuccess: (updated) => {
+            queryClient.setQueryData(['job-analysis', jobId, 'job_correlation_matrix'], updated);
+            void queryClient.invalidateQueries({ queryKey: ['job-analysis', jobId, 'job_correlation_matrix'] });
+        },
+    });
+
+    const summaryRun = summaryQuery.data;
+    const correlationRun = correlationQuery.data;
+    const effectiveSummaryRunId = summaryRun?.stats_run?.run_id ?? statsRunId ?? null;
+    const effectiveSummaryStatus = summaryRun?.status ?? (summaryQuery.isError ? 'unavailable' : statsStatus ?? null);
+    const effectiveSummaryReason = summaryRun?.reason ?? statsReason ?? null;
+    const effectiveSummaryStale = Boolean(summaryRun?.stale ?? statsStale);
+    const summaryUnavailable = effectiveSummaryStatus === 'unavailable' || effectiveSummaryReason === 'stats_toolkit_unavailable';
+
+    const effectiveCorrRunId = correlationRun?.stats_run?.run_id ?? null;
+    const effectiveCorrStatus = correlationRun?.status ?? (correlationQuery.isError ? 'unavailable' : null);
+    const effectiveCorrReason = correlationRun?.reason ?? null;
+    const effectiveCorrStale = Boolean(correlationRun?.stale);
+    const corrUnavailable = effectiveCorrStatus === 'unavailable' || effectiveCorrReason === 'stats_toolkit_unavailable';
+    const corrMethod = (correlationRun?.result?.method ?? (correlationRun?.params?.method as string | undefined) ?? 'pearson').toLowerCase();
+    const corrMethodLabel = corrMethod === 'spearman' ? 'Spearman ρ' : corrMethod === 'kendall' ? 'Kendall τ' : 'Pearson r';
+
     const theme = usePlotTheme();
     const xKey = numeric.includes(xChoice) ? xChoice : numeric.includes('seq_length') ? 'seq_length' : numeric[0] ?? '';
     const yKey = numeric.includes(yChoice) ? yChoice : numeric.includes('dsasa') ? 'dsasa' : numeric[1] ?? numeric[0] ?? '';
@@ -112,8 +300,20 @@ export function CohortAnalytics({ retentionKey, rows, selectedIds, activeId, onI
     const colorKey = mode === 'analytics' && numeric.includes(colorChoice) ? colorChoice : '';
     const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
     const pairs = useMemo(() => rows.filter(row => isFiniteMetric(row.values[xKey]) && isFiniteMetric(row.values[yKey])), [rows, xKey, yKey]);
-    const distribution = useMemo(() => rows.map(row => row.values[distKey]).filter(isFiniteMetric), [rows, distKey]);
-    const distributionSummary = useMemo(() => summarizeMetric(rows, distKey), [rows, distKey]);
+    const distributionCount = useMemo(() => rows.filter(row => isFiniteMetric(row.values[distKey])).length, [rows, distKey]);
+    const distributionSummary = useMemo(
+        () => storedMetricSummary(lookupStoredColumn(summaryRun, cohortKey, storedCohort, distKey), rows, distKey),
+        [summaryRun, cohortKey, storedCohort, rows, distKey],
+    );
+    const histogramTrace = useMemo(
+        () => histogramTraceFromStored(distributionSummary.histogramBins, distributionSummary.histogramCounts, {
+            label: caption(distKey),
+            color: '#3b82f6',
+            lineColor: theme.background,
+            hoverUnit: 'Records',
+        }),
+        [distributionSummary, distKey, theme.background, getMetricLabel],
+    );
     const barRows = useMemo(() => rows.filter(row => isFiniteMetric(row.values[barKey]))
         .sort((a, b) => (b.values[barKey] as number) - (a.values[barKey] as number)).slice(0, 20), [rows, barKey]);
     const active = rows.find(row => row.id === activeId);
@@ -123,12 +323,23 @@ export function CohortAnalytics({ retentionKey, rows, selectedIds, activeId, onI
     const heatKeyIdentity = JSON.stringify(heatKeys);
     const correlations = useMemo(() => {
         const keys: string[] = JSON.parse(heatKeyIdentity);
-        return mode === 'analytics' ? keys.map(y => keys.map(x => correlateMetrics(rows, x, y))) : [];
-    }, [rows, heatKeyIdentity, mode]);
+        return mode === 'analytics'
+            ? keys.map(y => keys.map(x => lookupStoredCorrelation(correlationRun, storedCohort, x, y, corrUnavailable)))
+            : [];
+    }, [correlationRun, storedCohort, corrUnavailable, heatKeyIdentity, mode]);
+    const hasAnyStoredCorrelation = useMemo(
+        () => correlations.some((row) => row.some((cell) => cell.r !== null)),
+        [correlations],
+    );
     const searchedKeys = allKeys.filter(key => `${key} ${getMetricLabel(key)}`.toLowerCase().includes(metricSearch.toLowerCase()));
     const page = Math.min(metricPage, Math.max(0, Math.ceil(searchedKeys.length / 20) - 1));
     const summaryKeys = searchedKeys.slice(page * 20, (page + 1) * 20);
-    const summaries = useMemo(() => mode === 'analytics' ? allKeys.map(key => ({ key, ...summarizeMetric(rows, key) })) : [], [rows, allKeys, mode]);
+    const summaries = useMemo(
+        () => mode === 'analytics'
+            ? allKeys.map(key => ({ key, ...storedMetricSummary(lookupStoredColumn(summaryRun, cohortKey, storedCohort, key), rows, key) }))
+            : [],
+        [summaryRun, cohortKey, storedCohort, rows, allKeys, mode],
+    );
     const summaryMap = new Map(summaries.map(summary => [summary.key, summary]));
     const axis = (title: string) => ({ title: { text: escape(title), font: { size: 11 } }, automargin: true, gridcolor: theme.grid, zeroline: false });
     const base: Partial<Layout> = { paper_bgcolor: theme.background, plot_bgcolor: theme.background,
@@ -229,16 +440,39 @@ export function CohortAnalytics({ retentionKey, rows, selectedIds, activeId, onI
                 </article>
                 </>}
                 <article className={card}>
-                    <div className="mb-2 flex items-center justify-between gap-2"><h4 className="text-sm font-semibold">Metric distribution</h4><span className="text-xs text-[var(--text-secondary)]">{distribution.length} observed · {rows.length - distribution.length} omitted</span></div>
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <h4 className="text-sm font-semibold">Metric distribution</h4>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs text-[var(--text-secondary)]">{distributionCount} observed · {rows.length - distributionCount} omitted</span>
+                            <StatsPanelControls
+                                kind="summary"
+                                statsRunId={effectiveSummaryRunId}
+                                stale={effectiveSummaryStale}
+                                status={effectiveSummaryStatus}
+                                reason={effectiveSummaryReason}
+                                histogramBins={typeof summaryRun?.params?.histogram_bins === 'number' ? summaryRun.params.histogram_bins : undefined}
+                                sharedBins={typeof summaryRun?.params?.shared_bins === 'boolean' ? summaryRun.params.shared_bins : undefined}
+                                onRecompute={jobId ? (opts) => recomputeSummary.mutate(opts) : undefined}
+                                isRecomputing={recomputeSummary.isPending}
+                            />
+                        </div>
+                    </div>
                     {mode === 'analytics' && picker('Distribution metric', distKey, setDistributionChoice)}
-                    <p className="text-xs">Each bin counts candidates within a range of recorded values. {description(distKey)}</p>
-                    <CohortPlot label={`Histogram: ${caption(distKey)}`} data={[
-                        { type: 'histogram', x: distribution, nbinsx: Math.min(40, Math.max(1, Math.ceil(Math.sqrt(distribution.length)))),
-                            marker: { color: '#3b82f6', line: { color: theme.background, width: 1 } },
-                            hovertemplate: 'Bin: %{x}<br>Records: %{y}<extra></extra>' } as Data,
-                    ]} layout={{ ...base, xaxis: axis(caption(distKey)), yaxis: { ...axis('Candidate count'), rangemode: 'tozero' },
-                        uirevision: JSON.stringify([distKey, rows.map(row => row.id)]) }} />
-                    <p className="pt-2 text-xs text-[var(--text-secondary)]">Median {formatMetric(distributionSummary.median)} · Q1–Q3 {formatMetric(distributionSummary.q1)}–{formatMetric(distributionSummary.q3)}.</p>
+                    <p className="text-xs">Each bin counts candidates within a range of recorded values from the stored Stats Toolkit run. {description(distKey)}</p>
+                    {histogramTrace.length > 0 ? (
+                        <CohortPlot label={`Histogram: ${caption(distKey)}`} data={histogramTrace}
+                            layout={{ ...base, bargap: 0.04, xaxis: axis(caption(distKey)), yaxis: { ...axis('Candidate count'), rangemode: 'tozero' },
+                                uirevision: JSON.stringify([distKey, effectiveSummaryRunId, rows.map(row => row.id)]) }} />
+                    ) : (
+                        <p role="status" className="py-6 text-sm text-[var(--text-secondary)]">
+                            {summaryUnavailable
+                                ? 'Distribution histogram unavailable (Stats Toolkit unreachable).'
+                                : 'Stored distribution histogram is not available yet.'}
+                        </p>
+                    )}
+                    <p className="pt-2 text-xs text-[var(--text-secondary)]">
+                        Median {distributionSummary.median === null ? '—' : formatMetric(distributionSummary.median)} · Q1–Q3 {distributionSummary.q1 === null ? '—' : formatMetric(distributionSummary.q1)}–{distributionSummary.q3 === null ? '—' : formatMetric(distributionSummary.q3)}.
+                    </p>
                 </article>
                 {mode === 'analytics' && barRows.length > 0 && <article className={card}>
                     <div className="mb-2 flex items-center justify-between gap-2"><h4 className="text-sm font-semibold">Candidates by recorded value</h4><span className="text-xs text-[var(--text-secondary)]">{barRows.length} of {rows.filter(row => isFiniteMetric(row.values[barKey])).length} observed</span></div>
@@ -267,18 +501,33 @@ export function CohortAnalytics({ retentionKey, rows, selectedIds, activeId, onI
         </>}
         {mode === 'analytics' && <>
             {numeric.length > 0 && <article className={card}>
-                <h4 className="text-sm font-semibold">How measurements vary together</h4>
-                <p className="my-2 text-xs text-[var(--text-secondary)]">Compare up to eight measurements. Blue/red cells show opposite/similar variation; blank cells have insufficient data or no variation. Correlation does not show causation.</p>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="text-sm font-semibold">How measurements vary together</h4>
+                    <StatsPanelControls
+                        kind="correlation"
+                        statsRunId={effectiveCorrRunId}
+                        stale={effectiveCorrStale}
+                        status={effectiveCorrStatus}
+                        reason={effectiveCorrReason}
+                        method={corrMethod}
+                        pAdjustMethod={correlationRun?.result?.p_adjust_method ?? (correlationRun?.params?.p_adjust_method as string | undefined)}
+                        onRecompute={jobId ? (opts) => recomputeCorrelation.mutate(opts) : undefined}
+                        isRecomputing={recomputeCorrelation.isPending}
+                    />
+                </div>
+                <p className="my-2 text-xs text-[var(--text-secondary)]">Compare up to eight measurements from the stored Stats Toolkit correlation matrix. Blue/red cells show opposite/similar variation; blank cells have insufficient data or no variation. Correlation does not show causation.</p>
                 <div aria-label="Correlation metrics" className="my-3 flex flex-wrap items-center gap-2">
                     {heatKeys.map(key => <button type="button" key={key} title={key} aria-label={`Remove correlation ${getMetricLabel(key)}`} className={control} onClick={() => setHeatChoice(heatKeys.filter(value => value !== key))}>{getMetricLabel(key)} ×</button>)}
                     {heatKeys.length < 8 && <div className="min-w-48">{picker('Add correlation measurement', heatAdd, value => { if (numeric.includes(value) && !heatKeys.includes(value)) setHeatChoice([...heatKeys, value]); setHeatAdd(''); }, true)}</div>}
                 </div>
-                {heatKeys.length ? <CohortPlot label="Pearson correlation heatmap" height={Math.max(380, heatKeys.length * 52)} data={[
+                {corrUnavailable ? (
+                    <p role="status" className="py-6 text-sm text-[var(--text-secondary)]">Correlations unavailable (Stats Toolkit unreachable).</p>
+                ) : heatKeys.length && hasAnyStoredCorrelation ? <CohortPlot label={`${corrMethodLabel} correlation heatmap`} height={Math.max(380, heatKeys.length * 52)} data={[
                     { type: 'heatmap', x: heatKeys.map(caption), y: heatKeys.map(caption), z: correlations.map(row => row.map(cell => cell.r)),
-                        customdata: correlations.map(row => row.map(cell => `n=${cell.pairs}; ${cell.reason ?? `r=${formatMetric(cell.r)}`}`)),
+                        customdata: correlations.map(row => row.map(cell => `n=${cell.pairs}; ${cell.reason ?? `${corrMethodLabel}=${formatMetric(cell.r)}`}`)),
                         hovertemplate: '%{x}<br>%{y}<br>%{customdata}<extra></extra>', hoverongaps: false,
                         zmin: -1, zmax: 1, zmid: 0, colorscale: 'RdBu', reversescale: true,
-                        colorbar: { title: { text: 'Pearson r' }, thickness: 14 } } as Data,
+                        colorbar: { title: { text: corrMethodLabel }, thickness: 14 } } as Data,
                     { type: 'scatter', mode: 'text', x: correlations.flatMap(row => row.flatMap((cell, x) => cell.r === null ? [caption(heatKeys[x])] : [])),
                         y: correlations.flatMap((row, y) => row.flatMap(cell => cell.r === null ? [caption(heatKeys[y])] : [])),
                         text: correlations.flatMap(row => row.flatMap(cell => cell.r === null ? ['—'] : [])),
@@ -286,22 +535,36 @@ export function CohortAnalytics({ retentionKey, rows, selectedIds, activeId, onI
                         hovertemplate: '%{x}<br>%{y}<br>%{customdata}<extra></extra>', textfont: { color: theme.text } },
                 ]} layout={{ ...base, margin: { l: 110, r: 60, t: 25, b: 100 },
                     xaxis: { ...axis(''), type: 'category', tickangle: -30 }, yaxis: { ...axis(''), type: 'category', autorange: 'reversed' } }} />
-                    : <p className="py-6 text-sm">Choose metrics to plot their pairwise correlations.</p>}
+                    : <p role="status" className="py-6 text-sm text-[var(--text-secondary)]">{heatKeys.length ? 'Stored correlation matrix is not available yet.' : 'Choose metrics to plot their pairwise correlations.'}</p>}
                 <details className="mt-2 text-xs"><summary className="cursor-pointer">Pair counts and undefined reasons (accessible table)</summary>
-                    <div className="max-h-64 overflow-auto"><table className="w-full text-left"><thead><tr><th>X</th><th>Y</th><th>Complete pairs</th><th>Pearson r / reason</th></tr></thead>
+                    <div className="max-h-64 overflow-auto"><table className="w-full text-left"><thead><tr><th>X</th><th>Y</th><th>Complete pairs</th><th>{corrMethodLabel} / reason</th></tr></thead>
                         <tbody>{correlations.flatMap((row, y) => row.map((cell, x) => <tr key={`${x}:${y}`}><td className="p-2">{caption(heatKeys[x])}</td><td>{caption(heatKeys[y])}</td><td>{cell.pairs}</td><td>{cell.reason ?? formatMetric(cell.r)}</td></tr>))}</tbody></table></div>
                 </details>
             </article>}
             <article className={card}>
-                <h4 className="text-sm font-semibold">Descriptive metric summary</h4>
-                <p className="my-2 text-xs text-[var(--text-secondary)]">Statistics for the records currently in view. “—” means unavailable.</p><details className="text-xs"><summary>Calculation details</summary><p>Quartiles use linear interpolation; standard deviation uses n − 1. Missing, null and nonnumeric values are counted separately and never replaced with zero.</p></details>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="text-sm font-semibold">Descriptive metric summary</h4>
+                    <StatsPanelControls
+                        kind="summary"
+                        statsRunId={effectiveSummaryRunId}
+                        stale={effectiveSummaryStale}
+                        status={effectiveSummaryStatus}
+                        reason={effectiveSummaryReason}
+                        histogramBins={typeof summaryRun?.params?.histogram_bins === 'number' ? summaryRun.params.histogram_bins : undefined}
+                        sharedBins={typeof summaryRun?.params?.shared_bins === 'boolean' ? summaryRun.params.shared_bins : undefined}
+                        onRecompute={jobId ? (opts) => recomputeSummary.mutate(opts) : undefined}
+                        isRecomputing={recomputeSummary.isPending}
+                    />
+                </div>
+                <p className="my-2 text-xs text-[var(--text-secondary)]">Stored Stats Toolkit descriptive statistics. “—” means unavailable.</p><details className="text-xs"><summary>Calculation details</summary><p>Computed in BioModStack Stats Toolkit using type-7 quartiles and sample standard deviation (n − 1). Missing, null and nonnumeric values are counted separately and never replaced with zero.</p></details>
+                {summaryUnavailable && <p role="status" className="my-2 text-xs text-rose-300">Statistics unavailable (Stats Toolkit unreachable).</p>}
                 <label className="flex max-w-md flex-col gap-1 text-xs">Find summary metrics<input className={control} type="search" aria-label="Find summary metrics" value={metricSearch} onChange={event => { setMetricSearch(event.target.value); setMetricPage(0); }} /></label>
                 <div className="mt-3 max-h-[480px] overflow-auto"><table className="w-full text-right text-xs tabular-nums">
                     <caption className="sr-only">Descriptive statistics for the full filtered cohort</caption>
                     <thead className="sticky top-0 bg-[var(--bg-primary)]"><tr><th className="p-2 text-left">Metric / native key</th>{['n', 'Missing', 'Null', 'Nonnumeric', 'Min', 'Q1', 'Median', 'Q3', 'Max', 'Mean', 'Sample SD'].map(name => <th key={name} className="whitespace-nowrap p-2">{name}</th>)}</tr></thead>
                     <tbody>{summaryKeys.map(key => { const summary = summaryMap.get(key)!; return <tr key={key} className="border-t border-[var(--border-color)]">
                         <th scope="row" className="p-2 text-left font-normal" title={key}>{getMetricLabel(key)}</th>
-                        {(['observed', 'missing', 'nulls', 'nonNumeric', 'min', 'q1', 'median', 'q3', 'max', 'mean', 'stdDev'] as const).map(field => <td key={field} className="whitespace-nowrap p-2" title={summary[field] === null ? 'Undefined or outside numeric range' : String(summary[field])}>{summary[field] === null ? '—' : formatMetric(summary[field])}</td>)}
+                        {(['observed', 'missing', 'nulls', 'nonNumeric', 'min', 'q1', 'median', 'q3', 'max', 'mean', 'stdDev'] as const).map(field => <td key={field} className="whitespace-nowrap p-2" title={summary[field] === null ? 'Undefined or unavailable' : String(summary[field])}>{summary[field] === null ? '—' : formatMetric(summary[field])}</td>)}
                     </tr>; })}</tbody>
                 </table></div>
                 {!searchedKeys.length && <p className="py-3 text-sm">No matching metric keys.</p>}

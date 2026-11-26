@@ -28,8 +28,37 @@ const fixture = (count: number) => Array.from({ length: count }, (_, i) => ({ de
         phase_metrics: { screen: { 'human_EGFR.iptm': { first: 0, last: i / 1000, min: 0, max: (i + 1) / 1000, samples: 50 } } } } }));
 async function mount(rows = fixture(100), options: { failOffset?: number; missingTrace?: boolean; props?: Record<string, unknown>; traceTotal?: number } = {}) {
     api.defaults.adapter = async config => {
-        if (config.method !== 'get' || config.url !== '/api/jobs/bc2-job') throw new Error(`Unexpected ${config.method} ${config.url}`);
-        return { config, status: 200, statusText: 'OK', headers: {}, data: { id: 'bc2-job', saved_selection_sets: [] } };
+        if (config.method === 'get' && config.url === '/api/jobs/bc2-job') {
+            return { config, status: 200, statusText: 'OK', headers: {}, data: { id: 'bc2-job', saved_selection_sets: [] } };
+        }
+        if (config.method === 'get' && config.url === '/api/jobs/bc2-job/analyses/job_metric_summary') {
+            const hasRefine = rows.some((row: any) => row.analytics?.phase_metrics?.refine?.['human_EGFR.iptm']?.last === 0.72);
+            return {
+                config, status: 200, statusText: 'OK', headers: {},
+                data: {
+                    run_id: 'ar-bc2-summary', status: 'completed', stale: false,
+                    stats_run: { run_id: 'sr-bc2-summary', tool_id: 'descriptive.summary' },
+                    result: {
+                        columns: {
+                            duration_seconds: { count: rows.length, min: 90, max: 90 + Math.max(0, rows.length - 1), mean: 90.5, median: 90.5, q1: 90, q3: 91, std: 0.5, histogram: { edges: [90, 95, 100], counts: [Math.ceil(rows.length / 2), Math.floor(rows.length / 2)] } },
+                            'screen · human_EGFR.iptm · last recorded': { count: rows.length, min: 0, max: 0.1, mean: 0.05, median: 0.05, q1: 0.02, q3: 0.08, std: 0.02, histogram: { edges: [0, 0.05, 0.1], counts: [Math.ceil(rows.length / 2), Math.floor(rows.length / 2)] } },
+                            ...(hasRefine ? { 'refine · human_EGFR.iptm · last recorded': { count: rows.length, min: 0.72, max: 0.72, mean: 0.72, median: 0.72, q1: 0.72, q3: 0.72, std: 0, histogram: { edges: [0.7, 0.74], counts: [rows.length] } } } : {}),
+                        },
+                    },
+                },
+            };
+        }
+        if (config.method === 'get' && config.url === '/api/jobs/bc2-job/analyses/job_correlation_matrix') {
+            return {
+                config, status: 200, statusText: 'OK', headers: {},
+                data: {
+                    run_id: 'ar-bc2-corr', status: 'completed', stale: false,
+                    stats_run: { run_id: 'sr-bc2-corr', tool_id: 'inference.correlation_matrix' },
+                    result: { metrics: ['duration_seconds', 'screen · human_EGFR.iptm · last recorded'], matrix: [[1, 0.5], [0.5, 1]], sample_sizes: [[rows.length, rows.length], [rows.length, rows.length]], method: 'pearson', p_adjust_method: 'benjamini_hochberg', pairs: [] },
+                },
+            };
+        }
+        throw new Error(`Unexpected ${config.method} ${config.url}`);
     };
     vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
         const url = new URL(input, 'http://test'); reads.push(url);

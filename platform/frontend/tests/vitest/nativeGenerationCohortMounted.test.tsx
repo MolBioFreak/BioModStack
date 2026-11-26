@@ -56,6 +56,31 @@ async function mount(rows = fixture(), props: Partial<Props> = {}, transport?: (
         if (config.method === 'get' && ['/api/jobs/cohort-job', '/api/jobs/new-job'].includes(String(config.url))) return { config, status: 200, statusText: 'OK', headers: {}, data: { id: config.url!.split('/').at(-1), saved_selection_sets: [] } };
         if (config.method === 'get' && config.url?.endsWith('/round')) return { config, status: 200, statusText: 'OK', headers: {}, data: { job_id: decodeURIComponent(config.url.split('/')[3]), state: 'not_requested', steps: {}, errors: {} } };
         if (config.method === 'get' && config.url?.endsWith('/binder-evidence')) return { config, status: 200, statusText: 'OK', headers: {}, data: { schema_version: 1, job_id: decodeURIComponent(config.url.split('/')[3]), offset: 0, limit: 100, total: 0, records: [] } };
+        if (config.method === 'get' && config.url?.endsWith('/analyses/job_metric_summary')) {
+            return {
+                config, status: 200, statusText: 'OK', headers: {},
+                data: {
+                    run_id: 'ar-cohort-summary', status: 'completed', stale: false,
+                    stats_run: { run_id: 'sr-cohort-summary', tool_id: 'descriptive.summary' },
+                    result: {
+                        columns: {
+                            seq_length: { count: rows.length, min: 1, max: Math.max(1, rows.length), mean: 600, median: 600, q1: 300, q3: 900, std: 300, histogram: { edges: [0, 600, 1205], counts: [600, Math.max(0, rows.length - 600)] } },
+                            dsasa: { count: rows.length, min: 0, max: 1205, mean: 600, median: 600, q1: 300, q3: 900, std: 300, histogram: { edges: [0, 600, 1205], counts: [600, Math.max(0, rows.length - 600)] } },
+                        },
+                    },
+                },
+            };
+        }
+        if (config.method === 'get' && config.url?.endsWith('/analyses/job_correlation_matrix')) {
+            return {
+                config, status: 200, statusText: 'OK', headers: {},
+                data: {
+                    run_id: 'ar-cohort-corr', status: 'completed', stale: false,
+                    stats_run: { run_id: 'sr-cohort-corr', tool_id: 'inference.correlation_matrix' },
+                    result: { metrics: ['seq_length', 'dsasa'], matrix: [[1, 0.9], [0.9, 1]], sample_sizes: [[rows.length, rows.length], [rows.length, rows.length]], method: 'pearson', p_adjust_method: 'benjamini_hochberg', pairs: [] },
+                },
+            };
+        }
         requests.push(config);
         if (config.method !== 'get' || !config.url?.endsWith('/generation-results')) throw new Error(`Unexpected request ${config.method} ${config.url}`);
         return transport ? transport(config) : response(config, rows);

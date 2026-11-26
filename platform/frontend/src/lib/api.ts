@@ -2795,12 +2795,24 @@ export const discoverHardware = () =>
     api.post<HardwareDiscoveryResponse>('/api/gpu/hardware/discover');
 
 // Analytics API
+export interface StatsRunRef {
+    run_id: string;
+    tool_id?: string | null;
+    workspace_id?: string | null;
+    status?: string | null;
+    method_version?: string | null;
+}
+
 export interface MetricDistribution {
     min: number;
     max: number;
     avg: number;
     median: number;
-    std_dev: number;
+    std_dev: number | null;
+    q1?: number | null;
+    q3?: number | null;
+    iqr?: number | null;
+    count?: number | null;
     histogram_bins: number[];
     histogram_counts: number[];
 }
@@ -2809,9 +2821,16 @@ export interface JobAnalytics {
     scientific_cohorts?: ScientificCohort[];
     job_id: string;
     design_count: number;
-    metrics: Record<string, MetricDistribution | null>;
+    metrics: Record<string, MetricDistribution | null> | null;
     correlations: Record<string, Array<{ x: number; y: number; id: string }>> | null;
     pipeline_summary: Record<string, UntypedApiValue>;
+    analysis_run_id?: string | null;
+    stats_run?: StatsRunRef | null;
+    stats_status?: string | null;
+    stale?: boolean;
+    reason?: string | null;
+    histogram_bins?: number | null;
+    shared_bins?: boolean | null;
 }
 
 export interface DesignMetricPoint extends ScientificPointFields {
@@ -2825,6 +2844,20 @@ export interface BatchAnalytics {
     job_ids: string[];
     metrics_summary: Record<string, Record<string, number>>; // metric -> {job_id -> avg}
     common_metrics: string[];
+    run_id?: string | null;
+    selection_signature?: string | null;
+    stats_run?: StatsRunRef | null;
+    stats_status?: string | null;
+    reason?: string | null;
+}
+
+export interface SelectionSummaryRequest {
+    design_ids?: string[];
+    job_ids?: string[];
+    selection_signature?: string;
+    histogram_bins?: number;
+    shared_bins?: boolean;
+    force_refresh?: boolean;
 }
 
 export const fetchJobAnalytics = (jobId: string) =>
@@ -2835,6 +2868,9 @@ export const fetchJobDesignMetrics = (jobId: string, includeChildren?: boolean) 
 
 export const fetchBatchAnalytics = (jobIds: string[]) =>
     api.post<BatchAnalytics>('/api/analytics/batch', jobIds).then(response => ({...response, data: validateScientificEnvelope(response.data)}));
+
+export const requestSelectionMetricSummary = (payload: SelectionSummaryRequest) =>
+    api.post<PersistedAnalysisRun>('/api/analytics/selection-summary', payload);
 
 // Structure Analysis (Biotite-powered)
 export interface StructureAnalysis {
@@ -2918,12 +2954,16 @@ export interface PersistedAnalysisRun<T = Record<string, unknown>> {
     analysis_type: string;
     subject_kind: string;
     subject_id: string;
-    status: 'missing' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'stale';
+    status: 'missing' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'stale' | 'unavailable' | string;
     resource_class: string | null;
     params: Record<string, unknown>;
     cache_hit: boolean;
     summary: Record<string, unknown> | null;
     result: T | null;
+    stats_run?: StatsRunRef | null;
+    stale?: boolean;
+    supersedes_run_id?: string | null;
+    reason?: string | null;
     error_message: string | null;
     artifacts: Record<string, unknown>;
     queued_at: string | null;
@@ -2935,6 +2975,10 @@ export interface PersistedAnalysisRun<T = Record<string, unknown>> {
 export interface JobAnalysisScopeParams {
     include_children?: boolean;
     design_ids?: string[];
+    method?: 'pearson' | 'spearman' | 'kendall';
+    p_adjust_method?: 'benjamini_hochberg' | 'holm' | 'bonferroni' | 'none';
+    histogram_bins?: number;
+    shared_bins?: boolean;
 }
 
 export const fetchStructureAnalysis = (designId: string) =>
@@ -2961,6 +3005,9 @@ export const triggerDesignAnalysis = <T = Record<string, unknown>>(
         force_refresh: forceRefresh,
     });
 
+export const fetchAnalysisRunById = <T = Record<string, unknown>>(runId: string) =>
+    api.get<PersistedAnalysisRun<T>>(`/api/analyses/${encodeURIComponent(runId)}`);
+
 export const fetchJobAnalysis = <T = Record<string, unknown>>(
     jobId: string,
     analysisType: string,
@@ -2969,7 +3016,11 @@ export const fetchJobAnalysis = <T = Record<string, unknown>>(
     api.get<PersistedAnalysisRun<T>>(`/api/jobs/${jobId}/analyses/${analysisType}`, {
         params: {
             include_children: params?.include_children,
-            design_ids: params?.design_ids?.join(','),
+            design_ids: params?.design_ids?.length ? params.design_ids.join(',') : undefined,
+            method: params?.method,
+            p_adjust_method: params?.p_adjust_method,
+            histogram_bins: params?.histogram_bins,
+            shared_bins: params?.shared_bins,
         },
     });
 
@@ -2983,6 +3034,10 @@ export const triggerJobAnalysis = <T = Record<string, unknown>>(
         params: {
             include_children: params?.include_children ?? true,
             design_ids: params?.design_ids ?? [],
+            ...(params?.method !== undefined ? { method: params.method } : {}),
+            ...(params?.p_adjust_method !== undefined ? { p_adjust_method: params.p_adjust_method } : {}),
+            ...(params?.histogram_bins !== undefined ? { histogram_bins: params.histogram_bins } : {}),
+            ...(params?.shared_bins !== undefined ? { shared_bins: params.shared_bins } : {}),
         },
         force_refresh: forceRefresh,
     });
@@ -4376,10 +4431,29 @@ export const fetchAntiFoldLogits = (designId: string) =>
 // ============================================================
 
 export interface CorrelationMatrix {
+    scientific_cohorts?: ScientificCohort[];
     job_id: string;
     metrics: string[];
-    matrix: number[][];  // NxN Pearson R values
+    matrix: number[][];
     sample_sizes: number[][];
+    p_value_matrix?: (number | null)[][] | null;
+    adjusted_p_value_matrix?: (number | null)[][] | null;
+    pairs?: Array<{
+        var_a: string;
+        var_b: string;
+        statistic: number | null;
+        p_value?: number | null;
+        adjusted_p_value?: number | null;
+        n?: number;
+    }> | null;
+    method?: string | null;
+    p_adjust_method?: string | null;
+    stats_backend?: string | null;
+    stats_tool_id?: string | null;
+    stats_method_version?: string | null;
+    analysis_run_id?: string | null;
+    stats_run?: StatsRunRef | null;
+    stale?: boolean;
 }
 
 export interface AACount {

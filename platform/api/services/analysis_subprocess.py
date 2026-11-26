@@ -25,6 +25,8 @@ from services.analysis_registry import (
     JOB_CORRELATION_MATRIX_ANALYSIS,
     JOB_METRIC_SUMMARY_ANALYSIS,
     PAE_MATRIX_ANALYSIS,
+    SELECTION_BATCH_SUMMARY_ANALYSIS,
+    SELECTION_METRIC_SUMMARY_ANALYSIS,
     STRUCTURE_SUMMARY_ANALYSIS,
     _design_supports_job_analysis,
     build_analysis_input_signature,
@@ -604,27 +606,6 @@ def _extract_metric_pairs(designs: list[Design], metric_x: str, metric_y: str) -
     return pairs
 
 
-def _pearson_r(values_x: list[float], values_y: list[float]) -> float:
-    if len(values_x) < 3 or len(values_y) < 3:
-        return 0.0
-    try:
-        import numpy as np
-
-        x_arr = np.array(values_x)
-        y_arr = np.array(values_y)
-        mask = ~(np.isnan(x_arr) | np.isnan(y_arr))
-        x_arr = x_arr[mask]
-        y_arr = y_arr[mask]
-        if len(x_arr) < 3:
-            return 0.0
-        value = float(np.corrcoef(x_arr, y_arr)[0, 1])
-        if value != value:
-            return 0.0
-        return value
-    except Exception:
-        return 0.0
-
-
 async def _job_scope_designs(session, job: Job, params: dict[str, Any], columns: tuple[Any, ...]) -> list[Design]:
     include_children = bool(params.get("include_children", True))
     requested_design_ids = [str(design_id) for design_id in (params.get("design_ids") or []) if str(design_id).strip()]
@@ -645,161 +626,43 @@ async def _job_scope_designs(session, job: Job, params: dict[str, Any], columns:
     return list(result.scalars().all())
 
 
-def _compute_correlation_matrix_via_stats_toolkit(
+def _select_complete_metric_columns(
     designs: list[Design],
     metric_names: list[str],
+) -> tuple[list[str], dict[str, list[float]]]:
+    """Select metrics with >=3 complete rows across designs for inference.correlation_matrix."""
+    active = list(metric_names[:50])
+    while len(active) >= 2:
+        cols: dict[str, list[float]] = {name: [] for name in active}
+        for design in designs:
+            vals = [_metric_value(design, name) for name in active]
+            if all(v is not None for v in vals):
+                for name, val in zip(active, vals):
+                    cols[name].append(float(val))  # type: ignore[arg-type]
+        if len(cols[active[0]]) >= 3:
+            return active, cols
+        # Drop the metric with fewest non-null values and retry
+        counts = {name: len(_extract_metric_values(designs, name)) for name in active}
+        drop_metric = min(active, key=lambda m: (counts[m], m))
+        active.remove(drop_metric)
+    return [], {}
+
+
+async def _compute_job_correlation_matrix(
+    session,
+    job: Job,
+    params: dict[str, Any],
     *,
-    method: str = "pearson",
-    p_adjust_method: str = "benjamini_hochberg",
-) -> dict[str, Any] | None:
-    """Compute pairwise correlation matrix + p-values + BH-FDR via BioModStack Stats Toolkit."""
-    from services.stats_toolkit_client import (
-        StatsToolkitUnavailableError,
-        get_stats_toolkit_client,
-        stats_toolkit_required,
+    bms_run_id: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any], None, dict[str, Any] | None]:
+    """Compute job correlation matrix exclusively via a durable Stats Toolkit run (R06/R12)."""
+    from services.scientific_analytics import (
+        owning_jobs,
+        partition_rows,
+        serialize_cohort_metadata,
     )
+    from services.stats_toolkit_client import get_stats_toolkit_client
 
-    m = len(metric_names)
-    if m < 2:
-        return None
-
-    sample_sizes: list[list[int]] = [[0] * m for _ in range(m)]
-    pair_map: dict[tuple[int, int], list[tuple[float, float]]] = {}
-    for i, mx in enumerate(metric_names):
-        vals_i = _extract_metric_values(designs, mx)
-        sample_sizes[i][i] = len(vals_i)
-        for j in range(i + 1, m):
-            pairs = _extract_metric_pairs(designs, mx, metric_names[j])
-            pair_map[(i, j)] = pairs
-            sample_sizes[i][j] = sample_sizes[j][i] = len(pairs)
-
-    complete_columns: dict[str, list[float]] = {name: [] for name in metric_names}
-    for design in designs:
-        extracted = [_metric_value(design, name) for name in metric_names]
-        if all(val is not None for val in extracted):
-            for name, val in zip(metric_names, extracted):
-                complete_columns[name].append(float(val))  # type: ignore[arg-type]
-    complete_n = len(complete_columns[metric_names[0]])
-    all_equal_complete = complete_n >= 3 and all(
-        sample_sizes[i][j] == complete_n for i in range(m) for j in range(m)
-    )
-
-    client = get_stats_toolkit_client()
-    try:
-        if all_equal_complete and m <= 50:
-            res = client.execute_tool(
-                "inference.correlation_matrix",
-                {
-                    "columns": complete_columns,
-                    "method": method,
-                    "p_adjust_method": p_adjust_method,
-                },
-            )
-            raw_corr = res["correlation_matrix"]
-            matrix = [
-                [1.0 if i == j else (round(float(raw_corr[i][j]), 4) if raw_corr[i][j] is not None else 0.0) for j in range(m)]
-                for i in range(m)
-            ]
-            return {
-                "matrix": matrix,
-                "sample_sizes": sample_sizes,
-                "p_value_matrix": res.get("p_value_matrix"),
-                "adjusted_p_value_matrix": res.get("adjusted_p_value_matrix"),
-                "pairs": res.get("pairs"),
-                "method": res.get("method", method),
-                "p_adjust_method": res.get("p_adjust_method", p_adjust_method),
-                "stats_backend": "stats_toolkit",
-                "stats_tool_id": "inference.correlation_matrix",
-                "stats_method_version": res.get("method_version"),
-            }
-
-        matrix = [[1.0 if i == j else 0.0 for j in range(m)] for i in range(m)]
-        p_value_matrix: list[list[float | None]] = [[0.0 if i == j else None for j in range(m)] for i in range(m)]
-        adjusted_p_value_matrix: list[list[float | None]] = [[0.0 if i == j else None for j in range(m)] for i in range(m)]
-        pair_records: list[dict[str, Any]] = []
-        valid_indices: list[int] = []
-        valid_pvals: list[float] = []
-        method_version: str | None = None
-        for i in range(m):
-            for j in range(i + 1, m):
-                pairs = pair_map[(i, j)]
-                mx, my = metric_names[i], metric_names[j]
-                if len(pairs) < 3:
-                    pair_records.append({
-                        "var_a": mx, "var_b": my, "n": len(pairs),
-                        "statistic": None, "p_value": None, "adjusted_p_value": None,
-                        "ci_low": None, "ci_high": None, "significant": False,
-                    })
-                    continue
-                pair_res = client.execute_tool(
-                    "inference.correlation_matrix",
-                    {
-                        "columns": {mx: [vx for vx, _ in pairs], my: [vy for _, vy in pairs]},
-                        "method": method,
-                        "p_adjust_method": "none",
-                    },
-                )
-                method_version = method_version or pair_res.get("method_version")
-                pair_info = (pair_res.get("pairs") or [{}])[0]
-                stat = pair_info.get("statistic")
-                p_val = pair_info.get("p_value")
-                matrix[i][j] = matrix[j][i] = round(float(stat), 4) if stat is not None else 0.0
-                p_value_matrix[i][j] = p_value_matrix[j][i] = float(p_val) if p_val is not None else None
-                rec = {
-                    "var_a": mx,
-                    "var_b": my,
-                    "n": len(pairs),
-                    "statistic": float(stat) if stat is not None else None,
-                    "p_value": float(p_val) if p_val is not None else None,
-                    "adjusted_p_value": float(p_val) if p_val is not None else None,
-                    "ci_low": pair_info.get("ci_low"),
-                    "ci_high": pair_info.get("ci_high"),
-                    "significant": bool(p_val is not None and float(p_val) < 0.05),
-                    "_i": i,
-                    "_j": j,
-                }
-                idx = len(pair_records)
-                pair_records.append(rec)
-                if p_val is not None:
-                    valid_indices.append(idx)
-                    valid_pvals.append(float(p_val))
-        if len(valid_pvals) >= 2 and p_adjust_method != "none":
-            adj = client.execute_tool(
-                "inference.adjust_p_values",
-                {"p_values": valid_pvals, "method": p_adjust_method},
-            )
-            for idx, adj_p in zip(valid_indices, adj["adjusted_p_values"]):
-                rec = pair_records[idx]
-                rec["adjusted_p_value"] = float(adj_p)
-                rec["significant"] = bool(float(adj_p) < 0.05)
-                ri, rj = rec["_i"], rec["_j"]
-                adjusted_p_value_matrix[ri][rj] = adjusted_p_value_matrix[rj][ri] = float(adj_p)
-        elif len(valid_pvals) == 1:
-            rec = pair_records[valid_indices[0]]
-            ri, rj = rec["_i"], rec["_j"]
-            adjusted_p_value_matrix[ri][rj] = adjusted_p_value_matrix[rj][ri] = float(valid_pvals[0])
-        for rec in pair_records:
-            rec.pop("_i", None)
-            rec.pop("_j", None)
-        return {
-            "matrix": matrix,
-            "sample_sizes": sample_sizes,
-            "p_value_matrix": p_value_matrix,
-            "adjusted_p_value_matrix": adjusted_p_value_matrix,
-            "pairs": pair_records,
-            "method": method,
-            "p_adjust_method": p_adjust_method,
-            "stats_backend": "stats_toolkit",
-            "stats_tool_id": "inference.correlation_matrix",
-            "stats_method_version": method_version,
-        }
-    except StatsToolkitUnavailableError:
-        if stats_toolkit_required():
-            raise
-        return None
-
-
-async def _compute_job_correlation_matrix(session, job: Job, params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any]:
     designs = await _job_scope_designs(
         session,
         job,
@@ -807,9 +670,18 @@ async def _compute_job_correlation_matrix(session, job: Job, params: dict[str, A
         tuple(getattr(Design, column.key) for column in Design.__table__.columns),
     )
     designs = [design for design in designs if _design_supports_job_analysis(design, JOB_CORRELATION_MATRIX_ANALYSIS)]
-    from services.analysis_registry import correlation_scientific_scope
-    designs, cohorts, _sources = await correlation_scientific_scope(designs, session)
-    metric_names = [metric_name for metric_name in JOB_CORRELATION_METRICS if len(_extract_metric_values(designs, metric_name)) >= 5]
+    owners = await owning_jobs(session, designs)
+    legacy_designs, grouped_cohorts = await partition_rows(designs, owners, session)
+
+    cohort_metadata = [
+        serialize_cohort_metadata(key, rows, include_pairs=True)
+        for key, rows in sorted(grouped_cohorts.items())
+    ]
+    metric_names = [
+        metric_name
+        for metric_name in JOB_CORRELATION_METRICS
+        if len(_extract_metric_values(legacy_designs, metric_name)) >= 5
+    ]
     method = str(params.get("method") or "pearson").strip().lower()
     if method not in {"pearson", "spearman", "kendall"}:
         method = "pearson"
@@ -817,59 +689,91 @@ async def _compute_job_correlation_matrix(session, job: Job, params: dict[str, A
     if p_adjust_method not in {"benjamini_hochberg", "holm", "bonferroni", "none"}:
         p_adjust_method = "benjamini_hochberg"
 
-    delegated = _compute_correlation_matrix_via_stats_toolkit(
-        designs,
-        metric_names,
-        method=method,
-        p_adjust_method=p_adjust_method,
-    )
-    if delegated is not None:
-        result = {
-            "job_id": job.id,
-            "metrics": metric_names,
-            "matrix": delegated["matrix"],
-            "sample_sizes": delegated["sample_sizes"],
-            "scientific_cohorts": cohorts,
-            "p_value_matrix": delegated["p_value_matrix"],
-            "adjusted_p_value_matrix": delegated["adjusted_p_value_matrix"],
-            "pairs": delegated["pairs"],
-            "method": delegated["method"],
-            "p_adjust_method": delegated["p_adjust_method"],
-            "stats_backend": delegated["stats_backend"],
-            "stats_tool_id": delegated["stats_tool_id"],
-            "stats_method_version": delegated["stats_method_version"],
-        }
+    chosen_metrics, complete_columns = _select_complete_metric_columns(legacy_designs, metric_names)
+    cohort_correlation_scope: dict[str, Any] | None = None
+    if len(chosen_metrics) >= 2:
+        sample_sizes = [
+            [len(_extract_metric_pairs(legacy_designs, mx, my)) for my in chosen_metrics]
+            for mx in chosen_metrics
+        ]
     else:
-        matrix: list[list[float]] = []
-        sample_sizes: list[list[int]] = []
-        for metric_x in metric_names:
-            row: list[float] = []
-            size_row: list[int] = []
-            for metric_y in metric_names:
-                pairs = _extract_metric_pairs(designs, metric_x, metric_y)
-                if metric_x == metric_y:
-                    row.append(1.0)
-                    size_row.append(len(pairs))
-                    continue
-                row.append(round(_pearson_r([value_x for value_x, _value_y in pairs], [value_y for _value_x, value_y in pairs]), 4))
-                size_row.append(len(pairs))
-            matrix.append(row)
-            sample_sizes.append(size_row)
+        # Fall back to rev-1 scientific cohort columns when no legacy metrics qualify.
+        sample_sizes = []
+        for key, rows in sorted(grouped_cohorts.items()):
+            all_keys = sorted({mk for _, proj in rows for mk in proj["metrics"]})
+            if len(all_keys) < 2:
+                continue
+            complete_rows = [proj for _, proj in rows if all(mk in proj["metrics"] for mk in all_keys)]
+            if len(complete_rows) >= 3:
+                chosen_metrics = all_keys[:50]
+                complete_columns = {
+                    mk: [float(proj["metrics"][mk]) for proj in complete_rows]
+                    for mk in chosen_metrics
+                }
+                n_rows = len(complete_rows)
+                sample_sizes = [[n_rows] * len(chosen_metrics) for _ in chosen_metrics]
+                cohort_correlation_scope = {"cohort_key": key, "metrics": chosen_metrics}
+                break
+
+    if len(chosen_metrics) < 2:
+        from services.scientific_analytics import assemble_cohort_from_metadata
+        assembled_cohorts = [
+            assemble_cohort_from_metadata(
+                cmeta,
+                summary_columns=None,
+                correlation_lookup=None,
+            ).model_dump(mode="json")
+            for cmeta in cohort_metadata
+        ]
         result = {
-            "job_id": job.id,
-            "metrics": metric_names,
-            "matrix": matrix,
-            "sample_sizes": sample_sizes,
-            "scientific_cohorts": cohorts,
-            "method": "pearson",
-            "stats_backend": "not_applicable" if len(metric_names) < 2 else "local_fallback",
+            "job_id": str(job.id),
+            "metrics": [],
+            "matrix": [],
+            "sample_sizes": [],
+            "scientific_cohorts": assembled_cohorts,
+            "method": method,
+            "p_adjust_method": p_adjust_method,
+            "stats_backend": "not_applicable",
         }
+        summary = {
+            "job_id": str(job.id),
+            "metric_count": 0,
+            "design_count": len(designs),
+            "metrics": [],
+            "sample_sizes": [],
+            "cohort_metadata": cohort_metadata,
+            "method": method,
+            "p_adjust_method": p_adjust_method,
+            "stats_backend": "not_applicable",
+        }
+        return result, summary, None, None
+
+    client = get_stats_toolkit_client()
+    workspace_id = client.resolve_workspace_id()
+    stats_run, _outputs = client.run_tool(
+        workspace_id,
+        "inference.correlation_matrix",
+        {
+            "columns": complete_columns,
+            "method": method,
+            "p_adjust_method": p_adjust_method,
+        },
+        idempotency_key=f"bms-analysis-{bms_run_id}",
+    )
     summary = {
-        "metric_count": len(metric_names),
+        "job_id": str(job.id),
+        "metric_count": len(chosen_metrics),
         "design_count": len(designs),
-        "stats_backend": result.get("stats_backend"),
+        "metrics": chosen_metrics,
+        "sample_sizes": sample_sizes,
+        "cohort_metadata": cohort_metadata,
+        "cohort_correlation_scope": cohort_correlation_scope,
+        "method": method,
+        "p_adjust_method": p_adjust_method,
+        "stats_backend": "stats_toolkit",
+        "stats_tool_id": "inference.correlation_matrix",
     }
-    return result, summary, result
+    return None, summary, None, stats_run
 
 
 async def _compute_job_aa_composition(session, job: Job, params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any]:
@@ -998,6 +902,40 @@ async def _compute_job_cdr_logo_pack(session, job: Job, params: dict[str, Any]) 
     return result, summary, result
 
 
+def _extract_finite_columns_for_designs(
+    legacy_designs: list[Design],
+    grouped_cohorts: dict[str, list[tuple[str, dict[str, Any]]]],
+    *,
+    column_prefix: str = "",
+) -> tuple[dict[str, list[float]], list[dict[str, Any]], list[str]]:
+    from routers.analytics import extract_metrics
+    from services.scientific_analytics import cohort_structure, serialize_cohort_metadata
+
+    columns: dict[str, list[float]] = {}
+    legacy_keys: list[str] = []
+    raw_legacy = extract_metrics(legacy_designs)
+    for metric_name, values in raw_legacy.items():
+        finite = [
+            float(v)
+            for v in values
+            if v is not None and float(v) == float(v) and abs(float(v)) != float("inf")
+        ]
+        if finite:
+            columns[f"{column_prefix}{metric_name}"] = finite
+            legacy_keys.append(metric_name)
+
+    cohort_metadata: list[dict[str, Any]] = []
+    for cohort_key, rows in sorted(grouped_cohorts.items()):
+        meta = serialize_cohort_metadata(cohort_key, rows, include_pairs=True)
+        cohort_metadata.append(meta)
+        struct = cohort_structure(rows, include_pairs=False)
+        for metric_key, values in sorted(struct["columns"].items()):
+            finite = [float(v) for v in values if v is not None and float(v) == float(v) and abs(float(v)) != float("inf")]
+            if finite:
+                columns[f"{column_prefix}cohort::{cohort_key}::{metric_key}"] = finite
+    return columns, cohort_metadata, sorted(legacy_keys)
+
+
 async def _compute_job_metric_summary(
     session,
     job: Job,
@@ -1006,8 +944,7 @@ async def _compute_job_metric_summary(
     bms_run_id: str,
 ) -> tuple[dict[str, Any] | None, dict[str, Any], None, dict[str, Any] | None]:
     """Compute cohort descriptive summary via a durable Stats Toolkit run (R06/R11)."""
-    from routers.analytics import extract_metrics
-    from services.analysis_registry import correlation_scientific_scope
+    from services.scientific_analytics import owning_jobs, partition_rows
     from services.stats_toolkit_client import get_stats_toolkit_client
 
     designs = await _job_scope_designs(
@@ -1017,35 +954,22 @@ async def _compute_job_metric_summary(
         tuple(getattr(Design, column.key) for column in Design.__table__.columns),
     )
     designs = [design for design in designs if _design_supports_job_analysis(design, JOB_METRIC_SUMMARY_ANALYSIS)]
-    legacy_designs, cohorts, _sources = await correlation_scientific_scope(designs, session)
+    owners = await owning_jobs(session, designs)
+    legacy_designs, grouped_cohorts = await partition_rows(designs, owners, session)
+    columns, cohort_metadata, legacy_keys = _extract_finite_columns_for_designs(legacy_designs, grouped_cohorts)
 
-    raw_legacy = extract_metrics(legacy_designs)
-    columns: dict[str, list[float]] = {}
-    for metric_name, values in raw_legacy.items():
-        finite = [float(v) for v in values if v is not None and float(v) == float(v) and abs(float(v)) != float("inf")]
-        if finite:
-            columns[metric_name] = finite
-
-    # Also include rev-1 scientific cohort metric columns if present.
-    for cohort in cohorts:
-        cohort_key = str(cohort.get("cohort_key") or "")
-        if not cohort_key:
-            continue
-        cohort_metrics = cohort.get("metrics") or {}
-        # Extract raw observed values for rev-1 cohorts from persisted projections when needed.
-        for metric_key in sorted(cohort_metrics.keys()):
-            col_name = f"cohort::{cohort_key}::{metric_key}"
-            if col_name in columns:
-                continue
-            # Pull finite values for this cohort via persisted projections.
-            pass
-
+    histogram_bins = int(params.get("histogram_bins", 10))
+    shared_bins = bool(params.get("shared_bins", False))
     if not columns:
         summary = {
-            "job_id": job.id,
+            "job_id": str(job.id),
             "design_count": len(designs),
             "metric_count": 0,
             "columns": [],
+            "legacy_keys": legacy_keys,
+            "cohort_metadata": cohort_metadata,
+            "histogram_bins": histogram_bins,
+            "shared_bins": shared_bins,
             "stats_backend": "stats_toolkit",
             "empty": True,
         }
@@ -1053,8 +977,6 @@ async def _compute_job_metric_summary(
 
     client = get_stats_toolkit_client()
     workspace_id = client.resolve_workspace_id()
-    histogram_bins = int(params.get("histogram_bins", 10))
-    shared_bins = bool(params.get("shared_bins", False))
     stats_run, _outputs = client.run_tool(
         workspace_id,
         "descriptive.summary",
@@ -1066,10 +988,158 @@ async def _compute_job_metric_summary(
         idempotency_key=f"bms-analysis-{bms_run_id}",
     )
     summary = {
-        "job_id": job.id,
+        "job_id": str(job.id),
         "design_count": len(designs),
         "metric_count": len(columns),
         "columns": sorted(columns.keys()),
+        "legacy_keys": legacy_keys,
+        "cohort_metadata": cohort_metadata,
+        "histogram_bins": histogram_bins,
+        "shared_bins": shared_bins,
+        "stats_backend": "stats_toolkit",
+    }
+    return None, summary, None, stats_run
+
+
+async def _compute_selection_metric_summary(
+    session,
+    selection_signature: str,
+    params: dict[str, Any],
+    *,
+    bms_run_id: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any], None, dict[str, Any] | None]:
+    from services.scientific_analytics import owning_jobs, partition_rows
+    from services.stats_toolkit_client import get_stats_toolkit_client
+
+    design_ids = [str(item).strip() for item in (params.get("design_ids") or []) if str(item).strip()]
+    job_ids = [str(item).strip() for item in (params.get("job_ids") or []) if str(item).strip()]
+    query = select(Design).order_by(Design.id.asc())
+    if design_ids:
+        query = query.where(Design.id.in_(design_ids))
+    elif job_ids:
+        query = query.where(Design.job_id.in_(job_ids))
+    else:
+        designs = []
+    if design_ids or job_ids:
+        designs = list((await session.execute(query)).scalars().all())
+
+    owners = await owning_jobs(session, designs)
+    legacy_designs, grouped_cohorts = await partition_rows(designs, owners, session)
+    columns, cohort_metadata, legacy_keys = _extract_finite_columns_for_designs(legacy_designs, grouped_cohorts)
+    histogram_bins = int(params.get("histogram_bins", 10))
+    shared_bins = bool(params.get("shared_bins", False))
+
+    if not columns:
+        summary = {
+            "selection_signature": selection_signature,
+            "design_count": len(designs),
+            "metric_count": 0,
+            "columns": [],
+            "legacy_keys": legacy_keys,
+            "cohort_metadata": cohort_metadata,
+            "histogram_bins": histogram_bins,
+            "shared_bins": shared_bins,
+            "stats_backend": "stats_toolkit",
+            "empty": True,
+        }
+        return None, summary, None, None
+
+    client = get_stats_toolkit_client()
+    workspace_id = client.resolve_workspace_id()
+    stats_run, _outputs = client.run_tool(
+        workspace_id,
+        "descriptive.summary",
+        {
+            "columns": columns,
+            "histogram_bins": histogram_bins,
+            "shared_bins": shared_bins,
+        },
+        idempotency_key=f"bms-analysis-{bms_run_id}",
+    )
+    summary = {
+        "selection_signature": selection_signature,
+        "design_count": len(designs),
+        "metric_count": len(columns),
+        "columns": sorted(columns.keys()),
+        "legacy_keys": legacy_keys,
+        "cohort_metadata": cohort_metadata,
+        "histogram_bins": histogram_bins,
+        "shared_bins": shared_bins,
+        "stats_backend": "stats_toolkit",
+    }
+    return None, summary, None, stats_run
+
+
+async def _compute_selection_batch_summary(
+    session,
+    selection_signature: str,
+    params: dict[str, Any],
+    *,
+    bms_run_id: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any], None, dict[str, Any] | None]:
+    from services.scientific_analytics import owning_jobs, partition_rows
+    from services.stats_toolkit_client import get_stats_toolkit_client
+
+    job_ids = [str(item).strip() for item in (params.get("job_ids") or []) if str(item).strip()]
+    columns: dict[str, list[float]] = {}
+    legacy_keys_by_job: dict[str, list[str]] = {}
+    cohort_metadata_by_job: dict[str, list[dict[str, Any]]] = {}
+    total_designs = 0
+
+    from routers.analytics import _scalar_design_query
+
+    for jid in job_ids:
+        designs = list((await session.execute(_scalar_design_query().where(Design.job_id == jid).order_by(Design.id.asc()))).scalars().all())
+        if not designs:
+            continue
+        total_designs += len(designs)
+        owners = await owning_jobs(session, designs)
+        legacy_designs, grouped_cohorts = await partition_rows(designs, owners, session)
+        job_cols, job_cohorts, job_legacy_keys = _extract_finite_columns_for_designs(
+            legacy_designs, grouped_cohorts, column_prefix=f"job::{jid}::"
+        )
+        columns.update(job_cols)
+        legacy_keys_by_job[jid] = job_legacy_keys
+        cohort_metadata_by_job[jid] = job_cohorts
+
+    histogram_bins = int(params.get("histogram_bins", 10))
+    shared_bins = bool(params.get("shared_bins", False))
+    if not columns:
+        summary = {
+            "selection_signature": selection_signature,
+            "job_ids": job_ids,
+            "design_count": total_designs,
+            "metric_count": 0,
+            "columns": [],
+            "legacy_keys_by_job": legacy_keys_by_job,
+            "cohort_metadata_by_job": cohort_metadata_by_job,
+            "histogram_bins": histogram_bins,
+            "shared_bins": shared_bins,
+            "stats_backend": "stats_toolkit",
+            "empty": True,
+        }
+        return None, summary, None, None
+
+    client = get_stats_toolkit_client()
+    workspace_id = client.resolve_workspace_id()
+    stats_run, _outputs = client.run_tool(
+        workspace_id,
+        "descriptive.summary",
+        {
+            "columns": columns,
+            "histogram_bins": histogram_bins,
+            "shared_bins": shared_bins,
+        },
+        idempotency_key=f"bms-analysis-{bms_run_id}",
+    )
+    summary = {
+        "selection_signature": selection_signature,
+        "job_ids": job_ids,
+        "design_count": total_designs,
+        "metric_count": len(columns),
+        "columns": sorted(columns.keys()),
+        "legacy_keys_by_job": legacy_keys_by_job,
+        "cohort_metadata_by_job": cohort_metadata_by_job,
         "histogram_bins": histogram_bins,
         "shared_bins": shared_bins,
         "stats_backend": "stats_toolkit",
@@ -1098,9 +1168,14 @@ async def _mark_failed(
 
 
 async def _run_analysis(run_id: str) -> int:
+    async with async_session() as session:
+        return await _run_analysis_with_session(session, run_id)
+
+
+async def _run_analysis_with_session(session, run_id: str) -> int:
     started_at = datetime.utcnow()
     started_perf = time.perf_counter()
-    async with async_session() as session:
+    if True:
         result = await session.execute(select(AnalysisRun).where(AnalysisRun.id == run_id))
         run = result.scalar_one_or_none()
         if run is None:
@@ -1211,13 +1286,26 @@ async def _run_analysis(run_id: str) -> int:
                     session, job, params, bms_run_id=str(run.id)
                 )
             elif run.analysis_type == JOB_CORRELATION_MATRIX_ANALYSIS:
-                result_payload, summary_payload, inline_payload = await _compute_job_correlation_matrix(session, job, params)
+                result_payload, summary_payload, inline_payload, stats_run = await _compute_job_correlation_matrix(
+                    session, job, params, bms_run_id=str(run.id)
+                )
             elif run.analysis_type == JOB_AA_COMPOSITION_ANALYSIS:
                 result_payload, summary_payload, inline_payload = await _compute_job_aa_composition(session, job, params)
             elif run.analysis_type == JOB_CDR_LOGO_PACK_ANALYSIS:
                 result_payload, summary_payload, inline_payload = await _compute_job_cdr_logo_pack(session, job, params)
             else:
                 raise ValueError(f"Unsupported job analysis type: {run.analysis_type}")
+        elif run.subject_kind == "selection":
+            if run.analysis_type == SELECTION_METRIC_SUMMARY_ANALYSIS:
+                result_payload, summary_payload, inline_payload, stats_run = await _compute_selection_metric_summary(
+                    session, str(run.subject_id), params, bms_run_id=str(run.id)
+                )
+            elif run.analysis_type == SELECTION_BATCH_SUMMARY_ANALYSIS:
+                result_payload, summary_payload, inline_payload, stats_run = await _compute_selection_batch_summary(
+                    session, str(run.subject_id), params, bms_run_id=str(run.id)
+                )
+            else:
+                raise ValueError(f"Unsupported selection analysis type: {run.analysis_type}")
         else:
             raise ValueError(f"Unsupported subject kind: {run.subject_kind}")
 
@@ -1259,6 +1347,39 @@ async def _run_analysis(run_id: str) -> int:
         run.artifact_manifest = manifest
         await session.commit()
     return 0
+
+
+async def execute_analysis_run_in_session(session, run_id: str) -> int:
+    from services.stats_toolkit_client import (
+        STATS_TOOLKIT_UNAVAILABLE_REASON,
+        StatsToolkitUnavailableError,
+    )
+
+    try:
+        return await _run_analysis_with_session(session, run_id)
+    except StatsToolkitUnavailableError as exc:
+        result = await session.execute(select(AnalysisRun).where(AnalysisRun.id == run_id))
+        run = result.scalar_one_or_none()
+        if run is not None:
+            run.status = "failed"
+            run.error_message = STATS_TOOLKIT_UNAVAILABLE_REASON
+            run.summary_json = {
+                "reason": STATS_TOOLKIT_UNAVAILABLE_REASON,
+                "detail": str(exc)[:1000],
+            }
+            run.completed_at = datetime.utcnow()
+            await session.commit()
+        return 1
+    except Exception:
+        message = traceback.format_exc()
+        result = await session.execute(select(AnalysisRun).where(AnalysisRun.id == run_id))
+        run = result.scalar_one_or_none()
+        if run is not None:
+            run.status = "failed"
+            run.error_message = message[:4000]
+            run.completed_at = datetime.utcnow()
+            await session.commit()
+        return 1
 
 
 async def _async_main(run_id: str) -> int:

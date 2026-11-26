@@ -8,7 +8,9 @@ export interface NativeResults {
     scope: Record<string, unknown>;
     read_identity: string; verification: string; points: ScientificPoint[]; ids: string[] | null;
     cohorts: Record<string, {count: number; metric_descriptors: Record<string, MetricDescriptor>}>;
-    summaries: Record<string, ScientificCohort['metrics']>;
+    summaries?: Record<string, ScientificCohort['metrics']>;
+    selection_signature?: string;
+    summary_run?: { run_id: string; status: string; stats_run?: Record<string, unknown> | null } | null;
 }
 export function parseNativeResults(value: unknown): NativeResults {
     const row = object(value);
@@ -28,15 +30,18 @@ export function parseNativeResults(value: unknown): NativeResults {
         requireThat(key.startsWith('v1:')); const cohort = object(raw); count(cohort.count);
         for (const [metric, d] of Object.entries(object(cohort.metric_descriptors))) descriptor(d, metric);
     }
-    for (const [key, raw] of Object.entries(object(row.summaries))) {
-        requireThat(key in cohorts);
-        for (const [metric, value] of Object.entries(object(raw))) {
-            const summary = object(value);
-            ['observed_count', 'unavailable_count', 'invalid_count'].forEach(k => count(summary[k]));
-            descriptor(summary.descriptor, metric);
-            if (summary.statistics !== null) Object.values(object(summary.statistics)).forEach(finite);
+    if (row.summaries !== undefined && row.summaries !== null) {
+        for (const [key, raw] of Object.entries(object(row.summaries))) {
+            requireThat(key in cohorts);
+            for (const [metric, value] of Object.entries(object(raw))) {
+                const summary = object(value);
+                ['observed_count', 'unavailable_count', 'invalid_count'].forEach(k => count(summary[k]));
+                descriptor(summary.descriptor, metric);
+                if (summary.statistics !== null) Object.values(object(summary.statistics)).forEach(finite);
+            }
         }
     }
+    if (row.selection_signature !== undefined) text(row.selection_signature);
     return value as NativeResults;
 }
 
@@ -51,7 +56,7 @@ export interface ScientificPoint {
 }
 export interface ScientificCohort {
     cohort_key:string; design_ids:string[];
-    metrics:Record<string,{observed_count:number; unavailable_count:number; invalid_count:number; descriptor:MetricDescriptor; statistics:Record<'min'|'max'|'avg'|'median'|'std_dev',number>|null; reason_code:string|null}>;
+    metrics:Record<string,{observed_count:number; unavailable_count:number; invalid_count:number; descriptor:MetricDescriptor; statistics:({min:number;max:number;avg:number;median:number;std_dev:number|null;q1?:number|null;q3?:number|null;iqr?:number|null;histogram_bins?:number[]|null;histogram_counts?:number[]|null})|null; reason_code:string|null}>;
     pairs:Record<string,{x_metric:string;y_metric:string;pair_count:number;excluded_count:number;excluded_ids:string[];points:{id:string;x:number;y:number}[];correlation:MetricState}>;
 }
 const allowed=new Set(['confidence_score','protein_iptm','complex_iplddt','complex_pde','complex_ipde','structure_confidence','design_ptm','affinity_probability','filter_rmsd','complex_plddt','plddt','gpde','ranking_score','plddt_mean','iptm','plddt_overall','plddt_binder','pae_overall','pae_interaction','rmsd_overall','rmsd_binder','ptm','conf_score','rog','mpnn_score','fampnn_psce','ligand_iptm','affinity_score','binder_probability','frustration_pct_high','maturation_interface_score','maturation_rmsd','maturation_delta_interface','maturation_selected_interface_score','maturation_selected_rmsd','maturation_nonselected_rmsd','ppiflow_objective_score','ppiflow_primary_loop_rmsd']);
@@ -114,8 +119,8 @@ export function parseScientificCohorts(value:unknown):ScientificCohort[] {
         for(const [key,value] of Object.entries(metrics)) {
             const m=object(value);keys(m,['observed_count','unavailable_count','invalid_count','descriptor','statistics','reason_code']);
             count(m.observed_count);count(m.unavailable_count);count(m.invalid_count);requireThat(m.observed_count+m.unavailable_count+m.invalid_count===ids.size);descriptor(m.descriptor,key);
-            if(m.observed_count===0){requireThat(m.statistics===null);text(m.reason_code);}
-            else{const s=object(m.statistics);keys(s,['min','max','avg','median','std_dev']);Object.values(s).forEach(finite);requireThat(m.reason_code===null);requireThat((s.min as number)<=(s.avg as number)&&(s.avg as number)<=(s.max as number)&&(s.min as number)<=(s.median as number)&&(s.median as number)<=(s.max as number)&&(s.std_dev as number)>=0);}
+            if(m.statistics===null){text(m.reason_code);}
+            else{requireThat(m.observed_count>0);const s=object(m.statistics);['min','max','avg','median'].forEach(k=>finite(s[k]));if(s.std_dev!==null&&s.std_dev!==undefined){finite(s.std_dev);requireThat((s.std_dev as number)>=0);}requireThat(m.reason_code===null);requireThat((s.min as number)<=(s.avg as number)&&(s.avg as number)<=(s.max as number)&&(s.min as number)<=(s.median as number)&&(s.median as number)<=(s.max as number));}
         }
         for(const [key,value] of Object.entries(object(row.pairs))) {
             const p=object(value);keys(p,['x_metric','y_metric','pair_count','excluded_count','excluded_ids','points','correlation']);text(p.x_metric);text(p.y_metric);

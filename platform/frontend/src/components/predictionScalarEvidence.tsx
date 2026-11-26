@@ -68,7 +68,7 @@ export function NativeScalarControls({query, result, onChange, jobLabel}: {
         onChange({...activeQuery, minimum: min, maximum: max});
     };
     const style = 'min-w-0 max-w-full rounded border border-[var(--border-color)] bg-[var(--bg-primary)] text-[var(--text-primary)] px-2 py-1 text-sm';
-    const summary = result?.summaries[cohortKey]?.[metricKey];
+    const summary = result?.summaries?.[cohortKey]?.[metricKey];
     const displayValue = (value: number) => (value * scale).toFixed(metricKey.includes('plddt') ? 2 : 4);
     const displayUnit = metricKey.includes('plddt') ? '0–100' : descriptor?.unit;
     return <div className="space-y-2 text-xs">

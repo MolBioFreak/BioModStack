@@ -1,3 +1,5 @@
+import type { Data } from 'plotly.js';
+
 export interface CohortRow {
     id: string;
     label: string;
@@ -12,7 +14,7 @@ export function secondaryStructureComposition(row: CohortRow | undefined): numbe
     const values = ['coil_percent', 'helix_percent', 'strand_percent'].map(key => row.values[key]);
     if (!values.every(value => isFiniteMetric(value) && value >= 0 && value <= 1)) return null;
     const fractions = values as number[];
-    const total = fractions.reduce((sum, value) => sum + value, 0);
+    const total = fractions.reduce((acc, value) => acc + value, 0);
     return Math.abs(total - 1) <= 0.02 ? fractions : null;
 }
 
@@ -27,6 +29,26 @@ export function numericMetricKeys(rows: CohortRow[]): string[] {
     return metricKeys(rows).filter(key => numeric.has(key));
 }
 
+export interface MetricObservationCounts {
+    observed: number;
+    missing: number;
+    nulls: number;
+    nonNumeric: number;
+}
+
+/** Non-statistical presence tally for display alongside stored Stats Toolkit summaries. */
+export function countMetricObservations(rows: CohortRow[], key: string): MetricObservationCounts {
+    const counts: MetricObservationCounts = { observed: 0, missing: 0, nulls: 0, nonNumeric: 0 };
+    for (const row of rows) {
+        const value = Object.prototype.hasOwnProperty.call(row.values, key) ? row.values[key] : undefined;
+        if (value === undefined) counts.missing++;
+        else if (value === null) counts.nulls++;
+        else if (isFiniteMetric(value)) counts.observed++;
+        else counts.nonNumeric++;
+    }
+    return counts;
+}
+
 export interface MetricSummary {
     observed: number;
     missing: number;
@@ -39,85 +61,111 @@ export interface MetricSummary {
     q1: number | null;
     q3: number | null;
     stdDev: number | null;
+    histogramBins?: number[];
+    histogramCounts?: number[];
 }
 
-function sum(values: number[]): number {
-    let total = 0, correction = 0;
-    for (const value of values) {
-        const adjusted = value - correction;
-        const next = total + adjusted;
-        correction = (next - total) - adjusted;
-        total = next;
+export interface StoredToolkitColumn {
+    count?: number | null;
+    min?: number | null;
+    max?: number | null;
+    mean?: number | null;
+    avg?: number | null;
+    median?: number | null;
+    q1?: number | null;
+    q3?: number | null;
+    std?: number | null;
+    std_dev?: number | null;
+    histogram?: { edges?: number[]; counts?: number[] } | null;
+    histogram_bins?: number[] | null;
+    histogram_counts?: number[] | null;
+}
+
+/** Adapt a stored Stats Toolkit descriptive column or MetricDistribution without local math. */
+export function storedMetricSummary(
+    stored: StoredToolkitColumn | null | undefined,
+    rows: CohortRow[],
+    key: string,
+): MetricSummary {
+    const counts = countMetricObservations(rows, key);
+    if (!stored) {
+        return {
+            ...counts,
+            min: null,
+            max: null,
+            mean: null,
+            median: null,
+            q1: null,
+            q3: null,
+            stdDev: null,
+        };
     }
-    return total;
+    const num = (value: unknown): number | null => (isFiniteMetric(value) ? value : null);
+    const bins = Array.isArray(stored.histogram_bins)
+        ? stored.histogram_bins.filter(isFiniteMetric)
+        : Array.isArray(stored.histogram?.edges)
+            ? stored.histogram.edges.filter(isFiniteMetric)
+            : undefined;
+    const histCounts = Array.isArray(stored.histogram_counts)
+        ? stored.histogram_counts.filter(isFiniteMetric)
+        : Array.isArray(stored.histogram?.counts)
+            ? stored.histogram.counts.filter(isFiniteMetric)
+            : undefined;
+    return {
+        ...counts,
+        observed: typeof stored.count === 'number' && Number.isFinite(stored.count) ? stored.count : counts.observed,
+        min: num(stored.min),
+        max: num(stored.max),
+        mean: num(stored.mean ?? stored.avg),
+        median: num(stored.median),
+        q1: num(stored.q1),
+        q3: num(stored.q3),
+        stdDev: num(stored.std ?? stored.std_dev),
+        histogramBins: bins,
+        histogramCounts: histCounts,
+    };
 }
 
-/** Center before scaling to retain small variation around large offsets. */
-function normalized(values: number[]) {
-    let anchor = values[0];
-    let shifted = values.map(value => value - anchor);
-    if (shifted.some(value => !Number.isFinite(value))) {
-        anchor = 0;
-        shifted = values;
+/** Render a Plotly bar trace directly from stored Stats Toolkit histogram edges and counts. */
+export function histogramTraceFromStored(
+    bins: number[] | undefined,
+    counts: number[] | undefined,
+    options: { label: string; color: string; lineColor: string; opacity?: number; hoverUnit?: string },
+): Data[] {
+    if (!bins || !counts || counts.length === 0 || bins.length < counts.length + 1) {
+        return [];
     }
-    const scale = shifted.reduce((largest, value) => Math.max(largest, Math.abs(value)), 0) || 1;
-    const scaled = shifted.map(value => value / scale);
-    const center = sum(scaled) / values.length;
-    return { anchor, scale, center, deviations: scaled.map(value => value - center) };
-}
-
-/** Type-7 quantiles: linearly interpolate at (n - 1) * p. */
-function quantile(sorted: number[], p: number): number {
-    const index = (sorted.length - 1) * p;
-    const low = Math.floor(index), fraction = index - low;
-    if (!fraction) return sorted[low];
-    return sorted[low] * (1 - fraction) + sorted[low + 1] * fraction;
-}
-
-export function summarizeMetric(rows: CohortRow[], key: string): MetricSummary {
-    const result: MetricSummary = { observed: 0, missing: 0, nulls: 0, nonNumeric: 0,
-        min: null, max: null, mean: null, median: null, q1: null, q3: null, stdDev: null };
-    const values: number[] = [];
-    for (const row of rows) {
-        const value = Object.prototype.hasOwnProperty.call(row.values, key) ? row.values[key] : undefined;
-        if (value === undefined) result.missing++;
-        else if (value === null) result.nulls++;
-        else if (isFiniteMetric(value)) values.push(value);
-        else result.nonNumeric++;
+    const centers: number[] = [];
+    const widths: number[] = [];
+    const ranges: string[] = [];
+    for (let i = 0; i < counts.length; i += 1) {
+        const lo = bins[i];
+        const hi = bins[i + 1];
+        centers.push((lo + hi) / 2);
+        const span = hi - lo;
+        widths.push(span > 0 ? span : 1);
+        ranges.push(`${formatMetric(lo)} – ${formatMetric(hi)}`);
     }
-    result.observed = values.length;
-    if (!values.length) return result;
-    const sorted = [...values].sort((a, b) => a - b);
-    const { anchor, scale, center, deviations } = normalized(values);
-    const mean = anchor + center * scale;
-    const sd = values.length > 1 ? Math.sqrt(sum(deviations.map(value => value * value)) / (values.length - 1)) * scale : null;
-    return { ...result, min: sorted[0], max: sorted[sorted.length - 1],
-        mean: Number.isFinite(mean) ? mean : null,
-        median: quantile(sorted, 0.5), q1: quantile(sorted, 0.25), q3: quantile(sorted, 0.75),
-        stdDev: sd !== null && Number.isFinite(sd) ? sd : null };
+    const countLabel = options.hoverUnit ?? 'Records';
+    return [{
+        type: 'bar',
+        x: centers,
+        y: counts,
+        width: widths,
+        customdata: ranges,
+        marker: {
+            color: options.color,
+            line: { color: options.lineColor, width: 1 },
+            ...(options.opacity !== undefined ? { opacity: options.opacity } : {}),
+        },
+        hovertemplate: `${options.label}: %{customdata}<br>${countLabel}: %{y}<extra></extra>`,
+    } as Data];
 }
 
 export interface CorrelationSummary {
     pairs: number;
     r: number | null;
-    reason: 'insufficient pairs' | 'constant metric' | 'numerical range' | null;
-}
-
-/** Pairwise complete finite observations; no imputation, p-values, or verdict. */
-export function correlateMetrics(rows: CohortRow[], xKey: string, yKey: string): CorrelationSummary {
-    const xs: number[] = [], ys: number[] = [];
-    for (const row of rows) {
-        const x = row.values[xKey], y = row.values[yKey];
-        if (isFiniteMetric(x) && isFiniteMetric(y)) { xs.push(x); ys.push(y); }
-    }
-    const pairs = xs.length;
-    if (pairs < 3) return { pairs, r: null, reason: 'insufficient pairs' };
-    const dx = normalized(xs).deviations, dy = normalized(ys).deviations;
-    const xx = sum(dx.map(value => value * value)), yy = sum(dy.map(value => value * value));
-    if (xx === 0 || yy === 0) return { pairs, r: null, reason: 'constant metric' };
-    const r = sum(dx.map((value, index) => value * dy[index])) / Math.sqrt(xx) / Math.sqrt(yy);
-    return Number.isFinite(r) ? { pairs, r: Math.max(-1, Math.min(1, r)), reason: null }
-        : { pairs, r: null, reason: 'numerical range' };
+    reason: string | null;
 }
 
 const LABELS: Record<string, string> = {

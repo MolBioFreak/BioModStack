@@ -442,8 +442,8 @@ async def _job_design_scope_rows(
 
 
 async def correlation_scientific_scope(designs, session):
-    """One canonical read path for cached computation and source-bound keys."""
-    from services.scientific_analytics import owning_jobs, partition, persisted_projection
+    """One canonical read path for cached computation and source-bound keys (no stats math)."""
+    from services.scientific_analytics import cohort_structure, owning_jobs, partition_rows, persisted_projection, serialize_cohort_metadata
     from services.core_protein_scientific_contract import revision_for_job
     owners = await owning_jobs(session, designs)
     projections, sources = {}, []
@@ -459,8 +459,14 @@ async def correlation_scientific_scope(designs, session):
             "projection": {key: ({k: v.model_dump(mode="json") if hasattr(v, "model_dump") else v
                 for k, v in item.items()} if isinstance(item, dict) else item)
                 for key, item in value.items()}})
-    legacy, cohorts = await partition(designs, owners, session, projections=projections)
-    return legacy, [cohort.model_dump(mode="json") for cohort in cohorts], sources
+    legacy, grouped = await partition_rows(designs, owners, session, projections=projections)
+    cohorts = []
+    for key, rows in sorted(grouped.items()):
+        meta = serialize_cohort_metadata(key, rows, include_pairs=True)
+        struct = cohort_structure(rows, include_pairs=False)
+        meta["columns"] = struct["columns"]
+        cohorts.append(meta)
+    return legacy, cohorts, sources
 
 
 _JOB_METRIC_SUMMARY_FIELDS = (

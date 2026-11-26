@@ -8,7 +8,10 @@ const control = 'rounded border border-[var(--border-color)] bg-[var(--bg-primar
 
 /** Adapt canonical observations to the existing dashboard and Plotly Lab. Never
  * merge producer cohorts or reinterpret native values through Design aliases. */
-export function ScientificAnalytics({ points, cohorts, jobId }: { points: ScientificPoint[]; cohorts: ScientificCohort[]; jobId?: string }) {
+export function ScientificAnalytics({ points, cohorts, jobId, statsRunId, statsStatus, statsReason, statsStale }: {
+    points: ScientificPoint[]; cohorts: ScientificCohort[]; jobId?: string;
+    statsRunId?: string | null; statsStatus?: string | null; statsReason?: string | null; statsStale?: boolean;
+}) {
     const groups = useMemo(() => {
         const grouped = new Map<string, ScientificPoint[]>();
         for (const point of points) {
@@ -20,12 +23,17 @@ export function ScientificAnalytics({ points, cohorts, jobId }: { points: Scient
     }, [points]);
     return <section aria-label="Scientific result analytics" className="min-w-0 space-y-4 text-[var(--text-primary)]">
         {groups.map(([key, rows], index) => <ScientificCohortCharts key={JSON.stringify([jobId, key])} retentionKey={`bms:chart-state:v1:${JSON.stringify([jobId ?? rows[0]?.source_job_id, key])}`} points={rows}
+            jobId={jobId} cohortKey={key}
             cohort={cohorts.find(cohort => cohort.cohort_key === key)}
+            statsRunId={statsRunId} statsStatus={statsStatus} statsReason={statsReason} statsStale={statsStale}
             title={groups.length > 1 ? `Recorded measurements · cohort ${index + 1}` : 'Recorded measurements'} />)}
     </section>;
 }
 
-function ScientificCohortCharts({ points, cohort, title, retentionKey }: { points: ScientificPoint[]; cohort?: ScientificCohort; title: string; retentionKey: string }) {
+function ScientificCohortCharts({ points, cohort, cohortKey, jobId, title, retentionKey, statsRunId, statsStatus, statsReason, statsStale }: {
+    points: ScientificPoint[]; cohort?: ScientificCohort; cohortKey: string; jobId?: string; title: string; retentionKey: string;
+    statsRunId?: string | null; statsStatus?: string | null; statsReason?: string | null; statsStale?: boolean;
+}) {
     const [saved] = useState<Record<string, unknown>>(() => {
         try {
             const value = JSON.parse(sessionStorage.getItem(`${retentionKey}:inspection`) ?? '{}');
@@ -66,6 +74,8 @@ function ScientificCohortCharts({ points, cohort, title, retentionKey }: { point
         </header>
         {incomplete > 0 && <p role="status" className={`${panel} text-sm`}>{incomplete} of {points.length} records have unavailable measurements. Charts use observed values only; missing values are not zero.</p>}
         <CohortAnalytics retentionKey={retentionKey} rows={rows} selectedIds={selectedIds} activeId={activeId}
+            jobId={jobId} cohortKey={cohortKey} storedCohort={cohort}
+            statsRunId={statsRunId} statsStatus={statsStatus} statsReason={statsReason} statsStale={statsStale}
             onInspect={id => { setActiveId(id); setShowDetails(true); }} onSelect={ids => setSelectedIds(previous => [...new Set([...previous, ...ids])])}
             mode="analytics" getMetricLabel={label} inspectionHint="click a point to inspect its recorded measurements"
             initialMetrics={pair ? { x: pair.x_metric, y: pair.y_metric, distribution: pair.x_metric } : undefined} />

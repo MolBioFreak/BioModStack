@@ -72,7 +72,10 @@ async def test_charts_native_scalars_and_sources_without_spatial_reads(tmp_path,
                 assert point['metric_sources'] == result['metric_sources']
                 assert point['publication_state'] is None
                 cohort = body['scientific_cohorts'][0]
-                assert cohort['metrics']['plddt']['statistics']['avg'] == .5
+                assert body['stats_status'] == 'not_computed'
+                assert cohort['metrics']['plddt']['observed_count'] == 1
+                assert cohort['metrics']['plddt']['statistics'] is None
+                assert cohort['metrics']['plddt']['reason_code'] == 'not_computed'
                 assert cohort['pairs']['plddt_vs_ptm']['pair_count'] == 1
                 response = await client.get('/api/analytics/job/job/designs')
                 assert response.status_code == 200, response.text

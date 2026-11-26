@@ -23,6 +23,17 @@ async def test_scalar_routes_match_full_hydration(tmp_path, monkeypatch, native)
     count = 8 if native else 128
     if native:
         publication(tmp_path, count=count)
+    from database import AnalysisRun
+    from sqlalchemy import delete
+    from test_stats_centralization_plumbing import _FakeToolkitServer
+    from services.stats_toolkit_client import StatsToolkitClient, clear_workspace_cache
+    import httpx
+    clear_workspace_cache()
+    fake_tk = _FakeToolkitServer()
+    tk_client = StatsToolkitClient(base_url='http://stats.test', transport=httpx.MockTransport(fake_tk.handler))
+    monkeypatch.setattr('services.stats_toolkit_client.get_stats_toolkit_client', lambda **_: tk_client)
+    monkeypatch.setattr('paths.get_analysis_cache_dir', lambda: tmp_path / 'analysis_cache')
+    monkeypatch.setattr('services.analysis_runs.get_analysis_cache_dir', lambda: tmp_path / 'analysis_cache')
     factory, engine = await setup(tmp_path)
     narrow = analytics._scalar_design_query
     statements = []
@@ -61,10 +72,24 @@ async def test_scalar_routes_match_full_hydration(tmp_path, monkeypatch, native)
             for method, path, body in routes:
                 expected = None
                 results = {}
+                def _normalize_wire(payload):
+                    if not isinstance(payload, dict):
+                        return payload
+                    cleaned = dict(payload)
+                    cleaned.pop('run_id', None)
+                    if isinstance(cleaned.get('stats_run'), dict):
+                        sr = dict(cleaned['stats_run'])
+                        sr.pop('run_id', None)
+                        cleaned['stats_run'] = sr
+                    return cleaned
                 for label, query in [('full', lambda: select(Design)), ('narrow', narrow)]:
+                    async with factory() as clear_session:
+                        await clear_session.execute(delete(AnalysisRun))
+                        await clear_session.commit()
                     monkeypatch.setattr(analytics, '_scalar_design_query', query)
                     samples = []
                     queries = []
+                    label_run_ids = []
                     for _ in range(3):
                         statements.clear()
                         started = time.perf_counter()
@@ -72,9 +97,14 @@ async def test_scalar_routes_match_full_hydration(tmp_path, monkeypatch, native)
                         samples.append((time.perf_counter() - started) * 1000)
                         assert response.status_code == 200, response.text
                         queries.append(len(statements))
+                        payload = response.json()
+                        if isinstance(payload, dict) and payload.get('run_id'):
+                            label_run_ids.append(payload['run_id'])
                         if expected is None:
-                            expected = response.json()
-                        assert response.json() == expected
+                            expected = payload
+                        assert _normalize_wire(payload) == _normalize_wire(expected)
+                    if label_run_ids:
+                        assert len(set(label_run_ids)) == 1
                     results[label] = {'milliseconds': samples, 'median_ms': statistics.median(samples),
                                       'queries': queries, 'payload_bytes': len(response.content)}
                 assert results['full']['queries'] == results['narrow']['queries']

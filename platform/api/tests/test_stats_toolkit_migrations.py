@@ -11,8 +11,7 @@ from typing import Any
 import httpx
 import pytest
 
-from routers.analytics import CorrelationMatrix, pearson_r
-from services.analysis_subprocess import _compute_correlation_matrix_via_stats_toolkit
+from routers.analytics import CorrelationMatrix
 from services.conformational_mapping.analysis import _rank_stability
 from services.md.results import _compute_replica_convergence_diagnostics
 from services.scientific_analytics import MetricDescriptor, metric_state, summarize
@@ -40,70 +39,24 @@ def test_stats_toolkit_required_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     assert stats_toolkit_required() is False
 
 
-def test_job_correlation_matrix_delegates_complete_cases_in_one_rpc(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, dict[str, Any]]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content.decode())
-        calls.append((request.url.path, body))
-        return httpx.Response(
-            200,
-            json={
-                "result": {
-                    "keys": ["plddt", "ptm"],
-                    "method": "pearson",
-                    "p_adjust_method": "benjamini_hochberg",
-                    "correlation_matrix": [[1.0, 0.98765], [0.98765, 1.0]],
-                    "p_value_matrix": [[0.0, 0.0016], [0.0016, 0.0]],
-                    "adjusted_p_value_matrix": [[0.0, 0.0016], [0.0016, 0.0]],
-                    "pairs": [
-                        {
-                            "var_a": "plddt",
-                            "var_b": "ptm",
-                            "statistic": 0.98765,
-                            "p_value": 0.0016,
-                            "adjusted_p_value": 0.0016,
-                            "ci_low": 0.85,
-                            "ci_high": 0.999,
-                            "significant": True,
-                        }
-                    ],
-                    "method_version": "1.0.0",
-                }
-            },
-        )
-
-    monkeypatch.setattr("services.stats_toolkit_client.get_stats_toolkit_client", lambda **_: _mock_client(handler))
-    designs = [
-        SimpleNamespace(plddt=float(70 + i * 5), ptm=float(0.6 + i * 0.08), metrics=None)
-        for i in range(5)
-    ]
-    delegated = _compute_correlation_matrix_via_stats_toolkit(designs, ["plddt", "ptm"])
-    assert delegated is not None
-    assert len(calls) == 1
-    assert calls[0][0] == "/api/v1/tools/inference.correlation_matrix/execute"
-    assert delegated["matrix"] == [[1.0, 0.9877], [0.9877, 1.0]]
-    assert delegated["sample_sizes"] == [[5, 5], [5, 5]]
-    assert delegated["stats_backend"] == "stats_toolkit"
-    assert delegated["p_value_matrix"][0][1] == pytest.approx(0.0016)
-    assert delegated["adjusted_p_value_matrix"][0][1] == pytest.approx(0.0016)
-
-    # Verify CorrelationMatrix Pydantic model accepts both enriched and legacy payloads
+def test_correlation_matrix_model_accepts_enriched_and_legacy_payloads() -> None:
     enriched_model = CorrelationMatrix.model_validate({
         "job_id": "job-1",
         "metrics": ["plddt", "ptm"],
-        "matrix": delegated["matrix"],
-        "sample_sizes": delegated["sample_sizes"],
-        "p_value_matrix": delegated["p_value_matrix"],
-        "adjusted_p_value_matrix": delegated["adjusted_p_value_matrix"],
-        "pairs": delegated["pairs"],
-        "method": delegated["method"],
-        "p_adjust_method": delegated["p_adjust_method"],
-        "stats_backend": delegated["stats_backend"],
-        "stats_tool_id": delegated["stats_tool_id"],
-        "stats_method_version": delegated["stats_method_version"],
+        "matrix": [[1.0, 0.9877], [0.9877, 1.0]],
+        "sample_sizes": [[5, 5], [5, 5]],
+        "p_value_matrix": [[0.0, 0.0016], [0.0016, 0.0]],
+        "adjusted_p_value_matrix": [[0.0, 0.0016], [0.0016, 0.0]],
+        "pairs": [{"var_a": "plddt", "var_b": "ptm", "statistic": 0.98765}],
+        "method": "pearson",
+        "p_adjust_method": "benjamini_hochberg",
+        "stats_backend": "stats_toolkit",
+        "stats_tool_id": "inference.correlation_matrix",
+        "stats_method_version": "1.0.0",
+        "stats_run": {"run_id": "run-1", "workspace_id": "ws-1", "tool_id": "inference.correlation_matrix"},
     })
     assert enriched_model.stats_backend == "stats_toolkit"
+    assert enriched_model.stats_run["run_id"] == "run-1"
     legacy_model = CorrelationMatrix.model_validate({
         "job_id": "job-legacy",
         "metrics": ["plddt", "ptm"],
@@ -112,85 +65,15 @@ def test_job_correlation_matrix_delegates_complete_cases_in_one_rpc(monkeypatch:
     })
     assert legacy_model.p_value_matrix is None
 
-
-def test_job_correlation_matrix_partial_missingness_runs_bh_fdr(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request.url.path)
-        if request.url.path.endswith("inference.correlation_matrix/execute"):
-            body = json.loads(request.content.decode())
-            cols = list(body["columns"].keys())
-            return httpx.Response(
-                200,
-                json={
-                    "result": {
-                        "pairs": [{
-                            "var_a": cols[0], "var_b": cols[1],
-                            "statistic": 0.85, "p_value": 0.02,
-                            "ci_low": 0.2, "ci_high": 0.98,
-                        }],
-                        "method_version": "1.0.0",
-                    }
-                },
-            )
-        if request.url.path.endswith("inference.adjust_p_values/execute"):
-            body = json.loads(request.content.decode())
-            return httpx.Response(
-                200,
-                json={"result": {"adjusted_p_values": [min(1.0, p * 1.5) for p in body["p_values"]]}},
-            )
-        return httpx.Response(404)
-
-    monkeypatch.setattr("services.stats_toolkit_client.get_stats_toolkit_client", lambda **_: _mock_client(handler))
-    designs = [
-        SimpleNamespace(plddt=70.0, ptm=0.60, iptm=0.50, metrics=None),
-        SimpleNamespace(plddt=75.0, ptm=0.65, iptm=0.55, metrics=None),
-        SimpleNamespace(plddt=80.0, ptm=0.70, iptm=0.60, metrics=None),
-        SimpleNamespace(plddt=85.0, ptm=0.75, iptm=None, metrics=None),
-        SimpleNamespace(plddt=90.0, ptm=None, iptm=0.70, metrics=None),
-    ]
-    delegated = _compute_correlation_matrix_via_stats_toolkit(designs, ["plddt", "ptm", "iptm"])
-    assert delegated is not None
-    assert calls.count("/api/v1/tools/inference.correlation_matrix/execute") == 3
-    assert calls.count("/api/v1/tools/inference.adjust_p_values/execute") == 1
-    assert delegated["adjusted_p_value_matrix"][0][1] == pytest.approx(0.03)
-
-
-def test_job_correlation_matrix_required_flag_forbids_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    def failing(_request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("refused")
-
-    monkeypatch.setattr("services.stats_toolkit_client.get_stats_toolkit_client", lambda **_: _mock_client(failing))
-    designs = [
-        SimpleNamespace(plddt=float(70 + i), ptm=float(0.6 + i * 0.05), metrics=None)
-        for i in range(5)
-    ]
-    monkeypatch.delenv("BMS_STATS_TOOLKIT_REQUIRED", raising=False)
-    assert _compute_correlation_matrix_via_stats_toolkit(designs, ["plddt", "ptm"]) is None
-
-    monkeypatch.setenv("BMS_STATS_TOOLKIT_REQUIRED", "1")
-    with pytest.raises(StatsToolkitUnavailableError):
-        _compute_correlation_matrix_via_stats_toolkit(designs, ["plddt", "ptm"])
-
-
-def test_pearson_r_delegates_to_stats_toolkit(monkeypatch: pytest.MonkeyPatch) -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={"result": {"pairs": [{"var_a": "x", "var_b": "y", "statistic": 0.9123}]}},
-        )
-
-    monkeypatch.setattr("services.stats_toolkit_client.get_stats_toolkit_client", lambda **_: _mock_client(handler))
-    assert pearson_r([1.0, 2.0, 3.0, 4.0], [2.0, 4.0, 5.0, 8.0]) == pytest.approx(0.9123)
-
-
 def test_scientific_analytics_summarize_delegates_correlations(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content.decode())
-        calls.append(body)
+        calls.append((request.url.path, body))
+        if request.url.path.endswith("descriptive.summary/execute"):
+            cols = {k: {"count": len(v), "min": min(v), "max": max(v), "mean": sum(v) / len(v), "median": sorted(v)[len(v) // 2], "std": 1.0} for k, v in body.get("columns", {}).items()}
+            return httpx.Response(200, json={"result": {"columns": cols}})
         return httpx.Response(
             200,
             json={
@@ -248,7 +131,7 @@ def test_scientific_analytics_summarize_delegates_correlations(monkeypatch: pyte
         for i in range(1, 5)
     ]
     summary = summarize(rows)
-    assert len(calls) == 1
+    assert any(p.endswith("inference.correlation_matrix/execute") for p, _ in calls)
     assert summary["pairs"]["a_vs_b"]["correlation"].value == pytest.approx(0.99)
     assert summary["pairs"]["a_vs_c"]["correlation"].state == "unavailable"
     assert summary["pairs"]["a_vs_c"]["correlation"].reason_code == "constant_metric"

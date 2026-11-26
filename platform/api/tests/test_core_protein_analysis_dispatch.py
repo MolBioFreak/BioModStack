@@ -87,6 +87,13 @@ async def test_ipsae_real_dispatch(tmp_path, monkeypatch, damage):
 async def test_correlation_real_dispatch_isolates_contracts(tmp_path, monkeypatch, mixed, missing):
     publication(tmp_path, count=2, native_scalars=[
         {'ptm': 0.0, 'complex_plddt': 0.0}, {'ptm': 0.8, 'complex_plddt': 0.4}])
+    from test_stats_centralization_plumbing import _FakeToolkitServer
+    from services.stats_toolkit_client import StatsToolkitClient, clear_workspace_cache
+    import httpx
+    clear_workspace_cache()
+    fake_tk = _FakeToolkitServer()
+    tk_client = StatsToolkitClient(base_url='http://stats.test', transport=httpx.MockTransport(fake_tk.handler))
+    monkeypatch.setattr('services.stats_toolkit_client.get_stats_toolkit_client', lambda **_: tk_client)
     factory, engine = await setup(tmp_path)
     cache(monkeypatch, tmp_path, factory)
     try:

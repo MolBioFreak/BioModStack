@@ -1,10 +1,11 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
 import { useQueries } from '@tanstack/react-query';
-import { fetchJobById } from '../lib/api';
+import { fetchJobAnalysis, fetchJobById, triggerJobAnalysis } from '../lib/api';
 import { useThemeColors } from './useThemeColors';
 import type { NativeCandidateSource } from '../lib/binderContinuation';
 import { hasNativeComparison, nativeComparisonKey, nativeComparisonLabel, nativeComparisonMetric, nativeComparisonOutcome, nativeComparisonSelection, nativeComparisonValues, readNativeComparison, type NativeComparisonSet } from '../lib/nativeBinderComparison';
-import { formatMetric, summarizeMetric, type CohortRow } from '../lib/cohortAnalytics';
+import { formatMetric, storedMetricSummary, type CohortRow, type StoredToolkitColumn } from '../lib/cohortAnalytics';
+import { StatsPanelControls, type SummaryRecomputeOptions } from './StatsPanelControls';
 import type { NativeGenerationRecord } from '../lib/nativeBinderResults';
 const CohortPlot = lazy(() => import('./CohortAnalytics').then(module => ({ default: module.CohortPlot })));
 
@@ -40,11 +41,37 @@ export function NativeBinderComparison({ jobIds, selectedDesignIds, selectedNati
     const choices = [...metrics.entries()].sort(([, a], [, b]) => (a.metric === 'i_pTM' ? -1 : b.metric === 'i_pTM' ? 1 : a.label.localeCompare(b.label)));
     const metricId = metrics.has(chosenMetric) ? chosenMetric : choices[0]?.[0] ?? '';
     const definition = metrics.get(metricId);
+    const summaryQueries = useQueries({
+        queries: nativeJobs.map(job => ({
+            queryKey: ['job-analysis', job.id, 'job_metric_summary'],
+            queryFn: () => fetchJobAnalysis<{ columns?: Record<string, StoredToolkitColumn>; metrics?: Record<string, StoredToolkitColumn> }>(job.id, 'job_metric_summary', { include_children: true }).then(res => res.data),
+            retry: false,
+            staleTime: 30_000,
+        })),
+    });
+    const summaryByJobId = new Map(nativeJobs.map((job, idx) => [job.id, summaryQueries[idx]]));
+    const [recomputing, setRecomputing] = useState(false);
+    const recomputeAll = async (options: SummaryRecomputeOptions) => {
+        setRecomputing(true);
+        try {
+            await Promise.all(nativeJobs.map(job => triggerJobAnalysis(job.id, 'job_metric_summary', { include_children: true, ...options }, true)));
+            await Promise.all(summaryQueries.map(q => q.refetch()));
+        } finally {
+            setRecomputing(false);
+        }
+    };
+    const firstRun = summaryQueries.map(q => q.data).find(Boolean);
+    const anyStale = summaryQueries.some(q => q.data?.stale);
+    const anyUnavailable = summaryQueries.some(q => q.isError || q.data?.status === 'unavailable' || q.data?.reason === 'stats_toolkit_unavailable');
     const groups = sourceRows.flatMap(({ set, records }) => {
         const matching = definition ? records.filter(row => nativeComparisonMetric(set, row, definition.metric).key === metricId) : [];
         if (!matching.length) return [];
         const cohort: CohortRow[] = matching.map(row => ({ id: nativeComparisonKey(set.job.id, row, set.records.indexOf(row)), label: nativeComparisonLabel(row, set.records.indexOf(row)), values: nativeComparisonValues(row) }));
-        return [{ set, records: matching, cohort, stats: summarizeMetric(cohort, definition!.metric) }];
+        const runData = summaryByJobId.get(set.job.id)?.data;
+        const cols = runData?.result?.columns;
+        const metricKey = definition!.metric;
+        const stored = cols?.[metricKey] ?? runData?.result?.metrics?.[metricKey] ?? (cols ? Object.entries(cols).find(([colKey]) => colKey.endsWith(`::${metricKey}`))?.[1] : undefined);
+        return [{ set, records: matching, cohort, stats: storedMetricSummary(stored, cohort, metricKey) }];
     });
     const selected = selectedDesignIds !== undefined || selectedNativeSources !== undefined;
     const allLoaded = sets.reduce((count, set) => count + set.records.length, 0);
@@ -80,7 +107,9 @@ export function NativeBinderComparison({ jobIds, selectedDesignIds, selectedNati
     if (!nativeJobs.length) return jobs.some(query => query.isError) ? <p role="status">Some comparison sources could not be read.</p> : null;
     return <section aria-label="Native candidate comparison" className="space-y-3 text-[var(--text-primary)]">
         <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-semibold">{selected ? 'Selected candidates' : 'Candidate populations'}</h3>
-            <div className="flex gap-2"><button type="button" className={control} onClick={() => queries.forEach(query => void query.refetch())}>Refresh</button><button type="button" className={control} onClick={download}>Export native data</button></div></div>
+            <div className="flex flex-wrap items-center gap-2">
+                <StatsPanelControls kind="summary" statsRunId={firstRun?.stats_run?.run_id} stale={anyStale} status={anyUnavailable ? 'unavailable' : firstRun?.status} reason={anyUnavailable ? 'stats_toolkit_unavailable' : firstRun?.reason} onRecompute={nativeJobs.length ? (opts) => void recomputeAll(opts) : undefined} isRecomputing={recomputing} />
+                <button type="button" className={control} onClick={() => queries.forEach(query => void query.refetch())}>Refresh</button><button type="button" className={control} onClick={download}>Export native data</button></div></div>
         {queries.some(query => query.isPending) && <p role="status">Loading native records…</p>}
         {sets.some(set => !set.complete) && <p role="status" className="text-sm text-[var(--warning)]">Partial comparison: {allLoaded} of {total} declared records loaded. Available rows remain usable.</p>}
         {sets.filter(set => set.error).map(set => <p key={set.job.id} className="text-sm" role="status">{set.job.name}: {set.error}</p>)}
@@ -88,7 +117,7 @@ export function NativeBinderComparison({ jobIds, selectedDesignIds, selectedNati
             <label className="text-sm">Population<select aria-label="Comparison population" className={`${control} ml-2`} value={population} onChange={event => setPopulation(event.target.value)}><option value="all">All outcomes</option><option value="passed">Passed</option><option value="rejected">Rejected</option></select></label>
             {!!choices.length && <label className="min-w-0 text-sm">Measurement<select aria-label="Native comparison measurement" className={`${control} ml-2 max-w-full`} value={metricId} onChange={event => setChosenMetric(event.target.value)}>{choices.map(([key, item]) => <option key={key} value={key}>{item.label} · {item.model}{choices.filter(([, other]) => other.label === item.label).length > 1 ? ` · ${sets.filter(set => item.jobs.has(set.job.id)).map(set => set.job.name).join(' / ')}` : ''}</option>)}</select></label>}
         </div>
-        <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr><th className="p-2">Source</th><th>Compared</th><th>Median</th><th>Range</th><th>Not reported</th></tr></thead><tbody>{groups.map(group => <tr key={group.set.job.id} className="border-t border-[var(--border-primary)]"><td className="p-2">{group.set.job.name}<span className="block text-xs text-[var(--text-secondary)]">{group.set.job.model_id} · {group.set.records.length} native records</span></td><td>{group.records.length}</td><td>{formatMetric(group.stats.median)}</td><td>{formatMetric(group.stats.min)} – {formatMetric(group.stats.max)}</td><td title={`Missing ${group.stats.missing}; null ${group.stats.nulls}; nonnumeric ${group.stats.nonNumeric}`}>{group.stats.missing + group.stats.nulls + group.stats.nonNumeric}</td></tr>)}</tbody></table></div>
+        <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr><th className="p-2">Source</th><th>Compared</th><th>Median</th><th>Range</th><th>Not reported</th></tr></thead><tbody>{groups.map(group => <tr key={group.set.job.id} className="border-t border-[var(--border-primary)]"><td className="p-2">{group.set.job.name}<span className="block text-xs text-[var(--text-secondary)]">{group.set.job.model_id} · {group.set.records.length} native records</span></td><td>{group.records.length}</td><td>{group.stats.median === null ? '—' : formatMetric(group.stats.median)}</td><td>{group.stats.min === null || group.stats.max === null ? '—' : `${formatMetric(group.stats.min)} – ${formatMetric(group.stats.max)}`}</td><td title={`Missing ${group.stats.missing}; null ${group.stats.nulls}; nonnumeric ${group.stats.nonNumeric}`}>{group.stats.missing + group.stats.nulls + group.stats.nonNumeric}</td></tr>)}</tbody></table></div>
         {!!groups.length && definition ? <Suspense fallback={<p>Loading comparison chart…</p>}><CohortPlot label="Native candidate measurement comparison" height={320}
             data={groups.map(group => ({ type: 'scatter', mode: 'markers', name: group.set.job.name,
                 x: group.cohort.map(row => row.label), y: group.cohort.map(row => finite(row.values[definition.metric]) ? row.values[definition.metric] as number : null),

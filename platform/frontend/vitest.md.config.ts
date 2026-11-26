@@ -137,6 +137,7 @@ export default defineConfig({
             './tests/vitest/maturationEvidenceMounted.test.tsx',
             ...(process.env.BMS_TEST_BOLTZ_WIRE ? ['./tests/vitest/publishedBoltzPaeMounted.test.tsx', './tests/vitest/publishedBoltzNativeMounted.test.tsx'] : []),
             './tests/vitest/truthfulAnalyticsMounted.test.tsx',
+            './tests/vitest/statsCentralizationMounted.test.tsx',
             './tests/vitest/scientificPairMatrixMounted.test.tsx',
             './tests/vitest/structurePredictionResultsMounted.test.tsx',
             './tests/vitest/nativeAtomViewerMounted.test.tsx',

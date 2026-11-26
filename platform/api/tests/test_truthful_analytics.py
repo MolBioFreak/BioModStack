@@ -20,7 +20,25 @@ def projected(id, x, y):
         records=[record('complex_plddt',x),record('ptm',y)]))
 
 
-def test_distributions_and_pair_denominators_are_candidate_bound():
+def test_distributions_and_pair_denominators_are_candidate_bound(monkeypatch):
+    import json, httpx
+    from services.stats_toolkit_client import StatsToolkitClient
+    # Without Toolkit, no local fallback computes statistics
+    unavail=scientific.summarize([projected('a',0,0.2),projected('b',0.8,None),projected('c',None,0.4)])
+    assert unavail['metrics']['complex_plddt']['statistics'] is None
+    assert unavail['metrics']['complex_plddt']['reason_code']=='stats_toolkit_unavailable'
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode())
+        cols = {}
+        for k, vals in body.get('columns', {}).items():
+            n = len(vals)
+            s = sorted(vals)
+            mean = sum(vals) / n
+            sd = (sum((x - mean) ** 2 for x in vals) / (n - 1)) ** 0.5 if n > 1 else None
+            cols[k] = {'count': n, 'min': s[0], 'max': s[-1], 'mean': mean, 'median': s[n // 2], 'std': sd, 'q1': s[0], 'q3': s[-1], 'iqr': s[-1] - s[0]}
+        return httpx.Response(200, json={'result': {'columns': cols}})
+    client = StatsToolkitClient(base_url='http://stats.test', transport=httpx.MockTransport(handler))
+    monkeypatch.setattr('services.stats_toolkit_client.get_stats_toolkit_client', lambda **_: client)
     result=scientific.summarize([projected('a',0,0.2),projected('b',0.8,None),projected('c',None,0.4)])
     assert result['metrics']['complex_plddt']['observed_count']==2
     assert result['metrics']['complex_plddt']['unavailable_count']==1
