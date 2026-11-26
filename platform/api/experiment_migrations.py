@@ -67,7 +67,9 @@ MIGRATION_V26_VERSION = 26
 MIGRATION_V26_NAME = "retire_ngs_domain_connector_tables"
 MIGRATION_V27_VERSION = 27
 MIGRATION_V27_NAME = "retire_run_control_and_resource_admission_tables"
-LATEST_MIGRATION_VERSION = MIGRATION_V27_VERSION
+MIGRATION_V28_VERSION = 28
+MIGRATION_V28_NAME = "retire_attempt_log_tables"
+LATEST_MIGRATION_VERSION = MIGRATION_V28_VERSION
 MIGRATION_V2_CHECKSUM = "db24d1ef056e560f10eb2fe9f8ef4dac0d4e4dbe90fd0a49efed88f0d111935c"
 MIGRATION_V3_CHECKSUM = "46f1a1d28a02334e87d628070e2bd9c6d78e158caa23d583951fdc582e7b11d2"
 MIGRATION_V4_CHECKSUM = "ec2966efee9129f8890019bee0d569de2cdf8d2a9fc4bb2e05138839880f375b"
@@ -77,8 +79,8 @@ MIGRATION_V7_CHECKSUM = "828bcc8e2b8cde1e131ec2f1ced9193ed001e1dfcb2b607e499a6a9
 MIGRATION_V8_CHECKSUM = "bf11980a720aad2b0f62fcbea055a3d2e1181b1b41449cc62c0455b70b9c92dc"
 MIGRATION_V9_CHECKSUM = "469240fb73fb6d7be9bf80412ccfd52cc81d14e91bf6bedb8881ffeb1c9b7bd0"
 MIGRATION_V10_CHECKSUM = "b36656f82945b839e573990255ecedbeb902608d2b329df0ebb0ce85dbea73e8"
-FINAL_SCHEMA_MANIFEST_CHECKSUM = "53959a558aa10198b3af475820275bce4d966fbcf43043d0138098aa918dfe3a"
-LEGACY_FINAL_SCHEMA_MANIFEST_CHECKSUM = "88dc6501b92d0119b5e4bdca9df48275834e51a669c472e716c8a8adfbde5ceb"
+FINAL_SCHEMA_MANIFEST_CHECKSUM = "fee43f31b20ef1a2c9594cbeafbde44309d271cda0d3b0006fe0f5ba34495e2f"
+LEGACY_FINAL_SCHEMA_MANIFEST_CHECKSUM = "448df52ed95af71e04e1c56b526e8fa5ac1ff0a2a0469a2b11b35761704fc581"
 
 MIGRATION_SQL = r'''
 CREATE TABLE IF NOT EXISTS resources (
@@ -2746,6 +2748,15 @@ DROP TABLE IF EXISTS resource_admission_policy;
 """.strip()
 MIGRATION_V27_CHECKSUM = hashlib.sha256(MIGRATION_V27_SQL.encode("utf-8")).hexdigest()
 
+MIGRATION_V28_SQL = """
+DROP TRIGGER IF EXISTS trg_experiment_log_chunk_immutable_update;
+DROP TRIGGER IF EXISTS trg_experiment_log_chunk_immutable_delete;
+DROP TABLE IF EXISTS log_chunks;
+DROP TABLE IF EXISTS log_streams;
+DELETE FROM resources WHERE kind = 'log_stream';
+""".strip()
+MIGRATION_V28_CHECKSUM = hashlib.sha256(MIGRATION_V28_SQL.encode("utf-8")).hexdigest()
+
 _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_resource_owner_same_workspace_insert",
     "trg_experiment_resource_owner_same_workspace_update",
@@ -2759,8 +2770,6 @@ _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_lineage_owns_no_cycle",
     "trg_experiment_audit_immutable_update",
     "trg_experiment_audit_immutable_delete",
-    "trg_experiment_log_chunk_immutable_update",
-    "trg_experiment_log_chunk_immutable_delete",
     "trg_experiment_artifact_identity_immutable_update",
     "trg_experiment_outbox_payload_immutable",
     "trg_experiment_validation_immutable_update",
@@ -2932,8 +2941,6 @@ _REQUIRED_SCHEMA_COLUMNS: dict[str, set[str]] = {
     "artifact_blobs": {"sha256", "size_bytes", "media_type", "storage_key", "state", "verified_at", "created_at"},
     "artifacts": {"resource_id", "blob_sha256", "logical_role", "logical_key", "schema_name", "schema_version", "provenance_json", "created_at"},
     "validations": {"resource_id", "subject_resource_id", "validator_name", "validator_version", "outcome", "input_graph_sha256", "receipt_json", "receipt_sha256", "created_at"},
-    "log_streams": {"resource_id", "attempt_id", "stream_name", "state", "created_at", "closed_at"},
-    "log_chunks": {"stream_id", "sequence_number", "content_sha256", "artifact_blob_sha256", "content_text", "created_at"},
     "audit_events": {"id", "workspace_id", "resource_id", "event_type", "generation", "payload_json", "created_at"},
     "research_records": {"resource_id", "workspace_id", "subject_resource_id", "record_kind", "body", "author", "source_receipt_ids_json", "supersedes_record_id", "created_at"},
     "domain_adapter_receipts": {"resource_id", "workspace_id", "domain_experiment_id", "adapter_id", "adapter_version", "operation_kind", "normalized_request_sha256", "receipt_json", "created_at"},
@@ -2986,10 +2993,11 @@ def _accepted_migration_ledgers() -> tuple[list[tuple[int, str, str]], ...]:
     v25 = (MIGRATION_V25_VERSION, MIGRATION_V25_NAME, MIGRATION_V25_CHECKSUM)
     v26 = (MIGRATION_V26_VERSION, MIGRATION_V26_NAME, MIGRATION_V26_CHECKSUM)
     v27 = (MIGRATION_V27_VERSION, MIGRATION_V27_NAME, MIGRATION_V27_CHECKSUM)
+    v28 = (MIGRATION_V28_VERSION, MIGRATION_V28_NAME, MIGRATION_V28_CHECKSUM)
     v1 = (LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM)
     return (
-        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27],
-        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27],
+        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28],
+        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28],
     )
 
 
@@ -3179,6 +3187,7 @@ def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dic
         _apply_v25_remove_hash_udfs_upgrade(expected)
         _apply_v26_retire_connector_upgrade(expected)
         _apply_v27_retire_run_control_and_admissions_upgrade(expected)
+        _apply_v28_retire_attempt_log_tables_upgrade(expected)
         manifest = _schema_definition_manifest(expected)
         if legacy_lineage:
             for table_name, definition in _LEGACY_FINAL_TABLE_SQL.items():
@@ -4270,6 +4279,28 @@ def _apply_v27_retire_run_control_and_admissions_upgrade(connection: sqlite3.Con
         connection.execute("PRAGMA foreign_keys = ON")
 
 
+def _apply_v28_retire_attempt_log_tables_upgrade(connection: sqlite3.Connection) -> None:
+    """Drop retired log_streams and log_chunks tables and log_stream resources."""
+    connection.execute("PRAGMA foreign_keys = OFF")
+    try:
+        script = (
+            "BEGIN IMMEDIATE;\n"
+            + MIGRATION_V28_SQL
+            + "\nINSERT INTO experiment_schema_migrations("
+            + "version, name, checksum, description, applied_at) VALUES ("
+            + f"{MIGRATION_V28_VERSION}, '{MIGRATION_V28_NAME}', '{MIGRATION_V28_CHECKSUM}', "
+            + f"'Retire attempt log_streams and log_chunks tables', '{datetime.now(timezone.utc).isoformat()}');\n"
+            + "COMMIT;\n"
+        )
+        connection.executescript(script)
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        connection.execute("PRAGMA foreign_keys = ON")
+
+
 def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
     """Migrate and attest; schema-only reopen still fully audits actual upgrades."""
     _verify_frozen_migration_sources()
@@ -4506,7 +4537,7 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-6] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-7] for ledger in _accepted_migration_ledgers()):
             _apply_additive_migration(
                 connection, MIGRATION_V22_VERSION, MIGRATION_V22_NAME,
                 MIGRATION_V22_CHECKSUM, "Native model workflow setup routes", MIGRATION_V22_SQL,
@@ -4515,7 +4546,7 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-5] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-6] for ledger in _accepted_migration_ledgers()):
             _apply_additive_migration(
                 connection, MIGRATION_V23_VERSION, MIGRATION_V23_NAME,
                 MIGRATION_V23_CHECKSUM, "Family MSA workflow setup routes", MIGRATION_V23_SQL,
@@ -4524,7 +4555,7 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-4] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-5] for ledger in _accepted_migration_ledgers()):
             _apply_additive_migration(
                 connection, MIGRATION_V24_VERSION, MIGRATION_V24_NAME, MIGRATION_V24_CHECKSUM,
                 "Keep submitted Project setups editable", MIGRATION_V24_SQL,
@@ -4533,20 +4564,26 @@ def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-3] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-4] for ledger in _accepted_migration_ledgers()):
             _apply_v25_remove_hash_udfs_upgrade(connection)
 
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-2] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-3] for ledger in _accepted_migration_ledgers()):
             _apply_v26_retire_connector_upgrade(connection)
 
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
-        if rows in tuple(ledger[:-1] for ledger in _accepted_migration_ledgers()):
+        if rows in tuple(ledger[:-2] for ledger in _accepted_migration_ledgers()):
             _apply_v27_retire_run_control_and_admissions_upgrade(connection)
+            rows = connection.execute(
+                "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+            ).fetchall()
+
+        if rows in tuple(ledger[:-1] for ledger in _accepted_migration_ledgers()):
+            _apply_v28_retire_attempt_log_tables_upgrade(connection)
             rows = connection.execute(
                 "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
             ).fetchall()

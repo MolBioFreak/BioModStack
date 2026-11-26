@@ -23,8 +23,6 @@ from experiment_models import (
     ExperimentDomainAdapterReceipt,
     ExperimentExternalEntityReceipt,
     ExperimentLineageEdge,
-    ExperimentLogChunk,
-    ExperimentLogStream,
     ExperimentRevision,
     ExperimentRunAttempt,
     ExperimentRunGroup,
@@ -1282,86 +1280,6 @@ async def attempt_detail(project_id: str, experiment_id: str, domain_id: str, at
         raise _error(exc) from exc
 
 
-@router.get(D + "/attempts/{attempt_id}/logs")
-async def attempt_logs(
-    project_id: str,
-    experiment_id: str,
-    domain_id: str,
-    attempt_id: str,
-    cursor: str | None = Query(default=None, max_length=1024),
-    limit: int = Query(default=50, ge=1, le=100),
-    session: AsyncSession = Depends(get_experiment_session),
-) -> dict[str, Any]:
-    try:
-        await _dataset_domain_kind(session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id)
-        await _attempt_in_domain(
-            session,
-            project_id=project_id,
-            domain_id=domain_id,
-            attempt_id=attempt_id,
-        )
-        scope = f"attempt-logs:{project_id}:{domain_id}:{attempt_id}"
-        anchor = decode_cursor(cursor, scope=scope, limit=limit)
-        statement = (
-            select(ExperimentLogChunk, ExperimentLogStream)
-            .join(ExperimentLogStream, ExperimentLogStream.resource_id == ExperimentLogChunk.stream_id)
-            .where(ExperimentLogStream.attempt_id == attempt_id)
-            .order_by(
-                ExperimentLogChunk.created_at.desc(),
-                ExperimentLogChunk.stream_id.desc(),
-                ExperimentLogChunk.sequence_number.desc(),
-            )
-            .limit(limit + 1)
-        )
-        if anchor:
-            stable_stream, separator, stable_sequence = anchor[1].rpartition(":")
-            if not separator or not stable_sequence.isdigit():
-                raise ValidationFailure("cursor stable identity is invalid")
-            sequence = int(stable_sequence)
-            statement = statement.where(
-                or_(
-                    ExperimentLogChunk.created_at < anchor[0],
-                    (ExperimentLogChunk.created_at == anchor[0])
-                    & or_(
-                        ExperimentLogChunk.stream_id < stable_stream,
-                        (ExperimentLogChunk.stream_id == stable_stream)
-                        & (ExperimentLogChunk.sequence_number < sequence),
-                    ),
-                )
-            )
-        rows = list((await session.execute(statement)).all())
-        page = rows[:limit]
-        next_cursor = None
-        if len(rows) > limit and page:
-            final_chunk = page[-1][0]
-            next_cursor = encode_cursor(
-                scope=scope,
-                created_at=final_chunk.created_at,
-                stable_id=f"{final_chunk.stream_id}:{final_chunk.sequence_number}",
-                limit=limit,
-            )
-        return _bounded_response(
-            {
-                "schema": "bms.attempt-log-page.v1",
-                "attempt_id": attempt_id,
-                "items": [
-                    {
-                        "stream_id": chunk.stream_id,
-                        "stream_name": stream.stream_name,
-                        "sequence": chunk.sequence_number,
-                        "content": chunk.content_text,
-                        "content_sha256": chunk.content_sha256,
-                        "stream_state": stream.state,
-                        "created_at": chunk.created_at,
-                    }
-                    for chunk, stream in page
-                ],
-                "next_cursor": next_cursor,
-                "has_more": next_cursor is not None,
-            },
-        )
-    except ExperimentServiceError as exc:
-        raise _error(exc) from exc
 
 
 @router.get(D + "/attempts/{attempt_id}/validations")

@@ -71,7 +71,7 @@ def test_r17_and_r35_schema_migrations_drop_retired_tables(tmp_path):
 
     ec = sqlite3.connect(exp_db)
     try:
-        assert ec.execute("SELECT MAX(version) FROM experiment_schema_migrations").fetchone()[0] == 27
+        assert ec.execute("SELECT MAX(version) FROM experiment_schema_migrations").fetchone()[0] == 28
         exp_tables = {row[0] for row in ec.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         for retired in (
             "domain_connector_commands",
@@ -81,6 +81,8 @@ def test_r17_and_r35_schema_migrations_drop_retired_tables(tmp_path):
             "run_control_commands",
             "resource_admissions",
             "resource_admission_policy",
+            "log_streams",
+            "log_chunks",
         ):
             assert retired not in exp_tables
         assert em.attest_schema(ec)["ok"] is True

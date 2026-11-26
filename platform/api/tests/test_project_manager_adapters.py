@@ -21,7 +21,6 @@ from experiment_models import (
 )
 from experiment_services import RevisionConflict, create_domain_experiment, create_global_experiment, create_project
 from services.global_experiments.adapters import AdapterError, NgsReferenceSetAdapter
-from services.global_experiments.read_models import build_project_manager_read_model
 from services.global_experiments.receipts import attach_verified_entity
 from services.global_experiments.result_surfaces import result_surface_for_receipt
 import services.global_experiments.adapters as adapter_module

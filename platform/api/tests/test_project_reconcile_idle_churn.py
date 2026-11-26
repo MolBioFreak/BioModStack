@@ -83,52 +83,8 @@ async def test_unchanged_running_job_appends_no_events_across_sweeps(
     assert await _live_events(setup_store) == 1
 
 
-@pytest.mark.asyncio
-async def test_terminal_projection_lands_when_status_log_is_at_cap(
-        native_http, setup_store, native_core_store, monkeypatch):
-    from database import Job
-    from experiment_models import ExperimentRunAttempt
-    from services import ngs_molbio_n5
-
-    project_id, group_id, attempt_id, job_id = await _running_bc2(native_http, setup_store, native_core_store)
-    assert (await _reconcile(setup_store, native_core_store, project_id, group_id))[0] == 'running'
-    # The open status stream now holds exactly as many chunks as the cap.
-    monkeypatch.setattr(ngs_molbio_n5, '_ATTEMPT_LOG_CHUNK_LIMIT', 1)
-    async with native_core_store() as core:
-        job = await core.get(Job, job_id)
-        job.status = job.queue_status = 'failed'
-        job.completed_at = datetime.now(timezone.utc)
-        job.error_message = 'Inert terminal fixture'
-        await core.commit()
-    state, generation = await _reconcile(setup_store, native_core_store, project_id, group_id)
-    assert state == 'failed'
-    async with setup_store() as session:
-        attempt = await session.get(ExperimentRunAttempt, attempt_id)
-        assert attempt.state == 'failed' and attempt.terminal_receipt_json
-    # Terminal and idle afterwards: further sweeps change nothing.
-    assert await _reconcile(setup_store, native_core_store, project_id, group_id) == (state, generation)
 
 
-@pytest.mark.asyncio
-async def test_cap_still_refuses_open_chunks_but_accepts_the_closing_one(
-        native_http, setup_store, native_core_store, monkeypatch):
-    from services import ngs_molbio_n5
-
-    project_id, group_id, attempt_id, _job = await _running_bc2(native_http, setup_store, native_core_store)
-    async with setup_store() as session:
-        await ngs_molbio_n5.append_attempt_log_chunk(
-            session, attempt_id=attempt_id, stream_name='status', content='{"open":1}')
-        await session.commit()
-    monkeypatch.setattr(ngs_molbio_n5, '_ATTEMPT_LOG_CHUNK_LIMIT', 1)
-    async with setup_store() as session:
-        with pytest.raises(ngs_molbio_n5.ValidationFailure, match='chunk limit'):
-            await ngs_molbio_n5.append_attempt_log_chunk(
-                session, attempt_id=attempt_id, stream_name='status', content='{"open":2}')
-    async with setup_store() as session:
-        chunk = await ngs_molbio_n5.append_attempt_log_chunk(
-            session, attempt_id=attempt_id, stream_name='status', content='{"final":true}', close=True)
-        assert chunk.sequence_number == 1
-        await session.commit()
 
 
 def test_late_output_check_is_bounded_and_reacts_to_new_provenance():

@@ -80,7 +80,6 @@ from services.global_experiments.launch_contexts import (
     validate_bound_job,
     workflow_pinned_gpu,
 )
-from services.global_experiments.read_models import build_project_manager_read_model
 from services.global_experiments.workflow_setups import (
     create_workflow_setup,
     delete_workflow_setup,
@@ -2601,57 +2600,6 @@ async def reopen_domain_result(project_id: str, experiment_id: str, domain_id: s
         raise _service_error(exc) from exc
 
 
-@router.get("/api/projects/{project_id}/summary")
-async def project_manager_summary(
-    project_id: str,
-    focus_id: str | None = Query(default=None),
-    selected_node_key: str | None = Query(default=None),
-    map_cursor: str | None = Query(default=None, max_length=512),
-    run_cursor: str | None = Query(default=None, max_length=512),
-    result_cursor: str | None = Query(default=None, max_length=512),
-    lineage_cursor: str | None = Query(default=None, max_length=512),
-    note_cursor: str | None = Query(default=None, max_length=512),
-    decision_cursor: str | None = Query(default=None, max_length=512),
-    dataset_cursor: str | None = Query(default=None, max_length=512),
-    activity_cursor: str | None = Query(default=None, max_length=512),
-    map_limit: int = Query(default=50, ge=1, le=100),
-    run_limit: int = Query(default=25, ge=1, le=100),
-    result_limit: int = Query(default=25, ge=1, le=100),
-    lineage_limit: int = Query(default=25, ge=1, le=100),
-    note_limit: int = Query(default=25, ge=1, le=100),
-    decision_limit: int = Query(default=25, ge=1, le=100),
-    dataset_limit: int = Query(default=25, ge=1, le=100),
-    activity_limit: int = Query(default=25, ge=1, le=100),
-    collection_families: str | None = Query(default=None, max_length=128),
-    session: AsyncSession = Depends(get_experiment_session),
-) -> dict:
-    try:
-        return await build_project_manager_read_model(
-            session,
-            project_id=project_id,
-            focus_id=focus_id,
-            selected_node_key=selected_node_key,
-            map_cursor=map_cursor,
-            run_cursor=run_cursor,
-            result_cursor=result_cursor,
-            lineage_cursor=lineage_cursor,
-            note_cursor=note_cursor,
-            decision_cursor=decision_cursor,
-            dataset_cursor=dataset_cursor,
-            activity_cursor=activity_cursor,
-            map_limit=map_limit,
-            run_limit=run_limit,
-            result_limit=result_limit,
-            lineage_limit=lineage_limit,
-            note_limit=note_limit,
-            decision_limit=decision_limit,
-            dataset_limit=dataset_limit,
-            activity_limit=activity_limit,
-            collection_families=(collection_families.split(",") if collection_families else [])
-            if collection_families is not None else None,
-        )
-    except ExperimentServiceError as exc:
-        raise _service_error(exc) from exc
 
 
 @router.get("/api/projects/{project_id}/receipts/{receipt_id}/surface")

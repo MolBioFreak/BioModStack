@@ -24,7 +24,6 @@ from molbio_ngs_models import (
     MolBioNGSDomainStateRevision,
     MolBioNGSMemberReceipt,
 )
-from services.ngs_molbio_n5 import append_attempt_log_chunk
 from services.project_hub import (
     get_project_hub_payload,
     get_project_sequences_payload,
@@ -344,37 +343,3 @@ async def test_project_sequences_zero_one_and_multi_domain_dedup(tmp_path: Path)
             await eng.dispose()
 
 
-@pytest.mark.asyncio
-async def test_status_log_chunk_echo_suppression(tmp_path: Path):
-    engines, SExp, _SCore, _SNgs, _SMol = await _make_sessions(tmp_path)
-    try:
-        async with SExp() as s_exp:
-            s_exp.add(ExperimentRunGroup(
-                resource_id="rg-1",
-                workspace_id="p1",
-                launch_idempotency_key="idem-1",
-                request_sha256="1" * 64,
-                state="running",
-                generation=1,
-            ))
-            s_exp.add(ExperimentRunAttempt(
-                resource_id="att-1",
-                workspace_id="p1",
-                workflow_run_id="rg-1",
-                preparation_id="prep-1",
-                attempt_number=1,
-                scheduler_job_id="job-1",
-                state="running",
-            ))
-            await s_exp.commit()
-
-            c1 = await append_attempt_log_chunk(s_exp, attempt_id="att-1", stream_name="status", content="running\n")
-            c2 = await append_attempt_log_chunk(s_exp, attempt_id="att-1", stream_name="status", content="running\n")
-            c3 = await append_attempt_log_chunk(s_exp, attempt_id="att-1", stream_name="status", content="completed\n")
-            c4 = await append_attempt_log_chunk(s_exp, attempt_id="att-1", stream_name="status", content="completed\n")
-            assert c1.sequence_number == c2.sequence_number
-            assert c3.sequence_number == c1.sequence_number + 1
-            assert c4.sequence_number == c3.sequence_number
-    finally:
-        for eng in engines:
-            await eng.dispose()

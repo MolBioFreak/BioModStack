@@ -30,8 +30,6 @@ from experiment_models import (
     ExperimentIdempotencyClaim,
     ExperimentLineageEdge,
     ExperimentLaunchContext,
-    ExperimentLogChunk,
-    ExperimentLogStream,
     ExperimentOperationalReceipt,
     ExperimentResource,
     ExperimentResearchRecord,
@@ -88,8 +86,6 @@ _WORKSPACE_TABLES: tuple[tuple[str, type[Any], str], ...] = (
     ("workflow_revision_edges", ExperimentWorkflowRevisionEdge, "revision"),
     ("artifacts", ExperimentArtifact, "resource"),
     ("validations", ExperimentValidation, "resource"),
-    ("log_streams", ExperimentLogStream, "resource"),
-    ("log_chunks", ExperimentLogChunk, "none"),
     ("audit_events", ExperimentAuditEvent, "workspace"),
     ("research_records", ExperimentResearchRecord, "workspace"),
     ("domain_adapter_receipts", ExperimentDomainAdapterReceipt, "workspace"),
@@ -488,14 +484,6 @@ async def build_workspace_export(session: AsyncSession, workspace_id: str) -> di
     for table_name, model, scope in _WORKSPACE_TABLES:
         rows = await _rows_for_scope(session, model, scope, resource_ids)
         tables[table_name] = sorted(rows, key=_canonical)
-    stream_ids = {row["resource_id"] for row in tables["log_streams"]}
-    if stream_ids:
-        log_chunks = (
-            await session.execute(
-                select(ExperimentLogChunk).where(ExperimentLogChunk.stream_id.in_(stream_ids))
-            )
-        ).scalars().all()
-        tables["log_chunks"] = sorted((_object_row(row) for row in log_chunks), key=_canonical)
     artifact_rows = tables["artifacts"]
     blob_ids = {row["blob_sha256"] for row in artifact_rows}
     if blob_ids:

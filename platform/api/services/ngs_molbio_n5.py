@@ -25,8 +25,6 @@ from experiment_models import (
     ExperimentExternalEntityReceipt,
     ExperimentIdempotencyClaim,
     ExperimentLineageEdge,
-    ExperimentLogChunk,
-    ExperimentLogStream,
     ExperimentOperationalReceipt,
     ExperimentResource,
     ExperimentRevision,
@@ -668,85 +666,8 @@ def _public_operational_value(value: Any) -> Any:
     return value
 
 
-_ATTEMPT_LOG_CHUNK_LIMIT = 10_000
 
 
-async def append_attempt_log_chunk(
-    session: AsyncSession,
-    *,
-    attempt_id: str,
-    stream_name: str,
-    content: str,
-    close: bool = False,
-) -> ExperimentLogChunk:
-    """Append one bounded, redacted, idempotent chunk to an attempt-owned log stream."""
-    attempt = await session.get(ExperimentRunAttempt, attempt_id)
-    if attempt is None:
-        raise NotFound("run attempt not found")
-    normalized_stream = stream_name.strip().lower()
-    if not normalized_stream or len(normalized_stream) > 64 or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", normalized_stream):
-        raise ValidationFailure("invalid attempt log stream name")
-    public_text = str(_public_operational_value(content))
-    encoded = public_text.encode("utf-8")
-    if len(encoded) > 16 * 1024:
-        raise ValidationFailure("attempt log chunk exceeds 16 KiB")
-    content_sha256 = hashlib.sha256(encoded).hexdigest()
-    stream_id = "log-" + hashlib.sha256(f"{attempt_id}\x00{normalized_stream}".encode("utf-8")).hexdigest()
-    stream = await session.get(ExperimentLogStream, stream_id)
-    if stream is None:
-        session.add(
-            ExperimentResource(
-                id=stream_id,
-                kind="log_stream",
-                workspace_id=attempt.workspace_id,
-                lifecycle_owner_id=attempt.resource_id,
-                created_at=now(),
-            )
-        )
-        await session.flush()
-        stream = ExperimentLogStream(
-            resource_id=stream_id,
-            attempt_id=attempt.resource_id,
-            stream_name=normalized_stream,
-            state="open",
-            created_at=now(),
-        )
-        session.add(stream)
-        await session.flush()
-    elif stream.attempt_id != attempt.resource_id or stream.stream_name != normalized_stream:
-        raise ValidationFailure("attempt log stream identity conflict")
-    last = await session.scalar(
-        select(ExperimentLogChunk)
-        .where(ExperimentLogChunk.stream_id == stream_id)
-        .order_by(ExperimentLogChunk.sequence_number.desc())
-        .limit(1)
-    )
-    if last is not None and last.content_sha256 == content_sha256:
-        if close and stream.state != "closed":
-            stream.state = "closed"
-            stream.closed_at = now()
-        return last
-    if stream.state == "closed":
-        raise ValidationFailure("attempt log stream is closed")
-    sequence = (int(last.sequence_number) + 1) if last is not None else 0
-    # The cap bounds open streams. The closing chunk is always accepted: it is
-    # at most one more row, and refusing it left terminal attempts unable to
-    # project, retrying the whole reconcile every sweep.
-    if sequence >= _ATTEMPT_LOG_CHUNK_LIMIT and not close:
-        raise ValidationFailure("attempt log stream chunk limit reached")
-    chunk = ExperimentLogChunk(
-        stream_id=stream_id,
-        sequence_number=sequence,
-        content_sha256=content_sha256,
-        content_text=public_text,
-        created_at=now(),
-    )
-    session.add(chunk)
-    if close:
-        stream.state = "closed"
-        stream.closed_at = now()
-    await session.flush()
-    return chunk
 
 
 async def persist_attempt_validation(
@@ -964,7 +885,7 @@ async def persist_payload_audit_operational_receipt(
 
 
 __all__ = [
-    "DATASET_KINDS", "InvalidLifecycleTransition", "ResourceAdmissionDenied", "ResourceUsageEvidenceUnavailable", "append_attempt_log_chunk", "create_project_dataset", "enabled_dataset_kind_records",
+    "DATASET_KINDS", "InvalidLifecycleTransition", "ResourceAdmissionDenied", "ResourceUsageEvidenceUnavailable", "create_project_dataset", "enabled_dataset_kind_records",
     "decode_cursor", "encode_cursor", "operational_receipt", "operational_status",
     "persist_payload_audit_operational_receipt",
     "persist_attempt_validation", "release_attempt_admissions", "require_dataset_read",

@@ -263,7 +263,6 @@ export default defineConfig({
             './tests/vitest/conformationalMappingRepairsMounted.test.tsx',
             './tests/vitest/projectManagerApi.test.ts',
             './tests/vitest/molecularProjectExport.test.tsx',
-            './tests/vitest/projectNavigationRepair.test.tsx',
             './tests/vitest/projectReturnBanner.test.tsx',
             './tests/vitest/projectWorkflowSetup.test.tsx',
             './tests/vitest/projectNativeOwnersMounted.test.tsx',

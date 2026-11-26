@@ -12,7 +12,7 @@ from experiment_models import ExperimentArtifact, ExperimentExternalEntityReceip
 from experiment_services import reconcile_run_group
 from services.family_msa.execution import run_owned_job
 from services.family_msa.publication import retained_path
-from tests.test_project_manager_read_models import read_model_store, _hierarchy, _add_workflow_runs, _add_retry_attempts
+from tests._project_store_helpers import read_model_store, _hierarchy, _add_workflow_runs, _add_retry_attempts
 
 
 @pytest.mark.asyncio

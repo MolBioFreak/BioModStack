@@ -189,6 +189,9 @@ def _validate_return_uri(
     return return_uri
 
 
+_VIRTUAL_FOLDERS = frozenset({"plans", "runs", "datasets", "results", "notes", "activity"})
+
+
 async def _validate_return_selection(
     session: AsyncSession,
     *,
@@ -196,23 +199,182 @@ async def _validate_return_selection(
     global_experiment_id: str,
     selected_node_key: str,
 ) -> None:
-    from services.global_experiments.read_models import build_project_manager_read_model
-
-    summary = await build_project_manager_read_model(
-        session,
-        project_id=project_id,
-        focus_id=global_experiment_id,
-        selected_node_key=selected_node_key,
-        run_limit=1,
-        map_limit=1,
-        collection_families=[],
+    from experiment_models import (
+        ExperimentExternalEntityReceipt,
+        ExperimentLineageEdge,
+        ExperimentResearchRecord,
+        ExperimentRevision,
+        ExperimentWorkflowPreparation,
+        ExperimentWorkflowRun,
     )
-    if summary["selection"]["node_key"] != selected_node_key:
-        raise LaunchContextError(
+
+    def _mismatch() -> LaunchContextError:
+        return LaunchContextError(
             "launch_context_return_uri_mismatch",
             "Return URI selection is not owned by the bound Project context.",
             status_code=409,
         )
+
+    kind, sep, rest = selected_node_key.partition(":")
+    if not sep or not rest:
+        raise _mismatch()
+
+    if kind == "project":
+        if rest != project_id:
+            raise _mismatch()
+        return
+
+    if kind == "global_experiment":
+        head = await session.get(ExperimentAggregateHead, rest)
+        if (
+            head is None
+            or head.aggregate_kind != "experiment"
+            or head.workspace_id != project_id
+            or head.parent_id != project_id
+        ):
+            raise _mismatch()
+        return
+
+    if kind == "domain_experiment":
+        head = await session.get(ExperimentAggregateHead, rest)
+        if (
+            head is None
+            or head.aggregate_kind != "domain_experiment"
+            or head.workspace_id != project_id
+            or head.parent_id != global_experiment_id
+        ):
+            raise _mismatch()
+        return
+
+    if kind == "local_ngs_molbio_project":
+        head = await session.get(ExperimentAggregateHead, rest)
+        if (
+            head is None
+            or head.aggregate_kind != "domain_experiment"
+            or head.workspace_id != project_id
+        ):
+            raise _mismatch()
+        return
+
+    if kind == "virtual_folder":
+        domain_id, vsep, folder = rest.partition(":")
+        if not vsep or folder not in _VIRTUAL_FOLDERS:
+            raise _mismatch()
+        head = await session.get(ExperimentAggregateHead, domain_id)
+        if (
+            head is None
+            or head.aggregate_kind != "domain_experiment"
+            or head.workspace_id != project_id
+            or head.parent_id != global_experiment_id
+        ):
+            raise _mismatch()
+        return
+
+    if kind == "research_record":
+        record = await session.get(ExperimentResearchRecord, rest)
+        if record is None or record.workspace_id != project_id:
+            raise _mismatch()
+        return
+
+    focused_domain_ids = set(
+        (
+            await session.execute(
+                select(ExperimentAggregateHead.aggregate_id).where(
+                    ExperimentAggregateHead.workspace_id == project_id,
+                    ExperimentAggregateHead.aggregate_kind == "domain_experiment",
+                    ExperimentAggregateHead.parent_id == global_experiment_id,
+                )
+            )
+        ).scalars().all()
+    )
+
+    if kind == "workflow":
+        head = await session.get(ExperimentAggregateHead, rest)
+        if (
+            head is None
+            or head.aggregate_kind != "workflow"
+            or head.workspace_id != project_id
+            or head.parent_id not in (focused_domain_ids | {global_experiment_id})
+        ):
+            raise _mismatch()
+        return
+
+    if kind == "workflow_run":
+        workflow_ids = set(
+            (
+                await session.execute(
+                    select(ExperimentAggregateHead.aggregate_id).where(
+                        ExperimentAggregateHead.workspace_id == project_id,
+                        ExperimentAggregateHead.aggregate_kind == "workflow",
+                        ExperimentAggregateHead.parent_id.in_(focused_domain_ids | {global_experiment_id}),
+                    )
+                )
+            ).scalars().all()
+        )
+        if not workflow_ids:
+            raise _mismatch()
+        row = (
+            await session.execute(
+                select(ExperimentWorkflowRun.resource_id)
+                .join(
+                    ExperimentWorkflowPreparation,
+                    ExperimentWorkflowPreparation.resource_id == ExperimentWorkflowRun.preparation_id,
+                )
+                .join(
+                    ExperimentRevision,
+                    ExperimentRevision.resource_id == ExperimentWorkflowPreparation.workflow_revision_id,
+                )
+                .where(
+                    ExperimentWorkflowRun.workspace_id == project_id,
+                    ExperimentWorkflowRun.resource_id == rest,
+                    ExperimentRevision.subject_id.in_(workflow_ids),
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise _mismatch()
+        return
+
+    if kind == "external_entity_receipt":
+        if not focused_domain_ids:
+            raise _mismatch()
+        row = (
+            await session.execute(
+                select(ExperimentExternalEntityReceipt.id)
+                .join(
+                    ExperimentLineageEdge,
+                    ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id,
+                )
+                .where(
+                    ExperimentLineageEdge.workspace_id == project_id,
+                    ExperimentLineageEdge.source_resource_id.in_(focused_domain_ids),
+                    ExperimentExternalEntityReceipt.id == rest,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise _mismatch()
+        return
+
+    if kind == "dataset":
+        dataset_id, dsep, revision_id = rest.partition(":")
+        if not dsep or not revision_id:
+            raise _mismatch()
+        dataset = await session.get(ExperimentAggregateHead, dataset_id)
+        if (
+            dataset is None
+            or dataset.workspace_id != project_id
+            or dataset.aggregate_kind != "dataset"
+            or dataset.parent_id not in focused_domain_ids
+        ):
+            raise _mismatch()
+        revision = await session.get(ExperimentRevision, revision_id)
+        if revision is None or revision.subject_id != dataset.aggregate_id:
+            raise _mismatch()
+        return
+
+    raise _mismatch()
 
 
 async def _validate_hierarchy(

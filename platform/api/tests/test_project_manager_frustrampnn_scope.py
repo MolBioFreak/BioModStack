@@ -29,7 +29,7 @@ from experiment_models import (
 from experiment_services import canonical_json, save_hierarchy_revision
 from routers._projects_domain_ops import router as project_manager_router
 from services.frustrampnn.contracts import canonical_json_bytes
-from tests.test_project_manager_read_models import _hierarchy, read_model_store
+from tests._project_store_helpers import _hierarchy, read_model_store
 
 
 async def _add_receipt(

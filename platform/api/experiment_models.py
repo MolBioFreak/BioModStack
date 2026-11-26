@@ -495,27 +495,8 @@ class ExperimentValidation(ExperimentBase):
     created_at = Column(String(64), nullable=False, default=_timestamp)
 
 
-class ExperimentLogStream(ExperimentBase):
-    __tablename__ = "log_streams"
-    __table_args__ = (UniqueConstraint("attempt_id", "stream_name"),)
-
-    resource_id = Column(String(128), ForeignKey("resources.id"), primary_key=True)
-    attempt_id = Column(String(128), ForeignKey("run_attempts.resource_id"), nullable=False)
-    stream_name = Column(String(255), nullable=False)
-    state = Column(String(32), nullable=False, default="open")
-    created_at = Column(String(64), nullable=False, default=_timestamp)
-    closed_at = Column(String(64), nullable=True)
 
 
-class ExperimentLogChunk(ExperimentBase):
-    __tablename__ = "log_chunks"
-
-    stream_id = Column(String(128), ForeignKey("log_streams.resource_id"), primary_key=True)
-    sequence_number = Column(Integer, primary_key=True)
-    content_sha256 = Column(String(64), nullable=False)
-    artifact_blob_sha256 = Column(String(64), ForeignKey("artifact_blobs.sha256"), nullable=True)
-    content_text = Column(Text, nullable=True)
-    created_at = Column(String(64), nullable=False, default=_timestamp)
 
 
 class ExperimentAuditEvent(ExperimentBase):

@@ -28,7 +28,6 @@ from experiment_models import (
 from experiment_services import RevisionConflict, ValidationFailure, create_project
 from routers._projects_domain_ops import router as project_manager_router
 from services.global_experiments import workflow_setups
-from services.global_experiments.read_models import build_project_manager_read_model
 from services import protein_project_capabilities
 from services.protein_project_capabilities import protein_capability_inventory
 from template_registry import TemplateRegistry
@@ -629,7 +628,7 @@ async def test_resume_is_hydrated_but_create_stays_navigation_bounded(setup_stor
 
 
 @pytest.mark.asyncio
-async def test_task_first_read_model_projects_setup_relationship_and_actions(setup_store) -> None:
+async def test_setup_context_projects_relationship_and_reopen_route(setup_store) -> None:
     async with setup_store() as session:
         project = await _project(session)
         setup = await workflow_setups.create_workflow_setup(
@@ -639,30 +638,17 @@ async def test_task_first_read_model_projects_setup_relationship_and_actions(set
             capability_id="protein.structure_prediction.boltz2",
             idempotency_key="primary-task-read-0001",
         )
-        read_model = await build_project_manager_read_model(session, project_id=project.id)
-        task = next(item for item in read_model["tasks"] if item["setup_context_id"] == setup["setup_context_id"])
+        resumed = await workflow_setups.get_workflow_setup(
+            session, project_id=project.id, setup_context_id=setup["setup_context_id"],
+        )
         setup_row = await session.get(ExperimentWorkflowSetupContext, setup["setup_context_id"])
         assert setup_row is not None
-        assert task == {
-            "setup_context_id": setup["setup_context_id"],
-            "global_experiment_id": setup["global_experiment_id"],
-            "experiment_name": "Familiar experiment",
-            "workflow_id": setup_row.workflow_id,
-            "workflow_name": "Familiar experiment — Boltz-2 structure prediction",
-            "relationship_kind": "primary",
-            "workflow_label": "Boltz-2 structure prediction",
-            "setup_state": "open",
-            "validation_state": "incomplete",
-            "latest_run_state": None,
-            "result_count": 0,
-            "reopen_route": (
-                f"/submit?template=structure_prediction&pred_method=boltz"
-                f"&setup_context_id={setup['setup_context_id'].replace(':', '%3A')}"
-                f"&project_id={project.id}"
-            ),
-            "allowed_actions": ["resume", "edit", "delete"],
-        }
-        assert "tree" in read_model and "map" in read_model and "selection" in read_model
+        assert resumed["setup_context_id"] == setup["setup_context_id"]
+        assert resumed["global_experiment_id"] == setup["global_experiment_id"]
+        assert resumed["relationship_kind"] == "primary"
+        assert resumed["state"] == "open"
+        assert resumed["validation_state"] == "incomplete"
+        assert resumed["setup_destination"] == "/submit?template=structure_prediction&pred_method=boltz"
 
 
 @pytest.mark.asyncio
