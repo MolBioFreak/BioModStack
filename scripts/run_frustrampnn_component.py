@@ -1055,7 +1055,7 @@ def _run_component_v2(
                 (staging / "frustrampnn_statistics_v1.json").write_bytes(
                     statistics_payload
                 )
-            except (OSError, ContractValidationError, rfc8785.CanonicalizationError) as exc:
+            except (OSError, ContractValidationError, rfc8785.CanonicalizationError, RuntimeError) as exc:
                 raise ComponentRunError("manifest_invalid", str(exc)) from exc
 
         try:

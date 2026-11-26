@@ -2,6 +2,7 @@ import type {
     FrustraMpnnResultDetail,
     FrustraMpnnStatistics,
     FrustraMpnnStatisticsAnalysis,
+    FrustraMpnnStatisticsVerification,
 } from '../lib/frustraMpnnApi.js';
 import { FrustraMpnnRequestedEffectiveSummary } from './frustrampnn/FrustraMpnnRequestedEffectiveSummary.js';
 
@@ -25,6 +26,7 @@ export function FrustraMpnnStatisticsAnalysisPanel({
     onRetry: () => void;
 }) {
     const diagnostic = boundedDiagnostic(analysis.diagnostic);
+    const isToolkitUnavailable = analysis.state === 'failed' && analysis.diagnostic === 'stats_toolkit_unavailable';
     return <section aria-label="FrustraMPNN statistics analysis lifecycle" className="rounded-xl border border-violet-500/25 bg-violet-950/10 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -36,13 +38,44 @@ export function FrustraMpnnStatisticsAnalysisPanel({
         {analysis.state === 'queued' && <p role="status" className="mt-3 text-xs text-violet-100">Queued for derived-statistics execution.</p>}
         {analysis.state === 'running' && <p role="status" className="mt-3 text-xs text-violet-100">Derived statistics are running.</p>}
         {analysis.state === 'completed' && <p role="status" className="mt-3 text-xs text-emerald-200">Derived statistics completed.</p>}
-        {analysis.state === 'failed' && <div role="alert" className="mt-3 rounded border border-red-500/30 bg-red-500/5 p-2 text-xs text-red-100">{diagnostic || 'Derived statistics failed without a diagnostic.'}</div>}
+        {analysis.state === 'failed' && <div role="alert" className="mt-3 rounded border border-red-500/30 bg-red-500/5 p-2 text-xs text-red-100" data-stats-unavailable={isToolkitUnavailable ? 'true' : undefined}>{isToolkitUnavailable ? 'Stats unavailable: Stats Toolkit service is unreachable.' : (diagnostic || 'Derived statistics failed without a diagnostic.')}</div>}
     </section>;
 }
 
-export function FrustraMpnnStatisticsSummary({ statistics }: { statistics: FrustraMpnnStatistics }) {
+export function FrustraMpnnStatisticsSummary({
+    statistics,
+    verification,
+}: {
+    statistics: FrustraMpnnStatistics;
+    verification?: FrustraMpnnStatisticsVerification | null;
+}) {
+    const runId = statistics.stats_run?.run_id ?? null;
+    const openHref = runId ? `/stats?run_id=${encodeURIComponent(runId)}` : null;
+    const isNotRechecked = verification?.status === 'not_rechecked' || (!verification && !runId);
     return <section aria-label="Canonical FrustraMPNN statistics" className="rounded-xl border border-sky-500/25 bg-sky-950/10 p-4">
-        <h2 className="font-semibold">Statistics</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-semibold">Statistics</h2>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+                {isNotRechecked && (
+                    <span
+                        role="status"
+                        data-frustra-stats-verification="not_rechecked"
+                        className="rounded border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 font-medium text-amber-200"
+                    >
+                        not rechecked
+                    </span>
+                )}
+                {openHref && (
+                    <a
+                        href={openHref}
+                        data-open-in-stats="true"
+                        className="rounded border border-sky-400/40 bg-sky-500/10 px-2 py-0.5 text-xs text-sky-200 underline hover:bg-sky-500/20"
+                    >
+                        Open in Stats
+                    </a>
+                )}
+            </div>
+        </div>
         <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3 lg:grid-cols-6">
             {([
                 ['Selected residues', statistics.support.selected_residue_count],
@@ -60,9 +93,11 @@ export function FrustraMpnnStatisticsSummary({ statistics }: { statistics: Frust
 export function FrustraMpnnResultAuthoritySurface({
     detail,
     statisticsOverride,
+    statisticsVerification,
 }: {
     detail: FrustraMpnnResultDetail;
     statisticsOverride?: FrustraMpnnStatistics | null;
+    statisticsVerification?: FrustraMpnnStatisticsVerification | null;
 }) {
     const statistics = statisticsOverride ?? null;
     return <>
@@ -73,7 +108,7 @@ export function FrustraMpnnResultAuthoritySurface({
             </div> : <p className="mt-2 text-xs text-amber-100">Effective settings were not recorded for this result.</p>}
         </details>
         {statistics
-            ? <FrustraMpnnStatisticsSummary statistics={statistics} />
+            ? <FrustraMpnnStatisticsSummary statistics={statistics} verification={statisticsVerification} />
             : <section aria-label="Canonical FrustraMPNN statistics" className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-xs text-amber-100"><h2 className="font-semibold">Statistics unavailable</h2><p className="mt-1">Statistics are loaded separately; the saved structure and residue scores remain available.</p></section>}
     </>;
 }

@@ -100,28 +100,77 @@ class _FakeToolkitServer:
             tool_id = body["tool_id"]
             inputs = body["inputs"]
             if tool_id == "descriptive.summary":
+                import math
                 cols_out = {}
-                for col_name, vals in inputs["columns"].items():
-                    n = len(vals)
-                    mean = sum(vals) / n
-                    cols_out[col_name] = {
-                        "count": n,
-                        "missing_count": 0,
-                        "non_finite_count": 0,
-                        "mean": mean,
-                        "median": sorted(vals)[n // 2],
-                        "std": 1.0 if n > 1 else None,
-                        "min": min(vals),
-                        "max": max(vals),
-                        "q1": min(vals),
-                        "q3": max(vals),
-                        "iqr": max(vals) - min(vals),
-                        "histogram": {
-                            "bins": inputs.get("histogram_bins", 10),
-                            "edges": [min(vals), max(vals)],
-                            "counts": [n],
-                        },
-                    }
+                for col_name, raw_vals in inputs["columns"].items():
+                    missing_count = 0
+                    non_finite_count = 0
+                    finite: list[float] = []
+                    for v in raw_vals:
+                        if v is None:
+                            missing_count += 1
+                        else:
+                            fv = float(v)
+                            if math.isfinite(fv):
+                                finite.append(fv)
+                            else:
+                                non_finite_count += 1
+                    finite.sort()
+                    n = len(finite)
+                    if n == 0:
+                        cols_out[col_name] = {
+                            "count": 0,
+                            "missing_count": missing_count,
+                            "non_finite_count": non_finite_count,
+                            "mean": None,
+                            "median": None,
+                            "std": None,
+                            "min": None,
+                            "max": None,
+                            "q1": None,
+                            "q3": None,
+                            "iqr": None,
+                            "histogram": {
+                                "bins": inputs.get("histogram_bins", 10),
+                                "edges": [],
+                                "counts": [],
+                            },
+                        }
+                    else:
+                        mean = sum(finite) / n
+                        sd = (
+                            math.sqrt(sum((x - mean) ** 2 for x in finite) / (n - 1))
+                            if n >= 2
+                            else None
+                        )
+                        def _q7(p: float) -> float:
+                            if n == 1:
+                                return finite[0]
+                            h = (n - 1) * p
+                            lo = math.floor(h)
+                            hi = math.ceil(h)
+                            return finite[lo] + (h - lo) * (finite[hi] - finite[lo])
+                        q1 = _q7(0.25)
+                        med = _q7(0.5)
+                        q3 = _q7(0.75)
+                        cols_out[col_name] = {
+                            "count": n,
+                            "missing_count": missing_count,
+                            "non_finite_count": non_finite_count,
+                            "mean": mean,
+                            "median": med,
+                            "std": sd,
+                            "min": finite[0],
+                            "max": finite[-1],
+                            "q1": q1,
+                            "q3": q3,
+                            "iqr": q3 - q1,
+                            "histogram": {
+                                "bins": inputs.get("histogram_bins", 10),
+                                "edges": [finite[0], finite[-1]],
+                                "counts": [n],
+                            },
+                        }
                 result = {
                     "columns": cols_out,
                     "histogram_bins": inputs.get("histogram_bins", 10),

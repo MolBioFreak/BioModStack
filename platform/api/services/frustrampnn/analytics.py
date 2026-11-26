@@ -20,6 +20,15 @@ from .contracts import (
     canonical_sha256,
     validate_schema,
 )
+from services import stats_toolkit_client as _stats_toolkit_client
+from services.stats_toolkit_client import (
+    STATS_TOOLKIT_UNAVAILABLE_REASON,
+    StatsToolkitClient,
+    StatsToolkitError,
+    StatsToolkitNotFoundError,
+    StatsToolkitUnavailableError,
+    get_stats_toolkit_client,
+)
 from .persistence import landscape_page
 
 AnalyticsLevel = Literal["result", "residue", "mutation"]
@@ -447,25 +456,24 @@ def _fraction_metric(numerator: int, denominator: int, kind: str) -> dict[str, A
     }
 
 
-def statistics_distribution(
-    values: Sequence[int | float], *, denominator_kind: str = "input_values",
-    denominator_count: int | None = None, missingness_reason: str | None = None,
+def _distribution_from_toolkit_column(
+    column: Mapping[str, Any],
+    *,
+    denominator_kind: str = "input_values",
+    denominator_count: int | None = None,
+    missingness_reason: str | None = None,
 ) -> dict[str, Any]:
-    """Type-7 quartiles and sample SD over finite scoreable values.
+    """Format one Stats Toolkit descriptive.summary column into the FrustraMPNN distribution shape.
 
-    ``sample_sd`` is null for n < 2. Every scalar names its arithmetic
-    denominator and records why support is absent or partial.
+    All distribution scalars (mean, median, sample_sd, min, max, q1, q3, iqr)
+    come directly from the Stats Toolkit descriptive.summary run.
     """
-    normalized: list[float] = []
-    for value in values:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ContractValidationError("statistics distribution values must be numeric")
-        number = float(value)
-        if not math.isfinite(number):
-            raise ContractValidationError("statistics distribution values must be finite")
-        normalized.append(number)
-    normalized.sort()
-    count = len(normalized)
+    if not isinstance(column, Mapping):
+        raise ContractValidationError("Stats Toolkit descriptive.summary column must be an object")
+    raw_count = column.get("count")
+    if isinstance(raw_count, bool) or not isinstance(raw_count, int) or raw_count < 0:
+        raise ContractValidationError("Stats Toolkit descriptive.summary count must be a non-negative integer")
+    count = int(raw_count)
     expected_count = count if denominator_count is None else denominator_count
     if expected_count < count:
         raise ContractValidationError("statistics denominator cannot be smaller than value count")
@@ -500,22 +508,26 @@ def statistics_distribution(
             "missingness_reasons": reasons,
         }
 
-    def percentile(p: float) -> float:
-        h = (count - 1) * p
-        lower, upper = math.floor(h), math.ceil(h)
-        return normalized[lower] if lower == upper else normalized[lower] + (
-            h - lower
-        ) * (normalized[upper] - normalized[lower])
+    def _finite_opt(raw: Any, field: str, *, allow_none: bool = False) -> float | None:
+        if raw is None and allow_none:
+            return None
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise ContractValidationError(f"Stats Toolkit descriptive.summary {field} must be numeric")
+        val = float(raw)
+        if not math.isfinite(val):
+            raise ContractValidationError(f"Stats Toolkit descriptive.summary {field} must be finite")
+        return val
 
-    mean = math.fsum(normalized) / count
-    q1, q3 = percentile(0.25), percentile(0.75)
     return {
-        "count": count, "mean": mean, "median": percentile(0.5),
-        "sample_sd": math.sqrt(
-            math.fsum((value - mean) ** 2 for value in normalized) / (count - 1)
-        ) if count >= 2 else None,
-        "min": normalized[0], "max": normalized[-1], "q1": q1, "q3": q3,
-        "iqr": q3 - q1,
+        "count": count,
+        "mean": _finite_opt(column.get("mean"), "mean"),
+        "median": _finite_opt(column.get("median"), "median"),
+        "sample_sd": _finite_opt(column.get("std"), "std", allow_none=True) if count >= 2 else None,
+        "min": _finite_opt(column.get("min"), "min"),
+        "max": _finite_opt(column.get("max"), "max"),
+        "q1": _finite_opt(column.get("q1"), "q1"),
+        "q3": _finite_opt(column.get("q3"), "q3"),
+        "iqr": _finite_opt(column.get("iqr"), "iqr"),
         "denominators": denominators,
         "missingness_reasons": reasons,
     }
@@ -570,31 +582,16 @@ def _class_burden(
     }
 
 
-def _group_summary(residues: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    slots = [slot for residue in residues for slot in residue["slots"]]
-    native = [slot for slot in slots if slot["native"]]
-    non_native = [slot for slot in slots if not slot["native"]]
+def _group_support(residues: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    slots_count = sum(len(residue["slots"]) for residue in residues)
     count = len(residues)
     return {
-        "support": {
-            "selected_residue_count": count, "observed_residue_count": count,
-            "fully_scoreable_residue_count": count,
-            "expected_slot_count": count * len(AA_ORDER),
-            "observed_slot_count": len(slots), "scoreable_slot_count": len(slots),
-        },
-        "all": statistics_distribution(
-            [slot["score"] for slot in slots],
-            denominator_kind="selected_substitution_slots", denominator_count=count * len(AA_ORDER),
-        ),
-        "native": statistics_distribution(
-            [slot["score"] for slot in native],
-            denominator_kind="selected_native_slots", denominator_count=count,
-        ),
-        "non_native": statistics_distribution(
-            [slot["score"] for slot in non_native],
-            denominator_kind="selected_non_native_slots",
-            denominator_count=count * (len(AA_ORDER) - 1),
-        ),
+        "selected_residue_count": count,
+        "observed_residue_count": count,
+        "fully_scoreable_residue_count": count,
+        "expected_slot_count": count * len(AA_ORDER),
+        "observed_slot_count": slots_count,
+        "scoreable_slot_count": slots_count,
     }
 
 
@@ -797,17 +794,23 @@ def _compatibility_basis(
     }
 
 
-def build_statistics_receipt(
-    *, request: Mapping[str, Any], execution_receipt: Mapping[str, Any],
-    landscape: Mapping[str, Any], structure_map: Mapping[str, Any],
-    capability_inventory: Mapping[str, Any], capability_inventory_bytes: bytes,
-    analysis_receipt: Mapping[str, Any] | None = None,
+def _extract_deterministic_receipt_context(
+    *,
+    request: Mapping[str, Any],
+    execution_receipt: Mapping[str, Any],
+    landscape: Mapping[str, Any],
+    structure_map: Mapping[str, Any],
+    capability_inventory: Mapping[str, Any],
+    capability_inventory_bytes: bytes,
     allow_legacy_external_authority: bool = False,
 ) -> dict[str, Any]:
-    """Build immutable statistics from complete physical v2 authority."""
+    """Compute all deterministic non-statistics fields and Stats Toolkit input columns."""
     _validate_statistics_inputs(
-        request=request, execution_receipt=execution_receipt, landscape=landscape,
-        structure_map=structure_map, capability_inventory=capability_inventory,
+        request=request,
+        execution_receipt=execution_receipt,
+        landscape=landscape,
+        structure_map=structure_map,
+        capability_inventory=capability_inventory,
         capability_inventory_bytes=capability_inventory_bytes,
         allow_legacy_external_authority=allow_legacy_external_authority,
     )
@@ -932,23 +935,24 @@ def build_statistics_receipt(
             "count": selected_missing_count,
         }] if selected_missing_count else []),
     }
-    per_residue, alternatives, deltas = [], [], []
-    for residue in residues:
+
+    columns: dict[str, list[float]] = {
+        "overall": [float(slot["score"]) for slot in all_slots],
+        "native": [float(slot["score"]) for slot in native_slots],
+        "non_native": [float(slot["score"]) for slot in non_native_slots],
+    }
+    per_residue_meta: list[dict[str, Any]] = []
+    alternatives: list[dict[str, Any]] = []
+    deltas: list[float] = []
+    for idx, residue in enumerate(residues):
         native = next(slot for slot in residue["slots"] if slot["native"])
         non_native = [slot for slot in residue["slots"] if not slot["native"]]
-        per_residue.append({
-            **_identity(residue), "native_score": native["score"],
+        columns[f"residue:{idx}:all"] = [float(slot["score"]) for slot in residue["slots"]]
+        columns[f"residue:{idx}:non_native"] = [float(slot["score"]) for slot in non_native]
+        per_residue_meta.append({
+            **_identity(residue),
+            "native_score": native["score"],
             "native_class": native["class"],
-            "all": statistics_distribution(
-                [slot["score"] for slot in residue["slots"]],
-                denominator_kind="selected_residue_substitution_slots",
-                denominator_count=len(AA_ORDER),
-            ),
-            "non_native": statistics_distribution(
-                [slot["score"] for slot in non_native],
-                denominator_kind="selected_residue_non_native_slots",
-                denominator_count=len(AA_ORDER) - 1,
-            ),
             "alternative_class_burden": _class_burden(
                 [slot["class"] for slot in non_native],
                 denominator_kind="selected_residue_non_native_slots",
@@ -956,27 +960,26 @@ def build_statistics_receipt(
             ),
         })
         for slot in non_native:
-            delta = slot["score"] - native["score"]
+            delta = float(slot["score"]) - float(native["score"])
             deltas.append(delta)
             alternatives.append({
                 **_identity(residue), "mutation_aa": slot["mutation_aa"],
                 "score": slot["score"], "score_class": slot["class"],
                 "native_score": native["score"], "delta": delta,
             })
-    per_aa = []
+    columns["delta"] = deltas
+
+    per_aa_meta: list[dict[str, Any]] = []
     for aa in AA_ORDER:
         aa_slots = [
             slot for residue in residues for slot in residue["slots"]
             if slot["mutation_aa"] == aa and not slot["native"]
         ]
         aa_denominator = sum(residue["wt"] != aa for residue in residues)
-        per_aa.append({
+        columns[f"aa:{aa}"] = [float(slot["score"]) for slot in aa_slots]
+        per_aa_meta.append({
             "mutation_aa": aa,
-            "distribution": statistics_distribution(
-                [slot["score"] for slot in aa_slots],
-                denominator_kind="applicable_non_native_amino_acid_slots",
-                denominator_count=aa_denominator,
-            ),
+            "denominator_count": aa_denominator,
             "class_composition": _class_burden(
                 [slot["class"] for slot in aa_slots],
                 denominator_kind="applicable_non_native_amino_acid_slots",
@@ -992,15 +995,36 @@ def build_statistics_receipt(
         entity_groups.setdefault(entity_key, []).append(residue)
         chain_groups.setdefault(chain_key, []).append(residue)
     sort_group = lambda item: tuple("" if value is None else value for value in item[0])
-    per_chain = [{
-        "entity_instance_id": key[0], "source_entity_id": key[1],
-        "label_asym_id": key[2], "auth_asym_id": key[3], "pdb_chain_id": key[4],
-        **_group_summary(group),
-    } for key, group in sorted(chain_groups.items(), key=sort_group)]
-    per_entity = [{
-        "entity_instance_id": key[0], "source_entity_id": key[1],
-        "label_asym_id": key[2], **_group_summary(group),
-    } for key, group in sorted(entity_groups.items(), key=sort_group)]
+    sorted_chains = sorted(chain_groups.items(), key=sort_group)
+    sorted_entities = sorted(entity_groups.items(), key=sort_group)
+
+    per_chain_meta: list[dict[str, Any]] = []
+    for idx, (key, group) in enumerate(sorted_chains):
+        g_slots = [slot for residue in group for slot in residue["slots"]]
+        g_native = [slot for slot in g_slots if slot["native"]]
+        g_non_native = [slot for slot in g_slots if not slot["native"]]
+        columns[f"chain:{idx}:all"] = [float(slot["score"]) for slot in g_slots]
+        columns[f"chain:{idx}:native"] = [float(slot["score"]) for slot in g_native]
+        columns[f"chain:{idx}:non_native"] = [float(slot["score"]) for slot in g_non_native]
+        per_chain_meta.append({
+            "entity_instance_id": key[0], "source_entity_id": key[1],
+            "label_asym_id": key[2], "auth_asym_id": key[3], "pdb_chain_id": key[4],
+            "support": _group_support(group),
+        })
+
+    per_entity_meta: list[dict[str, Any]] = []
+    for idx, (key, group) in enumerate(sorted_entities):
+        g_slots = [slot for residue in group for slot in residue["slots"]]
+        g_native = [slot for slot in g_slots if slot["native"]]
+        g_non_native = [slot for slot in g_slots if not slot["native"]]
+        columns[f"entity:{idx}:all"] = [float(slot["score"]) for slot in g_slots]
+        columns[f"entity:{idx}:native"] = [float(slot["score"]) for slot in g_native]
+        columns[f"entity:{idx}:non_native"] = [float(slot["score"]) for slot in g_non_native]
+        per_entity_meta.append({
+            "entity_instance_id": key[0], "source_entity_id": key[1],
+            "label_asym_id": key[2],
+            "support": _group_support(group),
+        })
 
     regions: list[dict[str, Any]] = []
     current, previous = None, None
@@ -1036,43 +1060,39 @@ def build_statistics_receipt(
     worst = [{**row, "rank": rank} for rank, row in enumerate(worst_source, 1)]
 
     basis = _compatibility_basis(request, structure_map, capability_inventory, capability_inventory_bytes)
-    overall_distribution = statistics_distribution(
-        [slot["score"] for slot in all_slots],
-        denominator_kind="selected_substitution_slots", denominator_count=expected_slots,
-    )
-    native_distribution = statistics_distribution(
-        [slot["score"] for slot in native_slots],
-        denominator_kind="selected_native_slots", denominator_count=count,
-    )
-    non_native_distribution = statistics_distribution(
-        [slot["score"] for slot in non_native_slots],
-        denominator_kind="selected_non_native_slots",
-        denominator_count=count * (len(AA_ORDER) - 1),
-    )
-    delta_distribution = statistics_distribution(
-        deltas, denominator_kind="paired_native_non_native_slots",
-        denominator_count=count * (len(AA_ORDER) - 1),
-    )
+    class_burden = {
+        "all": _class_burden(
+            [slot["class"] for slot in all_slots],
+            denominator_kind="selected_substitution_slots",
+            denominator_count=expected_slots,
+        ),
+        "native": _class_burden(
+            [slot["class"] for slot in native_slots],
+            denominator_kind="selected_native_slots", denominator_count=count,
+        ),
+        "non_native": _class_burden(
+            [slot["class"] for slot in non_native_slots],
+            denominator_kind="selected_non_native_slots",
+            denominator_count=count * (len(AA_ORDER) - 1),
+        ),
+    }
     statistics_schema_version = 2 if request["schema_version"] == 3 else 1
-    if statistics_schema_version == 2 and not isinstance(analysis_receipt, Mapping):
-        raise ContractValidationError(
-            "v3 core statistics require an immutable analysis receipt"
-        )
-    if statistics_schema_version == 1 and analysis_receipt is not None:
-        raise ContractValidationError(
-            "historical statistics cannot carry successor analysis authority"
-        )
-    payload: dict[str, Any] = {
+    metadata = {
         "schema_name": "frustrampnn_statistics",
         "schema_version": statistics_schema_version,
         "hash_semantics": "sha256(rfc8785(document_without_top_level_statistics_sha256))",
-        "invocation_id": request["invocation_id"], "parent_job_id": request["parent_job_id"],
-        "candidate_id": request["candidate_id"], "target_id": landscape["target_id"],
+        "invocation_id": request["invocation_id"],
+        "parent_job_id": request["parent_job_id"],
+        "candidate_id": request["candidate_id"],
+        "target_id": landscape["target_id"],
         "landscape_sha256": canonical_sha256(landscape),
         "source_artifact_sha256": request["source_artifact"]["sha256"],
         "normalized_pdb_sha256": request["normalized_pdb_sha256"],
-        "structure_map": {"schema_name": structure_map["schema_name"],
-            "schema_version": structure_map["schema_version"], "sha256": request["structure_map_sha256"]},
+        "structure_map": {
+            "schema_name": structure_map["schema_name"],
+            "schema_version": structure_map["schema_version"],
+            "sha256": request["structure_map_sha256"],
+        },
         "settings_sha256": request["requested_settings_sha256"],
         "effective_settings_sha256": request["effective_settings_sha256"],
         "capability_inventory_content_sha256": capability_inventory["content_sha256"],
@@ -1085,14 +1105,144 @@ def build_statistics_receipt(
         "canonical_amino_acid_order": AA_ORDER,
         "comparison_compatibility_basis": basis,
         "comparison_compatibility_id": comparison_compatibility_id(basis),
+    }
+    return {
+        "metadata": metadata,
+        "statistics_schema_version": statistics_schema_version,
+        "count": count,
+        "expected_slots": expected_slots,
         "support": support,
+        "columns": columns,
+        "per_residue_meta": per_residue_meta,
+        "per_aa_meta": per_aa_meta,
+        "per_chain_meta": per_chain_meta,
+        "per_entity_meta": per_entity_meta,
+        "regions": regions,
+        "ranked_non_native_alternatives": {
+            "support_count": len(alternatives),
+            "omitted_count": (excluded_count + missing_count) * (len(AA_ORDER) - 1),
+            "best_to_worst": best,
+            "worst_to_best": worst,
+        },
+        "class_burden": class_burden,
+    }
+
+
+def _assemble_distributions_from_toolkit(
+    ctx: Mapping[str, Any],
+    summary_columns: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(summary_columns, Mapping):
+        raise ContractValidationError("Stats Toolkit descriptive.summary output missing columns")
+    count = int(ctx["count"])
+    expected_slots = int(ctx["expected_slots"])
+
+    def _col(name: str) -> Mapping[str, Any]:
+        col = summary_columns.get(name)
+        if not isinstance(col, Mapping):
+            raise ContractValidationError(f"Stats Toolkit descriptive.summary missing column {name!r}")
+        return col
+
+    overall_distribution = _distribution_from_toolkit_column(
+        _col("overall"),
+        denominator_kind="selected_substitution_slots",
+        denominator_count=expected_slots,
+    )
+    native_distribution = _distribution_from_toolkit_column(
+        _col("native"),
+        denominator_kind="selected_native_slots",
+        denominator_count=count,
+    )
+    non_native_distribution = _distribution_from_toolkit_column(
+        _col("non_native"),
+        denominator_kind="selected_non_native_slots",
+        denominator_count=count * (len(AA_ORDER) - 1),
+    )
+    delta_distribution = _distribution_from_toolkit_column(
+        _col("delta"),
+        denominator_kind="paired_native_non_native_slots",
+        denominator_count=count * (len(AA_ORDER) - 1),
+    )
+    per_residue = [
+        {
+            **meta,
+            "all": _distribution_from_toolkit_column(
+                _col(f"residue:{idx}:all"),
+                denominator_kind="selected_residue_substitution_slots",
+                denominator_count=len(AA_ORDER),
+            ),
+            "non_native": _distribution_from_toolkit_column(
+                _col(f"residue:{idx}:non_native"),
+                denominator_kind="selected_residue_non_native_slots",
+                denominator_count=len(AA_ORDER) - 1,
+            ),
+        }
+        for idx, meta in enumerate(ctx["per_residue_meta"])
+    ]
+    per_aa = [
+        {
+            "mutation_aa": meta["mutation_aa"],
+            "distribution": _distribution_from_toolkit_column(
+                _col(f"aa:{meta['mutation_aa']}"),
+                denominator_kind="applicable_non_native_amino_acid_slots",
+                denominator_count=int(meta["denominator_count"]),
+            ),
+            "class_composition": meta["class_composition"],
+        }
+        for meta in ctx["per_aa_meta"]
+    ]
+    per_chain = []
+    for idx, meta in enumerate(ctx["per_chain_meta"]):
+        g_count = int(meta["support"]["selected_residue_count"])
+        per_chain.append({
+            **meta,
+            "all": _distribution_from_toolkit_column(
+                _col(f"chain:{idx}:all"),
+                denominator_kind="selected_substitution_slots",
+                denominator_count=g_count * len(AA_ORDER),
+            ),
+            "native": _distribution_from_toolkit_column(
+                _col(f"chain:{idx}:native"),
+                denominator_kind="selected_native_slots",
+                denominator_count=g_count,
+            ),
+            "non_native": _distribution_from_toolkit_column(
+                _col(f"chain:{idx}:non_native"),
+                denominator_kind="selected_non_native_slots",
+                denominator_count=g_count * (len(AA_ORDER) - 1),
+            ),
+        })
+    per_entity = []
+    for idx, meta in enumerate(ctx["per_entity_meta"]):
+        g_count = int(meta["support"]["selected_residue_count"])
+        per_entity.append({
+            **meta,
+            "all": _distribution_from_toolkit_column(
+                _col(f"entity:{idx}:all"),
+                denominator_kind="selected_substitution_slots",
+                denominator_count=g_count * len(AA_ORDER),
+            ),
+            "native": _distribution_from_toolkit_column(
+                _col(f"entity:{idx}:native"),
+                denominator_kind="selected_native_slots",
+                denominator_count=g_count,
+            ),
+            "non_native": _distribution_from_toolkit_column(
+                _col(f"entity:{idx}:non_native"),
+                denominator_kind="selected_non_native_slots",
+                denominator_count=g_count * (len(AA_ORDER) - 1),
+            ),
+        })
+    return {
         "distributions": {
             "overall": overall_distribution,
             "native": native_distribution,
             "non_native": non_native_distribution,
         },
-        "per_residue": per_residue, "per_mutation_amino_acid": per_aa,
-        "per_chain": per_chain, "per_entity": per_entity,
+        "per_residue": per_residue,
+        "per_mutation_amino_acid": per_aa,
+        "per_chain": per_chain,
+        "per_entity": per_entity,
         "native_vs_alternative": {
             "native_mean": native_distribution["mean"],
             "alternative_mean": non_native_distribution["mean"],
@@ -1106,27 +1256,64 @@ def build_statistics_receipt(
                 "alternative_mean": non_native_distribution["missingness_reasons"]["mean"],
             },
         },
-        "contiguous_native_class_regions": regions,
-        "ranked_non_native_alternatives": {
-            "support_count": len(alternatives),
-            "omitted_count": (excluded_count + missing_count) * (len(AA_ORDER) - 1),
-            "best_to_worst": best, "worst_to_best": worst,
-        },
-        "class_burden": {
-            "all": _class_burden(
-                [slot["class"] for slot in all_slots],
-                denominator_kind="selected_substitution_slots",
-                denominator_count=expected_slots,
-            ),
-            "native": _class_burden(
-                [slot["class"] for slot in native_slots],
-                denominator_kind="selected_native_slots", denominator_count=count,
-            ),
-            "non_native": _class_burden(
-                [slot["class"] for slot in non_native_slots],
-                denominator_kind="selected_non_native_slots",
-                denominator_count=count * (len(AA_ORDER) - 1),
-            ),
+    }
+
+
+def build_statistics_receipt(
+    *, request: Mapping[str, Any], execution_receipt: Mapping[str, Any],
+    landscape: Mapping[str, Any], structure_map: Mapping[str, Any],
+    capability_inventory: Mapping[str, Any], capability_inventory_bytes: bytes,
+    analysis_receipt: Mapping[str, Any] | None = None,
+    allow_legacy_external_authority: bool = False,
+    stats_client: StatsToolkitClient | None = None,
+) -> dict[str, Any]:
+    """Build immutable statistics via one Stats Toolkit descriptive.summary durable run."""
+    ctx = _extract_deterministic_receipt_context(
+        request=request,
+        execution_receipt=execution_receipt,
+        landscape=landscape,
+        structure_map=structure_map,
+        capability_inventory=capability_inventory,
+        capability_inventory_bytes=capability_inventory_bytes,
+        allow_legacy_external_authority=allow_legacy_external_authority,
+    )
+    statistics_schema_version = ctx["statistics_schema_version"]
+    if statistics_schema_version == 2 and not isinstance(analysis_receipt, Mapping):
+        raise ContractValidationError(
+            "v3 core statistics require an immutable analysis receipt"
+        )
+    if statistics_schema_version == 1 and analysis_receipt is not None:
+        raise ContractValidationError(
+            "historical statistics cannot carry successor analysis authority"
+        )
+
+    client = stats_client if stats_client is not None else _stats_toolkit_client.get_stats_toolkit_client()
+    run_ref, outputs = client.run_tool(
+        None,
+        "descriptive.summary",
+        {"columns": ctx["columns"]},
+    )
+    summary_columns = outputs.get("columns")
+    assembled = _assemble_distributions_from_toolkit(ctx, summary_columns)
+
+    payload: dict[str, Any] = {
+        **ctx["metadata"],
+        "support": ctx["support"],
+        "distributions": assembled["distributions"],
+        "per_residue": assembled["per_residue"],
+        "per_mutation_amino_acid": assembled["per_mutation_amino_acid"],
+        "per_chain": assembled["per_chain"],
+        "per_entity": assembled["per_entity"],
+        "native_vs_alternative": assembled["native_vs_alternative"],
+        "contiguous_native_class_regions": ctx["regions"],
+        "ranked_non_native_alternatives": ctx["ranked_non_native_alternatives"],
+        "class_burden": ctx["class_burden"],
+        "stats_run": {
+            "run_id": str(run_ref["run_id"]),
+            "workspace_id": str(run_ref["workspace_id"]),
+            "tool_id": str(run_ref["tool_id"]),
+            "tool_version": str(run_ref["tool_version"]),
+            "method_version": run_ref.get("method_version"),
         },
     }
     if statistics_schema_version == 2:
@@ -1134,6 +1321,249 @@ def build_statistics_receipt(
     payload["statistics_sha256"] = _rfc8785_sha256(payload)
     validate_statistics_receipt(payload)
     return payload
+
+
+def _scalars_match(recorded: Any, expected: Any, *, tol: float = 1e-12) -> bool:
+    if recorded is None and expected is None:
+        return True
+    if recorded is None or expected is None:
+        return False
+    if isinstance(recorded, bool) or isinstance(expected, bool):
+        return False
+    if isinstance(recorded, (int, float)) and isinstance(expected, (int, float)):
+        return math.isclose(float(recorded), float(expected), rel_tol=tol, abs_tol=tol)
+    return recorded == expected
+
+
+def _distribution_matches_toolkit_column(
+    recorded: Mapping[str, Any],
+    column: Mapping[str, Any],
+) -> bool:
+    if not isinstance(recorded, Mapping) or not isinstance(column, Mapping):
+        return False
+    if recorded.get("count") != column.get("count"):
+        return False
+    mapping = (
+        ("mean", "mean"),
+        ("median", "median"),
+        ("sample_sd", "std"),
+        ("min", "min"),
+        ("max", "max"),
+        ("q1", "q1"),
+        ("q3", "q3"),
+        ("iqr", "iqr"),
+    )
+    for rec_key, col_key in mapping:
+        if not _scalars_match(recorded.get(rec_key), column.get(col_key)):
+            return False
+    return True
+
+
+def verify_statistics_receipt_with_toolkit(
+    receipt: Mapping[str, Any],
+    *,
+    stats_client: StatsToolkitClient | None = None,
+    strict_mismatch: bool = True,
+) -> dict[str, Any]:
+    """Verify a receipt's statistics block read-only against its stored Stats Toolkit run.
+
+    - Old receipts without stats_run are marked 'not rechecked' without recomputation.
+    - New receipts with stats_run call read_run_outputs(run_id) (never creating a run).
+    - If the Toolkit is unreachable, returns 'not rechecked' without failing.
+    """
+    stats_run = receipt.get("stats_run") if isinstance(receipt, Mapping) else None
+    if not isinstance(stats_run, Mapping) or not str(stats_run.get("run_id") or "").strip():
+        return {
+            "status": "not_rechecked",
+            "label": "not rechecked",
+            "reason": "legacy_receipt_without_stats_run",
+            "stats_run_id": None,
+        }
+    run_id = str(stats_run["run_id"]).strip()
+    client = stats_client if stats_client is not None else _stats_toolkit_client.get_stats_toolkit_client()
+    try:
+        outputs = client.read_run_outputs(run_id)
+    except StatsToolkitUnavailableError:
+        return {
+            "status": "not_rechecked",
+            "label": "not rechecked",
+            "reason": STATS_TOOLKIT_UNAVAILABLE_REASON,
+            "stats_run_id": run_id,
+        }
+    except (StatsToolkitNotFoundError, StatsToolkitError) as exc:
+        if strict_mismatch:
+            raise ContractValidationError(
+                f"stored Stats Toolkit run {run_id!r} could not be read: {exc}"
+            ) from exc
+        return {
+            "status": "not_rechecked",
+            "label": "not rechecked",
+            "reason": "stats_run_not_found",
+            "stats_run_id": run_id,
+        }
+
+    summary_columns = outputs.get("columns")
+    if not isinstance(summary_columns, Mapping):
+        if strict_mismatch:
+            raise ContractValidationError("stored Stats Toolkit run output missing columns")
+        return {
+            "status": "mismatch",
+            "label": "mismatch",
+            "reason": "stats_toolkit_output_mismatch",
+            "stats_run_id": run_id,
+        }
+
+    distributions = receipt.get("distributions") if isinstance(receipt.get("distributions"), Mapping) else {}
+    native_vs_alt = (
+        receipt.get("native_vs_alternative")
+        if isinstance(receipt.get("native_vs_alternative"), Mapping)
+        else {}
+    )
+    checks_ok = (
+        _distribution_matches_toolkit_column(distributions.get("overall", {}), summary_columns.get("overall", {}))
+        and _distribution_matches_toolkit_column(distributions.get("native", {}), summary_columns.get("native", {}))
+        and _distribution_matches_toolkit_column(distributions.get("non_native", {}), summary_columns.get("non_native", {}))
+        and _distribution_matches_toolkit_column(
+            native_vs_alt.get("alternative_minus_native", {}), summary_columns.get("delta", {})
+        )
+        and _scalars_match(native_vs_alt.get("native_mean"), (summary_columns.get("native") or {}).get("mean"))
+        and _scalars_match(native_vs_alt.get("alternative_mean"), (summary_columns.get("non_native") or {}).get("mean"))
+    )
+
+    if checks_ok:
+        per_residue = receipt.get("per_residue") or []
+        for idx, row in enumerate(per_residue):
+            non_native_col = summary_columns.get(f"residue:{idx}:non_native")
+            if not isinstance(non_native_col, Mapping):
+                checks_ok = False
+                break
+            if not _distribution_matches_toolkit_column(row.get("non_native", {}), non_native_col):
+                checks_ok = False
+                break
+            all_col = summary_columns.get(f"residue:{idx}:all")
+            if isinstance(all_col, Mapping) and not _distribution_matches_toolkit_column(row.get("all", {}), all_col):
+                checks_ok = False
+                break
+
+    if checks_ok:
+        for row in receipt.get("per_mutation_amino_acid") or []:
+            aa_col = summary_columns.get(f"aa:{row.get('mutation_aa')}")
+            if isinstance(aa_col, Mapping) and not _distribution_matches_toolkit_column(row.get("distribution", {}), aa_col):
+                checks_ok = False
+                break
+
+    if checks_ok:
+        for idx, row in enumerate(receipt.get("per_chain") or []):
+            for field, suffix in (("all", "all"), ("native", "native"), ("non_native", "non_native")):
+                col = summary_columns.get(f"chain:{idx}:{suffix}")
+                if isinstance(col, Mapping) and not _distribution_matches_toolkit_column(row.get(field, {}), col):
+                    checks_ok = False
+                    break
+            if not checks_ok:
+                break
+
+    if checks_ok:
+        for idx, row in enumerate(receipt.get("per_entity") or []):
+            for field, suffix in (("all", "all"), ("native", "native"), ("non_native", "non_native")):
+                col = summary_columns.get(f"entity:{idx}:{suffix}")
+                if isinstance(col, Mapping) and not _distribution_matches_toolkit_column(row.get(field, {}), col):
+                    checks_ok = False
+                    break
+            if not checks_ok:
+                break
+
+    if not checks_ok:
+        if strict_mismatch:
+            raise ContractValidationError("statistics receipt disagrees with stored Stats Toolkit run outputs")
+        return {
+            "status": "mismatch",
+            "label": "mismatch",
+            "reason": "stats_toolkit_output_mismatch",
+            "stats_run_id": run_id,
+        }
+    return {
+        "status": "verified",
+        "label": "verified",
+        "reason": None,
+        "stats_run_id": run_id,
+    }
+
+
+def verify_statistics_receipt_against_bundle(
+    *,
+    statistics: Mapping[str, Any],
+    statistics_bytes: bytes | None = None,
+    request: Mapping[str, Any],
+    execution_receipt: Mapping[str, Any],
+    landscape: Mapping[str, Any],
+    structure_map: Mapping[str, Any],
+    capability_inventory: Mapping[str, Any],
+    capability_inventory_bytes: bytes,
+    allow_legacy_external_authority: bool = False,
+    stats_client: StatsToolkitClient | None = None,
+) -> dict[str, Any]:
+    """Validate deterministic non-stats receipt fields locally and verify stats read-only via Toolkit."""
+    validate_statistics_receipt(statistics)
+    if statistics_bytes is not None and statistics_bytes != rfc8785.dumps(dict(statistics)):
+        raise ContractValidationError("statistics receipt bytes are not canonical RFC 8785 JSON")
+
+    ctx = _extract_deterministic_receipt_context(
+        request=request,
+        execution_receipt=execution_receipt,
+        landscape=landscape,
+        structure_map=structure_map,
+        capability_inventory=capability_inventory,
+        capability_inventory_bytes=capability_inventory_bytes,
+        allow_legacy_external_authority=allow_legacy_external_authority,
+    )
+    for key, expected_val in ctx["metadata"].items():
+        if statistics.get(key) != expected_val:
+            raise ContractValidationError(f"statistics receipt metadata mismatch for {key}")
+    if statistics.get("support") != ctx["support"]:
+        raise ContractValidationError("statistics receipt support mismatch")
+    if statistics.get("class_burden") != ctx["class_burden"]:
+        raise ContractValidationError("statistics receipt class burden mismatch")
+    if statistics.get("contiguous_native_class_regions") != ctx["regions"]:
+        raise ContractValidationError("statistics receipt contiguous native class regions mismatch")
+    if statistics.get("ranked_non_native_alternatives") != ctx["ranked_non_native_alternatives"]:
+        raise ContractValidationError("statistics receipt ranked non-native alternatives mismatch")
+
+    per_residue = statistics.get("per_residue")
+    if not isinstance(per_residue, list) or len(per_residue) != len(ctx["per_residue_meta"]):
+        raise ContractValidationError("statistics receipt per_residue cardinality mismatch")
+    for actual, expected in zip(per_residue, ctx["per_residue_meta"]):
+        for key, exp_val in expected.items():
+            if actual.get(key) != exp_val:
+                raise ContractValidationError(f"statistics receipt per_residue mismatch for {key}")
+
+    per_aa = statistics.get("per_mutation_amino_acid")
+    if not isinstance(per_aa, list) or len(per_aa) != len(ctx["per_aa_meta"]):
+        raise ContractValidationError("statistics receipt per_mutation_amino_acid cardinality mismatch")
+    for actual, expected in zip(per_aa, ctx["per_aa_meta"]):
+        if actual.get("mutation_aa") != expected["mutation_aa"] or actual.get("class_composition") != expected["class_composition"]:
+            raise ContractValidationError("statistics receipt per_mutation_amino_acid metadata mismatch")
+
+    per_chain = statistics.get("per_chain")
+    if not isinstance(per_chain, list) or len(per_chain) != len(ctx["per_chain_meta"]):
+        raise ContractValidationError("statistics receipt per_chain cardinality mismatch")
+    for actual, expected in zip(per_chain, ctx["per_chain_meta"]):
+        for key, exp_val in expected.items():
+            if actual.get(key) != exp_val:
+                raise ContractValidationError(f"statistics receipt per_chain mismatch for {key}")
+
+    per_entity = statistics.get("per_entity")
+    if not isinstance(per_entity, list) or len(per_entity) != len(ctx["per_entity_meta"]):
+        raise ContractValidationError("statistics receipt per_entity cardinality mismatch")
+    for actual, expected in zip(per_entity, ctx["per_entity_meta"]):
+        for key, exp_val in expected.items():
+            if actual.get(key) != exp_val:
+                raise ContractValidationError(f"statistics receipt per_entity mismatch for {key}")
+
+    return verify_statistics_receipt_with_toolkit(
+        statistics,
+        stats_client=stats_client,
+        strict_mismatch=True,
+    )
 
 
 def validate_statistics_receipt(receipt: Mapping[str, Any]) -> None:

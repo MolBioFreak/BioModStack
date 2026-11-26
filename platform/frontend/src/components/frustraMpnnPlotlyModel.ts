@@ -2,6 +2,7 @@ import {
     CANONICAL_AMINO_ACIDS,
     type CmLandscapeResidue,
 } from './conformationalMapping/conformationalMappingSemantics.js';
+import type { FrustraMpnnStatistics } from '../lib/frustraMpnnApi.js';
 
 export interface FrustraMpnnPlotlyModel {
     residueLabels: string[];
@@ -19,14 +20,32 @@ export interface FrustraMpnnPlotlyModel {
     substitutionClassFractions: Record<string, { high: number; neutral: number; minimal: number; missing: number }>;
 }
 
-const median = (values: number[]): number | null => {
-    if (values.length === 0) return null;
-    const sorted = [...values].sort((a, b) => a - b);
-    const middle = Math.floor(sorted.length / 2);
-    return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
-};
+const residueKeyFull = (entityInstanceId: string, authAsymId: string, authSeqId: string | number, insertionCode: string | null | undefined): string =>
+    `${entityInstanceId}:${authAsymId}:${String(authSeqId)}:${insertionCode || ''}`;
 
-export function buildFrustraMpnnPlotlyModel(residues: CmLandscapeResidue[]): FrustraMpnnPlotlyModel {
+const residueKeyChain = (authAsymId: string, authSeqId: string | number, insertionCode: string | null | undefined): string =>
+    `${authAsymId}:${String(authSeqId)}:${insertionCode || ''}`;
+
+export function buildFrustraMpnnPlotlyModel(
+    residues: CmLandscapeResidue[],
+    statistics?: Pick<FrustraMpnnStatistics, 'per_residue'> | null,
+): FrustraMpnnPlotlyModel {
+    const receiptMediansFull = new Map<string, number | null>();
+    const receiptMediansChain = new Map<string, number | null>();
+    if (statistics?.per_residue) {
+        for (const row of statistics.per_residue) {
+            const val = row.non_native?.median ?? null;
+            receiptMediansFull.set(
+                residueKeyFull(row.entity_instance_id, row.auth_asym_id, row.auth_seq_id, row.insertion_code),
+                val,
+            );
+            receiptMediansChain.set(
+                residueKeyChain(row.auth_asym_id, row.auth_seq_id, row.insertion_code),
+                val,
+            );
+        }
+    }
+
     const residueLabels = residues.map((residue) => `${residue.auth_asym_id}:${residue.auth_seq_id}${residue.insertion_code || ''}`);
     const sequenceIndices = residues.map((residue) => residue.sequence_index + 1);
     const substitutionScores = Object.fromEntries(CANONICAL_AMINO_ACIDS.map((aa) => [aa, [] as number[]]));
@@ -66,7 +85,14 @@ export function buildFrustraMpnnPlotlyModel(residues: CmLandscapeResidue[]): Fru
         const deltas = native.score == null ? [] : alternativeScores.map((score) => score - native.score!);
         bestAlternativeDeltas.push(deltas.length > 0 ? Math.max(...deltas) : null);
         worstAlternativeDeltas.push(deltas.length > 0 ? Math.min(...deltas) : null);
-        medianAlternativeScores.push(median(alternativeScores));
+        const fullKey = residueKeyFull(residue.entity_instance_id, residue.auth_asym_id, residue.auth_seq_id, residue.insertion_code);
+        const chainKey = residueKeyChain(residue.auth_asym_id, residue.auth_seq_id, residue.insertion_code);
+        const receiptMedian = receiptMediansFull.has(fullKey)
+            ? receiptMediansFull.get(fullKey) ?? null
+            : receiptMediansChain.has(chainKey)
+                ? receiptMediansChain.get(chainKey) ?? null
+                : null;
+        medianAlternativeScores.push(receiptMedian);
         highAlternativeFractions.push(alternatives.length > 0 ? alternatives.filter((slot) => slot.class === 'high').length / alternatives.length : null);
         minimalAlternativeFractions.push(alternatives.length > 0 ? alternatives.filter((slot) => slot.class === 'minimal').length / alternatives.length : null);
     });

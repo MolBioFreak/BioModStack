@@ -551,7 +551,7 @@ export default function FrustraMpnnResultsViewer({
                     retryPending={retryStatistics.isPending}
                     onRetry={() => retryStatistics.mutate()}
                 />}
-                {detail.data && <FrustraMpnnResultAuthoritySurface detail={detail.data} statisticsOverride={fetchedStatistics} />}
+                {detail.data && <FrustraMpnnResultAuthoritySurface detail={detail.data} statisticsOverride={fetchedStatistics} statisticsVerification={statistics.data?.statistics_verification ?? null} />}
 
                 {resultContext.canReanalyzePersistedInputs && detail.data && <details aria-label="FrustraMPNN reanalysis settings" className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
                     <summary className="cursor-pointer font-semibold">Reanalysis settings</summary>
@@ -599,6 +599,7 @@ export default function FrustraMpnnResultsViewer({
                             residues={allResidues}
                             highMax={detail.data.summary.threshold_policy.high_max}
                             minimalMin={detail.data.summary.threshold_policy.minimal_min}
+                            statistics={fetchedStatistics}
                         />}
 
                         <section aria-label="FrustraMPNN structure map" className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">

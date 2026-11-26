@@ -1068,6 +1068,7 @@ export interface FrustraMpnnStatistics {
     structure_map: { schema_name: 'frustrampnn_structure_map'; schema_version: number; sha256: string };
     output_contract_version: string;
     analysis_receipt?: FrustraMpnnStatisticsAnalysisReceipt;
+    stats_run?: FrustraMpnnStatsRunRef;
     canonical_amino_acid_order: 'ACDEFGHIKLMNPQRSTVWY';
     comparison_compatibility_basis: {
         schema_name: 'frustrampnn_comparison_compatibility_basis';
@@ -1151,6 +1152,21 @@ export interface FrustraMpnnResultList {
     offset: number;
 }
 
+export interface FrustraMpnnStatsRunRef {
+    run_id: string;
+    workspace_id: string;
+    tool_id: string;
+    tool_version: string;
+    method_version: string | null;
+}
+
+export interface FrustraMpnnStatisticsVerification {
+    status: 'verified' | 'not_rechecked' | 'mismatch';
+    label: string;
+    reason: string | null;
+    stats_run_id: string | null;
+}
+
 export interface FrustraMpnnStatisticsResponse {
     result_id: string;
     parent_job_id: string;
@@ -1165,6 +1181,7 @@ export interface FrustraMpnnStatisticsResponse {
     statistics_sha256: string | null;
     comparison_compatibility_id: string | null;
     statistics: FrustraMpnnStatistics | null;
+    statistics_verification?: FrustraMpnnStatisticsVerification | null;
 }
 
 export type FrustraMpnnStatisticsQueryLevel = 'overview' | 'residue' | 'mutation_aa' | 'chain' | 'entity';
@@ -2239,7 +2256,7 @@ export const parseFrustraMpnnStatistics = (value: unknown): FrustraMpnnStatistic
         'per_mutation_amino_acid', 'per_chain', 'per_entity', 'native_vs_alternative',
         'contiguous_native_class_regions', 'ranked_non_native_alternatives', 'class_burden',
     ] as const;
-    const payload = fmClosedProjection(value, 'statistics', [...baseKeys, 'analysis_receipt'], baseKeys);
+    const payload = fmClosedProjection(value, 'statistics', [...baseKeys, 'analysis_receipt', 'stats_run'], baseKeys);
     const schemaVersion = fmInteger(payload.schema_version, 'statistics.schema_version', 1);
     const outputContractVersion = fmString(payload.output_contract_version, 'statistics.output_contract_version');
     if (payload.schema_name !== 'frustrampnn_statistics'
@@ -2247,6 +2264,19 @@ export const parseFrustraMpnnStatistics = (value: unknown): FrustraMpnnStatistic
         || payload.canonical_amino_acid_order !== 'ACDEFGHIKLMNPQRSTVWY') throw new Error('statistics schema identity is invalid');
     const analysisReceipt = payload.analysis_receipt !== undefined
         ? parseStatisticsAnalysisReceipt(payload.analysis_receipt)
+        : undefined;
+    const statsRun = payload.stats_run !== undefined
+        ? (() => {
+            const keys = ['run_id', 'workspace_id', 'tool_id', 'tool_version', 'method_version'] as const;
+            const ref = fmClosedProjection(payload.stats_run, 'statistics.stats_run', keys, keys);
+            return {
+                run_id: fmString(ref.run_id, 'statistics.stats_run.run_id'),
+                workspace_id: fmString(ref.workspace_id, 'statistics.stats_run.workspace_id'),
+                tool_id: fmString(ref.tool_id, 'statistics.stats_run.tool_id'),
+                tool_version: fmString(ref.tool_version, 'statistics.stats_run.tool_version'),
+                method_version: fmNullableString(ref.method_version, 'statistics.stats_run.method_version'),
+            };
+        })()
         : undefined;
     const structureMap = fmClosedProjection(payload.structure_map, 'statistics.structure_map', ['schema_name', 'schema_version', 'sha256'], ['schema_name', 'schema_version', 'sha256']);
     if (structureMap.schema_name !== 'frustrampnn_structure_map') throw new Error('statistics.structure_map schema identity is invalid');
@@ -2327,6 +2357,7 @@ export const parseFrustraMpnnStatistics = (value: unknown): FrustraMpnnStatistic
         statistics_sha256: fmSha256(payload.statistics_sha256, 'statistics.statistics_sha256'), structure_map: { schema_name: 'frustrampnn_structure_map', schema_version: fmInteger(structureMap.schema_version, 'statistics.structure_map.schema_version', 1), sha256: fmSha256(structureMap.sha256, 'statistics.structure_map.sha256') },
         output_contract_version: outputContractVersion,
         ...(analysisReceipt ? { analysis_receipt: analysisReceipt } : {}),
+        ...(statsRun ? { stats_run: statsRun } : {}),
         canonical_amino_acid_order: 'ACDEFGHIKLMNPQRSTVWY', comparison_compatibility_basis: parseStatisticsBasis(payload.comparison_compatibility_basis),
         support: parseStatisticsSupport(payload.support, 'statistics.support'),
         distributions: { overall: parseDistribution(distributions.overall, 'statistics.distributions.overall'), native: parseDistribution(distributions.native, 'statistics.distributions.native'), non_native: parseDistribution(distributions.non_native, 'statistics.distributions.non_native') },
@@ -2656,7 +2687,7 @@ const STATISTICS_RESPONSE_KEYS = [
     'result_id', 'parent_job_id', 'candidate_id', 'invocation_id', 'authority_version',
     'availability', 'missing_fields', 'settings_sha256', 'effective_settings_sha256',
     'effective_settings_json', 'capability_inventory_sha256', 'statistics_sha256',
-    'statistics_json', 'comparison_compatibility_id', 'statistics',
+    'statistics_json', 'comparison_compatibility_id', 'statistics', 'statistics_verification',
 ] as const;
 
 // Compare duplicate wire aliases by content, independent of object key order.
@@ -2671,7 +2702,7 @@ const statisticsWireEqual = (left: unknown, right: unknown): boolean => {
 };
 
 export const parseFrustraMpnnStatisticsResponse = (value: unknown): FrustraMpnnStatisticsResponse => {
-    const payload = fmClosedProjection(value, 'FrustraMPNN statistics response', STATISTICS_RESPONSE_KEYS, STATISTICS_RESPONSE_KEYS.filter((key) => key !== 'statistics' && key !== 'statistics_json' && key !== 'authority_version'));
+    const payload = fmClosedProjection(value, 'FrustraMPNN statistics response', STATISTICS_RESPONSE_KEYS, STATISTICS_RESPONSE_KEYS.filter((key) => key !== 'statistics' && key !== 'statistics_json' && key !== 'authority_version' && key !== 'statistics_verification'));
     if (!('statistics' in payload) && !('statistics_json' in payload)) throw new Error('statistics response is missing statistics');
     if ('statistics' in payload && 'statistics_json' in payload && !statisticsWireEqual(payload.statistics, payload.statistics_json)) {
         throw new Error('statistics response aliases conflict');
@@ -2696,6 +2727,21 @@ export const parseFrustraMpnnStatisticsResponse = (value: unknown): FrustraMpnnS
         statistics_sha256: fmOptionalSha256(payload.statistics_sha256, 'statistics statistics_sha256'),
         comparison_compatibility_id: fmOptionalSha256(payload.comparison_compatibility_id, 'statistics comparison_compatibility_id'),
         statistics: statistics === null ? null : parseFrustraMpnnStatistics(statistics),
+        statistics_verification: payload.statistics_verification == null
+            ? null
+            : (() => {
+                const vKeys = ['status', 'label', 'reason', 'stats_run_id'] as const;
+                const v = fmClosedProjection(payload.statistics_verification, 'statistics_verification', vKeys, ['status', 'label']);
+                if (v.status !== 'verified' && v.status !== 'not_rechecked' && v.status !== 'mismatch') {
+                    throw new Error('statistics_verification.status is invalid');
+                }
+                return {
+                    status: v.status,
+                    label: fmString(v.label, 'statistics_verification.label'),
+                    reason: v.reason === undefined ? null : fmNullableString(v.reason, 'statistics_verification.reason'),
+                    stats_run_id: v.stats_run_id === undefined ? null : fmNullableString(v.stats_run_id, 'statistics_verification.stats_run_id'),
+                };
+            })(),
     };
 };
 

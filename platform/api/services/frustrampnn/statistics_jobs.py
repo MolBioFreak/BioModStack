@@ -682,7 +682,11 @@ class FrustraMPNNStatisticsWorker:
                                 failure_session,
                                 analysis_id=analysis_id,
                                 claim_token=claim_token,
-                                diagnostic=f"{type(exc).__name__}: analysis failed",
+                                diagnostic=(
+                                    "stats_toolkit_unavailable"
+                                    if type(exc).__name__ == "StatsToolkitUnavailableError"
+                                    else f"{type(exc).__name__}: analysis failed"
+                                ),
                             )
                             await failure_session.commit()
                         except FrustraMPNNStatisticsJobError:

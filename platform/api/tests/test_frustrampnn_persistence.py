@@ -1710,3 +1710,15 @@ async def test_read_projections_are_ordered_and_never_expose_storage_paths(
         row["mutation_aa"] for row in rows
     )
     assert len(rows) == 5
+
+
+@pytest.fixture(autouse=True)
+def _frustra_fake_stats_toolkit(monkeypatch: pytest.MonkeyPatch):
+    from services import stats_toolkit_client as _stc
+    from test_stats_centralization_plumbing import _FakeToolkitServer
+
+    _stc.clear_workspace_cache()
+    server = _FakeToolkitServer(existing_workspace=True)
+    client = server.client()
+    monkeypatch.setattr(_stc, "get_stats_toolkit_client", lambda **_: client)
+    return server

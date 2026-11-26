@@ -489,8 +489,25 @@ def _assert_closed_objects(node: object, path: str = "$") -> None:
             _assert_closed_objects(value, f"{path}/{index}")
 
 
-def test_distribution_uses_type7_quartiles_and_sample_sd_for_odd_even_and_small_counts() -> None:
-    empty = analytics.statistics_distribution([])
+def test_distribution_uses_type7_quartiles_and_sample_sd_via_toolkit(_frustra_fake_stats_toolkit) -> None:
+    assert not hasattr(analytics, "statistics_distribution")
+    assert not hasattr(analytics, "_quantile_type7")
+    assert not hasattr(analytics, "_sample_sd")
+    client = _frustra_fake_stats_toolkit.client()
+    _, outputs = client.run_tool(
+        "ws_existing_bms",
+        "descriptive.summary",
+        {
+            "columns": {
+                "empty": [],
+                "singleton": [7.0],
+                "even": [3.0, 0.0, 2.0, 1.0],
+                "odd": [4.0, 1.0, 3.0, 2.0, 0.0],
+            }
+        },
+    )
+    cols = outputs["columns"]
+    empty = analytics._distribution_from_toolkit_column(cols["empty"])
     assert {key: empty[key] for key in (
         "count", "mean", "median", "sample_sd", "min", "max", "q1", "q3", "iqr"
     )} == {
@@ -504,7 +521,7 @@ def test_distribution_uses_type7_quartiles_and_sample_sd_for_odd_even_and_small_
         "q3": None,
         "iqr": None,
     }
-    singleton = analytics.statistics_distribution([7.0])
+    singleton = analytics._distribution_from_toolkit_column(cols["singleton"])
     assert {key: singleton[key] for key in (
         "count", "mean", "median", "sample_sd", "min", "max", "q1", "q3", "iqr"
     )} == {
@@ -523,19 +540,25 @@ def test_distribution_uses_type7_quartiles_and_sample_sd_for_odd_even_and_small_
         "count": 0,
     }
     assert singleton["missingness_reasons"]["sample_sd"] == "insufficient_support_n_lt_2"
-    even = analytics.statistics_distribution([3.0, 0.0, 2.0, 1.0])
+    even = analytics._distribution_from_toolkit_column(cols["even"])
     assert even["sample_sd"] == pytest.approx(1.2909944487358056)
     assert even["denominators"]["sample_sd"]["count"] == 3
     assert even["missingness_reasons"]["sample_sd"] is None
-    odd = analytics.statistics_distribution([4.0, 1.0, 3.0, 2.0, 0.0])
+    odd = analytics._distribution_from_toolkit_column(cols["odd"])
     assert odd["median"] == 2.0
     assert odd["q1"] == 1.0
     assert odd["q3"] == 3.0
     assert odd["sample_sd"] == pytest.approx(1.5811388300841898)
 
 
-def test_distribution_metadata_names_every_scalar_denominator_and_missingness_reason() -> None:
-    distribution = analytics.statistics_distribution([1.0, 2.0, 3.0])
+def test_distribution_metadata_names_every_scalar_denominator_and_missingness_reason(_frustra_fake_stats_toolkit) -> None:
+    client = _frustra_fake_stats_toolkit.client()
+    _, outputs = client.run_tool(
+        "ws_existing_bms",
+        "descriptive.summary",
+        {"columns": {"vals": [1.0, 2.0, 3.0]}},
+    )
+    distribution = analytics._distribution_from_toolkit_column(outputs["columns"]["vals"])
     scalar_names = {"count", "mean", "median", "sample_sd", "min", "max", "q1", "q3", "iqr"}
     assert set(distribution["denominators"]) == scalar_names
     assert set(distribution["missingness_reasons"]) == scalar_names
@@ -573,11 +596,13 @@ def test_statistics_receipt_is_deterministic_for_input_mapping_and_numeric_row_p
     second = copy.deepcopy(first)
     second["request"] = dict(reversed(list(second["request"].items())))
     second["landscape"] = dict(reversed(list(second["landscape"].items())))
-    assert _build(first) == _build(second)
-    values = [2.0, -2.0, 0.0, 2.0, -2.0]
-    assert analytics.statistics_distribution(values) == analytics.statistics_distribution(
-        list(reversed(values))
-    )
+    receipt_a = _build(first)
+    receipt_b = _build(second)
+    assert receipt_a["stats_run"]["run_id"] != receipt_b["stats_run"]["run_id"]
+    stripped_a = {k: v for k, v in receipt_a.items() if k not in ("stats_run", "statistics_sha256")}
+    stripped_b = {k: v for k, v in receipt_b.items() if k not in ("stats_run", "statistics_sha256")}
+    assert stripped_a == stripped_b
+    assert rfc8785.dumps(stripped_a) == rfc8785.dumps(stripped_b)
 
 
 def test_support_distributions_native_alternative_math_and_grouping_are_exact() -> None:
@@ -898,3 +923,74 @@ def test_builder_rejects_capability_byte_mismatch_and_statistics_hash_tampering(
     receipt["support"]["selected_residue_count"] = 5
     with pytest.raises(ContractValidationError, match="statistics SHA-256"):
         analytics.validate_statistics_receipt(receipt)
+
+
+@pytest.fixture(autouse=True)
+def _frustra_fake_stats_toolkit(monkeypatch: pytest.MonkeyPatch):
+    from services import stats_toolkit_client as _stc
+    from test_stats_centralization_plumbing import _FakeToolkitServer
+
+    _stc.clear_workspace_cache()
+    server = _FakeToolkitServer(existing_workspace=True)
+    client = server.client()
+    monkeypatch.setattr(_stc, "get_stats_toolkit_client", lambda **_: client)
+    return server
+
+
+def test_c17_c18_c19_toolkit_provenance_split_validation_and_unavailable(
+    _frustra_fake_stats_toolkit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fx = _fixture()
+    receipt = _build(fx)
+    run_id = receipt["stats_run"]["run_id"]
+    assert run_id
+    tk_outputs = _frustra_fake_stats_toolkit.client().read_run_outputs(run_id)
+    assert receipt["distributions"]["overall"]["mean"] == pytest.approx(
+        tk_outputs["columns"]["overall"]["mean"]
+    )
+    assert receipt["per_residue"][0]["non_native"]["median"] == pytest.approx(
+        tk_outputs["columns"]["residue:0:non_native"]["median"]
+    )
+
+    posts_before = sum(1 for m, p, *_ in _frustra_fake_stats_toolkit.calls if m == "POST" and p == "/api/v1/runs")
+    ver = analytics.verify_statistics_receipt_against_bundle(
+        statistics=receipt,
+        request=fx["request"],
+        execution_receipt=fx["execution_receipt"],
+        landscape=fx["landscape"],
+        structure_map=fx["structure_map"],
+        capability_inventory=fx["capability_inventory"],
+        capability_inventory_bytes=fx["capability_inventory_bytes"],
+    )
+    posts_after = sum(1 for m, p, *_ in _frustra_fake_stats_toolkit.calls if m == "POST" and p == "/api/v1/runs")
+    assert posts_after == posts_before
+    assert ver["status"] == "verified"
+
+    from services import stats_toolkit_client as _stc
+    monkeypatch.setenv("BMS_STATS_TOOLKIT_URL", "off")
+    monkeypatch.setattr(_stc, "get_stats_toolkit_client", lambda **_: _stc.StatsToolkitClient(base_url="off"))
+    ver_off = analytics.verify_statistics_receipt_against_bundle(
+        statistics=receipt,
+        request=fx["request"],
+        execution_receipt=fx["execution_receipt"],
+        landscape=fx["landscape"],
+        structure_map=fx["structure_map"],
+        capability_inventory=fx["capability_inventory"],
+        capability_inventory_bytes=fx["capability_inventory_bytes"],
+    )
+    assert ver_off["status"] == "not_rechecked"
+
+    legacy = copy.deepcopy(receipt)
+    legacy.pop("stats_run", None)
+    unhashed = {k: v for k, v in legacy.items() if k != "statistics_sha256"}
+    legacy["statistics_sha256"] = hashlib.sha256(rfc8785.dumps(unhashed)).hexdigest()
+    ver_old = analytics.verify_statistics_receipt_against_bundle(
+        statistics=legacy,
+        request=fx["request"],
+        execution_receipt=fx["execution_receipt"],
+        landscape=fx["landscape"],
+        structure_map=fx["structure_map"],
+        capability_inventory=fx["capability_inventory"],
+        capability_inventory_bytes=fx["capability_inventory_bytes"],
+    )
+    assert ver_old["status"] == "not_rechecked"

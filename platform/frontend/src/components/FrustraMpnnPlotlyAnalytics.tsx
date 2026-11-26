@@ -7,6 +7,7 @@ import {
 } from './conformationalMapping/conformationalMappingSemantics.js';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors.js';
 import { buildFrustraMpnnPlotlyModel } from './frustraMpnnPlotlyModel.js';
+import type { FrustraMpnnStatistics } from '../lib/frustraMpnnApi.js';
 
 const PLOT_CONFIG = {
     responsive: true,
@@ -20,12 +21,14 @@ function FrustraMpnnPlotlyAnalytics({
     residues,
     highMax,
     minimalMin,
+    statistics,
 }: {
     residues: CmLandscapeResidue[];
     highMax: number;
     minimalMin: number;
+    statistics?: FrustraMpnnStatistics | null;
 }) {
-    const model = useMemo(() => buildFrustraMpnnPlotlyModel(residues), [residues]);
+    const model = useMemo(() => buildFrustraMpnnPlotlyModel(residues, statistics), [residues, statistics]);
     const colors = useThemeColors();
     const baseLayout = useThemePlotlyLayout();
     const { heatmapData, nativeData, distributionData, alternativeEnvelopeData, burdenData, nativeVsAlternativeData, compositionData, heatmapLayout, nativeLayout, distributionLayout, alternativeEnvelopeLayout, burdenLayout, nativeVsAlternativeLayout, compositionLayout } = useMemo(() => {

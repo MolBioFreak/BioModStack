@@ -1,3 +1,4 @@
+import asyncio
 """
 FrustraMPNN API Router - Energetic Frustration Analysis
 
@@ -596,6 +597,15 @@ class FrustraMPNNHistoricalSummaryV1Document(RootModel[dict[str, JsonValue]]):
         return load_schema("frustrampnn_summary_v1")
 
 
+class FrustraMPNNStatisticsVerification(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["verified", "not_rechecked", "mismatch"]
+    label: str = Field(min_length=1)
+    reason: str | None = None
+    stats_run_id: str | None = None
+
+
 class FrustraMPNNStatisticsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -618,6 +628,7 @@ class FrustraMPNNStatisticsResponse(BaseModel):
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
     statistics: FrustraMPNNStatisticsDocument | None
+    statistics_verification: FrustraMPNNStatisticsVerification | None = None
 
 
 class StatisticsDatasetReference(BaseModel):
@@ -4345,9 +4356,21 @@ async def result_statistics(
     job_id: str = Query(...),
     session: AsyncSession = Depends(get_session),
 ) -> FrustraMPNNStatisticsResponse:
+    from services.frustrampnn.analytics import verify_statistics_receipt_with_toolkit
+
     result = await _scoped_result(invocation_id, job_id, session)
     authority = _result_authority(result)
     available = bool(authority["statistics_available"])
+    stats_doc = authority["statistics_json"] if available else None
+    verification = (
+        await asyncio.to_thread(
+            verify_statistics_receipt_with_toolkit,
+            stats_doc,
+            strict_mismatch=False,
+        )
+        if available and isinstance(stats_doc, Mapping)
+        else None
+    )
     return FrustraMPNNStatisticsResponse.model_validate(
         {
             "result_id": result.invocation_id,
@@ -4366,7 +4389,8 @@ async def result_statistics(
             "comparison_compatibility_id": authority[
                 "comparison_compatibility_id"
             ],
-            "statistics": authority["statistics_json"] if available else None,
+            "statistics": stats_doc,
+            "statistics_verification": verification,
         }
     )
 

@@ -45,7 +45,19 @@ test('Plotly model covers the full 540 by 20 landscape without sampling', () => 
     assert.equal(model.medianAlternativeScores.length, 540);
     assert.ok(Math.abs(model.bestAlternativeDeltas[0]! - 0.18) < 1e-12);
     assert.ok(Math.abs(model.worstAlternativeDeltas[0]! - (-0.01)) < 1e-12);
-    assert.ok(Math.abs(model.medianAlternativeScores[0]! - 1.10) < 1e-12);
+    // Without Toolkit per-residue statistics, medianAlternativeScores stays null (no local median math, C20).
+    assert.equal(model.medianAlternativeScores[0], null);
+    // With Toolkit per-residue statistics supplied, plotted medians match the receipt values.
+    const modelWithStats = buildFrustraMpnnPlotlyModel([makeResidue(1)], {
+        per_residue: [{
+            entity_instance_id: 'pdb:A',
+            auth_asym_id: 'A',
+            auth_seq_id: 1,
+            insertion_code: '',
+            non_native: { median: 1.10 },
+        } as any],
+    });
+    assert.ok(Math.abs(modelWithStats.medianAlternativeScores[0]! - 1.10) < 1e-12);
     assert.ok(Math.abs(model.highAlternativeFractions[0]! - (7 / 19)) < 1e-12);
     assert.ok(Math.abs(model.minimalAlternativeFractions[0]! - (6 / 19)) < 1e-12);
     assert.deepEqual(model.substitutionClassFractions.A, { high: 1, neutral: 0, minimal: 0, missing: 0 });

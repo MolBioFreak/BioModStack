@@ -190,3 +190,15 @@ def test_v2_workflow_reporters_execute_validator_before_stage_complete_callback(
     assert "\\${status}" in standalone
     assert "test \\\"\\${status}\\\" = complete" in standalone
     assert "frustrampnn complete" in WORKFLOWS[1].read_text(encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _frustra_fake_stats_toolkit(monkeypatch: pytest.MonkeyPatch):
+    from services import stats_toolkit_client as _stc
+    from test_stats_centralization_plumbing import _FakeToolkitServer
+
+    _stc.clear_workspace_cache()
+    server = _FakeToolkitServer(existing_workspace=True)
+    client = server.client()
+    monkeypatch.setattr(_stc, "get_stats_toolkit_client", lambda **_: client)
+    return server

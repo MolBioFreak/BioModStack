@@ -582,6 +582,12 @@ async def test_v2_statistics_returns_exact_persisted_receipt_and_audit_identity(
             "comparison_compatibility_id"
         ],
         "statistics": expected_statistics,
+        "statistics_verification": {
+            "status": "mismatch",
+            "label": "mismatch",
+            "reason": "stats_toolkit_output_mismatch",
+            "stats_run_id": expected_statistics["stats_run"]["run_id"],
+        },
     }
 
 
@@ -1262,3 +1268,15 @@ async def test_download_fails_closed_for_changed_or_unsafe_artifact(api, mutatio
         f"/api/frustrampnn/artifacts/{artifact_id}", params={"job_id": "job-1"}
     )
     assert response.status_code == 409
+
+
+@pytest.fixture(autouse=True)
+def _frustra_fake_stats_toolkit(monkeypatch: pytest.MonkeyPatch):
+    from services import stats_toolkit_client as _stc
+    from test_stats_centralization_plumbing import _FakeToolkitServer
+
+    _stc.clear_workspace_cache()
+    server = _FakeToolkitServer(existing_workspace=True)
+    client = server.client()
+    monkeypatch.setattr(_stc, "get_stats_toolkit_client", lambda **_: client)
+    return server

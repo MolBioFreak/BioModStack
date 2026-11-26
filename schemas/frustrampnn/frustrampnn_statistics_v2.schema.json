@@ -1741,6 +1741,41 @@
     "sha256": {
       "pattern": "^[0-9a-f]{64}$",
       "type": "string"
+    },
+    "statsRunRef": {
+      "additionalProperties": false,
+      "properties": {
+        "method_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "tool_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "tool_version": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspace_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "workspace_id",
+        "tool_id",
+        "tool_version",
+        "method_version"
+      ],
+      "type": "object"
     }
   },
   "$id": "https://biomodstack.local/schemas/frustrampnn/frustrampnn_statistics_v2.schema.json",
@@ -2318,6 +2353,9 @@
     "target_id": {
       "minLength": 1,
       "type": "string"
+    },
+    "stats_run": {
+      "$ref": "#/$defs/statsRunRef"
     }
   },
   "required": [

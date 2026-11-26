@@ -2124,7 +2124,7 @@ def _validate_v2_closure(
     allow_legacy_external_authority: bool = False,
 ) -> None:
     from .analysis import finalize_landscape_v2
-    from .analytics import build_statistics_receipt, validate_statistics_receipt
+    from .analytics import verify_statistics_receipt_against_bundle
     from .runtime import compile_frustrampnn_command_plan
     from . import settings as _settings
 
@@ -2213,7 +2213,9 @@ def _validate_v2_closure(
             raise ContractValidationError(
                 "installed capability inventory bytes disagree with v2 request authority"
             )
-        expected_statistics = build_statistics_receipt(
+        verify_statistics_receipt_against_bundle(
+            statistics=statistics,
+            statistics_bytes=payloads["frustrampnn_statistics_v1.json"],
             request=request,
             execution_receipt=receipt,
             landscape=landscape,
@@ -2222,17 +2224,10 @@ def _validate_v2_closure(
             capability_inventory_bytes=capability_inventory_bytes,
             allow_legacy_external_authority=allow_legacy_external_authority,
         )
-        validate_statistics_receipt(statistics)
     except (OSError, ContractValidationError, rfc8785.CanonicalizationError) as exc:
         raise ManifestValidationError(
             f"v2 statistics authority validation failed: {exc}"
         ) from exc
-    if statistics != expected_statistics or payloads[
-        "frustrampnn_statistics_v1.json"
-    ] != rfc8785.dumps(expected_statistics):
-        raise ManifestValidationError(
-            "v2 statistics do not exactly recompute from canonical bundle authority"
-        )
     plan = compile_frustrampnn_command_plan(effective)
     entries = [entry.canonical_payload() for entry in plan.entries]
     if receipt["command_plan"] != {"entries": entries, "plan_sha256": plan.plan_sha256}:

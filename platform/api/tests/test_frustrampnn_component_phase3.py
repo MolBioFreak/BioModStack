@@ -1416,3 +1416,15 @@ def test_v3_single_structure_producer_emits_predict_execution_method(tmp_path: P
     validate_result_manifest(
         output, json.loads((output / "frustrampnn_result_manifest_v3.json").read_text())
     )
+
+
+@pytest.fixture(autouse=True)
+def _frustra_fake_stats_toolkit(monkeypatch: pytest.MonkeyPatch):
+    from services import stats_toolkit_client as _stc
+    from test_stats_centralization_plumbing import _FakeToolkitServer
+
+    _stc.clear_workspace_cache()
+    server = _FakeToolkitServer(existing_workspace=True)
+    client = server.client()
+    monkeypatch.setattr(_stc, "get_stats_toolkit_client", lambda **_: client)
+    return server

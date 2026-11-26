@@ -2208,3 +2208,15 @@ async def test_disabled_protein_design_rejects_unsafe_or_ambiguous_published_str
             await ingest_job_results(job_id, str(job_root), session, commit=True)
     async with db() as session:
         assert await session.get(Design, candidate_id) is None
+
+
+@pytest.fixture(autouse=True)
+def _frustra_fake_stats_toolkit(monkeypatch: pytest.MonkeyPatch):
+    from services import stats_toolkit_client as _stc
+    from test_stats_centralization_plumbing import _FakeToolkitServer
+
+    _stc.clear_workspace_cache()
+    server = _FakeToolkitServer(existing_workspace=True)
+    client = server.client()
+    monkeypatch.setattr(_stc, "get_stats_toolkit_client", lambda **_: client)
+    return server
