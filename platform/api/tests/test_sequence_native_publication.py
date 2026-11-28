@@ -275,3 +275,36 @@ async def test_cancellation_and_review_precede_native_ingestion(tmp_path, store,
         result = await finalize_successful_job(job, str(root), session)
         assert not result.completed and result.integrity_state == expected
         assert await session.scalar(select(func.count(JobArtifact.id))) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model,mode", [("caliby_experimental", "sidechain_pack"), ("ligandmpnn", "metal_aware")])
+async def test_record_document_custody(tmp_path, monkeypatch, store, model, mode):
+    from fastapi import HTTPException
+    from services.binder_native_selection import resolve_native_source
+    from services import caliby_native_publication, ligandmpnn_design_publication
+    import hashlib
+
+    publisher = caliby_native_publication if model == "caliby_experimental" else ligandmpnn_design_publication
+    root, _, primary, _, params = emitted_result(tmp_path, monkeypatch, model, mode)
+    await seed(store, root, model, mode, params)
+    async with store() as session:
+        job = await session.get(Job, "native")
+        await publisher.publish_native_results(job, root, session)
+        await session.commit()
+    async with store() as session:
+        job = await session.get(Job, "native")
+        page = await publisher.read_published_native_results(job, session)
+        row = page['records'][0]
+        file = (row['structure'] if model == 'caliby_experimental' else next(a for a in row['artifacts'] if a['kind'] == 'structure'))
+        path, identity = await resolve_native_source(session, job.id, file['artifact_id'])
+        assert path == root / publisher.DIRECTORY / file['path']
+        assert identity['owner_job_id'] == job.id and identity['artifact_id'] == file['artifact_id']
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == identity['artifact_sha256'] == file['sha256']
+        for bad in (next(a['artifact_id'] for a in page['artifacts'] if a['path'] == primary), 'unregistered'):
+            with pytest.raises(HTTPException) as error:
+                await resolve_native_source(session, job.id, bad)
+            assert error.value.status_code == 404
+        path.write_bytes(path.read_bytes() + b'\n# different byte identity\n')
+        with pytest.raises(ValueError, match='bytes or ownership'):
+            await resolve_native_source(session, job.id, file['artifact_id'])

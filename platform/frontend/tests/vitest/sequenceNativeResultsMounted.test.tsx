@@ -8,7 +8,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
 import { ResultsViewer } from '../../src/components/ResultsViewer';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
-import { nativeSequenceResultKind } from '../../src/components/NativeSequenceResults';
+import NativeSequenceResults, { nativeSequenceResultKind } from '../../src/components/NativeSequenceResults';
 
 vi.mock('../../src/components/MolstarViewer', () => ({ default: (props: object) => <div data-testid="native-cif-viewer">{JSON.stringify(props)}</div> }));
 vi.mock('react-plotly.js', () => ({ default: () => null }));
@@ -177,4 +177,47 @@ it.each([['ensemble_design', false], ['sidechain_pack', true], ['ligand_aware', 
 });
 it('routes only the exact restored and ordinary modes, leaving historical and diagnostic routes unchanged', () => {
     for (const [model_id, mode] of [['caliby_experimental', 'design'], ['caliby_binder', 'design'], ['ligandmpnn', 'interface_context'], ['fampnn', 'design'], ['proteinmpnn', 'ensemble_design']]) expect(nativeSequenceResultKind({ model_id, mode })).toBeNull();
+});
+
+// Only read a publication and open the editor route. No compute job is created.
+it.each(['sidechain_pack', 'metal_aware', 'sequence-only', 'unregistered', 'absent-selection'])('record document custody: %s', async variant => {
+    const caliby = variant === 'sidechain_pack';
+    const mode = caliby ? 'sidechain_pack' : 'metal_aware';
+    const doc = structuredClone(emitted[mode]);
+    const row = doc.records[0];
+    const path = caliby ? row.structure_path : row.artifacts.find((a: any) => a.kind === 'structure').path;
+    const exact = { relative_path: path, artifact_id: 'coordinate-asset', sha256: '9'.repeat(64), download_url: '/fixture/one.cif' };
+    if (!caliby && variant === 'sequence-only') row.artifacts = row.artifacts.filter((a: any) => a.kind !== 'structure');
+    if (!caliby) row.artifacts.push({ kind: 'attachment', path: 'also-looks-like-a-structure.cif' });
+    doc.artifacts = [...(variant === 'unregistered' ? [] : [exact]), { ...exact, relative_path: 'also-looks-like-a-structure.cif', artifact_id: 'not-coordinates' }];
+    const id = '55555555-5555-4555-8555-555555555555';
+    const original = window.location.href;
+    window.history.replaceState({}, '', `/bms/designs/${id}?launch_context_id=project-context${variant === 'absent-selection' ? '&artifact_id=does-not-exist' : ''}`);
+    const requests: string[] = [];
+    api.defaults.adapter = async config => { requests.push(`${config.method} ${config.url}`);
+        const data = config.url?.endsWith('-results') ? doc : { records: [], total: 0, steps: {}, errors: {} };
+        return { data, config, status: 200, statusText: 'OK', headers: {} };
+    };
+    try {
+        await act(async () => root.render(<MemoryRouter><QueryClientProvider client={client}><ThemeProvider><NativeSequenceResults job={{ id, model_id: caliby ? 'caliby_experimental' : 'ligandmpnn', mode, status: 'completed' }} launchContextId="project-context" /></ThemeProvider></QueryClientProvider></MemoryRouter>));
+        await until(() => !!container.querySelector('[aria-label="Native initial-generation results"]') && container.textContent!.includes('1 native records'));
+        expect(container.textContent).toContain('1 native records');
+        const link = () => Array.from(container.querySelectorAll('a')).find(a => a.textContent === 'Predict exact structure');
+        if (!caliby && variant !== 'metal_aware') {
+            await flush(); expect(link()).toBeUndefined();
+            expect(container.textContent).not.toContain('Use as MD starting structure'); return;
+        }
+        await until(() => Boolean(link())); expect(link()).toBeDefined();
+        const url = new URL(link()!.href);
+        expect(url.searchParams.get('launch_context_id')).toBe('project-context');
+        expect(JSON.parse(url.searchParams.get('source_structure')!)).toMatchObject({ job_id: id, document: { artifact_id: exact.artifact_id }, expected_sha256: exact.sha256 });
+        const impl = (window.location as any)[Object.getOwnPropertySymbols(window.location).find(s => s.description === 'impl')!];
+        let destination = '';
+        const capture = vi.spyOn(impl, '_locationObjectNavigate').mockImplementation((u: any) => { destination = `/${u.path.join('/')}?${u.query}`; });
+        try { await act(async () => Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Use as MD starting structure')!.click()); } finally { capture.mockRestore(); }
+        const md = new URL(destination, window.location.origin); expect(md.pathname).toBe('/bms/submit');
+        expect(JSON.parse(md.searchParams.get('source_ref')!).candidate_ref).toEqual({ kind: 'native_document', job_id: id, artifact_id: exact.artifact_id });
+        expect(md.searchParams.get('launch_context_id')).toBe('project-context');
+        expect(new URL(md.searchParams.get('return_to')!, window.location.origin).searchParams.get('artifact_id')).toBe(exact.artifact_id);
+    } finally { window.history.replaceState({}, '', original); expect(requests.some(r => /^post \/api\/jobs$/.test(r))).toBe(false); }
 });

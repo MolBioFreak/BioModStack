@@ -42,6 +42,16 @@ async def resolve_native_source(session, job_id: str, artifact_id: str) -> tuple
             'owner_job_id': owner.id, 'lineage_root_job_id': lineage_root,
             'source_parent_job_id': owner.parent_job_id, 'producer_model_id': producer,
             'target_state': document.get('target_state'), 'producer_document': document}
+    if owner.model_id in {'caliby_experimental', 'ligandmpnn'}:
+        from services.caliby_native import SUPPORTED_MODES as CALIBY_MODES
+        from services.ligandmpnn_design import MODES as LIGAND_MODES
+        if owner.mode in (CALIBY_MODES if owner.model_id == 'caliby_experimental' else LIGAND_MODES):
+            from services.binder_selected_round import operation_document, UnpublishedOperationDocument
+            try:
+                path, meta = await operation_document(session, owner, {'artifact_id': artifact_id})
+            except UnpublishedOperationDocument as exc:
+                raise HTTPException(404, 'Selected native structure not found') from exc
+            return path, {**meta, 'source_parent_job_id': owner.parent_job_id, 'target_state': None}
     owners = {
         'bindcraft2': ('bindcraft2_native_publication', 'bindcraft2/native/'),
         'boltzgen': ('boltzgen_generation_publication', 'boltzgen/native/'),

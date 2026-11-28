@@ -196,11 +196,15 @@ async def native_operation_records(session, owner):
     return publication, result
 
 
+class UnpublishedOperationDocument(ValueError):
+    """No unique coordinate in the verified publication matches the requested artifact."""
+
+
 async def operation_document(session, owner, ref):
     _, records = await native_operation_records(session, owner)
     matches = [record for candidate, record in records if candidate.get('artifact_id') == ref['artifact_id']]
     if len(matches) != 1:
-        raise ValueError('Selected native document is not an exact published record')
+        raise UnpublishedOperationDocument('Selected native document is not an exact published record')
     artifact = await session.get(JobArtifact, ref['artifact_id'])
     # The model reader has already checked attempt/path/hash/provenance equality.
     return Path(artifact.storage_path), {'artifact_id': artifact.id, 'artifact_sha256': artifact.sha256,

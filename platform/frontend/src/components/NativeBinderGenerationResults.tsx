@@ -10,7 +10,7 @@ import { fetchNativeBinderGeneration, nativeCandidateRoute, nativeDocumentLabel,
 import { readBinderSelection, writeBinderSelection, readBinderNativeSources, writeBinderNativeSources, type NativeCandidateSource } from '../lib/binderContinuation';
 import { BinderCandidateSets } from './BinderCandidateSets';
 import { candidateKey, candidateIdentity, uniqueCandidates, readRoundStorage, writeRoundStorage, type CandidateRef } from '../lib/binderSelectedRound';
-import { continuationHref, continuationLabel, rfd4Destinations } from '../lib/deNovoContinuation';
+import { continuationHref, continuationLabel, rfd4Destinations, type DeNovoDestination } from '../lib/deNovoContinuation';
 import { DeNovoRepeatSettings } from './DeNovoRepeatSettings';
 import { NativeGeneratedSequences } from './NativeGeneratedSequences';
 import { Rfd4RetainedStateContinuation } from './Rfd4RetainedStateContinuation';
@@ -46,6 +46,7 @@ export interface NativeWorkbenchAdapter {
     fetchPage: (offset: number, signal?: AbortSignal) => Promise<NativeGenerationPage>;
     label: (row: NativeGenerationRecord) => string;
     preferredColumns?: string[];
+    documentDestinations?: readonly DeNovoDestination[];
     metricLabel?: (key: string) => string | undefined;
     preferredDocument?: (row: NativeGenerationRecord) => NativeGenerationDocument | undefined;
     initialMetrics?: (numericKeys: string[]) => CohortInitialMetrics;
@@ -430,7 +431,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         <div className={`${panel} p-3`}>
             <div className="mb-2 text-xs font-semibold text-[var(--text-primary)]">Continue from {cohort.find(entry => entry.id === activeId)?.label ?? 'candidate'}</div>
             <nav aria-label="Continue exact native document" className="flex flex-wrap items-center gap-1.5 text-xs">
-                {(rfd4 ? [...rfd4Destinations, 'redesign', 'sequence', 'prediction'] as const : ['redesign', 'sequence', 'prediction'] as const).map(destination => {
+                {(adapter?.documentDestinations ?? (rfd4 ? [...rfd4Destinations, 'redesign', 'sequence', 'prediction'] as const : ['redesign', 'sequence', 'prediction'] as const)).map(destination => {
                     const href = new URL(continuationHref(continuationSource!, destination), window.location.origin);
                     const back = new URL(href.searchParams.get('return_to')!, window.location.origin);
                     back.searchParams.set('native_candidate', activeId!); back.searchParams.set('artifact_id', document.artifact_id);

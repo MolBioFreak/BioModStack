@@ -5,6 +5,7 @@ import { fetchCalibyNativeResults, fetchLigandMPNNDesignResults } from '../lib/a
 import type { Job } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
 import { NativeBinderGenerationResults, type NativeWorkbenchAdapter } from './NativeBinderGenerationResults';
+import type { NativeGenerationDocument } from '../lib/nativeBinderResults';
 import type { CandidateRef } from '../lib/binderSelectedRound';
 const ProtonPottsResults = lazy(() => import('./ProtonPottsResults'));
 
@@ -80,9 +81,9 @@ function Files({ files, onView }: { files: NativeFile[]; onView: (file: NativeFi
 }
 
 export default function NativeSequenceResults({ job, launchContextId }: { job: Pick<Job, 'id' | 'model_id' | 'mode' | 'status'> & Partial<Pick<Job, 'params'>>; launchContextId?: string | null }) {
-    return job.model_id === 'protonpottsmpnn' ? <Suspense fallback={<p>Loading native redesign workbench…</p>}><ProtonPottsResults job={job} launchContextId={launchContextId} /></Suspense> : <StructureSequenceResults job={job} />;
+    return job.model_id === 'protonpottsmpnn' ? <Suspense fallback={<p>Loading native redesign workbench…</p>}><ProtonPottsResults job={job} launchContextId={launchContextId} /></Suspense> : <StructureSequenceResults job={job} launchContextId={launchContextId} />;
 }
-function StructureSequenceResults({ job }: { job: Pick<Job, 'id' | 'model_id' | 'mode' | 'status'> }) {
+function StructureSequenceResults({ job, launchContextId }: { job: Pick<Job, 'id' | 'model_id' | 'mode' | 'status'>; launchContextId?: string | null }) {
     const kind = nativeSequenceResultKind(job);
     const [viewed, setViewed] = useState<NativeFile | null>(null);
 
@@ -97,6 +98,7 @@ function StructureSequenceResults({ job }: { job: Pick<Job, 'id' | 'model_id' | 
     const caliby = data && !('contract' in data) ? data : undefined;
     const ligand = data && 'contract' in data ? data : undefined;
     const count = data?.records.length ?? 0;
+    const selection = new URLSearchParams(window.location.search);
     const directory = kind === 'caliby' ? 'caliby_native' : 'ligandmpnn_design';
     const adapter = useMemo<NativeWorkbenchAdapter | undefined>(() => {
         if (!data) return undefined;
@@ -104,14 +106,33 @@ function StructureSequenceResults({ job }: { job: Pick<Job, 'id' | 'model_id' | 
             const handle = data.artifacts?.find(item => item.relative_path === file.path || item.relative_path === `${directory}/${file.path}`);
             return handle ? { ...file, ...handle, path: file.path } : file;
         };
-        const rows = caliby ? caliby.records.map(row => ({
-            candidate_key: row.record_id, candidate_ref: row.candidate_ref, native_record: row,
-            metrics: row.native, files: [resolveFile(row.structure ?? { path: row.structure_path, kind: 'structure' })],
-        })) : ligand!.records.map(row => ({
-            candidate_key: JSON.stringify(row.producer), candidate_ref: row.candidate_ref, native_record: row,
-            metrics: row.native_output, files: row.artifacts.map(resolveFile),
-        }));
-        return { key: kind!, title: kind === 'caliby' ? 'Caliby native records' : 'LigandMPNN native records',
+        const toStructures = (files: NativeFile[]): NativeGenerationDocument[] => {
+            const coords = files.filter(file => Boolean(file.artifact_id));
+            return coords.map(file => ({
+                artifact_id: file.artifact_id!,
+                logical_path: file.path.startsWith(`${directory}/`) ? file.path : `${directory}/${file.path}`,
+                download_url: file.download_url ?? undefined,
+                sha256: file.sha256,
+                primary: coords.length === 1,
+            }));
+        };
+        const rows = caliby ? caliby.records.map(row => {
+            const files = [resolveFile(row.structure ?? { path: row.structure_path, kind: 'structure' })];
+            const structures = toStructures(files);
+            return {
+                candidate_key: row.record_id, candidate_ref: row.candidate_ref, native_record: row,
+                metrics: row.native, files, ...(structures.length ? { structures } : {}),
+            };
+        }) : ligand!.records.map(row => {
+            const files = row.artifacts.map(resolveFile);
+            // Only the producer's coordinate role qualifies, not a filename suffix.
+            const structures = toStructures(files.filter((_, index) => row.artifacts[index].kind === 'structure'));
+            return {
+                candidate_key: JSON.stringify(row.producer), candidate_ref: row.candidate_ref, native_record: row,
+                metrics: row.native_output, files, ...(structures.length ? { structures } : {}),
+            };
+        });
+        return { key: kind!, documentDestinations: ['prediction'], title: kind === 'caliby' ? 'Caliby native records' : 'LigandMPNN native records',
             label: row => String(row.candidate_key), recordLabel: 'Native records',
             fetchPage: async offset => ({ records: rows.slice(offset, offset + 100), offset, limit: 100, total: rows.length, receipt: {}, publication: {} }),
             inspect: row => <div className="space-y-3"><Values value={row.native_record} /><Files files={row.files as NativeFile[]} onView={setViewed} /></div>,
@@ -131,7 +152,7 @@ function StructureSequenceResults({ job }: { job: Pick<Job, 'id' | 'model_id' | 
             {count === 0 && <p className="text-sm text-slate-400">No native records were emitted. Settings and retained files remain available.</p>}
             {ligand && !ligand.request.write_structures && <p className="text-xs text-slate-400">Structure writing was off. Native sequence records remain available.</p>}
             {viewed?.download_url && <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-3"><MolstarViewer structureUrl={viewed.stream_url ?? viewed.download_url} format="cif" label={viewed.path} artifactJobId={job.id} height={520} /></div>}
-            {adapter && <NativeBinderGenerationResults jobId={job.id} status={job.status} adapter={adapter} />}
+            {adapter && <NativeBinderGenerationResults jobId={job.id} status={job.status} launchContextId={launchContextId} adapter={adapter} artifactId={selection.get('artifact_id')} targetState={selection.get('target_state')} />}
             {(data.artifacts?.length ?? 0) > 0 && <details className="rounded-lg border border-slate-700 p-3"><summary className="cursor-pointer text-sm font-medium">Retained artifact files ({data.artifacts!.length})</summary><div className="mt-2"><Files files={(data.artifacts ?? []).map(file => ({ ...file, path: file.relative_path }))} onView={setViewed} /></div></details>}
             {caliby && <div className="grid gap-2 md:grid-cols-2">
                 <Receipt title="Requested Caliby settings" value={caliby.request.requested} />
