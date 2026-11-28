@@ -12,7 +12,10 @@ vi.mock('../../src/components/MolBioToolkit/AutoAnnotatePanel', () => ({ AutoAnn
 vi.mock('../../src/components/MolBioToolkit/panels', () => Object.fromEntries(['AlignmentPanel','AssemblyPanel','DigestPanel','HistoryPanel','PCRPanel','PrimerPanel','RnaStructurePanel','FeaturePanel','EditPanel','SearchPanel'].map(name => [name, () => null])));
 vi.mock('../../src/components/MolBioToolkit/RnaStructureViewer', () => ({ RnaStructureViewer: () => null }));
 vi.mock('../../src/components/MolBioToolkit/demoConstructs', () => ({ loadDemoPlasmids: mocks.demos }));
-vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({ useGlobalExperimentContext: () => ({ updateQueryParams: vi.fn(), contextHref: (p: string) => p, ...mocks.context }) }));
+vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({ useGlobalExperimentContext: () => ({ updateQueryParams: (updates: { workspace_id?: string | null }) => {
+        if (updates.workspace_id === null) mocks.context = {};
+        root.render(<QueryClientProvider client={client}><MemoryRouter><MolBioToolkitV2 /></MemoryRouter></QueryClientProvider>);
+    }, contextHref: (p: string) => p, ...mocks.context }) }));
 vi.mock('../../src/lib/restrictionAnalysis', async original => ({ ...await original<any>(), fetchRestrictionCatalogBrowse: async () => ({ catalog: { catalog_id: 'fixture' }, items: [] }), fetchRestrictionAnalysisBatch: async () => ({}) }));
 vi.mock('../../src/lib/api', async original => ({ ...await original<any>(),
     fetchNucleotideSequences: mocks.recent, fetchProjectHub: mocks.hub, fetchNucleotideSequence: mocks.get,

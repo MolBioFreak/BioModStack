@@ -93,7 +93,8 @@ import {
 } from '../../lib/api';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
 import { projectHubDNASequencesToConstructShelf, projectSequencesToConstructShelf } from './utils/projectConstructShelf';
-import { getProjectSequences, searchProjects } from '../../lib/projectManager';
+import { designerProjectSelection } from '../molbio-ngs/designerProjectSelection';
+import { getProjectSequences } from '../../lib/projectManager';
 import type {
     AnalysisTrack,
     SequenceData,
@@ -198,7 +199,6 @@ interface SequenceLibraryProps {
     activeProjectId?: string | null;
     projectOptions?: Array<{ id: string; name: string }>;
     onShelfSourceChange?: (nextValue: string) => void;
-    onShelfPickerEngage?: () => void;
 }
 
 export function SequenceLibrary({
@@ -224,7 +224,6 @@ export function SequenceLibrary({
     activeProjectId,
     projectOptions = [],
     onShelfSourceChange,
-    onShelfPickerEngage,
 }: SequenceLibraryProps) {
     const [showDemos, setShowDemos] = useState(false);
     const [alignmentSelection, setAlignmentSelection] = useState<string[]>([]);
@@ -284,9 +283,6 @@ export function SequenceLibrary({
                         <select
                             aria-label="Sequences from"
                             value={shelfSourceValue ?? 'unassigned'}
-                            onFocus={onShelfPickerEngage}
-                            onPointerDown={onShelfPickerEngage}
-                            onMouseEnter={onShelfPickerEngage}
                             onChange={(event) => onShelfSourceChange(event.target.value)}
                             className="mt-1 w-full rounded border border-slate-600 bg-slate-950 px-2 py-1.5 text-xs text-slate-100 focus:border-cyan-400 focus:outline-none"
                         >
@@ -718,7 +714,7 @@ function assertExactMolecularRevisionIdentity(
 export function MolBioToolkitV2() {
     const location = useLocation();
     const navigate = useNavigate();
-    const { workspaceId, globalExperimentId, domainExperimentId, stateRevisionId, updateQueryParams, contextHref } = useGlobalExperimentContext();
+    const { workspaces, workspaceId, globalExperimentId, domainExperimentId, stateRevisionId, updateQueryParams, contextHref } = useGlobalExperimentContext();
     const [alignmentBusy, setAlignmentBusy] = useState(false);
     const [alignmentError, setAlignmentError] = useState('');
     const alignmentTransferGeneration = useRef(0);
@@ -767,37 +763,19 @@ export function MolBioToolkitV2() {
     // State
     const [digestAssemblyFragments, setDigestAssemblyFragments] = useState<import('../../lib/api').AssemblyFragmentInput[] | null>(null);
     const urlProjectId = queryParams.get('project_id')?.trim() || queryParams.get('workspace_id')?.trim() || workspaceId || null;
-    const [shelfSelectionOverride, setShelfSelectionOverride] = useState<
-        { forUrlProjectId: string | null; value: 'unassigned' | 'all' | `project:${string}` } | null
-    >(null);
-    const effectiveOverride = shelfSelectionOverride && shelfSelectionOverride.forUrlProjectId === urlProjectId
-        ? shelfSelectionOverride.value
-        : null;
-    const activeShelfProjectId = effectiveOverride === null
-        ? urlProjectId
-        : (effectiveOverride.startsWith('project:') ? effectiveOverride.slice('project:'.length) : null);
-    const shelfSourceValue = activeShelfProjectId
-        ? `project:${activeShelfProjectId}`
-        : (effectiveOverride === 'all' ? 'all' : 'unassigned');
-    const hasExactPinnedFourTuple = Boolean(workspaceId && globalExperimentId && domainExperimentId && stateRevisionId && activeShelfProjectId === workspaceId && effectiveOverride === null);
-    const projectShelfScope = JSON.stringify([activeShelfProjectId ?? null, globalExperimentId ?? null, domainExperimentId ?? null, stateRevisionId ?? null]);
-    const showAllConstructs = effectiveOverride === 'unassigned' || effectiveOverride === 'all';
+    const activeShelfProjectId = urlProjectId;
+    const shelfSourceValue = activeShelfProjectId ? `project:${activeShelfProjectId}` : (queryParams.get('shelf') === 'all' ? 'all' : 'unassigned');
+    const hasExactPinnedFourTuple = Boolean(workspaceId && globalExperimentId && domainExperimentId && stateRevisionId && activeShelfProjectId === workspaceId);
+    const projectShelfScope = JSON.stringify([activeShelfProjectId, globalExperimentId, domainExperimentId, stateRevisionId]);
+    const showAllConstructs = !activeShelfProjectId;
     const libraryScope = JSON.stringify([projectShelfScope, shelfSourceValue]);
-    const [shelfPickerEngaged, setShelfPickerEngaged] = useState(false);
-    const engageShelfPicker = useCallback(() => setShelfPickerEngaged(true), []);
-    const shelfProjectsQuery = useQuery({
-        queryKey: ['molbio-shelf-projects'],
-        queryFn: ({ signal }) => searchProjects({ archive: 'active', projectScope: 'all', limit: 100, signal }),
-        enabled: shelfPickerEngaged || Boolean(activeShelfProjectId),
-        staleTime: 60_000,
-    });
     const shelfProjectOptions = useMemo(() => {
-        const items = (shelfProjectsQuery.data?.items ?? []).map((p) => ({ id: p.id, name: p.name }));
+        const items = (workspaces ?? []).map(p => ({ id: p.id, name: p.name }));
         if (activeShelfProjectId && !items.some((item) => item.id === activeShelfProjectId)) {
             return [{ id: activeShelfProjectId, name: activeShelfProjectId }, ...items];
         }
         return items;
-    }, [activeShelfProjectId, shelfProjectsQuery.data?.items]);
+    }, [activeShelfProjectId, workspaces]);
     const [library, setLibrary] = useState<{ scope: string; items: NucleotideSequenceListItem[] }>({ scope: libraryScope, items: [] });
     // A scope change hides old rows in the same render, before async effects run.
     const sequences = library.scope === libraryScope ? library.items : [];
@@ -1196,28 +1174,9 @@ export function MolBioToolkitV2() {
     }, [activeShelfProjectId, domainExperimentId, globalExperimentId, hasExactPinnedFourTuple, libraryScope, openShelfIdsKey, queryClient, shelfSourceValue, stateRevisionId, workspaceId]);
 
     const handleShelfSourceChange = useCallback((nextValue: string) => {
-        if (nextValue.startsWith('project:')) {
-            const nextProjectId = nextValue.slice('project:'.length);
-            setShelfSelectionOverride({ forUrlProjectId: urlProjectId, value: `project:${nextProjectId}` });
-            updateQueryParams({
-                project_id: nextProjectId,
-                workspace_id: null,
-                global_experiment_id: null,
-                domain_experiment_id: null,
-                state_revision_id: null,
-            });
-            return;
-        }
-        const nextMode = nextValue === 'all' ? 'all' : 'unassigned';
-        setShelfSelectionOverride({ forUrlProjectId: urlProjectId, value: nextMode });
-        updateQueryParams({
-            project_id: null,
-            workspace_id: null,
-            global_experiment_id: null,
-            domain_experiment_id: null,
-            state_revision_id: null,
-        });
-    }, [updateQueryParams, urlProjectId]);
+        const project = nextValue.startsWith('project:') ? nextValue.slice('project:'.length) : null;
+        updateQueryParams(designerProjectSelection(project, nextValue === 'all'));
+    }, [updateQueryParams]);
 
     useEffect(() => {
         loadLibrary();
@@ -3506,7 +3465,6 @@ export function MolBioToolkitV2() {
                             activeProjectId={activeShelfProjectId}
                             projectOptions={shelfProjectOptions}
                             onShelfSourceChange={handleShelfSourceChange}
-                            onShelfPickerEngage={engageShelfPicker}
                         />
                     </div>
                 )}
@@ -3650,7 +3608,6 @@ export function MolBioToolkitV2() {
                             activeProjectId={activeShelfProjectId}
                             projectOptions={shelfProjectOptions}
                             onShelfSourceChange={handleShelfSourceChange}
-                            onShelfPickerEngage={engageShelfPicker}
                         />
                         {viewerLayout.showLibraryResizeHandle && (
                             <button

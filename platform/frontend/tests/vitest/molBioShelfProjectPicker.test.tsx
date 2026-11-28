@@ -1,6 +1,6 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useSearchParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
@@ -24,11 +24,16 @@ vi.mock('../../src/components/MolBioToolkit/panels', () =>
 vi.mock('../../src/components/MolBioToolkit/RnaStructureViewer', () => ({ RnaStructureViewer: () => null }));
 vi.mock('../../src/components/MolBioToolkit/demoConstructs', () => ({ loadDemoPlasmids: vi.fn().mockResolvedValue([]) }));
 vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
-    useGlobalExperimentContext: () => ({
-        updateQueryParams: mocks.updateQueryParams,
-        contextHref: (p: string) => p,
-        ...mocks.context,
-    }),
+    useGlobalExperimentContext: () => {
+        const [, setParams] = useSearchParams();
+        const updateQueryParams = React.useCallback((changes: Record<string,string|null>) => {
+            mocks.updateQueryParams(changes);
+            setParams(current => { const next = new URLSearchParams(current); for (const [k,v] of Object.entries(changes)) {
+                if (v) next.set(k,v); else next.delete(k);
+            } return next; });
+        }, [setParams]);
+        return { updateQueryParams, workspaces: [{id:'proj-gg',name:'Golden Gate'},{id:'proj-bio',name:'Bionova'}], contextHref: (p: string) => p, ...mocks.context };
+    },
 }));
 vi.mock('../../src/lib/restrictionAnalysis', async (original) => ({
     ...(await original<any>()),
@@ -45,10 +50,13 @@ vi.mock('../../src/lib/api', async (original) => ({
 }));
 vi.mock('../../src/lib/projectManager', async (original) => ({
     ...(await original<any>()),
+    getProjectHub: vi.fn(),
     getProjectSequences: mocks.projectSeqs,
     searchProjects: mocks.searchProjects,
 }));
 
+import ProjectContext from '../../src/components/molbio-ngs/NgsMolBioProjectHub';
+import { getProjectHub } from '../../src/lib/projectManager';
 import { MolBioToolkitV2 } from '../../src/components/MolBioToolkit/MolBioToolkitV2';
 
 let host: HTMLDivElement;
@@ -153,4 +161,34 @@ it('loads project sequences from ?project_id= alone and supports Sequences from 
         expect(host.textContent).toContain('pUnassigned');
         expect(host.textContent).toContain('pBionova');
     });
+});
+
+
+it('selects project work from the Molecular Toolset banner and keeps the shelf in sync', async () => {
+    vi.mocked(getProjectHub).mockImplementation(async id => ({
+        project: {id, name: id === 'proj-gg' ? 'Golden Gate' : 'Bionova', experiments: [], linked_local_projects: [], workflow_setups: []},
+        capabilities: {has_in_silico:true, has_molbio:true, has_ngs_ont:true},
+        sections:{in_silico:[], molecular_sequences:[], molecular_operations:[{id:id+'-op',title:id+' saved operation',subtitle:'',badges:[],open_href:'/designer?project_id='+id+'&molbio_operation_id='+id+'-op'}],ngs_ont_and_alignments:[]}, next_cursor:null,
+    } as any));
+    await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/designer']}>
+        <ProjectContext presentation="viewer"><MolBioToolkitV2 /></ProjectContext>
+    </MemoryRouter></QueryClientProvider>));
+    const picker=host.querySelector<HTMLSelectElement>('select[aria-label="Select project"]');
+    expect(picker).not.toBeNull();
+    const choose = async (sel:HTMLSelectElement,value:string) => act(async()=>{sel.value=value;sel.dispatchEvent(new Event('change',{bubbles:true}));});
+    await choose(picker!, 'proj-gg');
+    await vi.waitFor(()=>expect(host.querySelector('h1')?.textContent).toBe('Golden Gate'));
+    expect(host.textContent).toContain('Notes and research records');
+    await act(async()=>host.querySelector<HTMLButtonElement>('#section-molbio-heading')!.click());
+    const operations=Array.from(host.querySelectorAll('button')).find(b=>b.textContent?.includes('Operations'))!;
+    await act(async()=>operations.click());
+    expect(host.querySelector('a[href*="molbio_operation_id=proj-gg-op"]')).not.toBeNull();
+    const editor=Array.from(host.querySelectorAll('button')).find(b=>b.textContent==='Sequence editor')!;
+    await act(async()=>editor.click());
+    const shelf=host.querySelector<HTMLSelectElement>('select[aria-label="Sequences from"]')!;
+    expect(shelf.value).toBe('project:proj-gg');
+    await choose(shelf,'project:proj-bio');
+    await vi.waitFor(()=>expect(host.querySelector('h1')?.textContent).toBe('Bionova'));
+    expect(picker!.value).toBe('proj-bio');
+    expect(host.querySelector('a[href*="molbio_operation_id=proj-gg-op"]')).toBeNull();
 });

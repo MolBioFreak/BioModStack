@@ -110,8 +110,7 @@ function App() {
               path="/designer"
               element={(
                   <div className="flex h-full min-h-0 w-full flex-col">
-                    <NgsMolBioProjectHub presentation="viewer" />
-                    <MolBioToolkitV2 />
+                    <NgsMolBioProjectHub presentation="viewer"><MolBioToolkitV2 /></NgsMolBioProjectHub>
                   </div>
                 )}
             />
