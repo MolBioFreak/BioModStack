@@ -728,3 +728,52 @@ it('selected native result opens the real sequence editor without a Job, retains
     expect(captured[0].params).not.toHaveProperty('source_structure');
     expect(captured[0].params).not.toHaveProperty('_source_prepared');
 });
+
+it('handoff receipt: editing a document retires ancestry after a cold Project reopen', async () => {
+    const old = 'inputs/original.cif', replacement = 'inputs/replacement.cif';
+    const saved = { sequence_continuation: true, model_id: 'caliby_experimental', mode: 'sidechain_pack',
+        structures: [{ state_id: 'one', path: old }], source_structure: { job_id: 'old-job', path: old },
+        binder_native_drafts: { 'fampnn:design': { sequence_continuation: true, input_pdb: old, target_pdb: old,
+            source_structure: { job_id: 'old-job', path: old }, note: 'keep' } } };
+    let setup: any = { schema: 'bms.project-workflow-setup.detail.v1', project_id: 'project', setup_context_id: 'setup',
+        global_experiment_id: 'experiment', domain_experiment_id: 'domain', relationship_kind: 'follow_up',
+        capability_id: 'protein', state: 'open', validation_state: 'incomplete', setup_destination: '/submit', return_uri: '/projects/project',
+        generation: 1, project_label: 'Project', experiment_label: 'Experiment', workflow_label: 'Sequence', field_errors: {}, diagnostics: {}, draft: saved };
+    const route = '/submit?project_id=project&setup_context_id=setup';
+    const previous = api.defaults.adapter as any;
+    api.defaults.adapter = async config => {
+        if (!config.url?.startsWith('/api/projects/project/workflow-setups/setup')) return previous(config);
+        if (config.method === 'put') setup = { ...setup, generation: setup.generation + 1, draft: JSON.parse(config.data).draft };
+        return { data: setup, config, status: 200, statusText: 'OK', headers: {} };
+    };
+    const input = () => document.querySelector<HTMLInputElement>('input[aria-label="structures.0.path"]');
+    await mountRoute(route);
+    await vi.waitFor(async () => { await settle(); expect(input()?.value).toBe(old); });
+    await change(document.querySelector('[aria-label="structures.0.state_id"]')!, 'renamed');
+    await click('Save draft'); expect(setup.draft.source_structure.job_id).toBe('old-job');
+    await change(input()!, replacement); await click('Save draft');
+    expect(setup.draft.source_structure).toEqual({ path: replacement, output_format: 'native' });
+    expect(setup.draft.binder_native_drafts['fampnn:design']).toMatchObject({ note: 'keep' });
+    expect(JSON.stringify(setup.draft)).not.toContain(old);
+    await act(async () => root!.unmount()); root = undefined; client.clear(); document.body.replaceChildren();
+    await mountRoute(route);
+    await vi.waitFor(async () => { await settle(); expect(input()?.value).toBe(replacement); });
+    await click('Save draft'); expect(JSON.stringify(setup.draft)).not.toContain('old-job');
+    expect(captured).toEqual([]);
+});
+
+it('handoff receipt: packing and ensemble forms point at the same selected file', async () => {
+    const prior = api.defaults.adapter as any;
+    api.defaults.adapter = async config => config.url === '/api/files/materialize-structure'
+        ? { data: nativeFixture, config, status: 200, statusText: 'OK', headers: {} } : prior(config);
+    const route = new URL(sequenceRoute, window.location.origin);
+    route.searchParams.set('model', 'caliby_experimental'); route.searchParams.set('mode', 'sidechain_pack');
+    await mountRoute(route.pathname + route.search);
+    const pathValue = (label: string) => document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)?.value;
+    await vi.waitFor(async () => { await settle(); expect(pathValue('structures.0.path')).toBe(nativeFixture.path); });
+    for (const [mode, label] of [['ensemble_design', 'ensembles.0.states.0.path'], ['sidechain_pack', 'structures.0.path']]) {
+        await change(document.querySelector('[aria-label="Sequence design model"]')!, `caliby_experimental:${mode}`);
+        await vi.waitFor(async () => { await settle(); expect(pathValue(label)).toBe(nativeFixture.path); });
+    }
+    expect(captured).toEqual([]);
+});

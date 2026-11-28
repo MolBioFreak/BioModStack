@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 const protenixSchema = JSON.parse(execFileSync(process.env.BMS_TEST_API_PYTHON ?? process.env.BMS_TEST_PYTHON ?? resolve('../api/.venv/bin/python'), ['-c', 'import json; from scripts.protenix_chemistry import parameter_schema; print(json.dumps(parameter_schema()))'], { cwd: resolve('../..'), encoding: 'utf8' }));
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { isolateDeNovoTransport } from './deNovoTransport';
 import { api } from '../../src/lib/api';
@@ -51,11 +51,11 @@ const posts: Array<{ url: string; body: any }> = [];
 const unexpected: string[] = [];
 const settle = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); }); };
 async function close() { await act(async () => root?.unmount()); root = undefined; client?.clear(); document.body.replaceChildren(); }
-async function mount(node: React.ReactNode, route = `/designs/${jobId}?native_candidate=native&artifact_id=alternate&target_state=B&model_number=2`) {
+async function mount(node: React.ReactNode, route = `/designs/${jobId}?native_candidate=native&artifact_id=alternate&target_state=B&model_number=2`, basename = '/') {
     window.history.replaceState({}, '', route);
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-    await act(async () => root!.render(<MemoryRouter initialEntries={[route]}><QueryClientProvider client={client}><ThemeProvider>{node}</ThemeProvider></QueryClientProvider></MemoryRouter>));
+    await act(async () => root!.render(<MemoryRouter basename={basename} initialEntries={[route]}><QueryClientProvider client={client}><ThemeProvider>{node}</ThemeProvider></QueryClientProvider></MemoryRouter>));
     await settle();
 }
 async function click(label: string) {
@@ -246,8 +246,9 @@ it('native recipe survives cold draft reopen and rebases existing bonds after ro
     expect(posts.filter(p => p.url === '/api/jobs')).toEqual([]);
 });
 
-it('actual Results MD action opens the real receiving editor and inspects exact CandidateRef without launch', async () => {
-    await mount(<NativeBinderGenerationResults jobId={jobId} artifactId="alternate" targetState="B" />);
+it.each(['/', '/bms/'])('handoff receipt: actual Results MD action opens the exact document under %s without launch', async base => {
+    await mount(<NativeBinderGenerationResults jobId={jobId} artifactId="alternate" targetState="B" />,
+        `${base}designs/${jobId}?native_candidate=native&artifact_id=alternate&target_state=B&model_number=2`);
     await vi.waitFor(async () => { await settle(); expect(document.querySelector('[aria-label="Continue exact native document"]')).not.toBeNull(); });
     // Browser navigation is a transport boundary: capture jsdom's otherwise
     // unimplemented navigation, not the route builder or any scientific owner.
@@ -256,17 +257,43 @@ it('actual Results MD action opens the real receiving editor and inspects exact 
     let destination = '';
     const navigation = vi.spyOn(impl, '_locationObjectNavigate').mockImplementation((url: any) => { destination = `/${url.path.join('/')}?${url.query}`; });
     await click('Use as MD starting structure'); navigation.mockRestore();
+    expect(new URL(destination, window.location.origin).pathname).toBe(`${base}submit`);
     expect(destination).toContain('template=molecular_dynamics');
     const query = new URL(destination, window.location.origin).searchParams;
     expect(JSON.parse(query.get('source_ref')!)).toEqual({ kind: 'candidate', id: jobId, candidate_ref: candidate });
     expect(query.get('source_design_id')).toBeNull();
     expect(query.get('return_to')).toContain('artifact_id=alternate');
-    await close(); await mount(<JobSubmission />, destination);
+    expect(new URL(query.get('return_to')!, window.location.origin).pathname).toBe(`/designs/${jobId}`);
+    const returned = new URL(query.get('return_to')!, window.location.origin);
+    const expectedSelection = new URLSearchParams({ artifact_id: 'alternate', target_state: 'B', model_number: '2' });
+    for (const [key, value] of expectedSelection) expect(returned.searchParams.get(key)).toBe(value);
+    function ReturnLocation() {
+        const location = useLocation();
+        return <output aria-label="Reopened result">{location.pathname}{location.search}{location.hash}</output>;
+    }
+    await close(); await mount(<Routes><Route path="/submit" element={<JobSubmission />} />
+        <Route path="/designs/:job" element={<ReturnLocation />} /></Routes>, destination, base);
     await vi.waitFor(async () => { await settle(); expect(posts.some(p => p.url === '/api/molecular-dynamics/starting-structures/inspect')).toBe(true); });
     expect(posts.find(p => p.url.endsWith('/inspect'))!.body).toEqual({ source_ref: { kind: 'candidate', id: jobId, candidate_ref: candidate }, chemistry_profile_id: null });
     await settle();
     expect(document.body.textContent).toContain('Alternate MODEL 2 fixture');
+    await click('← Back to workflows');
+    expect(document.querySelector('[aria-label="Reopened result"]')?.textContent).toBe(query.get('return_to'));
     expect(posts.filter(p => p.url === '/api/jobs' || p.url.includes('launch'))).toEqual([]);
 });
 
 
+
+it.each([true, false])('handoff receipt: skip analysis only for continuation=%s', async scoped => {
+    let draft: any;
+    const previous = api.defaults.adapter as any;
+    api.defaults.adapter = async config => config.url === '/api/models/frustrampnn/integration'
+        ? { config, status: 200, statusText: 'OK', headers: {}, data: { workflows: { structure_prediction: { default_enabled: true } } } }
+        : previous(config);
+    await mount(<StructurePredictionTemplate onBack={() => {}} onDraftChange={d => { draft = d; }}
+        initialValues={{ sequence: 'AG', pred_method: 'esmfold2', run_frustrampnn: true, ...(scoped ? { _continuation_chains: [] } : {}) }} />);
+    await vi.waitFor(async () => { await settle(); expect(draft?.native_job_request).toBeTruthy(); });
+    expect(draft.editor_state.run_frustrampnn).toBe(!scoped);
+    expect(draft.native_job_request.params.run_frustrampnn).toBe(!scoped);
+    expect(posts.filter(p => p.url === '/api/jobs')).toEqual([]);
+});

@@ -2,7 +2,7 @@
 export function mountedApplicationBase(): string {
     const path = typeof window === 'undefined' ? '' : window.location.pathname;
     const match = path.match(/^(.*\/)(?:designs\/|submit(?:\/|$))/);
-    return match?.[1] ?? import.meta.env.BASE_URL ?? '/';
+    return match?.[1] ?? import.meta.env?.BASE_URL ?? '/';
 }
 export function sourceResultReturn(value: string | null, baseUrl = mountedApplicationBase()): string | null {
     const base = (baseUrl || '/').replace(/\/+$/, '');

@@ -296,7 +296,7 @@ export function JobSubmission() {
         if (!continuationQuery.data || appliedContinuation.current === continuationKey || (projectSetup.active && (!projectSetup.setup || projectSetup.settings.sequence_continuation))) return;
         appliedContinuation.current = continuationKey;
         const preparedValues = continuationDestination === 'sequence'
-            ? { sequence_continuation: true, ...continuationQuery.data, ...nativeSequenceInput(selectedModelId || 'proteinmpnn', continuationQuery.data._source_prepared, continuationQuery.data._source_native_prepared) }
+            ? { sequence_continuation: true, ...continuationQuery.data, ...nativeSequenceInput(selectedModelId || 'proteinmpnn', continuationQuery.data._source_prepared, continuationQuery.data._source_native_prepared, selectedModeId || undefined) }
             : { ...continuationQuery.data, ...(continuationDestination?.startsWith('rfd4_') ? {
                 native_recipe: continuationDestination === 'rfd4_partial' ? 'partial'
                     : continuationDestination === 'rfd4_inverse' ? 'inverse' : 'annotated',
@@ -1037,7 +1037,7 @@ export function JobSubmission() {
     useEffect(() => {
         setSequencePreparationError(null);
         const native = params._source_native_prepared;
-        if (!isSequenceContinuation || !native || selectedModelId === 'caliby_experimental' || params.input_pdb) return;
+        if (!isSequenceContinuation || !native || selectedModelId === 'caliby_experimental' || params.input_pdb || params.target_pdb) return;
         let current = true;
         const preparation = native.format === 'pdb' ? Promise.resolve(native)
             : materializeExactStructure({ path: native.path, expected_sha256: native.sha256, output_format: 'pdb', ...(native.model_number == null ? {} : { model_number: native.model_number }) });
@@ -1045,7 +1045,7 @@ export function JobSubmission() {
             if (current) setParams(previous => ({ ...previous, input_pdb: prepared.path, ...(selectedModelId === 'ligandmpnn' || selectedModelId === 'protonpottsmpnn' ? { target_pdb: prepared.path } : {}), _source_prepared: prepared }));
         }).catch(error => { if (current) setSequencePreparationError(String(error)); });
         return () => { current = false; };
-    }, [isSequenceContinuation, selectedModelId, selectedModeId, params._source_native_prepared, params.input_pdb, clonedValues]);
+    }, [isSequenceContinuation, selectedModelId, selectedModeId, params._source_native_prepared, params.input_pdb, params.target_pdb, clonedValues]);
 
     const sequenceDraft = () => {
         const { binder_native_drafts: _inactive, ...active } = params;
@@ -1059,7 +1059,7 @@ export function JobSubmission() {
             sequence_continuation: true, source_structure: params.source_structure,
             _source_prepared: params._source_prepared, _source_native_prepared: params._source_native_prepared,
             ...(params._source_native_prepared ? continuationRoleDefaults(params._source_native_prepared, 'sequence') : {}),
-            ...(params._source_prepared ? nativeSequenceInput(model, params._source_prepared, params._source_native_prepared) : {}),
+            ...(params._source_prepared ? nativeSequenceInput(model, params._source_prepared, params._source_native_prepared, mode) : {}),
         };
         setClonedValues(next); setParams(next); setSelectedModelId(model); setSelectedModeId(mode);
     };
@@ -1070,19 +1070,25 @@ export function JobSubmission() {
         // Replacing the consumed source retires the old ancestry, not sequence edits.
         setParams(prev => {
             const next = { ...prev, [key]: value };
-            const sourcePaths = (ensembles: UntypedApiValue) => (ensembles || []).flatMap((ensemble: UntypedApiValue) => (ensemble.states || []).map((state: UntypedApiValue) => state.path));
+            const ensemblePaths = (ensembles: UntypedApiValue) => (ensembles || []).flatMap((ensemble: UntypedApiValue) => (ensemble?.states || []).map((state: UntypedApiValue) => state?.path));
+            const structurePaths = (structures: UntypedApiValue) => (structures || []).map((state: UntypedApiValue) => state?.path);
             const replaced = key === 'input_pdb' ? value !== prev.input_pdb
-                : key === 'ensembles' && JSON.stringify(sourcePaths(value)) !== JSON.stringify(sourcePaths(prev.ensembles));
+                : key === 'target_pdb' ? value !== prev.target_pdb
+                : key === 'ensembles' ? JSON.stringify(ensemblePaths(value)) !== JSON.stringify(ensemblePaths(prev.ensembles))
+                : key === 'structures' && JSON.stringify(structurePaths(value)) !== JSON.stringify(structurePaths(prev.structures));
             if (replaced) {
-                const paths = key === 'input_pdb' ? [value] : sourcePaths(value);
+                const paths = (key === 'input_pdb' || key === 'target_pdb') ? [value]
+                    : key === 'ensembles' ? ensemblePaths(value)
+                    : structurePaths(value);
                 next.source_structure = paths.length === 1 && paths[0] ? { path: paths[0], output_format: 'native' } : undefined;
-                next._source_prepared = undefined; next._source_native_prepared = undefined;
+                next._source_prepared = undefined; next._source_native_prepared = undefined; next._continuation_chains = undefined;
+                if (key === 'target_pdb' && 'input_pdb' in next) delete next.input_pdb;
+                if (key === 'input_pdb' && 'target_pdb' in next) delete next.target_pdb;
                 // Inactive science settings survive; ancestry to a replaced source does not.
                 for (const draft of Object.values(binderNativeDrafts.current)) {
-                    delete draft.source_structure; delete draft._source_prepared; delete draft._source_native_prepared;
-                    delete draft.input_pdb; delete draft.ensembles;
+                    delete draft.source_structure; delete draft._source_prepared; delete draft._source_native_prepared; delete draft._continuation_chains;
+                    delete draft.input_pdb; delete draft.target_pdb; delete draft.ensembles; delete draft.structures;
                 }
-
             }
             if (selectedModelId && selectedModeId) binderNativeDrafts.current[`${selectedModelId}:${selectedModeId}`] = nativeBinderDraft(next, jobName);
             return next;

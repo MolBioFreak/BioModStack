@@ -1,4 +1,5 @@
 import { parseMolecularDynamicsSourceRef, type MolecularDynamicsStartingStructureRef } from './molecularDynamicsUiState.js';
+import { mountedApplicationBase, sourceResultReturn } from '../lib/sourceResultReturn.js';
 
 export const MD_HANDOFF_DRAFT_PREFIX = 'bms.md.gen2.draft.v1:';
 
@@ -93,10 +94,11 @@ export const buildResultsViewerMolecularDynamicsRoute = (jobId: string, designId
     return `/submit?${params}`;
 };
 
-export const requireMolecularDynamicsReturn = (raw: string): string => {
-    // Same local Designs return policy as ResultsViewer, without URL normalization.
-    if (!/^\/designs\/[^\\\s?#]+(?:[?#][^\\\r\n]*)?$/.test(raw)) throw new Error('Invalid Molecular Dynamics return route.');
-    return raw;
+export const requireMolecularDynamicsReturn = (raw: string, baseUrl = mountedApplicationBase()): string => {
+    // Same local Designs return policy as ResultsViewer, stripping mounted router basename.
+    const route = sourceResultReturn(raw, baseUrl);
+    if (!route) throw new Error('Invalid Molecular Dynamics return route.');
+    return route;
 };
 
 export const parseMolecularDynamicsHandoffRoute = (search: string): MolecularDynamicsHandoffRoute => {

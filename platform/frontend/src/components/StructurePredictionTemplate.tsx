@@ -205,21 +205,27 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
     const initialPlacementMatches = (initialValues?.execution_target_id ?? null) === (executionTargetId ?? null);
     const initialGpuPinningState = resolveInitialGpuPinningState(initialPlacementMatches ? initialValues : undefined);
     const [jobName, setJobName] = useState(initialValues?.name || initialValues?.job_name || 'structure_prediction');
-    const initialFrustrampnnSelection = createModelIntegrationSelection(initialValues?.run_frustrampnn, true);
+    const isDeNovoContinuation = Boolean(initialValues?._continuation_chains);
+    const initialFrustrampnnSelection = createModelIntegrationSelection(
+        isDeNovoContinuation ? false : initialValues?.run_frustrampnn,
+        !isDeNovoContinuation,
+    );
     const frustrampnnSelectionRef = useRef(initialFrustrampnnSelection);
-    const [runFrustrampnn, setRunFrustrampnn] = useState(initialFrustrampnnSelection.value);
+    const [selectedFrustrampnn, setRunFrustrampnn] = useState(initialFrustrampnnSelection.value);
+    const runFrustrampnn = !isDeNovoContinuation && selectedFrustrampnn;
     const [frustrampnnSettings, setFrustrampnnSettings] = useState(() => (
         hydrateFrustraMpnnSettings(initialValues?.frustrampnn_settings)
     ));
     const configuredFrustrampnnDefault = frustrampnnIntegrationQuery.data?.workflows?.structure_prediction?.default_enabled;
     useEffect(() => {
+        if (isDeNovoContinuation) return;
         const previous = frustrampnnSelectionRef.current;
         const next = applyModelIntegrationDefault(previous, configuredFrustrampnnDefault);
         frustrampnnSelectionRef.current = next;
         if (next !== previous) {
             setRunFrustrampnn(next.value);
         }
-    }, [configuredFrustrampnnDefault]);
+    }, [configuredFrustrampnnDefault, isDeNovoContinuation]);
     const updateRunFrustrampnn = (checked: boolean) => {
         const next = applyModelIntegrationChoice(frustrampnnSelectionRef.current, checked);
         frustrampnnSelectionRef.current = next;

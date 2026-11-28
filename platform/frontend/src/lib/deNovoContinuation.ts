@@ -65,12 +65,16 @@ export function continuationRoleDefaults(native: StructureMaterialization, desti
     return { ...defaults, ...draft }; // Own-property clears, nulls and edits win.
 }
 
-export function nativeSequenceInput(model: string, prepared: StructureMaterialization, native: StructureMaterialization = prepared): Record<string, unknown> {
-    return model === 'caliby_experimental'
-        ? { ensembles: [{ ensemble_id: 'selected-candidate', states: [{ state_id: 'selected-structure', path: native.path }] }] }
-        : model === 'ligandmpnn' || model === 'protonpottsmpnn'
-            ? (prepared.format === 'pdb' ? { input_pdb: prepared.path, target_pdb: prepared.path } : {})
-            : prepared.format === 'pdb' ? { input_pdb: prepared.path } : {};
+export function nativeSequenceInput(model: string, prepared: StructureMaterialization, native: StructureMaterialization = prepared, mode?: string): Record<string, unknown> {
+    if (model === 'caliby_experimental') {
+        const state = { state_id: 'selected-structure', path: native.path };
+        return mode === 'sidechain_pack'
+            ? { structures: [state] }
+            : { ensembles: [{ ensemble_id: 'selected-candidate', states: [state] }] };
+    }
+    return model === 'ligandmpnn' || model === 'protonpottsmpnn'
+        ? (prepared.format === 'pdb' ? { input_pdb: prepared.path, target_pdb: prepared.path } : {})
+        : prepared.format === 'pdb' ? { input_pdb: prepared.path } : {};
 }
 
 // Materialization retains immutable input only; never submits a scientific Job.

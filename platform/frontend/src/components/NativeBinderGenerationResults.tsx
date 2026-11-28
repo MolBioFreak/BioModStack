@@ -15,6 +15,7 @@ import { DeNovoRepeatSettings } from './DeNovoRepeatSettings';
 import { NativeGeneratedSequences } from './NativeGeneratedSequences';
 import { Rfd4RetainedStateContinuation } from './Rfd4RetainedStateContinuation';
 import { buildResultsViewerMolecularDynamicsRoute } from './gen2StartingStructureState';
+import { mountedApplicationBase } from '../lib/sourceResultReturn';
 import type { CohortInitialMetrics } from './CohortAnalytics';
 import { CohortMetricPicker } from './CohortMetricPicker';
 import { describeCohortMetric } from '../lib/cohortMetricPresentation';
@@ -448,7 +449,8 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                     if (document.target_state != null) back.searchParams.set('target_state', document.target_state); else back.searchParams.delete('target_state');
                     if (adapter) back.searchParams.set('native_scope', adapter.key);
                     if (sourceModel != null) back.searchParams.set('model_number', String(sourceModel)); else back.searchParams.delete('model_number');
-                    const href = buildResultsViewerMolecularDynamicsRoute(jobId, row?.design_id ?? null, { sourceRef: { kind: 'candidate', id: jobId, candidate_ref: ref }, returnTo: `${back.pathname}${back.search}${back.hash}` });
+                    const route = buildResultsViewerMolecularDynamicsRoute(jobId, row?.design_id ?? null, { sourceRef: { kind: 'candidate', id: jobId, candidate_ref: ref }, returnTo: `${back.pathname}${back.search}${back.hash}` });
+                    const href = `${mountedApplicationBase().replace(/\/+$/, '')}${route}`;
                     window.location.assign(launchContextId ? `${href}&launch_context_id=${encodeURIComponent(launchContextId)}` : href);
                 }}>Use as MD starting structure</button>
                 {onEditExactDocument && continuationSource && <button className="rounded-md border border-[var(--border-color)] bg-[var(--bg-tertiary)] px-2.5 py-1 text-[var(--text-primary)] hover:border-[var(--accent-primary)] whitespace-nowrap" type="button" onClick={() => {
