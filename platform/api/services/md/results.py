@@ -45,6 +45,8 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MAX_REPLICAS = 64
 MAX_ARTIFACTS = 1024
 MAX_ANALYSIS_POINTS = 10_000
+# minItems for timeseries.convergence_diagnostics (per replica, never pooled).
+MIN_CONVERGENCE_FRAMES = 12
 MAX_RESIDUE_METRICS = 10_000
 
 
@@ -595,7 +597,7 @@ def _wham_report(root: Path, aggregate: Mapping[str, Any], job: MDJobRecord):
     return result
 
 
-def analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None, include_convergence: bool = True) -> dict[str, Any]:
+def analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict[str, Any]:
     if not optional_analysis((job.params or {}).get("md_job_spec")):
         return _analysis_report(job, _inventory=_inventory, _digests=_digests)
     # Dynamics inventory errors remain dynamics errors, outside optional parsing.
@@ -614,7 +616,7 @@ def analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None, include
                             f"Optional MD analysis could not be read: {type(exc).__name__}: {exc}", 409) from exc
 
 
-def _analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None, include_convergence: bool = True) -> dict[str, Any]:
+def _analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict[str, Any]:
     digests = _digests if _digests is not None else {}
     root, aggregate, inventory = (_inventory if _inventory is not None
         else _load_inventory(job, _digests=digests))
@@ -739,7 +741,6 @@ def _analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None, includ
     if ((wham and wham.get("status") == "failed")
             or any(report.get("pull_error") or any(item.get("status") == "failed" for item in report.get("specialized_analyzers", [])) for report in reports)):
         overall = "partial" if reports and overall != "failed" else "failed"
-    convergence_diagnostics = _compute_replica_convergence_diagnostics(completed_reports) if include_convergence else None
     payload = {
         "schema": "bms.md.analysis-report-set.v1", "job_id": job.id,
         "source": "validated_job_owned_analysis_reports", "status": overall,
@@ -753,8 +754,6 @@ def _analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None, includ
             "frames_are_independent_replicates": False,
         },
     }
-    if convergence_diagnostics is not None:
-        payload["convergence_diagnostics"] = convergence_diagnostics
     return payload
 
 
@@ -804,7 +803,7 @@ def _extract_eligible_md_convergence_series(
     eligible: list[tuple[Any, list[float], list[float]]] = []
     for report in completed_reports:
         points = report.get("points")
-        if not isinstance(points, list) or len(points) < 8:
+        if not isinstance(points, list) or len(points) < MIN_CONVERGENCE_FRAMES:
             continue
         times: list[float] = []
         values: list[float] = []
@@ -820,7 +819,7 @@ def _extract_eligible_md_convergence_series(
                 break
             times.append(float(t_val))
             values.append(float(r_val))
-        if valid and len(values) >= 8:
+        if valid:
             eligible.append((report.get("replica"), values, times))
     return eligible
 

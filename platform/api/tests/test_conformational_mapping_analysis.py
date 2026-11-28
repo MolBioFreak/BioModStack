@@ -161,6 +161,7 @@ def test_cm8_007_support_and_missingness(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_cm8_008_rank_stability(monkeypatch: pytest.MonkeyPatch) -> None:
     _mock_cm_toolkit(monkeypatch, {
+        "descriptive.summary": lambda inputs: {"columns": {"spearman": {"median": 1.0}}},
         "inference.correlation_matrix": lambda inputs: {
             "pairs": [
                 {"var_a": "1", "var_b": "2", "statistic": 1.0, "p_value": 0.0, "adjusted_p_value": 0.0},
@@ -169,13 +170,14 @@ def test_cm8_008_rank_stability(monkeypatch: pytest.MonkeyPatch) -> None:
             ]
         }
     })
-    items = {("t", index): {(seed, "0"): float(10 - index) for seed in ("1", "2", "3")} for index in range(3)}
-    stability, common, pairwise, excluded = _rank_stability(
+    items = {("t", index): {"strata": {seed: {"valid_inner": ["0"], "mean": float(10 - index)}
+                                for seed in ("1", "2", "3")}} for index in range(3)}
+    rank = _rank_stability(
         items, {seed: ["0"] for seed in ("1", "2", "3")},
         inner_minimum=1.0, outer_minimum=1.0, common_minimum=3,
     )
-    assert stability == pytest.approx(1.0)
-    assert len(common) == 3 and len(pairwise) == 3 and not excluded
+    assert rank.value == pytest.approx(1.0)
+    assert len(rank.common) == 3 and len(rank.pairwise) == 3 and not rank.excluded
 
 
 def test_cm8_009_local_math_helpers_deleted() -> None:

@@ -91,7 +91,34 @@ def test_c21_cm_unavailable_when_toolkit_off(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
-async def test_c22_md_convergence_persists_reuses_and_recomputes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_short_md_trace_opens_without_creating_an_unusable_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from test_md_analysis_results import _completed_md_report_tree
+
+    record, _, _, _ = _completed_md_report_tree(tmp_path, monkeypatch, point_count=11)
+    def unexpected_client():
+        pytest.fail("a trace shorter than the Toolkit minimum must not create a run")
+    monkeypatch.setattr("services.stats_toolkit_client.get_stats_toolkit_client", unexpected_client)
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            session.add(Job(id=record.id, name="md", model_id="molecular_dynamics", mode="simulate",
+                            status="completed", params=record.params, output_dir=str(tmp_path)))
+            await session.commit()
+            for _ in range(2):
+                report = await get_md_analysis(record.id, session=session)
+                assert len(report["reports"][0]["points"]) == 11
+                assert report["convergence_diagnostics"]["reason"] == "insufficient_frames"
+                assert report["convergence_diagnostics"]["status"] == "unavailable"
+                assert report["convergence_diagnostics"]["replicas"] == []
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize("optional", [False, True])
+@pytest.mark.asyncio
+async def test_c22_md_convergence_persists_reuses_and_recomputes(optional: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     clear_workspace_cache()
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'md.db'}")
     async with engine.begin() as conn:
@@ -149,47 +176,29 @@ async def test_c22_md_convergence_persists_reuses_and_recomputes(monkeypatch: py
         "services.stats_toolkit_client.get_stats_toolkit_client",
         lambda **_: StatsToolkitClient(base_url="http://stats.test", transport=httpx.MockTransport(handler)),
     )
-    fake_report = {
-        "schema": "bms.md.analysis-report-set.v1",
-        "job_id": "job-md-1",
-        "source": "validated_job_owned_analysis_reports",
-        "status": "completed",
-        "bounded": True,
-        "replica_states": [{"replica": 0, "status": "completed"}],
-        "reports": [{
-            "replica": 0,
-            "status": "completed",
-            "method": "md_backbone_rmsd_v1",
-            "inputs": {"manifest_sha256": "a" * 64, "trajectory_sha256": "b" * 64},
-            "summary": {"mean": 1.5, "final": 1.6},
-            "points": [{"time_ps": float(i * 10), "rmsd_angstrom": 1.5 + 0.01 * (i % 3)} for i in range(12)],
-        }],
-        "collection": None,
-        "ensemble": {"completed_replicas": 1},
-        "wham": None,
-        "evidence": {"status": "insufficient_evidence", "reason": "x", "frames_are_independent_replicates": False},
-    }
-    monkeypatch.setattr("routers.md_results.analysis_report", lambda _rec, include_convergence=True: dict(fake_report))
-    monkeypatch.setattr("routers.md_results._generation_matches_accepted", lambda _rec: True)
+    from test_md_analysis_results import _completed_md_report_tree
 
+    record, _, _, _ = _completed_md_report_tree(tmp_path, monkeypatch, point_count=12)
+    if optional:
+        record.params["md_job_spec"]["analysis"] = {}
     async with Session() as session:
-        job = Job(id="job-md-1", name="md", model_id="molecular_dynamics", mode="simulate", status="completed", params={}, output_dir=str(tmp_path))
+        job = Job(id=record.id, name="md", model_id="molecular_dynamics", mode="simulate", status="completed", params=record.params, output_dir=str(tmp_path))
         session.add(job)
         await session.commit()
 
-        first = await get_md_analysis("job-md-1", recompute=False, session=session)
+        first = await get_md_analysis(record.id, recompute=False, session=session)
         assert post_runs == 1 and get_runs == 0
         assert first["convergence_diagnostics"]["stats_run"]["run_id"] == "run-md-1"
         assert first["convergence_diagnostics"]["replicas"][0]["block_sem"] == pytest.approx(0.025)
 
         # Second GET reuses persisted AnalysisRun via GET /api/v1/runs/{id}
-        second = await get_md_analysis("job-md-1", recompute=False, session=session)
+        second = await get_md_analysis(record.id, recompute=False, session=session)
         assert post_runs == 1 and get_runs == 1
         assert second["convergence_diagnostics"]["stats_run"]["run_id"] == "run-md-1"
         assert second["convergence_diagnostics"]["analysis_run_id"] == first["convergence_diagnostics"]["analysis_run_id"]
 
         # Recompute creates superseding run
-        third = await get_md_analysis("job-md-1", recompute=True, session=session)
+        third = await get_md_analysis(record.id, recompute=True, session=session)
         assert post_runs == 2
         assert third["convergence_diagnostics"]["stats_run"]["run_id"] == "run-md-2"
         rows = (await session.execute(select(AnalysisRun).where(AnalysisRun.analysis_type == "md_convergence_diagnostics").order_by(AnalysisRun.queued_at.asc()))).scalars().all()

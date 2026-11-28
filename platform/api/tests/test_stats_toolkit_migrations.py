@@ -44,7 +44,8 @@ def test_correlation_matrix_model_accepts_enriched_and_legacy_payloads() -> None
     assert enriched_model.stats_run["run_id"] == "run-1"
 
 
-def test_cm_rank_stability_delegates_durable_run(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("summary_offline", [False, True])
+def test_cm_rank_stability_delegates_durable_run(summary_offline: bool, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -52,6 +53,14 @@ def test_cm_rank_stability_delegates_durable_run(monkeypatch: pytest.MonkeyPatch
             return httpx.Response(200, json={"workspaces": [{"workspace_id": "ws-1", "name": "BioModStack analyses"}]})
         body = json.loads(request.content.decode())
         seen.append(body)
+        if body["tool_id"] == "descriptive.summary":
+            if summary_offline:
+                raise httpx.ConnectError("summary unavailable", request=request)
+            assert body["inputs"]["columns"] == {"spearman": [0.9, 0.8, 0.95]}
+            return httpx.Response(200, json={
+                "run_id": "run-cm-summary", "workspace_id": "ws-1", "tool_id": body["tool_id"],
+                "status": "completed", "result": {"columns": {"spearman": {"median": 0.875}}},
+            })
         return httpx.Response(
             200,
             json={
@@ -70,21 +79,27 @@ def test_cm_rank_stability_delegates_durable_run(monkeypatch: pytest.MonkeyPatch
         )
 
     monkeypatch.setattr("services.stats_toolkit_client.get_stats_toolkit_client", lambda **_: _mock_client(handler))
-    items = {("t", index): {(seed, "0"): float(10 - index) for seed in ("1", "2", "3")} for index in range(4)}
-    stability, common, pairwise, excluded = _rank_stability(
+    items = {("t", index): {"strata": {seed: {"valid_inner": ["0"], "mean": float(10 - index)}
+                                for seed in ("1", "2", "3")}} for index in range(4)}
+    rank = _rank_stability(
         items,
         {seed: ["0"] for seed in ("1", "2", "3")},
         inner_minimum=1.0,
         outer_minimum=1.0,
         common_minimum=3,
     )
-    assert len(seen) == 1
-    assert seen[0]["tool_id"] == "inference.correlation_matrix"
+    assert [r["tool_id"] for r in seen] == ["inference.correlation_matrix", "descriptive.summary"]
     assert seen[0]["inputs"]["method"] == "spearman"
-    assert stability == pytest.approx(0.9)
-    assert len(common) == 4 and len(pairwise) == 3 and not excluded
-    assert all(entry["stats_backend"] == "stats_toolkit" for entry in pairwise)
-    assert pairwise[0]["stats_run"]["run_id"] == "run-cm-rank-1"
+    assert rank.unavailable == summary_offline
+    if summary_offline:
+        assert rank.value is None and rank.summary_run is None
+    else:
+        assert rank.value == pytest.approx(0.875)  # supplied by Toolkit, not locally reconstructed
+        assert rank.summary_run is not None
+        assert rank.summary_run["run_id"] == "run-cm-summary"
+    assert len(rank.common) == 4 and len(rank.pairwise) == 3 and not rank.excluded
+    assert all(entry["stats_backend"] == "stats_toolkit" for entry in rank.pairwise)
+    assert rank.pairwise[0]["stats_run"]["run_id"] == "run-cm-rank-1"
 
 
 def test_confornets_mds_delegates_controller_durable_run(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,18 +223,22 @@ def _live_stats_toolkit_reachable() -> bool:
     reason="Live Stats Toolkit service not reachable in this test namespace",
 )
 def test_live_stats_toolkit_end_to_end_migrations() -> None:
-    items = {("t", idx): {(seed, "0"): float(10 - idx) for seed in ("1", "2", "3")} for idx in range(5)}
-    stability, common, pairwise, excluded = _rank_stability(
+    items = {("t", idx): {"strata": {seed: {"valid_inner": ["0"], "mean": float(10 - idx)}
+                                for seed in ("1", "2", "3")}} for idx in range(5)}
+    rank = _rank_stability(
         items,
         {seed: ["0"] for seed in ("1", "2", "3")},
         inner_minimum=1.0,
         outer_minimum=1.0,
         common_minimum=3,
     )
-    assert stability == pytest.approx(1.0)
-    assert len(common) == 5 and len(pairwise) == 3 and not excluded
-    assert all(item["stats_backend"] == "stats_toolkit" for item in pairwise)
-    assert all(item["stats_run"]["run_id"] for item in pairwise)
+    assert rank.value == pytest.approx(1.0)
+    client = StatsToolkitClient(base_url=os.environ.get("BMS_STATS_TOOLKIT_URL", "http://127.0.0.1:18181"))
+    assert rank.summary_run is not None
+    assert client.read_run_outputs(rank.summary_run["run_id"])["columns"]["spearman"]["median"] == rank.value
+    assert len(rank.common) == 5 and len(rank.pairwise) == 3 and not rank.excluded
+    assert all(item["stats_backend"] == "stats_toolkit" for item in rank.pairwise)
+    assert all(item["stats_run"]["run_id"] for item in rank.pairwise)
 
     dm = [
         [0.0, 3.0, 5.0, 4.0],
@@ -249,3 +268,26 @@ def test_live_stats_toolkit_end_to_end_migrations() -> None:
     assert diag["stats_backend"] == "stats_toolkit"
     assert diag["stats_run"]["run_id"]
     assert diag["replicas"][0]["converged"] is True
+
+
+@pytest.mark.skipif(not _live_stats_toolkit_reachable(), reason="Live Stats Toolkit service not reachable in this test namespace")
+def test_live_cm_report_references_final_statistic() -> None:
+    from services.conformational_mapping.analysis import analyze_landscapes
+    from test_step5_cm_md_confornets import _make_cm_fixture
+
+    ensemble, landscapes, policy = _make_cm_fixture()
+    report = analyze_landscapes(ensemble, landscapes, policy=policy)
+    refs = {ref["role"]: ref for ref in report["stats_runs"]}
+    client = StatsToolkitClient(base_url=os.environ.get("BMS_STATS_TOOLKIT_URL", "http://127.0.0.1:18181"))
+    summary = refs["rank_stability:t1"]
+    correlation = refs["rank_correlations:t1"]
+    assert summary["tool_id"] == "descriptive.summary"
+    assert correlation["tool_id"] == "inference.correlation_matrix"
+    stored = client.read_run_outputs(summary["run_id"])["columns"]["spearman"]["median"]
+    assert stored == pytest.approx(1.0)
+    assert report["results"]
+    for row in report["results"]:
+        assert row["components"]["rank_stability"] == stored
+        pairs = row["components"]["pairwise_rank_correlations"]
+        assert len(pairs) == 3
+        assert {p["stats_run"]["run_id"] for p in pairs} == {correlation["run_id"]}

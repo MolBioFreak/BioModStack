@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import statistics
 from collections import defaultdict
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, NamedTuple, Sequence
 
 from .contracts import (
     AA_ORDER,
@@ -165,22 +165,36 @@ def _batch_hierarchical_summary(
     return results, run_refs, False
 
 
-def _rank_stability_with_run(
-    values_by_item: Mapping[tuple[Any, ...], Mapping[tuple[str, str], float]],
+class _RankStability(NamedTuple):
+    value: float | None
+    common: set[tuple[Any, ...]]
+    pairwise: list[dict[str, Any]]
+    excluded: dict[str, str]
+    correlation_run: dict[str, Any] | None = None
+    summary_run: dict[str, Any] | None = None
+    unavailable: bool = False
+
+
+def _rank_stability(
+    absolute_by_item: Mapping[tuple[Any, ...], Mapping[str, Any] | None],
     expected: Mapping[str, Sequence[str]],
     *,
     inner_minimum: float,
     outer_minimum: float,
     common_minimum: int,
-) -> tuple[float | None, set[tuple[Any, ...]], list[dict[str, Any]], dict[str, str], dict[str, Any] | None, bool]:
+) -> _RankStability:
+    # Reuse the inner means from the existing absolute hierarchical summary run.
     rank_scores: dict[str, dict[tuple[Any, ...], float]] = {}
     excluded: dict[str, str] = {}
     for outer, inner_ids in expected.items():
         scores: dict[tuple[Any, ...], float] = {}
-        for item, values in values_by_item.items():
-            valid = [abs(values[(outer, inner)]) for inner in inner_ids if (outer, inner) in values]
-            if valid and len(valid) / len(inner_ids) >= inner_minimum:
-                scores[item] = (len(valid) / len(inner_ids)) * statistics.mean(valid)
+        for item, absolute in absolute_by_item.items():
+            stratum = (absolute["strata"].get(outer) if absolute else None)
+            if not stratum or stratum["mean"] is None or not inner_ids:
+                continue
+            support = len(stratum["valid_inner"]) / len(inner_ids)
+            if support >= inner_minimum:
+                scores[item] = support * stratum["mean"]
         if len(scores) >= common_minimum:
             rank_scores[outer] = scores
         else:
@@ -189,7 +203,7 @@ def _rank_stability_with_run(
     pairwise: list[dict[str, Any]] = []
     stability: float | None = None
     run_ref: dict[str, Any] | None = None
-    unavailable = False
+    summary_ref = None
     if len(rank_scores) >= max(3, math.ceil(outer_minimum * len(expected))) and len(common) >= max(3, common_minimum):
         outer_ids = list(expected)
         ranked_outer_ids = [outer for outer in outer_ids if outer in rank_scores]
@@ -204,7 +218,8 @@ def _rank_stability_with_run(
                 for outer in ranked_outer_ids
             }
             try:
-                run_ref, res = get_stats_toolkit_client().run_tool(
+                client = get_stats_toolkit_client()
+                run_ref, res = client.run_tool(
                     None,
                     "inference.correlation_matrix",
                     {
@@ -214,7 +229,7 @@ def _rank_stability_with_run(
                     },
                 )
             except StatsToolkitUnavailableError:
-                return None, common, [], excluded, None, True
+                return _RankStability(None, common, [], excluded, unavailable=True)
             pair_lookup = {
                 (str(item["var_a"]), str(item["var_b"])): item
                 for item in (res.get("pairs") or [])
@@ -237,29 +252,17 @@ def _rank_stability_with_run(
                     }
                     pairwise.append(entry)
                     if corr_val is None:
-                        return None, common, pairwise, excluded, run_ref, False
+                        return _RankStability(None, common, pairwise, excluded, run_ref)
                     correlations.append(corr_val)
             if correlations and len(correlations) == len(pairwise):
-                stability = statistics.median(correlations)
-    return stability, common, pairwise, excluded, run_ref, unavailable
-
-
-def _rank_stability(
-    values_by_item: Mapping[tuple[Any, ...], Mapping[tuple[str, str], float]],
-    expected: Mapping[str, Sequence[str]],
-    *,
-    inner_minimum: float,
-    outer_minimum: float,
-    common_minimum: int,
-) -> tuple[float | None, set[tuple[Any, ...]], list[dict[str, Any]], dict[str, str]]:
-    stability, common, pairwise, excluded, _run_ref, _unavailable = _rank_stability_with_run(
-        values_by_item,
-        expected,
-        inner_minimum=inner_minimum,
-        outer_minimum=outer_minimum,
-        common_minimum=common_minimum,
-    )
-    return stability, common, pairwise, excluded
+                try:
+                    summary_ref, summary = client.run_tool(
+                        None, "descriptive.summary", {"columns": {"spearman": correlations}},
+                    )
+                except StatsToolkitUnavailableError:
+                    return _RankStability(None, common, pairwise, excluded, run_ref, unavailable=True)
+                stability = summary["columns"]["spearman"]["median"]
+    return _RankStability(stability, common, pairwise, excluded, run_ref, summary_ref)
 
 
 def _matched_comparison_with_runs(
@@ -471,23 +474,6 @@ def analyze_landscapes(
 
     stats_runs: list[dict[str, Any]] = []
     any_stats_unavailable = False
-    rank_by_target: dict[str, tuple[float | None, set[tuple[Any, ...]], list[dict[str, Any]], dict[str, str], dict[str, Any] | None, bool]] = {}
-    for target, target_expected in expected_by_target.items():
-        rank_record = _rank_stability_with_run(
-            {item: values for item, values in per_item_values.items() if str(item[0]) == target},
-            target_expected, inner_minimum=inner_minimum,
-            outer_minimum=outer_minimum, common_minimum=common_minimum,
-        )
-        rank_by_target[target] = rank_record
-        if rank_record[4] is not None:
-            stats_runs.append({"role": f"rank_stability:{target}", **rank_record[4]})
-        if rank_record[5]:
-            any_stats_unavailable = True
-    ranked_universe_reference_by_target = {
-        target: _ranked_universe_reference(rank_record[1])
-        for target, rank_record in rank_by_target.items()
-    }
-
     results: list[dict[str, Any]] = []
     support_records: list[dict[str, Any]] = []
     epsilon = float(policy["sign_zero_epsilon"])
@@ -611,11 +597,29 @@ def analyze_landscapes(
                 continue
             clash_by_key.update(clash_out)
 
+    rank_by_target = {}
+    for target, target_expected in expected_by_target.items():
+        rank = _rank_stability(
+            {item: abs_by_key.get(item_source_keys[item]) for item in items_by_target[target]},
+            target_expected, inner_minimum=inner_minimum, outer_minimum=outer_minimum,
+            common_minimum=common_minimum,
+        )
+        rank_by_target[target] = rank
+        if rank.correlation_run:
+            stats_runs.append({"role": f"rank_correlations:{target}", **rank.correlation_run})
+        if rank.summary_run:
+            stats_runs.append({"role": f"rank_stability:{target}", **rank.summary_run})
+        any_stats_unavailable |= rank.unavailable
+    ranked_universe_reference_by_target = {
+        target: _ranked_universe_reference(rank.common) for target, rank in rank_by_target.items()
+    }
+
     for item in sorted_items:
         target = str(item[0])
         values = per_item_values[item]
         item_expected = expected_by_target[target]
-        rank_stability, common, pairwise, excluded_rank_strata, rank_run_ref, rank_unavail = rank_by_target[target]
+        rank = rank_by_target[target]
+        rank_stability = rank.value
         identity = item_identities[item]
         source_key = item_source_keys[item]
         hier_unavail = target in hierarchical_unavailable_targets
@@ -626,7 +630,7 @@ def analyze_landscapes(
             unavail_components: dict[str, Any] = {}
             if matched:
                 unavail_components["matched_comparison"] = matched
-            if hier_unavail or rank_unavail:
+            if hier_unavail or rank.unavailable:
                 unavail_components["stats_status"] = "unavailable"
                 unavail_components["stats_unavailable_reason"] = STATS_TOOLKIT_UNAVAILABLE_REASON
                 unavail_components["rank_stability"] = None
@@ -651,7 +655,7 @@ def analyze_landscapes(
                     },
                 }
             )
-            if hier_unavail or rank_unavail:
+            if hier_unavail or rank.unavailable:
                 support_records.append({"source_row_key": source_key, **unavail_components})
             continue
         absolute = abs_by_key.get(source_key)
@@ -670,7 +674,7 @@ def analyze_landscapes(
             insufficient.append("sign support below minimum")
         if clash is None or clash["outer_support_fraction"] < outer_minimum:
             insufficient.append("clash support below minimum")
-        if rank_stability is None or item not in common:
+        if rank_stability is None or item not in rank.common:
             insufficient.append("rank stability is unavailable")
         hotspot = aggregate["coordinate_support_fraction"] * absolute["mean"]
         threshold_failures: list[str] = []
@@ -698,8 +702,8 @@ def analyze_landscapes(
             "clash_exclusions": clash_reasons,
             "rank_stability": rank_stability,
             "common_ranked_universe": ranked_universe_reference_by_target[str(item[0])],
-            "pairwise_rank_correlations": pairwise,
-            "excluded_rank_strata": excluded_rank_strata,
+            "pairwise_rank_correlations": rank.pairwise,
+            "excluded_rank_strata": rank.excluded,
         }
         result = {
             "source_row_key": source_key,

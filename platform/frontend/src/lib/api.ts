@@ -360,6 +360,7 @@ export interface MDConvergenceReplica {
 }
 
 export interface MDConvergenceDiagnostics {
+    minimum_frames?: number;
     status?: 'available' | 'unavailable';
     reason?: string | null;
     stats_backend?: string;

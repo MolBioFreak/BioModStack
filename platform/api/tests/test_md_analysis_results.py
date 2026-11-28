@@ -446,9 +446,7 @@ def test_analysis_workflow_is_cpu_hash_bound_retryable_and_separate() -> None:
     assert "--nv" not in config[analysis_label:coordinator_label]
 
 
-def test_replica_reporting_never_pools_frames_as_biological_replicates(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _completed_md_report_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, point_count: int = 2):
     monkeypatch.setenv("BMS_MD_RESULT_ROOT", str(tmp_path))
     raw_job, manifest_path, _trajectory = _md_job_tree(tmp_path)
     job = cast(MDJobRecord, raw_job)
@@ -480,19 +478,19 @@ def test_replica_reporting_never_pools_frames_as_biological_replicates(
         "policy": {
             "pbc": "nojump_then_center_protein", "alignment": "mass_weighted_backbone_fit",
             "exclusions": "non_protein_and_non_backbone", "requested_stride": 1,
-            "effective_stride": 1, "max_points": 2,
+            "effective_stride": 1, "max_points": point_count,
         },
         "policy_sha256": "3" * 64,
         "frame_admission": {
-            "source_frame_count": 2, "admitted_frame_count": 2, "first_source_frame": 0,
-            "last_source_frame": 10, "first_time_ps": 0.0, "last_time_ps": 20.0,
+            "source_frame_count": point_count, "admitted_frame_count": point_count, "first_source_frame": 0,
+            "last_source_frame": 10 * (point_count - 1), "first_time_ps": 0.0, "last_time_ps": 20.0 * (point_count - 1),
         },
         "units": {"time": "ps", "rmsd": "angstrom"},
         "points": [
-            {"replica": 0, "source_frame": 0, "time_ps": 0.0, "rmsd_angstrom": 0.0, "radius_of_gyration_angstrom": 10.0},
-            {"replica": 0, "source_frame": 10, "time_ps": 20.0, "rmsd_angstrom": 1.0, "radius_of_gyration_angstrom": 10.1},
+            {"replica": 0, "source_frame": 10 * i, "time_ps": 20.0 * i, "rmsd_angstrom": float(i % 2),
+             "radius_of_gyration_angstrom": 10.0 + 0.1 * (i % 2)} for i in range(point_count)
         ],
-        "summary": {"count": 2, "min": 0.0, "mean": 0.5, "max": 1.0, "final": 1.0},
+        "summary": {"count": point_count, "min": 0.0, "mean": 0.5, "max": 1.0, "final": 1.0},
         "residue_metrics": [],
         "block_statistics": [],
         "evidence": {"status": "insufficient_evidence", "reason": "one replica", "statistical_unit": "replica", "frames_are_independent_replicates": False},
@@ -526,6 +524,15 @@ def test_replica_reporting_never_pools_frames_as_biological_replicates(
     }
     (analysis_dir / "md_analysis_replica_0.artifacts.json").write_text(json.dumps(sidecar), encoding="utf-8")
 
+    return raw_job, manifest_path, report_path, sidecar
+
+
+def test_replica_reporting_never_pools_frames_as_biological_replicates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw_job, manifest_path, report_path, sidecar = _completed_md_report_tree(tmp_path, monkeypatch)
+    job = cast(MDJobRecord, raw_job)
+    analysis_dir = report_path.parent
     result = analysis_report(job)
     recorded_tool = result["reports"][0]["tool"].copy()
     def changed_source():

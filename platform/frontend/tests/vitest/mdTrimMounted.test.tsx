@@ -205,6 +205,17 @@ describe('MD trim receiving behavior', () => {
         expect(container.querySelector('[data-viewer]')?.getAttribute('data-viewer')).toBe('/final'); expect(container.querySelector('[data-viewer]')?.getAttribute('data-scene')).toBe('null'); expect(container.textContent).toContain('HTTP 422');
         await act(async () => button('Retry playback read').click()); await settle(); expect(fetcher).toHaveBeenCalledTimes(2); expect(container.querySelector('[data-viewer]')?.getAttribute('data-scene')).toContain('trajectoryArtifactId');
     });
+    it('explains a short trace without presenting convergence values or hiding the result', async () => {
+        const queries = prepared('short-trace');
+        const report = queries.getQueryData<any>(['md-analysis', 'short-trace']);
+        queries.setQueryData(['md-analysis', 'short-trace'], response({ ...report.data, status: 'completed',
+            convergence_diagnostics: { status: 'unavailable', reason: 'insufficient_frames', minimum_frames: 12, replicas: [] } }));
+        await mount(<MDResultsPane jobId="short-trace" />, queries); await settle();
+        const panel = container.querySelector('[data-bms-md-convergence]');
+        expect(panel?.textContent).toContain('at least 12 frames in one replica');
+        expect(panel?.querySelector('table')).toBeNull();
+        expect(container.querySelector('[data-viewer]')?.getAttribute('data-viewer')).toBe('/final');
+    });
     it('keeps analysis, exports and final structure despite failed summary/playback read', async () => {
         const queries = prepared('independent'); queries.removeQueries({ queryKey: ['md-summary', 'independent'] }); vi.spyOn(api, 'fetchMDSummary').mockRejectedValue(new Error('corrupt playback map'));
         const report = queries.getQueryData<any>(['md-analysis', 'independent']);

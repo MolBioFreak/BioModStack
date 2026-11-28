@@ -21,6 +21,7 @@ from scripts.bms_md.spawn_analysis import QUALIFIED_RUNTIME_SHA256
 from services.md.lifecycle import reconcile_md_analysis_parent
 from services.md.results import (
     MDResultError,
+    MIN_CONVERGENCE_FRAMES,
     _compute_replica_convergence_diagnostics,
     _extract_eligible_md_convergence_series,
     analysis_report,
@@ -104,7 +105,7 @@ async def get_md_analysis(
 ) -> dict:
     try:
         job = await _job(job_id, session)
-        report = await _joined_thread(analysis_report, result_record(job), include_convergence=False)
+        report = await _joined_thread(analysis_report, result_record(job))
         completed_reports = [
             item for item in (report.get("reports") or [])
             if isinstance(item, dict)
@@ -183,6 +184,11 @@ async def get_md_analysis(
                         conv["analysis_run_id"] = run_row.id
                         conv["stale"] = False
                     report["convergence_diagnostics"] = conv
+        elif completed_reports and all(len(r.get("points") or []) < MIN_CONVERGENCE_FRAMES for r in completed_reports):
+            report["convergence_diagnostics"] = {
+                "status": "unavailable", "reason": "insufficient_frames",
+                "minimum_frames": MIN_CONVERGENCE_FRAMES, "replicas": [],
+            }
         children = list(
             (
                 await session.execute(

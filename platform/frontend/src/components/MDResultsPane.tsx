@@ -402,7 +402,11 @@ export default function MDResultsPane({ jobId, returnTo }: { jobId: string; retu
                             </div>
                         </div>
                         {analysisData.convergence_diagnostics.status === 'unavailable' ? (
-                            <p className="text-xs text-amber-200" data-bms-stats-unavailable="true">Stats Toolkit convergence diagnostics unavailable.</p>
+                            <p className="text-xs text-amber-200" data-bms-stats-unavailable="true">
+                                {analysisData.convergence_diagnostics.reason === 'insufficient_frames'
+                                    ? `Convergence needs at least ${analysisData.convergence_diagnostics.minimum_frames} frames in one replica.`
+                                    : 'Stats Toolkit convergence diagnostics unavailable.'}
+                            </p>
                         ) : analysisData.convergence_diagnostics.replicas.length > 0 ? (
                             <table className="w-full text-left text-xs text-slate-200">
                                 <thead>
