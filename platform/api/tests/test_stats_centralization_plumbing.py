@@ -576,10 +576,80 @@ async def test_c11_job_stats_queue_failure_preserves_job_and_per_design_autorun(
         await engine.dispose()
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count,queue_fails", [(501, False), (1, True)])
+async def test_terminal_publication_schedules_isolated_stats(tmp_path, monkeypatch, count, queue_fails):
+    """Exercise the post-commit hook, not just autorun on an already-completed job."""
+    import asyncio
+    from runtime_policy import DEPLOYMENT_ADMISSION_LOCK_ENV
+    from services import gpu_orchestrator, result_state_integrity
+
+    factory, engine = await _setup_db(tmp_path)
+    _bind_cache(monkeypatch, tmp_path, factory)
+    monkeypatch.setattr(autorun, "async_session", factory)
+    monkeypatch.setenv(DEPLOYMENT_ADMISSION_LOCK_ENV, str(tmp_path / "admission.lock"))
+    monkeypatch.delenv("BMS_ANALYSIS_AUTORUN_MAX_DESIGNS", raising=False)
+    job_id = f"terminal-stats-{count}"
+    pdb = tmp_path / "structure.pdb"
+    pdb.write_text("END\n")  # Inert result-publication fixture; no inference.
+
+    async def ingest(job_id, output_dir, session, **kwargs):
+        session.add_all([Design(id=f"d-{i}", job_id=job_id, name=f"candidate-{i}",
+            pdb_path=str(pdb), review_profile_id="de_novo_generation_v1",
+            plddt_overall=80.0, ptm=0.8) for i in range(count)])
+        await session.flush()
+        return count
+
+    finalize = result_state_integrity.finalize_successful_job
+    async def finalize_fixture(job, directory, session):
+        return await finalize(job, directory, session, ingest_fn=ingest)
+    monkeypatch.setattr(result_state_integrity, "finalize_successful_job", finalize_fixture)
+    if queue_fails:
+        async def fail_job_queue(session, job):
+            assert job.status == "completed"
+            raise RuntimeError("injected post-publication queue failure")
+        monkeypatch.setattr(autorun, "_ensure_job_stats_analyses", fail_job_queue)
+
+    ensure = autorun.ensure_viewer_minimum_analyses_for_job
+    finished = asyncio.get_running_loop().create_future()
+    async def observed(job_id):
+        try:
+            result = await ensure(job_id)
+        except Exception as exc:
+            finished.set_exception(exc)
+            raise
+        finished.set_result(result)
+        return result
+    monkeypatch.setattr(autorun, "ensure_viewer_minimum_analyses_for_job", observed)
+    try:
+        async with factory() as s:
+            job = Job(id=job_id, name=job_id, model_id="boltzgen", mode="denovo", params={},
+                      status="running", queue_status="running", output_dir=str(tmp_path))
+            s.add(job)
+            await s.commit()
+            assert await gpu_orchestrator._finalize_recovered_success(job, s, str(tmp_path),
+                snapshot_history=False, gate_present=False, age_seconds=0, stale_fail_after_seconds=60)
+        await asyncio.wait_for(finished, timeout=20)
+        async with factory() as s:
+            job = await s.get(Job, job_id)
+            assert job.status == "completed" and job.error_message is None
+            rows = list((await s.execute(select(AnalysisRun))).scalars())
+            assert len(rows) == 2 and all(r.status == "queued" for r in rows)
+            if queue_fails:
+                assert {r.subject_kind for r in rows} == {"design"}
+                assert len({r.analysis_type for r in rows}) == 2
+            else:
+                assert {r.subject_kind for r in rows} == {"job"}
+                assert {r.analysis_type for r in rows} == {JOB_METRIC_SUMMARY_ANALYSIS, JOB_CORRELATION_MATRIX_ANALYSIS}
+    finally:
+        await engine.dispose()
+
 # --- C12: Unavailable state when BMS_STATS_TOOLKIT_URL=off ---
 
 @pytest.mark.asyncio
-async def test_c12_unavailable_toolkit_marks_failed_and_job_still_opens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("analysis_type", [JOB_METRIC_SUMMARY_ANALYSIS, JOB_CORRELATION_MATRIX_ANALYSIS])
+async def test_c12_unavailable_toolkit_marks_failed_and_job_still_opens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, analysis_type: str) -> None:
     clear_workspace_cache()
     monkeypatch.setenv("BMS_STATS_TOOLKIT_URL", "off")
     monkeypatch.delenv("BMS_STATS_TOOLKIT_WORKSPACE_ID", raising=False)
@@ -589,13 +659,15 @@ async def test_c12_unavailable_toolkit_marks_failed_and_job_still_opens(tmp_path
     try:
         async with factory() as session:
             session.add(Job(id="job-c12", name="denovo-off", model_id="boltzgen", mode="denovo", params={}, status="completed"))
-            session.add(Design(
-                id="d-c12", job_id="job-c12", name="d-c12",
-                pdb_path="/tmp/d-c12.pdb", review_profile_id="de_novo_generation_v1",
-                plddt_overall=85.0, ptm=0.82,
-            ))
+            # Enough eligible data to execute both tools; one row is not a correlation.
+            for i in range(6):
+                session.add(Design(
+                    id=f"d-c12-{i}", job_id="job-c12", name=f"d-c12-{i}",
+                    pdb_path="/tmp/d-c12.pdb", review_profile_id="de_novo_generation_v1",
+                    plddt_overall=85.0 + i, ptm=0.70 + i / 100,
+                ))
             await session.commit()
-            queued = await trigger_job_analysis("job-c12", JOB_METRIC_SUMMARY_ANALYSIS, AnalysisRunRequest(), session)
+            queued = await trigger_job_analysis("job-c12", analysis_type, AnalysisRunRequest(), session)
 
         # Worker records failed row with stats_toolkit_unavailable reason
         assert await worker._async_main(queued.run_id) == 1
@@ -607,7 +679,7 @@ async def test_c12_unavailable_toolkit_marks_failed_and_job_still_opens(tmp_path
             assert row.summary_json["reason"] == STATS_TOOLKIT_UNAVAILABLE_REASON
 
             # GET analysis reports unavailable
-            resp = await get_job_analysis("job-c12", JOB_METRIC_SUMMARY_ANALYSIS, session=session)
+            resp = await get_job_analysis("job-c12", analysis_type, session=session)
             assert resp.status == "unavailable"
             assert resp.reason == STATS_TOOLKIT_UNAVAILABLE_REASON
             assert resp.result is None
@@ -615,7 +687,7 @@ async def test_c12_unavailable_toolkit_marks_failed_and_job_still_opens(tmp_path
             # Job itself and its designs remain readable
             job = await session.get(Job, "job-c12")
             designs = list((await session.execute(select(Design).where(Design.job_id == "job-c12"))).scalars().all())
-            assert job is not None and job.status == "completed" and len(designs) == 1
+            assert job is not None and job.status == "completed" and len(designs) == 6
     finally:
         await engine.dispose()
         clear_workspace_cache()

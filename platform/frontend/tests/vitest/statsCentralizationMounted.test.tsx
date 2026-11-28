@@ -38,10 +38,13 @@ afterEach(async () => {
     root = undefined;
     client?.clear();
     api.defaults.adapter = originalAdapter;
+    window.history.replaceState(null, '', '/');
     document.body.innerHTML = '';
 });
 
 test('renders stored Toolkit SD and histogram counts, Open in Stats run_id link, stale badge, and Recompute replacement (C25-C27)', async () => {
+    window.history.replaceState(null, '', '/bms/designs/job-c25');
+    let queuedReads = 0;
     const postCalls: Array<{ url: string; data: any }> = [];
     let currentSummary: any = {
         run_id: 'ar-sum-1',
@@ -74,6 +77,10 @@ test('renders stored Toolkit SD and histogram counts, Open in Stats run_id link,
     api.defaults.adapter = async config => {
         const url = String(config.url);
         if (config.method === 'get' && url.endsWith('/analyses/job_metric_summary')) {
+            if (queuedReads > 0) {
+                queuedReads--;
+                return { config, status: 200, statusText: 'OK', headers: {}, data: { status: 'queued', result: null } };
+            }
             return { config, status: 200, statusText: 'OK', headers: {}, data: currentSummary };
         }
         if (config.method === 'get' && url.endsWith('/analyses/job_correlation_matrix')) {
@@ -81,6 +88,7 @@ test('renders stored Toolkit SD and histogram counts, Open in Stats run_id link,
         }
         if (config.method === 'post' && url.endsWith('/analyses/job_metric_summary')) {
             const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+            queuedReads = 1;
             postCalls.push({ url, data: body });
             currentSummary = {
                 ...currentSummary,
@@ -117,8 +125,8 @@ test('renders stored Toolkit SD and histogram counts, Open in Stats run_id link,
 
     // C26: Open in Stats link forwards run_id
     const openLinks = [...host.querySelectorAll('a[data-open-in-stats="true"]')].map(a => a.getAttribute('href'));
-    expect(openLinks).toContain('/stats?run_id=sr-run-old');
-    expect(openLinks).toContain('/stats?run_id=sr-corr-1');
+    expect(openLinks).toContain('/bms/stats?run_id=sr-run-old');
+    expect(openLinks).toContain('/bms/stats?run_id=sr-corr-1');
 
     // C27: stale badge shows, Recompute posts options and replaces displayed values
     expect(host.querySelector('[data-stats-stale="true"]')?.textContent).toBe('Stale');
@@ -133,10 +141,12 @@ test('renders stored Toolkit SD and histogram counts, Open in Stats run_id link,
 
     expect(postCalls).toHaveLength(1);
     expect(postCalls[0].data).toMatchObject({ force_refresh: true, params: { include_children: true, histogram_bins: 20, shared_bins: false } });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 1700)); });
+    await flush();
     expect(host.textContent).toContain('444.444');
     expect(host.querySelector('[data-stats-stale="true"]')).toBeNull();
     const updatedLinks = [...host.querySelectorAll('a[data-open-in-stats="true"]')].map(a => a.getAttribute('href'));
-    expect(updatedLinks).toContain('/stats?run_id=sr-run-new');
+    expect(updatedLinks).toContain('/bms/stats?run_id=sr-run-new');
     const updatedHist = plots(host).find(plot => plot.data[0]?.type === 'bar' && plot.layout?.yaxis?.title?.text === 'Candidate count');
     expect(updatedHist?.data[0]?.y).toEqual([1, 1, 1]);
 });

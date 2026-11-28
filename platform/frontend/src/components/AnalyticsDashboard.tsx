@@ -493,6 +493,7 @@ function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLe
         queryFn: () => (jobId ? fetchJobAnalytics(jobId).then((response) => response.data) : null),
         enabled: Boolean(jobId),
         retry: false,
+        refetchInterval: q => ['queued', 'running'].includes(q.state.data?.stats_status ?? '') ? 1500 : false,
         staleTime: 30_000,
     });
 
@@ -501,6 +502,7 @@ function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLe
         queryFn: () => (jobId ? fetchJobAnalysis<CorrelationMatrix>(jobId, 'job_correlation_matrix', { include_children: true }).then((response) => response.data) : null),
         enabled: Boolean(jobId && showAdvancedCharts),
         retry: false,
+        refetchInterval: q => ['queued', 'running'].includes(q.state.data?.status ?? '') ? 1500 : false,
         staleTime: 30_000,
     });
 
@@ -1410,6 +1412,17 @@ function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLe
                                 onRecompute={(opts) => recomputeJobSummary.mutate(opts)}
                                 isRecomputing={recomputeJobSummary.isPending}
                             />
+                        )}
+                        {jobAnalyticsData?.metrics && jobAnalyticsData.stats_run && (
+                            <details className="text-xs" data-job-metric-summary="true">
+                                <summary>Saved job statistics</summary>
+                                <table><thead><tr><th>Metric</th><th>Count</th><th>Sample SD</th></tr></thead>
+                                    <tbody>{Object.entries(jobAnalyticsData.metrics).map(([key, dist]) => dist && (
+                                        <tr key={key} data-summary-metric={key}><th>{getMetricLabel(key)}</th>
+                                            <td>{dist.count ?? '—'}</td><td>{dist.std_dev ?? '—'}</td></tr>
+                                    ))}</tbody>
+                                </table>
+                            </details>
                         )}
                         {jobId && showAdvancedCharts && (
                             <StatsPanelControls

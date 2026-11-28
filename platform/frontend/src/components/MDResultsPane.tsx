@@ -1,3 +1,4 @@
+import { mountedApplicationBase } from '../lib/sourceResultReturn';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -385,7 +386,7 @@ export default function MDResultsPane({ jobId, returnTo }: { jobId: string; retu
                                 {analysisData.convergence_diagnostics.stale && <span className="rounded border border-amber-400/50 bg-amber-500/10 px-1.5 py-0.5 text-amber-200">stale</span>}
                                 {analysisData.convergence_diagnostics.stats_run?.run_id && (
                                     <a
-                                        href={`/stats?run_id=${encodeURIComponent(analysisData.convergence_diagnostics.stats_run.run_id)}`}
+                                        href={`${mountedApplicationBase()}stats?run_id=${encodeURIComponent(analysisData.convergence_diagnostics.stats_run.run_id)}`}
                                         className="rounded border border-cyan-400/40 bg-cyan-500/10 px-2 py-0.5 text-cyan-200 hover:bg-cyan-500/20"
                                     >
                                         Open in Stats

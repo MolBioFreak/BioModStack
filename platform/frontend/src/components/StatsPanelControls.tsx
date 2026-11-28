@@ -1,3 +1,4 @@
+import { mountedApplicationBase } from '../lib/sourceResultReturn';
 import { useState } from 'react';
 
 export interface SummaryRecomputeOptions {
@@ -56,7 +57,7 @@ export function StatsPanelControls(props: StatsPanelControlsProps) {
     );
 
     const isUnavailable = props.status === 'unavailable' || props.reason === 'stats_toolkit_unavailable';
-    const openHref = props.statsRunId ? `/stats?run_id=${encodeURIComponent(props.statsRunId)}` : null;
+    const openHref = props.statsRunId ? `${mountedApplicationBase()}stats?run_id=${encodeURIComponent(props.statsRunId)}` : null;
 
     const triggerRecompute = () => {
         if (!props.onRecompute) return;

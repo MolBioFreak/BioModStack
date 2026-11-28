@@ -236,6 +236,7 @@ export function CohortAnalytics({
         queryFn: () => fetchJobAnalysis<StoredSummaryResult>(jobId!, 'job_metric_summary', { include_children: true }).then((res) => res.data),
         enabled: Boolean(jobId),
         retry: false,
+        refetchInterval: q => ['queued', 'running'].includes(q.state.data?.status ?? '') ? 1500 : false,
         staleTime: 30_000,
     });
 
@@ -244,6 +245,7 @@ export function CohortAnalytics({
         queryFn: () => fetchJobAnalysis<CorrelationMatrix>(jobId!, 'job_correlation_matrix', { include_children: true }).then((res) => res.data),
         enabled: Boolean(jobId && mode === 'analytics'),
         retry: false,
+        refetchInterval: q => ['queued', 'running'].includes(q.state.data?.status ?? '') ? 1500 : false,
         staleTime: 30_000,
     });
 
