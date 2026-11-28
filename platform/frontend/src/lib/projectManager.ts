@@ -158,6 +158,7 @@ export interface ProjectHubLinkedLocalProject {
 }
 
 export interface ProjectHubResponse {
+    next_cursor?: string | null;
     capabilities: ProjectHubCapabilities;
     project: {
         id: string;
@@ -167,6 +168,7 @@ export interface ProjectHubResponse {
         project_scope: 'global' | 'ngs_molbio_local';
         created_at: string | null;
         updated_at: string | null;
+        workflow_setups?: { id: string; label: string; state: string }[];
         experiments: ProjectHubExperimentSummary[];
         linked_local_projects: ProjectHubLinkedLocalProject[];
     };
@@ -852,16 +854,27 @@ export async function getProject(projectId: string, signal?: AbortSignal): Promi
 
 export async function getProjectHub(
     projectId: string,
-    options: { experimentId?: string; limit?: number; signal?: AbortSignal } = {},
+    options: { experimentId?: string; limit?: number; cursor?: string; signal?: AbortSignal } = {},
 ): Promise<ProjectHubResponse> {
     const response = await api.get<ProjectHubResponse>(`/api/projects/${segment(projectId)}/hub`, {
         params: {
             experiment_id: options.experimentId || undefined,
+            cursor: options.cursor,
             limit: options.limit ?? 200,
         },
         signal: options.signal,
     });
     return response.data;
+}
+
+export interface ProjectResearchRecord {
+    id: string; subject_resource_id: string; subject_name: string; subject_kind: string;
+    record_kind: string; body: string; author: string; created_at: string;
+}
+export async function listProjectResearchRecords(projectId: string, cursor?: string, signal?: AbortSignal) {
+    return (await api.get<{ items: ProjectResearchRecord[]; next_cursor: string | null }>(`/api/projects/${segment(projectId)}/records`, {
+        params: { include_descendants: true, limit: 50, cursor }, signal,
+    })).data;
 }
 
 export async function getProjectSequences(

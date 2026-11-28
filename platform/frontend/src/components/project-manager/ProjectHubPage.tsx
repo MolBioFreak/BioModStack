@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     getProject,
     getProjectHub,
@@ -9,6 +9,7 @@ import {
     type ProjectStatus,
 } from '../../lib/projectManager';
 import { removeMolecularProjectMember } from '../../lib/molecularProjectMembership';
+import { ProjectSavedRecords } from './ProjectSavedRecords';
 import { ProjectAttachmentDialog } from './ProjectAttachmentDialog';
 import { ProjectFormDialog, ProjectLifecycleDialog } from './ProjectFormDialog';
 
@@ -149,9 +150,17 @@ export function ProjectHubPage({ projectId }: { projectId: string }) {
     const [detachError, setDetachError] = useState<string | null>(null);
     const [detachingId, setDetachingId] = useState<string | null>(null);
 
-    const hubQuery = useQuery({
+    const hubQuery = useInfiniteQuery({
         queryKey: ['project-hub', projectId],
-        queryFn: ({ signal }) => getProjectHub(projectId, { signal }),
+        initialPageParam: undefined as string | undefined,
+        queryFn: ({ signal, pageParam }) => getProjectHub(projectId, { signal, cursor: pageParam }),
+        getNextPageParam: page => page.next_cursor ?? undefined,
+        select: ({ pages }) => ({ ...pages[0], sections: {
+            in_silico: pages.flatMap(p => p.sections.in_silico),
+            molecular_sequences: pages.flatMap(p => p.sections.molecular_sequences),
+            molecular_operations: pages.flatMap(p => p.sections.molecular_operations),
+            ngs_ont_and_alignments: pages.flatMap(p => p.sections.ngs_ont_and_alignments),
+        } }),
     });
 
     const projectMetaQuery = useQuery({
@@ -374,6 +383,8 @@ export function ProjectHubPage({ projectId }: { projectId: string }) {
                 </p>
             )}
 
+            <ProjectSavedRecords key={project.id} project={project} />
+            {hubQuery.hasNextPage && <button className="text-cyan-300" disabled={hubQuery.isFetchingNextPage} onClick={() => void hubQuery.fetchNextPage()}>Load more project items</button>}
             {groupBy === 'type' ? (
                 <div className="space-y-3">
                     {capabilities.has_in_silico && (

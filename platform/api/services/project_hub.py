@@ -9,9 +9,9 @@ import json
 from collections import defaultdict
 from datetime import datetime
 from typing import Any, Mapping
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
@@ -22,6 +22,7 @@ from experiment_models import (
     ExperimentExternalEntityReceipt,
     ExperimentLineageEdge,
     ExperimentRevision,
+    ExperimentWorkflowSetupContext,
 )
 from molbio_models import (
     MolecularDocument,
@@ -104,86 +105,16 @@ def resolve_hub_capabilities(request: Request | None) -> dict[str, bool]:
                 "has_stats": False,
             }
 
-    def _collect_route_paths(routes: Any, prefix: str = "") -> set[str]:
-        collected: set[str] = set()
-        for route in routes or ():
-            path = getattr(route, "path", None)
-            if isinstance(path, str):
-                full = (
-                    f"{prefix.rstrip('/')}/{path.lstrip('/')}"
-                    if prefix and path
-                    else (path or prefix)
-                )
-                if full:
-                    collected.add(full)
-            orig = getattr(route, "original_router", None)
-            if orig is not None:
-                inc_ctx = getattr(route, "include_context", None)
-                inc_prefix = getattr(inc_ctx, "prefix", "") or ""
-                next_prefix = (
-                    f"{prefix.rstrip('/')}/{inc_prefix.lstrip('/')}"
-                    if prefix and inc_prefix
-                    else (inc_prefix or prefix)
-                )
-                if next_prefix:
-                    collected.add(next_prefix)
-                collected.update(_collect_route_paths(getattr(orig, "routes", ()), next_prefix))
-            sub_routes = getattr(route, "routes", None)
-            if sub_routes:
-                mount_prefix = (
-                    f"{prefix.rstrip('/')}/{path.lstrip('/')}"
-                    if prefix and isinstance(path, str) and path
-                    else (path if isinstance(path, str) and path else prefix)
-                )
-                collected.update(_collect_route_paths(sub_routes, mount_prefix))
-        return collected
+    from biomodstack_runtime_profile import resolve_install_features
+    from molbio_ngs_database import get_molbio_ngs_startup_error
+    from services.runtime_features import effective_runtime_features
 
-    route_paths: set[str] = set()
-    if request is not None:
-        route_paths = _collect_route_paths(getattr(request.app, "routes", ()))
-
-    configured_features: dict[str, Any] = {}
-    try:
-        from services.runtime_features import effective_runtime_features, install_profile_snapshot
-
-        snapshot = install_profile_snapshot()
-        resolved = snapshot.get("resolved") if isinstance(snapshot, Mapping) else {}
-        features = resolved.get("features") if isinstance(resolved, Mapping) else {}
-        if isinstance(features, Mapping):
-            configured_features = (
-                effective_runtime_features(request, features)
-                if request is not None
-                else dict(features)
-            )
-    except Exception:
-        configured_features = {}
-
-    def _feature_flag(keys: tuple[str, ...], default: bool) -> bool:
-        for key in keys:
-            if key in configured_features:
-                return bool(configured_features[key])
-        return default
-
-    has_in_silico_routes = (
-        any(p.startswith(("/api/jobs", "/api/designs", "/api/models")) for p in route_paths)
-        if route_paths
-        else True
-    )
-    has_molbio_routes = (
-        any(p.startswith(("/api/sequences", "/api/molbio")) for p in route_paths)
-        if route_paths
-        else True
-    )
-    has_ngs_routes = (
-        any(p.startswith(("/api/ngs", "/api/alignments", "/api/projects")) for p in route_paths)
-        if route_paths
-        else True
-    )
-
+    installed = resolve_install_features()
+    mounted = effective_runtime_features(request, installed) if request is not None else installed
     return {
-        "has_in_silico": has_in_silico_routes and _feature_flag(("in_silico", "protein_design", "models"), True),
-        "has_molbio": has_molbio_routes and _feature_flag(("molbio", "molecular_toolset"), True),
-        "has_ngs_ont": has_ngs_routes and _feature_flag(("ngs_ont", "ngs", "alignments"), True),
+        "has_in_silico": bool(installed["protein_compute"] and mounted["protein_compute"]),
+        "has_molbio": True,  # The molecular toolset is independent of optional NGS hardware.
+        "has_ngs_ont": bool(installed["ngs_ont"] and mounted["ngs_ont"] and not get_molbio_ngs_startup_error()),
         "has_stats": False,
     }
 
@@ -357,7 +288,7 @@ async def _load_project_head_and_payload(
 
 async def get_project_sequences_payload(
     session: AsyncSession,
-    native_session: AsyncSession,
+    native_session: AsyncSession | None,
     molbio_session: AsyncSession,
     *,
     project_id: str,
@@ -389,7 +320,7 @@ async def get_project_sequences_payload(
 
     domain_ids = [d.aggregate_id for d in domain_rows]
     domain_by_id = {d.aggregate_id: d for d in domain_rows}
-    if not domain_ids:
+    if not domain_ids or native_session is None:
         return {
             "project_id": project_id,
             "project_name": project_payload.get("name") or project_head.display_name,
@@ -540,11 +471,13 @@ def _classify_core_job(entity_kind: str, job: Job | None) -> str:
     return "in_silico"
 
 
-def _in_silico_open_href(entity_kind: str, entity_id: str, job: Job | None, ack: dict[str, Any]) -> str:
+def _in_silico_open_href(entity_kind: str, entity_id: str, job: Job | None, ack: dict[str, Any], project_id: str) -> str:
+    if entity_kind == "conformational_mapping_source":
+        return f"/projects/{quote(project_id, safe='')}/conformational-sources/{quote(entity_id, safe='')}"
     reopen = ack.get("reopen_uri")
     if isinstance(reopen, str) and reopen.startswith("/") and not reopen.startswith("/projects/"):
         return reopen
-    if entity_kind in {"conformational_mapping_source", "conformational_mapping_request"}:
+    if entity_kind == "conformational_mapping_request":
         return f"/designs/{entity_id}" if job is not None else f"/jobs/{entity_id}"
     if job is not None:
         if (job.status or "").lower() == "completed":
@@ -570,7 +503,7 @@ def _format_seq_subtitle(item: dict[str, Any]) -> str:
 
 async def get_projects_summary_counts(
     session: AsyncSession,
-    native_session: AsyncSession,
+    native_session: AsyncSession | None,
     molbio_session: AsyncSession,
     project_ids: list[str],
 ) -> dict[str, dict[str, int]]:
@@ -635,7 +568,7 @@ async def get_projects_summary_counts(
     sample_ids: dict[str, set[str]] = defaultdict(set)
     ref_ids: dict[str, set[str]] = defaultdict(set)
 
-    if all_dom_ids:
+    if all_dom_ids and native_session is not None:
         states = (
             await native_session.execute(
                 select(
@@ -728,7 +661,7 @@ async def get_project_hub_payload(
     request: Request | None,
     session: AsyncSession,
     core_session: AsyncSession,
-    native_session: AsyncSession,
+    native_session: AsyncSession | None,
     molbio_session: AsyncSession,
     *,
     project_id: str,
@@ -743,6 +676,8 @@ async def get_project_hub_payload(
     project_head, project_payload = loaded
     project_scope = _normalize_scope(project_payload)
     capabilities = resolve_hub_capabilities(request)
+    if not capabilities["has_ngs_ont"]:
+        native_session = None
 
     # Load experiments and domain experiments
     child_heads = (
@@ -952,7 +887,7 @@ async def get_project_hub_payload(
                 "status": str(status_val),
                 "experiment_id": exp_id,
                 "updated_at": updated_val,
-                "open_href": _in_silico_open_href(r.entity_kind, r.entity_id, job, ack),
+                "open_href": _in_silico_open_href(r.entity_kind, r.entity_id, job, ack, project_id),
                 "detach": None,
             }
             if bucket == "alignment":
@@ -1000,7 +935,7 @@ async def get_project_hub_payload(
         )
 
     # Native NGS samples, references, and molecular_operation members from molbio_ngs.db
-    if domain_ids:
+    if domain_ids and native_session is not None:
         states = (
             await native_session.execute(
                 select(MolBioNGSDomainState).where(
@@ -1202,7 +1137,7 @@ async def get_project_hub_payload(
                     "status": op.status if op else "completed",
                     "experiment_id": exp_id,
                     "updated_at": _iso(op.created_at) if op else rcpt_ts,
-                    "open_href": f"/designer?project_id={project_id}",
+                    "open_href": "/designer?" + urlencode({"project_id": project_id, "molbio_operation_id": op_id}),
                     "detach": None,
                 }
             )
@@ -1304,7 +1239,26 @@ async def get_project_hub_payload(
         "alignments": len(alignment_items),
     }
 
+    setups = (await session.execute(
+        select(ExperimentWorkflowSetupContext.setup_context_id, ExperimentWorkflowSetupContext.lifecycle_state,
+               ExperimentWorkflowSetupContext.capability_id, ExperimentAggregateHead.display_name)
+        .join(ExperimentAggregateHead, ExperimentAggregateHead.aggregate_id == ExperimentWorkflowSetupContext.workflow_id)
+        .where(ExperimentWorkflowSetupContext.project_id == project_id, ExperimentWorkflowSetupContext.deleted_at.is_(None))
+        .order_by(ExperimentWorkflowSetupContext.updated_at.desc(), ExperimentWorkflowSetupContext.setup_context_id)
+    )).all()
+    buckets = {
+        "in_silico": in_silico_items, "molecular_sequences": molecular_sequence_items,
+        "molecular_operations": molecular_operation_items, "ngs_ont_and_alignments": ngs_ont_and_alignments,
+    }
+    # Advance each bucket by the same page width, with a deterministic tie breaker.
+    if cursor is not None and (len(cursor) > 12 or not cursor.isascii() or not cursor.isdecimal()):
+        raise HTTPException(422, detail="Invalid project hub cursor")
+    offset = int(cursor or 0)
+    end = offset + limit
+    for items in buckets.values():
+        items.sort(key=lambda row: (row.get("updated_at") or "", row["id"]), reverse=True)
     return {
+        "next_cursor": str(end) if any(len(items) > end for items in buckets.values()) else None,
         "capabilities": capabilities,
         "project": {
             "id": project_head.aggregate_id,
@@ -1315,13 +1269,9 @@ async def get_project_hub_payload(
             "created_at": _iso(project_head.created_at),
             "updated_at": _iso(project_head.updated_at),
             "experiments": experiments_list,
+            "workflow_setups": [{"id": sid, "state": state, "label": label or cap} for sid, state, cap, label in setups],
             "linked_local_projects": linked_local_projects,
         },
         "counts": counts,
-        "sections": {
-            "in_silico": in_silico_items[:limit],
-            "molecular_sequences": molecular_sequence_items[:limit],
-            "molecular_operations": molecular_operation_items[:limit],
-            "ngs_ont_and_alignments": ngs_ont_and_alignments[:limit],
-        },
+        "sections": {name: items[offset:end] for name, items in buckets.items()},
     }

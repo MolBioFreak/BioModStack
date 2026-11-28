@@ -106,7 +106,7 @@ describe('ProjectManager Hub & Index', () => {
         container.remove();
     });
 
-    it('renders single-column projects index with counts and hides ngs_molbio_local in full BMS', async () => {
+    it('renders single-column projects index with counts and lists unlinked local projects in full BMS', async () => {
         vi.mocked(pm.searchProjects).mockResolvedValue({
             capabilities: { has_in_silico: true, has_molbio: true, has_ngs_ont: true, has_stats: false },
             items: [
@@ -156,9 +156,24 @@ describe('ProjectManager Hub & Index', () => {
         await waitUntil(() => {
             expect(container.textContent).toContain('TNF-alpha Binder Work');
         });
-        expect(container.textContent).not.toContain('Hidden Local Project');
+        expect(findLinkByText('Hidden Local Project')?.getAttribute('href')).toBe('/projects/proj-local-1');
         expect(container.textContent).toContain('In silico');
         expect(container.textContent).toContain('7');
+    });
+
+    it('loads another page of projects without discarding the first page', async () => {
+        const page = (id: string, next: string | null): pm.ProjectListPage => ({ items: [{
+            id, project_id: id, workspace_id: id, kind: 'project', storage_kind: 'workspace', name: id,
+            current_revision_id: null, parent_id: null, head_generation: 1, lifecycle_state: 'active', status: 'active',
+            created_at: '', updated_at: '',
+        }], next_cursor: next });
+        vi.mocked(pm.searchProjects).mockImplementation(async options => options?.cursor ? page('Later project', null) : page('First project', 'next-page'));
+        await renderAt('/projects');
+        await waitUntil(() => expect(findButtonByText('Load more projects')).not.toBeNull());
+        await act(async () => findButtonByText('Load more projects')!.click());
+        await waitUntil(() => expect(findLinkByText('Later project')).not.toBeNull());
+        expect(findLinkByText('First project')).not.toBeNull();
+        expect(findButtonByText('Load more projects')).toBeNull();
     });
 
     it('renders collapsed-by-default By type view, switches to By experiment, and detaches molecular sequences', async () => {

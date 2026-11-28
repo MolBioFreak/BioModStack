@@ -7,6 +7,7 @@ import NgsMolBioProjectHub from './components/molbio-ngs/NgsMolBioProjectHub';
 import { useResolvedBmsFeatures } from './runtime/installFeatures';
 
 const Dashboard = lazy(() => import('./components/Dashboard').then((module) => ({ default: module.Dashboard })));
+const ProjectCmSourcePage = lazy(() => import('./components/conformationalMapping/ProjectCmSourcePage'));
 const ProjectManager = lazy(() => import('./pages/ProjectManager').then((module) => ({ default: module.ProjectManager })));
 const JobSubmission = lazy(() => import('./components/JobSubmission').then((module) => ({ default: module.JobSubmission })));
 const ResultsViewer = lazy(() => import('./components/ResultsViewer').then((module) => ({ default: module.ResultsViewer })));
@@ -83,6 +84,7 @@ function App() {
             <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/projects" element={<ProjectManager />} />
+            <Route path="/projects/:projectId/conformational-sources/:sourceId" element={<ProjectCmSourcePage />} />
             <Route path="/projects/:projectId" element={<ProjectManager />} />
             <Route path="/projects/:projectId/experiments/:experimentId" element={<ProjectManager />} />
             <Route path="/projects/:projectId/experiments/:experimentId/domains/:domainId" element={<ProjectManager />} />

@@ -322,6 +322,14 @@ async def test_project_sequences_zero_one_and_multi_domain_dedup(tmp_path: Path)
             assert by_id["seq-a"]["is_head_editable"] is True
             assert by_id["seq-b"]["is_head_editable"] is True
 
+            async with SCore() as core:
+                args = (None, s_exp, core, s_ngs, s_mol)
+                first = await get_project_hub_payload(*args, project_id="proj-multi", limit=1)
+                assert first.get("next_cursor")
+                second = await get_project_hub_payload(*args, project_id="proj-multi", limit=1, cursor=first["next_cursor"])
+                assert second["next_cursor"] is None
+                assert {p["sections"]["molecular_sequences"][0]["id"] for p in (first, second)} == {"seq-a", "seq-b"}
+
             # 3. Pinned domain/state_revision_id preserves historical non-head editability
             pinned = await get_project_sequences_payload(
                 s_exp, s_ngs, s_mol,
@@ -343,3 +351,41 @@ async def test_project_sequences_zero_one_and_multi_domain_dedup(tmp_path: Path)
             await eng.dispose()
 
 
+
+
+@pytest.mark.asyncio
+async def test_project_record_scope_includes_children_without_crossing_projects(tmp_path):
+    from experiment_models import ExperimentResearchRecord
+    from experiment_services import ValidationFailure
+    from routers.projects import _records
+    engines, store, *_ = await _make_sessions(tmp_path)
+    try:
+        async with store() as session:
+            for name, owner, subject in [("p-note", "p", "p"), ("e-note", "p", "e"), ("d-note", "p", "d"), ("other", "q", "q")]:
+                session.add(ExperimentResearchRecord(resource_id=name, workspace_id=owner, subject_resource_id=subject,
+                                                     body=name, record_kind="note", created_at="2026-01-01"))
+            await session.flush()
+            assert [r["id"] for r in (await _records(session, "p", None, None, 50))["items"]] == ["p-note"]
+            first = await _records(session, "p", None, None, 2, include_descendants=True)
+            last = await _records(session, "p", None, first["next_cursor"], 2, include_descendants=True)
+            assert last["next_cursor"] is None
+            assert {(r["id"], r["subject_resource_id"]) for r in first["items"] + last["items"]} == {
+                ("p-note", "p"), ("e-note", "e"), ("d-note", "d")}
+            with pytest.raises(ValidationFailure):
+                await _records(session, "p", None, "other", 2, include_descendants=True)
+    finally:
+        for eng in engines:
+            await eng.dispose()
+
+
+def test_project_capabilities_follow_install_switches_even_with_mounted_routes(monkeypatch):
+    from fastapi import FastAPI, Request
+    from services.project_hub import resolve_hub_capabilities
+    monkeypatch.setenv("BMS_FEATURE_PROTEIN_COMPUTE", "0")
+    monkeypatch.setenv("BMS_FEATURE_NGS_ONT", "0")
+    app = FastAPI()
+    app.add_api_route("/api/jobs", lambda: None)
+    app.add_api_route("/api/ngs", lambda: None)
+    app.state.mounted_features = {"ngs_ont": True, "protein_compute": True}
+    for request in (None, Request({"type": "http", "app": app})):
+        assert resolve_hub_capabilities(request) == {"has_in_silico": False, "has_molbio": True, "has_ngs_ont": False, "has_stats": False}

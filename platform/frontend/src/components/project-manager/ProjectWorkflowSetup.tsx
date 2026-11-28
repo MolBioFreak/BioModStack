@@ -19,7 +19,7 @@ import {
 const INPUT = 'w-full rounded-lg border border-border-primary bg-surface px-3 py-2 text-sm text-content';
 const BUTTON = 'rounded-lg border border-accent px-3 py-2 text-xs font-semibold text-accent disabled:cursor-not-allowed disabled:opacity-50';
 
-function nativeDestination(setup: ProjectWorkflowSetupNavigation | ProjectWorkflowSetup): string {
+export function nativeDestination(setup: ProjectWorkflowSetupNavigation | ProjectWorkflowSetup): string {
     const destination = new URL(setup.setup_destination, window.location.origin);
     if (destination.origin !== window.location.origin) throw new Error('The setup destination is not local to BioModStack.');
     destination.searchParams.set('setup_context_id', setup.setup_context_id);

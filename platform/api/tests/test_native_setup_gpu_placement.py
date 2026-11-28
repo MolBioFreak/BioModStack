@@ -8,13 +8,12 @@ from experiment_services import create_run_group, validate_preparation_authority
 from routers._projects_domain_ops import _launch_context_document
 from schemas import JobCreate
 from services.global_experiments import launch_contexts, workflow_setups
-from services.ngs_molbio_n5 import reserve_run_group
 from test_project_workflow_setups import setup_store, _project
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pinned_gpu", [0, 2, None])
-async def test_native_protenix_gpu_survives_real_reservation(setup_store, monkeypatch, pinned_gpu):
+async def test_native_protenix_gpu_survives_project_handoff(setup_store, monkeypatch, pinned_gpu):
     from services import gpu_metadata
     from biomodstack_local_resources import applied_local_policy
     applied_local_policy.cache_clear()
@@ -53,11 +52,11 @@ async def test_native_protenix_gpu_survives_real_reservation(setup_store, monkey
             submitted = JobCreate.model_validate(document["pinned_scheduler"])
             assert submitted.pinned_gpu == pinned_gpu
             assert submitted.execution_target_id is None
-            group = await create_run_group(session, project.id, [preparation.resource_id],
+            # The Project launch route now creates the group directly. GPU reservation
+            # belongs to the scheduler; no second Project reservation is performed.
+            await create_run_group(session, project.id, [preparation.resource_id],
                 idempotency_key="run", source_domain_id=setup["domain_experiment_id"],
                 launch_context_ids={preparation.resource_id: context.launch_context_id})
-            await reserve_run_group(session, group_id=group.resource_id,
-                domain_id=setup["domain_experiment_id"], actor="operator")
             await session.commit()
         async with setup_store() as session:
             context = await session.get(ExperimentLaunchContext, prepared["launch_context_id"])

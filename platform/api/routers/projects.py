@@ -658,15 +658,17 @@ async def _records(
     cursor: str | None,
     limit: int,
     body_schema: str | None = None,
+    *, include_descendants: bool = False,
 ) -> dict[str, Any]:
-    filters = [ExperimentResearchRecord.subject_resource_id == subject_resource_id]
+    scope = ExperimentResearchRecord.workspace_id if include_descendants else ExperimentResearchRecord.subject_resource_id
+    filters = [scope == subject_resource_id]
     if kind is not None:
         filters.append(ExperimentResearchRecord.record_kind == kind)
     if body_schema is not None:
         filters.append(ExperimentResearchRecord.body.contains(f'"schema":"{body_schema}"'))
     if cursor is not None:
         anchor = await session.get(ExperimentResearchRecord, cursor)
-        if anchor is None or anchor.subject_resource_id != subject_resource_id:
+        if anchor is None or getattr(anchor, scope.key) != subject_resource_id:
             raise ValidationFailure("record cursor is invalid for this subject")
         filters.append(
             or_(
@@ -687,7 +689,16 @@ async def _records(
     ).scalars().all()
     has_more = len(rows) > limit
     page = rows[:limit]
-    return {"items": [_record_json(row) for row in page], "next_cursor": page[-1].resource_id if has_more else None}
+    items = [_record_json(row) for row in page]
+    if include_descendants and items:
+        subjects = {key: (name, kind) for key, name, kind in (await session.execute(
+            select(ExperimentAggregateHead.aggregate_id, ExperimentAggregateHead.display_name, ExperimentAggregateHead.aggregate_kind)
+            .where(ExperimentAggregateHead.workspace_id == subject_resource_id,
+                   ExperimentAggregateHead.aggregate_id.in_({row.subject_resource_id for row in page}))
+        )).all()}
+        for item in items:
+            item["subject_name"], item["subject_kind"] = subjects.get(item["subject_resource_id"], (item["subject_resource_id"], "record"))
+    return {"items": items, "next_cursor": page[-1].resource_id if has_more else None}
 
 
 async def _activity(
@@ -808,6 +819,7 @@ def _complete_domain_v4_attestations(payload: dict[str, Any]) -> dict[str, Any]:
 
 @_projects_router.get("")
 async def list_projects(
+    request: Request = None,
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
     project_scope: Literal["global", "ngs_molbio_local", "all"] = Query(default="all"),
@@ -816,6 +828,7 @@ async def list_projects(
     molbio_session: AsyncSession = Depends(get_molbio_session),
 ) -> dict[str, Any]:
     return await search_projects(
+        request=request,
         q="",
         status_filter=None,
         archive="all",
@@ -859,6 +872,7 @@ async def create_project_route(
 
 @_projects_router.get("/search")
 async def search_projects(
+    request: Request = None,
     q: str = Query(default="", max_length=256),
     status_filter: str | None = Query(default=None, alias="status"),
     archive: Literal["active", "archived", "all"] = Query(default="active"),
@@ -974,7 +988,8 @@ async def search_projects(
                 ExperimentLineageEdge.edge_key.like("ngs-molbio-project-link:%"),
             )
         )).scalars().all())
-    summary_counts = await get_projects_summary_counts(session, native_session, molbio_session, project_ids)
+    capabilities = resolve_hub_capabilities(request)
+    summary_counts = await get_projects_summary_counts(session, native_session if capabilities["has_ngs_ont"] else None, molbio_session, project_ids)
     for head, payload_text in page:
         item = await _head_json(session, head, exposed_kind="project", storage_kind="workspace", payload=json.loads(payload_text))
         item["has_ngs_molbio_links"] = head.aggregate_id in linked_project_ids
@@ -984,7 +999,7 @@ async def search_projects(
         items.append(item)
     return {
         "items": items,
-        "capabilities": resolve_hub_capabilities(None),
+        "capabilities": capabilities,
         "next_cursor": (
             _encode_cursor(
                 "project-search",
@@ -1038,6 +1053,7 @@ async def get_project_hub(
 @_projects_router.get("/{project_id}/sequences")
 async def get_project_sequences(
     project_id: str,
+    request: Request = None,
     domain_experiment_id: str | None = Query(default=None),
     state_revision_id: str | None = Query(default=None),
     experiment_id: str | None = Query(default=None),
@@ -1047,7 +1063,7 @@ async def get_project_sequences(
 ) -> dict[str, Any]:
     payload = await get_project_sequences_payload(
         session,
-        native_session,
+        native_session if resolve_hub_capabilities(request)["has_ngs_ont"] else None,
         molbio_session,
         project_id=project_id,
         domain_experiment_id=domain_experiment_id,
@@ -2066,6 +2082,7 @@ async def append_ngs_data_record(
 @_projects_router.get("/{project_id}/records")
 async def list_project_records(
     project_id: str,
+    include_descendants: bool = False,
     kind: Literal["note", "observation", "decision", "conclusion"] | None = Query(default=None),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
@@ -2073,7 +2090,7 @@ async def list_project_records(
 ) -> dict[str, Any]:
     try:
         await _project(session, project_id)
-        return await _records(session, project_id, kind, cursor, limit)
+        return await _records(session, project_id, kind, cursor, limit, include_descendants=include_descendants)
     except ExperimentServiceError as exc:
         raise _error(exc) from exc
 

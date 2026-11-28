@@ -1,6 +1,6 @@
 import { useDeferredValue, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import {
     projectManagerErrorMessage,
     searchProjects,
@@ -38,18 +38,21 @@ export function ProjectIndexTable() {
         project: { id: string; name: string; head_generation: number };
     } | null>(null);
 
-    const projectsQuery = useQuery({
+    const projectsQuery = useInfiniteQuery({
+        initialPageParam: undefined as string | undefined,
         queryKey: ['projects-index', deferredQuery, archiveFilter],
-        queryFn: ({ signal }) => searchProjects({
+        queryFn: ({ signal, pageParam }) => searchProjects({
+            cursor: pageParam,
             query: deferredQuery,
             archive: archiveFilter,
             projectScope: 'all',
             limit: 100,
             signal,
         }),
+        getNextPageParam: page => page.next_cursor ?? undefined,
     });
 
-    const capabilities = projectsQuery.data?.capabilities ?? {
+    const capabilities = projectsQuery.data?.pages[0]?.capabilities ?? {
         has_in_silico: true,
         has_molbio: true,
         has_ngs_ont: true,
@@ -58,14 +61,13 @@ export function ProjectIndexTable() {
     const hasInSilico = capabilities.has_in_silico;
 
     const visibleProjects = useMemo(() => {
-        const items = projectsQuery.data?.items ?? [];
+        const items = projectsQuery.data?.pages.flatMap(page => page.items) ?? [];
         if (hasInSilico) {
-            // Full BMS lists global projects in the main index (linked local projects appear inside them).
-            return items.filter((item) => (item.project_scope ?? 'global') !== 'ngs_molbio_local');
+            return items;
         }
         // Standalone NGS/MolBio lists local projects directly.
         return items.filter((item) => item.project_scope === 'ngs_molbio_local');
-    }, [hasInSilico, projectsQuery.data?.items]);
+    }, [hasInSilico, projectsQuery.data]);
 
     const defaultCreateScope: 'global' | 'ngs_molbio_local' = hasInSilico ? 'global' : 'ngs_molbio_local';
 
@@ -225,6 +227,7 @@ export function ProjectIndexTable() {
                 </table>
             </section>
 
+            {projectsQuery.hasNextPage && <button className="text-cyan-300" disabled={projectsQuery.isFetchingNextPage} onClick={() => void projectsQuery.fetchNextPage()}>Load more projects</button>}
             <ProjectFormDialog
                 open={createOpen}
                 mode="create"

@@ -44,14 +44,9 @@ verification, repeated every 2 seconds. With no jobs running, the API used about
 
 ## Diagnosing
 
-```sh
-curl -s localhost:18002/api/experiment-workspaces/ops/worker-health | python3 -m json.tool
-```
-
-A `failure_count` that keeps rising with the same `last_error`, while
-`last_sweep_counts.reconciled` stays 0, means one group fails on every sweep. To
-see where the time goes, profile the live process for 30 seconds. This is
-read-only.
+The Project reconcile worker and its health endpoint were retired. For the current
+API use `GET /api/health`; it reports service health, not a reconcile sweep count.
+To diagnose API load, profile the live process for 30 seconds. This is read-only.
 
 ```sh
 sudo py-spy record --pid "$(systemctl --user show -p MainPID --value biomodstack-api)" \
